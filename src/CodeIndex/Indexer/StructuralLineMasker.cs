@@ -419,6 +419,14 @@ internal static class StructuralLineMasker
         // 複数行にわたるネスト triple 内の `}` が外側のホール brace 数え上げを壊さないようにする。
         char nestedTripleChar = '\0';
         bool nestedTripleRaw = false;
+        // Track whether a nested triple-quoted string is itself an f-string so
+        // its own `{expr}` holes still surface real call edges.
+        // ネストした三重引用符文字列自身が f-string かどうかを追跡し、その内部の
+        // `{expr}` ホールに含まれる real call を参照抽出に見せる。
+        bool nestedTripleIsFString = false;
+        // -1 when outside the nested triple's own hole, >=0 when inside it (tracks `{` depth).
+        // ネスト triple 自身のホール外は -1、ホール内は 0 以上（`{` の深さを追跡）。
+        int nestedTripleHoleDepth = -1;
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -447,14 +455,62 @@ internal static class StructuralLineMasker
                         if (nestedTripleChar != '\0')
                         {
                             // Scan contents of a nested triple-quoted string until we hit
-                            // its closing triple. Mask all content to spaces so that
-                            // indentation-sensitive downstream consumers (e.g. Python
-                            // symbol-body extraction) still see a blank line here instead
-                            // of stray `}` / `'''` at column 0.
+                            // its closing triple. For plain nested triples mask all content
+                            // to spaces so that indentation-sensitive downstream consumers
+                            // (e.g. Python symbol-body extraction) still see a blank line
+                            // here instead of stray `}` / `'''` at column 0. For nested
+                            // triple f-strings, preserve the `{expr}` hole contents so real
+                            // call edges inside the inner hole still survive; only the
+                            // non-hole body is blanked.
                             // ネストした三重引用符文字列の本体を走査し、閉じ三重までの
                             // 全ての文字を空白に置き換える。インデント依存の後段
                             // （Python のシンボル本体抽出など）が 0 桁位置の `}` や
-                            // `'''` を見てブロックを早終了しないようにする。
+                            // `'''` を見てブロックを早終了しないようにする。ネスト三重
+                            // f-string の場合は、内部 `{expr}` ホールの内容を保持して
+                            // 実呼び出し edge を残し、ホール外の本体のみ空白化する。
+                            if (nestedTripleIsFString && nestedTripleHoleDepth >= 0)
+                            {
+                                // Inside the nested f-string's own hole: preserve chars.
+                                // Skip nested single-line strings and Python `#` comments so
+                                // their braces do not mis-close the hole.
+                                // ネスト f-string 内部のホール: 文字を残して call edge を
+                                // 抽出に見せる。単行文字列と `#` コメントはスキップし、
+                                // 内部の `{` / `}` がホール深度に影響しないようにする。
+                                if (line[pos] == '\'' || line[pos] == '"')
+                                {
+                                    pos = SkipPythonSingleLineString(line, pos);
+                                    continue;
+                                }
+
+                                if (line[pos] == '#')
+                                    break;
+
+                                if (line[pos] == '{')
+                                {
+                                    nestedTripleHoleDepth++;
+                                    pos++;
+                                    continue;
+                                }
+
+                                if (line[pos] == '}')
+                                {
+                                    if (nestedTripleHoleDepth == 0)
+                                    {
+                                        masked[pos] = ' ';
+                                        nestedTripleHoleDepth = -1;
+                                        pos++;
+                                        continue;
+                                    }
+
+                                    nestedTripleHoleDepth--;
+                                    pos++;
+                                    continue;
+                                }
+
+                                pos++;
+                                continue;
+                            }
+
                             if (!nestedTripleRaw && line[pos] == '\\' && pos + 1 < line.Length)
                             {
                                 ReplaceWithSpaces(masked, pos, 2);
@@ -471,7 +527,36 @@ internal static class StructuralLineMasker
                                 pos += 3;
                                 nestedTripleChar = '\0';
                                 nestedTripleRaw = false;
+                                nestedTripleIsFString = false;
+                                nestedTripleHoleDepth = -1;
                                 continue;
+                            }
+
+                            if (nestedTripleIsFString)
+                            {
+                                // `{{` / `}}` are escaped literal braces — blank both chars.
+                                // `{{` / `}}` は literal brace のエスケープ。両方空白化。
+                                if (pos + 1 < line.Length && line[pos] == '{' && line[pos + 1] == '{')
+                                {
+                                    ReplaceWithSpaces(masked, pos, 2);
+                                    pos += 2;
+                                    continue;
+                                }
+
+                                if (pos + 1 < line.Length && line[pos] == '}' && line[pos + 1] == '}')
+                                {
+                                    ReplaceWithSpaces(masked, pos, 2);
+                                    pos += 2;
+                                    continue;
+                                }
+
+                                if (line[pos] == '{')
+                                {
+                                    masked[pos] = ' ';
+                                    nestedTripleHoleDepth = 0;
+                                    pos++;
+                                    continue;
+                                }
                             }
 
                             masked[pos] = ' ';
@@ -479,12 +564,14 @@ internal static class StructuralLineMasker
                             continue;
                         }
 
-                        if (TryOpenPythonTripleString(line, pos, out var nestedPrefixLen, out var nestedQuote, out var nestedRawFlag, out _))
+                        if (TryOpenPythonTripleString(line, pos, out var nestedPrefixLen, out var nestedQuote, out var nestedRawFlag, out var nestedFFlag))
                         {
                             ReplaceWithSpaces(masked, pos, nestedPrefixLen + 3);
                             pos += nestedPrefixLen + 3;
                             nestedTripleChar = nestedQuote;
                             nestedTripleRaw = nestedRawFlag;
+                            nestedTripleIsFString = nestedFFlag;
+                            nestedTripleHoleDepth = -1;
                             continue;
                         }
 
@@ -1029,11 +1116,23 @@ internal static class StructuralLineMasker
         // `switch` / `catch` / `with`）だったかを追跡し、対応する `)` の直後に
         // 続く `/` を division ではなく regex literal として扱えるようにする。
         public Stack<bool> ParenStatementHead;
+        // True after the `class` keyword until the next `{` opens its body. This
+        // forces `class Foo {}` (and `class Foo extends Bar {}`) to be classified
+        // as a statement block instead of an object-literal expression brace, so
+        // the matching `}` stays regex-legal and a following `/regex/` does not
+        // flip to division and swallow backticks as a phantom template opener.
+        // `class` キーワードの後から次の `{` で class body が開くまで true。
+        // `class Foo {}` / `class Foo extends Bar {}` の `{` を object literal
+        // ではなく statement block として扱わせ、対応する `}` を regex-legal に
+        // 保つことで、続く `/regex/` が division に倒れて regex 本文の backtick を
+        // phantom template 開始として読んでしまうのを防ぐ。
+        public bool ClassHeaderPending;
 
         public void Reset()
         {
             PrevTokenKind = JsPrevTokenKind.None;
             PrevIdentifier = string.Empty;
+            ClassHeaderPending = false;
             if (ParenStatementHead is null)
                 ParenStatementHead = new Stack<bool>();
             else
@@ -1050,6 +1149,8 @@ internal static class StructuralLineMasker
         {
             PrevTokenKind = JsPrevTokenKind.Identifier;
             PrevIdentifier = word;
+            if (word == "class")
+                ClassHeaderPending = true;
         }
     }
 
@@ -1177,14 +1278,21 @@ internal static class StructuralLineMasker
                             holeFrame.NestedBraceDepth++;
                             // Classify the nested `{` as expression brace (object literal
                             // or `() => ({})` body) vs. statement block (arrow body
-                            // `=> {...}`, or `if (x) {...}` inside arrow body). Block
+                            // `=> {...}`, `if (x) {...}`, or `class Foo {...}`). Block
                             // braces preserve `}`→regex behavior; expression braces set
-                            // `}`→division so `${({a:1} / 2)}` stays parseable.
+                            // `}`→division so `${({a:1} / 2)}` stays parseable. A pending
+                            // class header always opens a class body, regardless of what
+                            // identifier or `extends` clause token came last.
                             // ネスト `{` を expression brace（object literal / `() => ({})`）
-                            // と statement block（arrow body や `if (x) {}`）に分類する。
-                            // block は `}` の次の `/` を regex にし、expression は
-                            // division にする。これで `${({a:1} / 2)}` が壊れない。
-                            holeFrame.InnerBraceIsExpression.Push(IsJsExpressionBraceContext(lexState));
+                            // と statement block（arrow body / `if (x) {}` / `class Foo {}`）
+                            // に分類する。block は `}` の次の `/` を regex にし、expression
+                            // は division にする。これで `${({a:1} / 2)}` が壊れない。
+                            // class header pending 中は直前トークンが何であっても class
+                            // body とみなす。
+                            var isExpressionBrace = !lexState.ClassHeaderPending
+                                && IsJsExpressionBraceContext(lexState);
+                            lexState.ClassHeaderPending = false;
+                            holeFrame.InnerBraceIsExpression.Push(isExpressionBrace);
                             pos++;
                             lexState.SetKind(JsPrevTokenKind.Other);
                             continue;

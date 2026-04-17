@@ -1713,4 +1713,67 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "runTask" && r.ContainerName == "caller");
         Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
     }
+
+    [Fact]
+    public void Extract_PythonOuterFStringHoleNestedTripleFString_PreservesInnerCall()
+    {
+        // Regression for issue #291 follow-up: a nested triple-quoted f-string
+        // `f"""...{real_call()}..."""` placed inside an outer f-string hole must
+        // preserve the inner hole expression. Previously the nested triple's
+        // f-string flag was discarded and its body was blanked wholesale,
+        // erasing `real_call` from the reference graph.
+        // issue #291 続編: 外側 f-string ホール内のネスト三重引用符 f-string
+        // `f"""...{real_call()}..."""` で内側 hole の式本体を残すこと。従来は
+        // ネスト三重の f 接頭辞を捨てて本体を全面空白化していたため、内側の
+        // `real_call` が参照グラフから消えていた。
+        const string content = "def caller():\n"
+            + "    msg = f\"\"\"\n"
+            + "    {format(f\"\"\"{real_call()}\"\"\")}\n"
+            + "    \"\"\"\n"
+            + "    tail()\n"
+            + "\n"
+            + "def format(_):\n"
+            + "    return \"\"\n"
+            + "\n"
+            + "def real_call():\n"
+            + "    pass\n"
+            + "\n"
+            + "def tail():\n"
+            + "    pass\n";
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "real_call" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "format" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "tail" && r.ContainerName == "caller");
+    }
+
+    [Fact]
+    public void Extract_JsTemplateHoleClassBodyThenRegex_PreservesFollowingCall()
+    {
+        // Regression for issue #291 follow-up: `class Local {}` inside a template
+        // hole must open a statement block, not an expression brace. Otherwise
+        // the matching `}` classifies the following `/regex/` as division, which
+        // stops the regex skipper from consuming its body and lets a backtick
+        // inside the regex look like a phantom template opener — erasing the
+        // call edge to `runTask` that follows the regex.
+        // issue #291 続編: テンプレートホール内の `class Local {}` は
+        // expression brace ではなく statement block として開かせる必要がある。
+        // そうしないと閉じ `}` 以降の `/regex/` が division と誤判定され、
+        // regex 本文中の backtick が phantom template として読まれて、その後の
+        // `runTask` 参照が消えてしまう。
+        const string content = "function caller(value) {\n"
+            + "    const s = `${(() => { class Local {} /`/.test(value); runTask(); return 1; })()}`;\n"
+            + "    realCall();\n"
+            + "}\n"
+            + "function runTask() {}\n"
+            + "function realCall() {}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "runTask" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
+    }
 }
