@@ -3789,11 +3789,44 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_CSharp_DetectsRefStruct()
     {
-        var content = "public readonly ref struct Span2D<T> { }\nref struct StackBuffer { }";
+        var content = "public readonly ref struct Span2D<T> { }\nref struct StackBuffer { }\npublic readonly struct ImmutablePoint { }";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Span2D");
         Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "StackBuffer");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "ImmutablePoint");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsRefReturnMethodsPropertiesAndIndexers()
+    {
+        var content = """
+            public interface IRefBox
+            {
+                ref int GetRef();
+            }
+
+            public class RefBox : IRefBox
+            {
+                private static int _value;
+                private static readonly int[] _items = [1, 2, 3];
+
+                public static ref int RefReturn(ref int[] arr, int i) => ref arr[i];
+                public static ref readonly int RefReadonlyReturn(int[] arr, int i) => ref arr[i];
+                public ref int PropRef => ref _value;
+                public ref readonly int PropRefRo { get => ref _value; }
+                public ref readonly int this[int index] => ref _items[index];
+                ref int IRefBox.GetRef() => ref _value;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "RefReturn" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "RefReadonlyReturn" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PropRef" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "PropRefRo" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "this" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetRef" && s.ContainerName == "RefBox" && s.ReturnType == "ref int");
     }
 
     [Fact]
