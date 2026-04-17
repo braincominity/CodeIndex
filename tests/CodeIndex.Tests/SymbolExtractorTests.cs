@@ -5135,6 +5135,77 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_PlainFieldPatternDoesNotLeakLocalVariables()
+    {
+        // Plain fields are captured as kind `property`, but local variable declarations
+        // inside method / property accessor / constructor / lambda bodies share the same
+        // shape as fields. Without a scope gate, names like `local`, `numbers`, `tmp`
+        // would leak into `symbols`, `definition`, `outline`, `inspect`, and `unused`.
+        // Closes #298 follow-up (codex review blocker).
+        // 通常フィールドは kind `property` として抽出されるが、メソッド・アクセサ・
+        // コンストラクタ・ラムダの内部にあるローカル変数宣言はフィールドと同じ形を持つ。
+        // スコープ判定を入れないと `local`、`numbers`、`tmp` などが
+        // `symbols` / `definition` / `outline` / `inspect` / `unused` に混入する。
+        // Closes #298 の codex レビュー blocker 対応。
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public class Worker",
+            "{",
+            "    public string Field;",
+            "    public List<int> Items = new();",
+            "",
+            "    public Worker()",
+            "    {",
+            "        string ctorLocal = \"ctor\";",
+            "        List<int> ctorNumbers = new();",
+            "    }",
+            "",
+            "    public void Run()",
+            "    {",
+            "        string local = \"x\";",
+            "        System.Collections.Generic.List<int> numbers = new();",
+            "        if (local.Length > 0)",
+            "        {",
+            "            string inner = local;",
+            "        }",
+            "    }",
+            "",
+            "    public int Value",
+            "    {",
+            "        get",
+            "        {",
+            "            int tmp = 1;",
+            "            return tmp;",
+            "        }",
+            "    }",
+            "",
+            "    public Func<int, int> Lambda = x =>",
+            "    {",
+            "        int y = x + 1;",
+            "        return y;",
+            "    };",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Field");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Items");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Lambda");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Worker");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Run");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Value");
+
+        Assert.DoesNotContain(symbols, s => s.Name == "ctorLocal");
+        Assert.DoesNotContain(symbols, s => s.Name == "ctorNumbers");
+        Assert.DoesNotContain(symbols, s => s.Name == "local");
+        Assert.DoesNotContain(symbols, s => s.Name == "numbers");
+        Assert.DoesNotContain(symbols, s => s.Name == "inner");
+        Assert.DoesNotContain(symbols, s => s.Name == "tmp");
+        Assert.DoesNotContain(symbols, s => s.Name == "y");
+    }
+
+    [Fact]
     public void Extract_VB_DetectsSubFunctionClassModule()
     {
         // VB.NET: Sub, Function, Class, Module, Imports / VB.NET: サブ、関数、クラス、モジュール、Imports

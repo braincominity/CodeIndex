@@ -742,6 +742,9 @@ public static class SymbolExtractor
         var csharpMatchLines = lang == "csharp"
             ? BuildCSharpMatchLines(structuralLines)
             : null;
+        var csharpInsideTypeBody = lang == "csharp"
+            ? BuildCSharpTypeBodyScope(structuralLines)
+            : null;
         var cssQualifiedRuleAncestors = lang == "css"
             ? FindCssQualifiedRuleAncestors(cssScannerLines!)
             : null;
@@ -803,6 +806,25 @@ public static class SymbolExtractor
                         break;
 
                     if (ShouldSkipCSharpBracePropertyCandidate(lang, pattern, patternMatchLine))
+                        break;
+
+                    // Gate the C# plain-field pattern (kind `property`, BodyStyle.None) to
+                    // lines that sit directly inside a type body. Without this gate, local
+                    // variable declarations inside method / property / accessor / lambda
+                    // bodies match the same shape and leak into `symbols`, `definition`,
+                    // `outline`, `inspect`, and `unused` as phantom property symbols.
+                    // Closes #298 follow-up (codex review blocker).
+                    // C# の通常フィールド用パターン（kind `property` かつ BodyStyle.None）は
+                    // 型本体（class / struct / interface / record / enum の直下）でしか
+                    // 許可しない。このゲートを入れないと、メソッド・プロパティ・アクセサ・
+                    // ラムダの内部にあるローカル変数宣言が同じ形でマッチしてしまい、
+                    // `symbols` / `definition` / `outline` / `inspect` / `unused` に
+                    // 擬似シンボルが混入する。Closes #298 の codex レビュー blocker 対応。
+                    if (lang == "csharp"
+                        && pattern.Kind == "property"
+                        && pattern.BodyStyle == BodyStyle.None
+                        && csharpInsideTypeBody != null
+                        && !csharpInsideTypeBody[i])
                         break;
 
                     if (ShouldSkipCssNestedSelectorCandidate(lang, pattern, patternMatchLine, cssQualifiedRuleAncestors, i))
@@ -5693,6 +5715,70 @@ public static class SymbolExtractor
         && pattern.BodyStyle == BodyStyle.Brace
         && !matchLine.Contains("=>", StringComparison.Ordinal)
         && !HasCSharpPropertyAccessorStart(matchLine);
+
+    // Mark every line that sits directly inside a C# type body (class / struct /
+    // interface / record / enum). Used to gate the plain-field pattern so that
+    // local variable declarations inside a method, property accessor, lambda, or
+    // other non-type body are not misclassified as kind `property`. The scan uses
+    // `structuralLines` (strings / chars / comments already masked), so it is not
+    // fooled by braces or type-declaration-looking text inside literals. Only
+    // brace-delimited types push a type-body frame — `new { ... }`, collection
+    // initializers, and lambda bodies all carry the `class|struct|interface|record|enum`
+    // keyword absent from the preceding buffer, so they correctly stay non-type.
+    // Closes #298 follow-up (codex review blocker).
+    // C# の「現在この行は型本体（class / struct / interface / record / enum）の
+    // 直下にあるか」を行単位で事前計算する。新しい通常フィールド抽出パターンが
+    // メソッド本体・プロパティアクセサ・ラムダなど「非型本体」に含まれる
+    // ローカル変数宣言を kind `property` として誤抽出しないよう、このフラグで
+    // ゲートする。走査は既に文字列・文字・コメントを空白化した
+    // `structuralLines` を使うため、リテラル内の `{` や `class` 相当の文字列に
+    // 騙されない。`new { ... }` や collection initializer、ラムダ本体の `{` は
+    // 直前バッファに `class|struct|interface|record|enum` を含まないため
+    // 非型本体として扱われる。Closes #298 の codex レビュー blocker 対応。
+    private static readonly Regex CSharpTypeBodyDeclarationMarker = new(
+        @"\b(?:class|struct|interface|record|enum)\b\s+\w",
+        RegexOptions.Compiled);
+
+    private static bool[] BuildCSharpTypeBodyScope(string[] structuralLines)
+    {
+        var insideTypeBody = new bool[structuralLines.Length];
+        var scopeStack = new Stack<bool>();
+        scopeStack.Push(false);
+        var declBuffer = new StringBuilder();
+
+        for (int lineIndex = 0; lineIndex < structuralLines.Length; lineIndex++)
+        {
+            insideTypeBody[lineIndex] = scopeStack.Peek();
+
+            var line = structuralLines[lineIndex];
+            for (int cursor = 0; cursor < line.Length; cursor++)
+            {
+                var ch = line[cursor];
+                if (ch == '{')
+                {
+                    var isTypeBody = CSharpTypeBodyDeclarationMarker.IsMatch(declBuffer.ToString());
+                    scopeStack.Push(isTypeBody);
+                    declBuffer.Clear();
+                }
+                else if (ch == '}')
+                {
+                    if (scopeStack.Count > 1)
+                        scopeStack.Pop();
+                    declBuffer.Clear();
+                }
+                else if (ch == ';')
+                {
+                    declBuffer.Clear();
+                }
+                else
+                {
+                    declBuffer.Append(ch);
+                }
+            }
+        }
+
+        return insideTypeBody;
+    }
 
     private static bool[] FindCSharpSwitchExpressionLines(string[] structuralLines)
     {
