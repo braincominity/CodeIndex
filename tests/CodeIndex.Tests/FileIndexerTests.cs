@@ -188,7 +188,7 @@ public class FileIndexerTests
     [InlineData("target", "main.rs")]
     [InlineData("vendor", "dep.go")]
     [InlineData("bin", "app.cs")]
-    public void ScanFiles_SkipsExplicitRootWhenRootNameIsSkipped(string rootDirName, string fileName)
+    public void ScanFiles_IndexesExplicitRootEvenWhenRootNameIsSkipped(string rootDirName, string fileName)
     {
         var tempParentDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
         var rootDir = Path.Combine(tempParentDir, rootDirName);
@@ -204,7 +204,8 @@ public class FileIndexerTests
             var indexer = new FileIndexer(rootDir);
             var files = indexer.ScanFiles();
 
-            Assert.Empty(files);
+            Assert.Single(files);
+            Assert.Contains(fileName, files[0]);
         }
         finally
         {
@@ -630,7 +631,7 @@ public class FileIndexerTests
     }
 
     [Fact]
-    public void ScanFiles_ProjectRootNamedNodeModules_IsSkippedByDefaultDirectoryFilter()
+    public void ScanFiles_ProjectRootNamedNodeModules_IsIndexedButNestedSkipDirsRemainSkipped()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
         var projectRoot = Path.Combine(tempDir, "node_modules");
@@ -638,6 +639,8 @@ public class FileIndexerTests
         {
             Directory.CreateDirectory(projectRoot);
             File.WriteAllText(Path.Combine(projectRoot, "app.js"), "console.log('ignored root dir');");
+            Directory.CreateDirectory(Path.Combine(projectRoot, "node_modules"));
+            File.WriteAllText(Path.Combine(projectRoot, "node_modules", "nested.js"), "console.log('skip child');");
 
             var indexer = new FileIndexer(projectRoot);
             var files = indexer.ScanFiles()
@@ -645,7 +648,7 @@ public class FileIndexerTests
                 .OrderBy(path => path, StringComparer.Ordinal)
                 .ToList();
 
-            Assert.Empty(files);
+            Assert.Equal(["app.js"], files);
         }
         finally
         {

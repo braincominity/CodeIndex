@@ -1789,7 +1789,7 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FullScan_ProjectRootNamedNodeModules_IsSkippedByDefaultDirectoryFilter()
+    public void Run_FullScan_ProjectRootNamedNodeModules_IndexesExplicitProjectRoot()
     {
         var tempRoot = CreateTempProject();
         var projectRoot = Path.Combine(tempRoot, "node_modules");
@@ -1804,7 +1804,7 @@ public class IndexCommandRunnerTests
             Assert.Equal("success", json.GetProperty("status").GetString());
 
             var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
-            Assert.DoesNotContain("app.js", indexedPaths);
+            Assert.Contains("app.js", indexedPaths);
         }
         finally
         {
@@ -1814,7 +1814,7 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_UpdateMode_WithFiles_ProjectRootNamedNodeModules_RemovesIndexedFile()
+    public void Run_UpdateMode_WithFiles_ProjectRootNamedNodeModules_UpdatesIndexedFile()
     {
         var tempRoot = CreateTempProject();
         var projectRoot = Path.Combine(tempRoot, "node_modules");
@@ -1831,11 +1831,11 @@ public class IndexCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
-            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("removed").GetInt32());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("updated").GetInt32());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
 
             var indexedPaths = ReadIndexedPaths(dbPath);
-            Assert.DoesNotContain("app.js", indexedPaths);
+            Assert.Contains("app.js", indexedPaths);
         }
         finally
         {

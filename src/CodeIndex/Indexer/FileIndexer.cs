@@ -856,7 +856,7 @@ public class FileIndexer
         if (!preloadResult.IgnoreRulesAvailable)
             return new PathFilterResult(PathFilterKind.IgnoreRulesUnavailable, errors);
 
-        var projectRootFilterKind = GetDirectoryFilterKind(_projectRoot, activeIgnoreRules);
+        var projectRootFilterKind = GetDirectoryFilterKind(_projectRoot, activeIgnoreRules, isProjectRoot: true);
         if (projectRootFilterKind != PathFilterKind.None)
             return new PathFilterResult(projectRootFilterKind, errors);
 
@@ -914,7 +914,7 @@ public class FileIndexer
         var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
         if (preloadResult.IgnoreRulesAvailable)
         {
-            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, preloadResult.Rules);
+            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, preloadResult.Rules, isProjectRoot: true);
         }
         return new ScanFilesResult(
             files,
@@ -933,11 +933,12 @@ public class FileIndexer
         HashSet<string> probeFailedFilePaths,
         HashSet<string> listedDirectories,
         HashSet<string> fullyScannedDirectories,
-        IgnoreRuleSet activeIgnoreRules)
+        IgnoreRuleSet activeIgnoreRules,
+        bool isProjectRoot = false)
     {
         var relativeDir = ToRelativePath(dir);
 
-        var filterKind = GetDirectoryFilterKind(dir, activeIgnoreRules);
+        var filterKind = GetDirectoryFilterKind(dir, activeIgnoreRules, isProjectRoot);
         if (filterKind != PathFilterKind.None)
         {
             listedDirectories.Add(relativeDir);
@@ -1041,10 +1042,10 @@ public class FileIndexer
         return fullyScanned;
     }
 
-    private static PathFilterKind GetDirectoryFilterKind(string dir, IgnoreRuleSet activeIgnoreRules)
+    private static PathFilterKind GetDirectoryFilterKind(string dir, IgnoreRuleSet activeIgnoreRules, bool isProjectRoot = false)
     {
         var dirName = Path.GetFileName(Path.TrimEndingDirectorySeparator(dir));
-        if (SkipDirs.Contains(dirName))
+        if (!isProjectRoot && SkipDirs.Contains(dirName))
             return PathFilterKind.ExcludedByDefaultDirectory;
 
         return activeIgnoreRules.IsIgnored(dir, isDirectory: true)
