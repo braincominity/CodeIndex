@@ -22,7 +22,34 @@ public partial class DbReader
         var tokens = query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
         if (tokens.Length == 0)
             return "\"\"";
-        return string.Join(" ", tokens.Select(t => "\"" + t.Replace("\"", "\"\"") + "\""));
+        return string.Join(" ", tokens.Select(FormatFtsToken));
+    }
+
+    /// <summary>
+    /// Build a single FTS5 phrase token. Non-ASCII tokens (CJK, emoji, etc.) get an
+    /// appended '*' prefix-match operator because FTS5's default unicode61 tokenizer
+    /// treats an entire run of non-whitespace-separated codepoints as a single token,
+    /// so a bare '計算' query would never match content containing '計算する'.
+    /// FTS5フレーズトークンを構築。FTS5既定のunicode61トークナイザはCJK/絵文字の連続を単一トークンとして扱うため、
+    /// 非ASCIIトークンには prefix match の '*' を付け、'計算' で '計算する' にマッチさせる。
+    /// </summary>
+    private static string FormatFtsToken(string token)
+    {
+        var quoted = "\"" + token.Replace("\"", "\"\"") + "\"";
+        // '"phrase"*' (no space) is FTS5 prefix-phrase syntax. '"phrase" *' (with space)
+        // means "phrase followed by any token", which is not what we want.
+        // '"phrase"*'（スペースなし）がFTS5のprefix phrase構文。スペース有りは別意味なので付けない。
+        return ContainsNonAscii(token) ? quoted + "*" : quoted;
+    }
+
+    private static bool ContainsNonAscii(string token)
+    {
+        foreach (var c in token)
+        {
+            if (c > 0x7F)
+                return true;
+        }
+        return false;
     }
 
     /// <summary>

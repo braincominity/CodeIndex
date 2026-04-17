@@ -235,6 +235,48 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void Search_FindsCjkSubstringInsideLongerToken()
+    {
+        // FTS5 default tokenizer (unicode61) treats an entire CJK run like "計算する" as one token.
+        // Without the non-ASCII prefix-match fallback, `search 計算` would miss `def 計算する`.
+        // FTS5既定のunicode61トークナイザは「計算する」を単一トークンとして扱う。
+        // 非ASCIIトークンに prefix match を付与しない限り、`search 計算` は `def 計算する` を取りこぼす。
+        InsertIndexedFile("src/cjk.py", "python",
+            "def 計算する(値):\n    return 値 * 2\n");
+
+        var results = _reader.Search("計算");
+
+        Assert.Contains(results, r => r.Path == "src/cjk.py");
+    }
+
+    [Fact]
+    public void Search_CjkQueryStillRespectsExactFullToken()
+    {
+        // Prefix-match fallback must not regress the exact full-token case.
+        // The literal '計算する' should still find '計算する', not only broader prefixes.
+        // prefix match フォールバックが exact full token を壊していないことを確認する。
+        InsertIndexedFile("src/cjk_exact.py", "python",
+            "def 計算する(値):\n    return 値\n");
+
+        var results = _reader.Search("計算する");
+
+        Assert.Contains(results, r => r.Path == "src/cjk_exact.py");
+    }
+
+    [Fact]
+    public void CountSearchResults_IncludesCjkSubstringMatches()
+    {
+        // Count path shares the sanitizer, so the non-ASCII prefix fallback must apply there too.
+        // カウント経路も同じサニタイザを共有するため、非ASCIIの prefix フォールバックが効く必要がある。
+        InsertIndexedFile("src/cjk_count.py", "python",
+            "def 計算する(値):\n    return 値\n");
+
+        var counts = _reader.CountSearchResults("計算");
+
+        Assert.True(counts.Count >= 1, $"expected at least one CJK substring match, got {counts.Count}");
+    }
+
+    [Fact]
     public void SearchSymbols_FindsByName()
     {
         var results = _reader.SearchSymbols("authenticate");

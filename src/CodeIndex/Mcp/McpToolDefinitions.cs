@@ -20,7 +20,7 @@ public partial class McpServer
         {
             CreateToolDefinition(
                 "search",
-                "Full-text search across indexed code chunks using FTS5. Returns compact match-centered snippets with line metadata. / FTS5を使ったコードチャンクの全文検索。一致中心の軽量スニペットと行メタデータを返す。",
+                "Full-text search across indexed code chunks using FTS5. Returns compact match-centered snippets with line metadata. CJK / Japanese / Chinese / Korean tokens in the literal-safe path are auto-upgraded to FTS5 prefix phrases so `search 計算` matches content containing `計算する` without needing `rawQuery`. Emoji substring search is still limited by FTS5's default unicode61 tokenizer categories. / FTS5を使ったコードチャンクの全文検索。一致中心の軽量スニペットと行メタデータを返す。literal-safe 経路の CJK / 日本語 / 中国語 / 韓国語トークンは自動で FTS5 prefix phrase に昇格するため、`search 計算` は `rawQuery` なしでも `計算する` を含むコードにマッチする。絵文字の部分一致は FTS5 既定 unicode61 の category 設定により依然として制限がある。",
                 new JsonObject
                 {
                     ["type"] = "object",
