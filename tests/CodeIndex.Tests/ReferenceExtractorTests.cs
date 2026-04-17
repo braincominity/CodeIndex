@@ -227,6 +227,350 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonLegitimateCalls_AreNotDroppedByOtherLanguageKeywordLists()
+    {
+        const string content = """
+            def caller():
+                run()
+                build()
+                install()
+                clean()
+                help()
+                print()
+                require()
+                notexcluded()
+                apply()
+                task()
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        var names = references.Select(reference => reference.SymbolName).ToHashSet(StringComparer.Ordinal);
+        Assert.Contains("run", names);
+        Assert.Contains("build", names);
+        Assert.Contains("install", names);
+        Assert.Contains("clean", names);
+        Assert.Contains("help", names);
+        Assert.Contains("print", names);
+        Assert.Contains("require", names);
+        Assert.Contains("notexcluded", names);
+        Assert.Contains("apply", names);
+        Assert.Contains("task", names);
+        Assert.Equal(10, references.Count(reference => reference.ReferenceKind == "call"));
+    }
+
+    [Fact]
+    public void Extract_PythonRaiseSyntax_IsIgnored()
+    {
+        const string content = """
+            def fail():
+                raise(ValueError())
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "raise");
+        Assert.Contains(references, reference => reference.SymbolName == "ValueError" && reference.ContainerName == "fail");
+    }
+
+    [Fact]
+    public void Extract_PythonYieldSyntax_IsIgnored()
+    {
+        const string content = """
+            def stream(xs):
+                yield(item())
+                yield from(source())
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "yield");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "from");
+        Assert.Contains(references, reference => reference.SymbolName == "item" && reference.ContainerName == "stream");
+        Assert.Contains(references, reference => reference.SymbolName == "source" && reference.ContainerName == "stream");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptRequireCall_IsNotDropped()
+    {
+        const string content = """
+            function load() {
+                require("fs");
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "require" && reference.ContainerName == "load");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptSyntaxConstructs_AreIgnored()
+    {
+        const string content = """
+            class Base {
+                run() {}
+            }
+
+            class Derived extends Base {
+                constructor() {
+                    import("fs");
+                    super();
+                    require("path");
+                }
+
+                *stream(item) {
+                    yield(item);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "import");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "super");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "yield");
+        Assert.Contains(references, reference => reference.SymbolName == "require" && reference.ContainerName == "constructor");
+    }
+
+    [Fact]
+    public void Extract_RubyRequireCall_IsNotDropped()
+    {
+        const string content = """
+            def load
+              require("json")
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "require" && reference.ContainerName == "load");
+    }
+
+    [Fact]
+    public void Extract_RubyRaiseSyntax_IsIgnored()
+    {
+        const string content = """
+            def fail
+              raise("boom")
+              ValueError()
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "raise");
+        Assert.Contains(references, reference => reference.SymbolName == "ValueError" && reference.ContainerName == "fail");
+    }
+
+    [Fact]
+    public void Extract_RubyContextualKeywords_AreIgnored()
+    {
+        const string content = """
+            module Shared
+            end
+
+            class Worker
+              include(Shared)
+
+              def run(x)
+                super(x)
+                yield(item())
+              end
+            end
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "ruby", content);
+        var references = ReferenceExtractor.Extract(1, "ruby", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "include");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "super");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "yield");
+        Assert.Contains(references, reference => reference.SymbolName == "item" && reference.ContainerName == "run");
+    }
+
+    [Fact]
+    public void Extract_CsharpRunCall_IsNotDroppedByMakefileKeywordList()
+    {
+        const string content = """
+            public class Worker
+            {
+                public void Execute(Task task)
+                {
+                    task.Run();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "Run" && reference.ContainerName == "Execute");
+    }
+
+    [Fact]
+    public void Extract_CsharpReturnTargetAttribute_CallIsNotDropped()
+    {
+        const string content = """
+            using System.Runtime.InteropServices;
+
+            public class Foo
+            {
+                [MarshalAs(UnmanagedType.Bool)]
+                public bool Field1;
+
+                [return: MarshalAs(UnmanagedType.Bool)]
+                public bool Method1() => true;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var marshalAsCalls = references
+            .Where(reference => reference.SymbolName == "MarshalAs" && reference.ReferenceKind == "call")
+            .OrderBy(reference => reference.Line)
+            .ToList();
+
+        Assert.Equal(2, marshalAsCalls.Count);
+        Assert.Equal([5, 8], marshalAsCalls.Select(reference => reference.Line).ToArray());
+        Assert.All(marshalAsCalls, reference => Assert.Equal("Foo", reference.ContainerName));
+    }
+
+    [Fact]
+    public void Extract_ConstructorCalls_AreInstantiateOnly()
+    {
+        const string content = """
+            namespace N
+            {
+                public class Foo { }
+                public class Bar { }
+            }
+
+            public class Worker
+            {
+                public void Execute()
+                {
+                    var foo = new N.Foo();
+                    var bar = new global::N.Bar();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "Foo" && reference.ReferenceKind == "instantiate");
+        Assert.Contains(references, reference => reference.SymbolName == "Bar" && reference.ReferenceKind == "instantiate");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Foo" && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Bar" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_PhpIncludeRequireConstructs_AreIgnored()
+    {
+        const string content = """
+            <?php
+            function load() {
+                require("lib.php");
+                REQUIRE("lib_upper.php");
+                require_once("lib_once.php");
+                include("more.php");
+                Include_Once("more_once_mixed.php");
+                include_once("more_once.php");
+                custom();
+            }
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "require");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "REQUIRE");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "require_once");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "include");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Include_Once");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "include_once");
+        Assert.Contains(references, reference => reference.SymbolName == "custom" && reference.ContainerName == "load");
+    }
+
+    [Fact]
+    public void Extract_PhpCaseInsensitiveSharedKeywords_AreIgnored()
+    {
+        const string content = """
+            <?php
+            function load($flag, $items) {
+                IF($flag) { custom(); }
+                WHILE($flag) { break; }
+                FOREACH($items as $item) { custom(); }
+            }
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "IF");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "WHILE");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "FOREACH");
+        Assert.Equal(2, references.Count(reference => reference.SymbolName == "custom" && reference.ReferenceKind == "call"));
+    }
+
+    [Fact]
+    public void Extract_PhpCaseInsensitiveNew_IsInstantiate()
+    {
+        const string content = """
+            <?php
+            function load() {
+                new \Foo();
+                NEW namespace\Bar();
+            }
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "Foo" && reference.ReferenceKind == "instantiate");
+        Assert.Contains(references, reference => reference.SymbolName == "Bar" && reference.ReferenceKind == "instantiate");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Foo" && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Bar" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_PhpLanguageConstructCalls_AreIgnored()
+    {
+        const string content = """
+            <?php
+            function load($value) {
+                echo("hello");
+                EXIT();
+                Eval("return 1;");
+                empty($value);
+                custom();
+            }
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "echo");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "EXIT");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Eval");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "empty");
+        Assert.Contains(references, reference => reference.SymbolName == "custom" && reference.ContainerName == "load");
+    }
+
+    [Fact]
     public void Extract_UnsupportedLanguage_ReturnsEmpty()
     {
         const string content = "hello = world";
