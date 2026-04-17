@@ -130,7 +130,7 @@ symbol_references (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
     symbol_name     TEXT,                    -- referenced symbol name
-    reference_kind  TEXT,                    -- "call", "instantiate", ...
+    reference_kind  TEXT,                    -- "call", "instantiate", "subscribe", "attribute", "annotation"
     line            INTEGER,                 -- 1-based line number
     column_number   INTEGER,                 -- 1-based column number
     context         TEXT,                    -- trimmed source line
@@ -1149,7 +1149,7 @@ symbol_references (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     file_id         INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
     symbol_name     TEXT,                    -- 参照先シンボル名
-    reference_kind  TEXT,                    -- "call", "instantiate" など
+    reference_kind  TEXT,                    -- "call", "instantiate", "subscribe", "attribute", "annotation"
     line            INTEGER,                 -- 1始まりの行番号
     column_number   INTEGER,                 -- 1始まりの列番号
     context         TEXT,                    -- trim済みソース行

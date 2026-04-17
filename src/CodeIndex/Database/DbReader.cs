@@ -63,6 +63,12 @@ public partial class DbReader
             ELSE 0
         END";
     private const string InvokeReferenceKindsSql = "('call', 'instantiate')";
+    // Reference kinds that participate in the call-graph (callers/callees/hotspots). Metadata
+    // kinds such as `attribute` / `annotation` are excluded so they do not inflate the graph
+    // with non-call edges (issue #293).
+    // call-graph (callers/callees/hotspots) に参加する reference kind。`attribute` / `annotation`
+    // のようなメタデータ kind は非呼び出しエッジなのでここから除外する (issue #293)。
+    internal const string CallGraphReferenceKindsSql = "('call', 'instantiate', 'subscribe')";
 
     /// <summary>
     /// Visibility ranking: public symbols first, then protected, internal, private, unknown last.
@@ -872,6 +878,7 @@ public partial class DbReader
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
                 WHERE r.container_name IS NOT NULL
+                  AND r.reference_kind IN {CallGraphReferenceKindsSql}
                   AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}"
             : @"
             SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
@@ -962,6 +969,8 @@ public partial class DbReader
 
         if (referenceKind != null)
             groupedSql += " AND r.reference_kind = @referenceKind";
+        else
+            groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
         if (exact && _foldReady)
             groupedSql += " AND r.symbol_name_folded = @query";
         else if (exact)
@@ -1011,6 +1020,8 @@ public partial class DbReader
 
         if (referenceKind != null)
             groupedSql += " AND r.reference_kind = @referenceKind";
+        else
+            groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
         if (exact && _foldReady)
             groupedSql += " AND r.symbol_name_folded = @query";
         else if (exact)
@@ -1058,6 +1069,7 @@ public partial class DbReader
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
                 WHERE r.container_name IS NOT NULL
+                  AND r.reference_kind IN {CallGraphReferenceKindsSql}
                   AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}"
             : @"
             SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
@@ -1152,6 +1164,8 @@ public partial class DbReader
 
         if (referenceKind != null)
             groupedSql += " AND r.reference_kind = @referenceKind";
+        else
+            groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
         if (exact && _foldReady)
             groupedSql += " AND r.container_name_folded = @query";
         else if (exact)
@@ -1204,6 +1218,8 @@ public partial class DbReader
 
         if (referenceKind != null)
             groupedSql += " AND r.reference_kind = @referenceKind";
+        else
+            groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
         if (exact && _foldReady)
             groupedSql += " AND r.container_name_folded = @query";
         else if (exact)

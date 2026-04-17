@@ -132,6 +132,22 @@ public static class ReferenceExtractor
     // C# イベント購読・解除: Click += OnClick — LHS と RHS の両方が PascalCase 識別子のみ
     private static readonly Regex EventSubscriptionRegex = new(@"(?<name>[A-Z]\w*)\s*[+-]=\s*(?:new\s+)?[A-Z]\w*", RegexOptions.Compiled);
 
+    // C# targeted-attribute prefixes (e.g. [return: NotNull], [assembly: InternalsVisibleTo(...)]).
+    // C# のターゲット付き属性の prefix。
+    private static readonly HashSet<string> CSharpAttributeTargets = new(StringComparer.Ordinal)
+    {
+        "return", "param", "method", "type", "field", "property", "event", "assembly", "module",
+    };
+
+    // Languages whose `@Decorator(args)` / `@Annotation(args)` syntax should produce
+    // `annotation` reference rows rather than `call` rows (issue #293).
+    // `@Decorator(args)` / `@Annotation(args)` 構文を `call` ではなく `annotation` として
+    // 記録すべき言語 (issue #293)。
+    private static readonly HashSet<string> AnnotationLanguages = new(StringComparer.Ordinal)
+    {
+        "java", "kotlin", "scala", "typescript",
+    };
+
     public static IReadOnlyCollection<string> GetSupportedLanguages() => SupportedLanguages;
 
     public static bool SupportsLanguage(string? lang) =>
@@ -211,7 +227,8 @@ public static class ReferenceExtractor
             foreach (Match match in CallRegex.Matches(preparedLine))
             {
                 var name = match.Groups["name"].Value;
-                if (IsConstructorCallName(language, preparedLine, match.Groups["name"].Index))
+                var nameIndex = match.Groups["name"].Index;
+                if (IsConstructorCallName(language, preparedLine, nameIndex))
                 {
                     AddReference(references, seen, fileId, match, "instantiate", context, lineNumber, container);
                     continue;
@@ -221,7 +238,12 @@ public static class ReferenceExtractor
                 if (definitionNames != null && definitionNames.Contains(name))
                     continue;
 
-                AddReference(references, seen, fileId, match, "call", context, lineNumber, container);
+                // issue #293: reclassify C# attribute / Java/Kotlin/Scala/TypeScript annotation
+                // usages with arguments so they do not pollute the call-graph as phantom `call` rows.
+                // issue #293: 引数付きの C# attribute と Java/Kotlin/Scala/TypeScript annotation 使用を
+                // `call` ではなく専用の種別に分類し、call-graph の phantom エッジを防ぐ。
+                var metadataKind = TryClassifyMetadataReference(language, preparedLine, nameIndex);
+                AddReference(references, seen, fileId, match, metadataKind ?? "call", context, lineNumber, container);
             }
         }
 
@@ -379,6 +401,117 @@ public static class ReferenceExtractor
 
     private static bool IsIdentifierChar(char ch) =>
         char.IsLetterOrDigit(ch) || ch == '_';
+
+    /// <summary>
+    /// Classify a call-looking identifier as an attribute/annotation when it appears inside
+    /// a C# `[...]` attribute list or is preceded by a Java-family `@` marker. Returns null
+    /// for ordinary method calls so the caller emits the default `call` reference kind.
+    /// 呼び出しに見える識別子を、C# の `[...]` 属性リスト内や Java 系 `@` 付き注釈に該当する
+    /// 場合に専用の reference kind へ分類する。通常の呼び出しは null を返して既定の `call` を維持する。
+    /// </summary>
+    private static string? TryClassifyMetadataReference(string language, string preparedLine, int nameIndex)
+    {
+        var probe = nameIndex - 1;
+        while (probe >= 0 && char.IsWhiteSpace(preparedLine[probe]))
+            probe--;
+        if (probe < 0)
+            return null;
+
+        if (language == "csharp")
+            return IsCSharpAttributeContext(preparedLine, probe) ? "attribute" : null;
+
+        if (AnnotationLanguages.Contains(language))
+            return IsAnnotationContext(preparedLine, probe) ? "annotation" : null;
+
+        return null;
+    }
+
+    private static bool IsCSharpAttributeContext(string line, int probe)
+    {
+        // Direct form: `[Foo(...)`. 直接形 `[Foo(...)`。
+        if (line[probe] == '[')
+            return true;
+
+        // Targeted form: `[target: Foo(...)]` — peek past the `target:` prefix.
+        // ターゲット指定形式 `[target: Foo(...)]` — `target:` 部分をスキップして `[` を探す。
+        if (line[probe] == ':')
+        {
+            var j = probe - 1;
+            var idEnd = j;
+            while (j >= 0 && IsIdentifierChar(line[j]))
+                j--;
+            if (j + 1 <= idEnd)
+            {
+                var target = line[(j + 1)..(idEnd + 1)];
+                if (CSharpAttributeTargets.Contains(target))
+                {
+                    var k = j;
+                    while (k >= 0 && char.IsWhiteSpace(line[k]))
+                        k--;
+                    if (k >= 0 && line[k] == '[')
+                        return true;
+                }
+            }
+            return false;
+        }
+
+        // Comma-separated list: `[Foo("a"), Bar("b")]` — walk past prior attribute entries
+        // (and any balanced parens they contain) until an unbalanced opening `[` appears.
+        // 一行に並んだ複数属性 `[Foo("a"), Bar("b")]` では、先行する属性と対応する括弧を
+        // 読み飛ばして未対応の `[` に到達した場合にのみ属性として扱う。
+        if (line[probe] == ',')
+            return ScanLeftForAttributeOpen(line, probe - 1);
+
+        return false;
+    }
+
+    private static bool ScanLeftForAttributeOpen(string line, int start)
+    {
+        var parenDepth = 0;
+        for (var i = start; i >= 0; i--)
+        {
+            var c = line[i];
+            if (c == ')')
+            {
+                parenDepth++;
+                continue;
+            }
+            if (c == '(')
+            {
+                if (parenDepth == 0)
+                    return false;
+                parenDepth--;
+                continue;
+            }
+            if (parenDepth > 0)
+                continue;
+            if (c == '[')
+                return true;
+            if (c == ']' || c == ';' || c == '{' || c == '}')
+                return false;
+        }
+        return false;
+    }
+
+    private static bool IsAnnotationContext(string line, int probe)
+    {
+        // `@Annotation(args)` — direct marker. 直接 `@Annotation(args)` の場合。
+        if (line[probe] == '@')
+            return true;
+
+        // `@module.Annotation(args)` — walk past the dotted qualifier chain to the `@`.
+        // `@module.Annotation(args)` のようにドット区切り修飾子がある場合は、`.` と識別子を
+        // 順に遡って `@` を探す。
+        while (probe >= 0 && line[probe] == '.')
+        {
+            probe--;
+            while (probe >= 0 && IsIdentifierChar(line[probe]))
+                probe--;
+            while (probe >= 0 && char.IsWhiteSpace(line[probe]))
+                probe--;
+        }
+        return probe >= 0 && line[probe] == '@';
+    }
 
     private static bool UsesHashComments(string lang) =>
         lang is "python" or "ruby" or "php" or "elixir" or "r" or "powershell"

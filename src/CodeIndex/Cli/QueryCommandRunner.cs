@@ -2956,7 +2956,7 @@ public static class QueryCommandRunner
     private static readonly string[] AllValidKinds =
         ["class", "delegate", "enum", "event", "function", "import", "interface", "namespace", "property", "struct"];
     private static readonly string[] AllValidReferenceKinds =
-        ["call", "instantiate", "subscribe"];
+        ["annotation", "attribute", "call", "instantiate", "subscribe"];
 
     private static void WriteKindHint(string? kind, DbReader reader)
     {

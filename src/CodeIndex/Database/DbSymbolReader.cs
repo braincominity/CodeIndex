@@ -871,6 +871,7 @@ public partial class DbReader
                        " + GetLogicalReferenceKindSql("sr.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references sr
                 JOIN files rf ON rf.id = sr.file_id
+                WHERE sr.reference_kind IN " + CallGraphReferenceKindsSql + @"
                 GROUP BY rf.lang, sr.file_id, sr.symbol_name, sr.line, sr.column_number, logical_reference_kind
             ),
             global_reference_counts AS (
@@ -1084,6 +1085,7 @@ public partial class DbReader
                        " + GetLogicalReferenceKindSql("sr.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references sr
                 JOIN files rf ON rf.id = sr.file_id
+                WHERE sr.reference_kind IN " + CallGraphReferenceKindsSql + @"
                 GROUP BY rf.lang, sr.file_id, sr.symbol_name, sr.line, sr.column_number, logical_reference_kind
             ),
             global_reference_counts AS (

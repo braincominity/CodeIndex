@@ -614,8 +614,13 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpReturnTargetAttribute_CallIsNotDropped()
+    public void Extract_CsharpReturnTargetAttribute_ReferenceIsRecordedAsAttribute()
     {
+        // issue #293: C# attributes (including targeted `[return: ...]` form) are recorded as
+        // `attribute` kind — the reference must not be dropped, but also must not pollute the
+        // call-graph with a phantom `call` row.
+        // issue #293: C# 属性（`[return: ...]` の target 付きも含む）は `attribute` として
+        // 記録される。参照自体は失われないが、call-graph を `call` 行で汚染してはならない。
         const string content = """
             using System.Runtime.InteropServices;
 
@@ -632,14 +637,15 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var marshalAsCalls = references
-            .Where(reference => reference.SymbolName == "MarshalAs" && reference.ReferenceKind == "call")
+        var marshalAsRefs = references
+            .Where(reference => reference.SymbolName == "MarshalAs")
             .OrderBy(reference => reference.Line)
             .ToList();
 
-        Assert.Equal(2, marshalAsCalls.Count);
-        Assert.Equal([5, 8], marshalAsCalls.Select(reference => reference.Line).ToArray());
-        Assert.All(marshalAsCalls, reference => Assert.Equal("Foo", reference.ContainerName));
+        Assert.Equal(2, marshalAsRefs.Count);
+        Assert.Equal([5, 8], marshalAsRefs.Select(reference => reference.Line).ToArray());
+        Assert.All(marshalAsRefs, reference => Assert.Equal("attribute", reference.ReferenceKind));
+        Assert.All(marshalAsRefs, reference => Assert.Equal("Foo", reference.ContainerName));
     }
 
     [Fact]
@@ -1029,5 +1035,181 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "calculate" && r.ReferenceKind == "call");
         // Comments should not produce references / コメントは参照を生成しないこと
         Assert.DoesNotContain(references, r => r.SymbolName == "fakeCall");
+    }
+
+    [Fact]
+    public void Extract_CsharpAttribute_ClassifiedAsAttribute()
+    {
+        // issue #293: `[Obsolete("msg")]` must produce an `attribute` reference, not a phantom `call`.
+        // issue #293: `[Obsolete("msg")]` は `call` ではなく `attribute` として記録されること。
+        const string content = """
+            using System;
+            [Obsolete("old")]
+            public class Old
+            {
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var obsolete = Assert.Single(references.Where(r => r.SymbolName == "Obsolete"));
+        Assert.Equal("attribute", obsolete.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpTargetedAttribute_ClassifiedAsAttribute()
+    {
+        // issue #293: `[return: NotNull("x")]` targeted attribute is classified as `attribute`.
+        // issue #293: `[return: NotNull("x")]` のターゲット付き属性も `attribute` になること。
+        const string content = """
+            public class C
+            {
+                [return: NotNull("x")]
+                public string M() => string.Empty;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var notNull = Assert.Single(references.Where(r => r.SymbolName == "NotNull"));
+        Assert.Equal("attribute", notNull.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpMultipleAttributes_ClassifiedAsAttribute()
+    {
+        // issue #293: `[Foo("a"), Bar("b")]` — both entries in a comma-separated attribute list
+        // must be classified as `attribute`.
+        // issue #293: `[Foo("a"), Bar("b")]` のカンマ区切り属性リストは全て `attribute` になること。
+        const string content = """
+            [Foo("a"), Bar("b")]
+            public class C { }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var foo = Assert.Single(references.Where(r => r.SymbolName == "Foo"));
+        var bar = Assert.Single(references.Where(r => r.SymbolName == "Bar"));
+        Assert.Equal("attribute", foo.ReferenceKind);
+        Assert.Equal("attribute", bar.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpAttributeWithNewArgument_InstantiateStaysInstantiate()
+    {
+        // Inside attribute arguments, `new Foo()` still counts as `instantiate` — only the
+        // attribute identifier itself is reclassified.
+        // 属性引数内の `new Foo()` は従来通り `instantiate`。属性名本体のみが再分類される。
+        const string content = """
+            [AttributeUsage(AttributeTargets.Class)]
+            public class C { }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var au = Assert.Single(references.Where(r => r.SymbolName == "AttributeUsage"));
+        Assert.Equal("attribute", au.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpMethodBodyCall_StaysCall()
+    {
+        // Regression guard: ordinary method calls inside method bodies must still produce `call`,
+        // not be mistaken for attribute references due to unrelated `[` tokens on nearby lines.
+        // 回帰防止: メソッド本体内の通常呼び出しは、近くの `[` トークンの影響で `attribute` と
+        // 誤判定されず `call` のまま残ること。
+        const string content = """
+            public class C
+            {
+                public int Run() => Compute(42);
+                public int Compute(int x) => x;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var compute = Assert.Single(references.Where(r => r.SymbolName == "Compute"));
+        Assert.Equal("call", compute.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_JavaAnnotation_ClassifiedAsAnnotation()
+    {
+        // issue #293: `@Deprecated(since="1.0")` must produce an `annotation` reference, not a phantom `call`.
+        // issue #293: `@Deprecated(since="1.0")` は `call` ではなく `annotation` として記録されること。
+        const string content = """
+            public class AnnotatedClass {
+                @Deprecated(since="1.0")
+                public void doWork() { }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        var deprecated = Assert.Single(references.Where(r => r.SymbolName == "Deprecated"));
+        Assert.Equal("annotation", deprecated.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_JavaQualifiedAnnotation_ClassifiedAsAnnotation()
+    {
+        // issue #293: `@org.junit.Test(timeout=1000)` — dotted qualifier chain still resolves to `@`.
+        // issue #293: `@org.junit.Test(timeout=1000)` のような修飾付き注釈も `annotation` になること。
+        const string content = """
+            public class T {
+                @org.junit.Test(timeout=1000)
+                public void testIt() { }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        var testAnno = Assert.Single(references.Where(r => r.SymbolName == "Test"));
+        Assert.Equal("annotation", testAnno.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_KotlinAnnotation_ClassifiedAsAnnotation()
+    {
+        // issue #293: Kotlin `@Deprecated("msg")` also emits `annotation`.
+        // issue #293: Kotlin の `@Deprecated("msg")` も `annotation` になること。
+        const string content = """
+            class K {
+                @Deprecated("msg")
+                fun old() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        var deprecated = Assert.Single(references.Where(r => r.SymbolName == "Deprecated"));
+        Assert.Equal("annotation", deprecated.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_JavaMethodBodyCall_StaysCall()
+    {
+        // Regression guard: ordinary Java method call remains `call`, not `annotation`.
+        // 回帰防止: Java のメソッド本体内の通常呼び出しは `annotation` に誤判定されず `call` のまま。
+        const string content = """
+            public class J {
+                public int add(int a, int b) { return compute(a, b); }
+                public int compute(int a, int b) { return a + b; }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        var compute = Assert.Single(references.Where(r => r.SymbolName == "compute"));
+        Assert.Equal("call", compute.ReferenceKind);
     }
 }
