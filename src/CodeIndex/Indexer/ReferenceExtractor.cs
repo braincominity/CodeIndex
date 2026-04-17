@@ -330,9 +330,11 @@ public static class ReferenceExtractor
             // ヘッダ範囲（end line の end column より前）に入っているかを判定して差し替える。
             SymbolRecord ResolveContainerForCall(int column)
             {
-                foreach (var (rangeStart, rangeEnd, rangeEndColumn, syntheticRecordCtor) in recordPrimaryCtorRanges)
+                foreach (var (rangeStart, rangeStartColumn, rangeEnd, rangeEndColumn, syntheticRecordCtor) in recordPrimaryCtorRanges)
                 {
                     if (lineNumber < rangeStart || lineNumber > rangeEnd)
+                        continue;
+                    if (lineNumber == rangeStart && column < rangeStartColumn)
                         continue;
                     if (lineNumber == rangeEnd && column >= rangeEndColumn)
                         continue;
@@ -944,12 +946,12 @@ public static class ReferenceExtractor
     /// 宣言ヘッダーの範囲（end line は終端 `;` / `{` のカラムまで）だけ合成 ctor に差し替えることで、
     /// 同一行 braced body の呼び出しや後続メソッドは本来の container に残る。
     /// </summary>
-    private static List<(int StartLine, int EndLine, int EndColumn, SymbolRecord Container)> BuildCSharpPrimaryCtorContainers(
+    private static List<(int StartLine, int StartColumn, int EndLine, int EndColumn, SymbolRecord Container)> BuildCSharpPrimaryCtorContainers(
         string language,
         IReadOnlyList<SymbolRecord> symbols,
         string[] structuralLines)
     {
-        var ranges = new List<(int, int, int, SymbolRecord)>();
+        var ranges = new List<(int, int, int, int, SymbolRecord)>();
         if (language != "csharp")
             return ranges;
 
@@ -978,6 +980,16 @@ public static class ReferenceExtractor
             if (!HasCSharpBasePrimaryCtorCall(headerText))
                 continue;
 
+            // Restrict the synthetic container to the actual declaration span, starting at the
+            // `class` / `struct` / `record` keyword column on the start line. Without this
+            // same-line tokens BEFORE the keyword (e.g. attribute arguments in
+            // `[Attr(Helper.Get())] public class Child(int x) : Parent(x) {}`) would get
+            // attributed to the synthetic ctor and pollute callers / impact with phantom
+            // `Child` callers for `Attr` and `Helper.Get`.
+            // 合成 ctor コンテナを本物の宣言範囲に限定する。`class` / `struct` / `record`
+            // キーワード位置より前（同一行の属性呼び出しなど）は本来の container に残す。
+            var startColumn = FindCSharpPrimaryCtorKeywordColumn(structuralLines, symbol.StartLine);
+
             var synthetic = new SymbolRecord
             {
                 FileId = symbol.FileId,
@@ -996,11 +1008,39 @@ public static class ReferenceExtractor
                 Visibility = symbol.Visibility,
             };
 
-            ranges.Add((symbol.StartLine, headerEndLine, headerEndColumn, synthetic));
+            ranges.Add((symbol.StartLine, startColumn, headerEndLine, headerEndColumn, synthetic));
         }
 
         return ranges;
     }
+
+    private static int FindCSharpPrimaryCtorKeywordColumn(string[] structuralLines, int startLine)
+    {
+        var idx = Math.Max(0, startLine - 1);
+        if (idx >= structuralLines.Length)
+            return 0;
+        var line = structuralLines[idx];
+        foreach (var keyword in CSharpPrimaryCtorKeywords)
+        {
+            int pos = 0;
+            while (pos < line.Length)
+            {
+                var found = line.IndexOf(keyword, pos, StringComparison.Ordinal);
+                if (found < 0) break;
+                var before = found == 0 ? ' ' : line[found - 1];
+                var afterIdx = found + keyword.Length;
+                var after = afterIdx < line.Length ? line[afterIdx] : ' ';
+                if (!IsCSharpIdentifierPart(before) && !IsCSharpIdentifierPart(after))
+                    return found;
+                pos = found + 1;
+            }
+        }
+        return 0;
+    }
+
+    private static readonly string[] CSharpPrimaryCtorKeywords = { "record", "class", "struct" };
+
+    private static bool IsCSharpIdentifierPart(char c) => char.IsLetterOrDigit(c) || c == '_';
 
     /// <summary>
     /// Walk structural-masked lines starting at the 1-based <paramref name="startLine"/> and collect

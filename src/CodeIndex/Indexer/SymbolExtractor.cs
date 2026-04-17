@@ -3961,7 +3961,7 @@ public static class SymbolExtractor
         {
             BodyStyle.Brace when lang is "javascript" or "typescript" => FindJavaScriptBraceRange(lines, startIndex, lang, startColumn),
             BodyStyle.Brace when lang == "csharp" => FindCSharpBraceRange(lines, startIndex, startColumn),
-            BodyStyle.Brace => FindBraceRange(lines, startIndex, startColumn),
+            BodyStyle.Brace => FindBraceRange(lines, startIndex, startColumn, lang),
             BodyStyle.Indent => FindIndentRange(lines, startIndex),
             BodyStyle.RubyEnd => FindRubyRange(lines, startIndex),
             BodyStyle.VisualBasicEnd => FindVisualBasicRange(lines, startIndex),
@@ -4197,11 +4197,19 @@ public static class SymbolExtractor
             : (startIndex + 1, null, null);
     }
 
-    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindBraceRange(string[] lines, int startIndex, int startColumn = 0)
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindBraceRange(string[] lines, int startIndex, int startColumn = 0, string? lang = null)
     {
         int depth = 0;
         bool opened = false;
         int? bodyStartLine = null;
+        // In languages where `'...'` is a regular string literal (PHP) rather than a char
+        // literal (Java/Kotlin/Scala/Swift/Go/C/C++/Dart) or a lifetime annotation (Rust / OCaml),
+        // we must scan to the next unescaped `'` regardless of length so that unbalanced `(`,
+        // `[`, `{`, `}` tokens inside long single-quoted strings do not leak into brace-depth
+        // counters and collapse the enclosing body range.
+        // PHP のように `'...'` が通常の文字列リテラルである言語では、閉じ `'` まで距離を制限せず
+        // スキップしないと、文字列内の `(` / `[` / `{` / `}` で body 範囲が壊れる。
+        bool singleQuoteIsString = lang == "php";
         // Track () and [] depth so `{` / `}` inside annotation arguments, function-default lambdas,
         // and similar paren/bracket-delimited contexts do not advance the body brace counter.
         // Without this, Java headers like `class Leaf extends @Ann({A.class, B.class}) Root {`
@@ -4277,6 +4285,33 @@ public static class SymbolExtractor
 
                 if (c == '\'')
                 {
+                    if (singleQuoteIsString)
+                    {
+                        // PHP-style: `'...'` is a full string literal. Scan to the next
+                        // unescaped `'` on this line regardless of length so long strings
+                        // with `[` / `{` / `(` inside cannot leak into brace-depth counters.
+                        // PHP の `'...'` はフルの文字列リテラル。閉じ `'` まで距離制限なく走査する。
+                        var closeIdx = -1;
+                        for (int k = j + 1; k < scanLine.Length; k++)
+                        {
+                            if (scanLine[k] == '\\' && k + 1 < scanLine.Length)
+                            {
+                                k++;
+                                continue;
+                            }
+                            if (scanLine[k] == '\'')
+                            {
+                                closeIdx = k;
+                                break;
+                            }
+                        }
+                        // If no close on this line, swallow the rest of the line so multi-line
+                        // PHP single-quoted strings do not corrupt brace depth mid-scan.
+                        // その行に閉じが無ければ行末までスキップする（PHP の複数行 '...' 文字列対応）。
+                        j = closeIdx > 0 ? closeIdx : scanLine.Length;
+                        continue;
+                    }
+
                     // Distinguish char literals (`'x'`, `'\n'`, `'\u{1}'`) from Rust / OCaml
                     // lifetime annotations (`'a`, `'static`, `'_`) and from possessive text
                     // in comments/strings we already skipped. A char literal has a closing
@@ -4285,24 +4320,26 @@ public static class SymbolExtractor
                     // regular character so `Holder<'a>` does not swallow the `{` that follows.
                     // Rust の lifetime (`'a`) と char literal (`'x'`) を区別する。対応する閉じ `'`
                     // が近傍に無ければ lifetime として `'` を普通の文字扱いで読み飛ばす。
-                    var closeIdx = -1;
-                    var limit = Math.Min(scanLine.Length, j + 12);
-                    for (int k = j + 1; k < limit; k++)
                     {
-                        if (scanLine[k] == '\\' && k + 1 < scanLine.Length)
+                        var closeIdx = -1;
+                        var limit = Math.Min(scanLine.Length, j + 12);
+                        for (int k = j + 1; k < limit; k++)
                         {
-                            k++;
-                            continue;
+                            if (scanLine[k] == '\\' && k + 1 < scanLine.Length)
+                            {
+                                k++;
+                                continue;
+                            }
+                            if (scanLine[k] == '\'')
+                            {
+                                closeIdx = k;
+                                break;
+                            }
                         }
-                        if (scanLine[k] == '\'')
+                        if (closeIdx > 0)
                         {
-                            closeIdx = k;
-                            break;
+                            j = closeIdx;
                         }
-                    }
-                    if (closeIdx > 0)
-                    {
-                        j = closeIdx;
                     }
                     continue;
                 }

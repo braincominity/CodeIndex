@@ -2773,6 +2773,65 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Php_SingleQuotedDefaultArgument_PreservesFunctionBodyRange()
+    {
+        // Regression: the shared `FindBraceRange` `'` heuristic previously assumed a char
+        // literal (closing `'` within ~12 chars) and silently skipped only the opening `'`
+        // if none was found nearby. In PHP `'...'` is a full string literal, so a long
+        // default argument such as `$x = 'aaaaaaaaaaaaaaa['` leaked the `[` into the shared
+        // paren / bracket depth counters — `parenDepth` stayed > 0 at the real body `{`, so
+        // `demo` ended up with null body range and `callThing()` lost its container. Now
+        // the scanner treats `'...'` as a full string literal for PHP specifically.
+        // PHP の `'...'` を char literal として扱うと長い文字列内の `[` / `{` で body 範囲が崩れる。
+        const string content = """
+            <?php
+            function demo($x = 'aaaaaaaaaaaaaaa[') { return callThing(); }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(1, "php", content, symbols);
+
+        var demo = Assert.Single(symbols, s => s.Name == "demo" && s.Kind == "function");
+        Assert.NotNull(demo.BodyStartLine);
+        Assert.NotNull(demo.BodyEndLine);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "callThing" && r.ReferenceKind == "call"
+            && r.ContainerKind == "function" && r.ContainerName == "demo");
+    }
+
+    [Fact]
+    public void Extract_CSharpPrimaryCtor_SameLineAttributeCallsStayOnClassContainer()
+    {
+        // Regression: the synthetic C# primary-ctor container previously applied to every
+        // call on the declaration's start line, including attribute argument calls that
+        // textually precede the `class` keyword. `[Attr(Helper.Get())] public class Child(int x) : Parent(x) {}`
+        // then attributed `Attr` and `Get` to the synthetic `function:Child` container, so
+        // `callers Attr` / `callers Helper.Get` looked like the child ctor called them.
+        // The synthetic range now tracks a start column at the `class` keyword, so tokens
+        // before it stay on the real `class:Child` container while `Parent(x)` remains on
+        // the synthetic ctor.
+        // 宣言行より前の属性呼び出しが合成 primary-ctor コンテナに奪われないことを固定する。
+        const string content =
+            "[Attr(Helper.Get())] public class Child(int x) : Parent(x) {}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Attr" && r.ContainerKind == "class" && r.ContainerName == "Child");
+        Assert.Contains(references, r =>
+            r.SymbolName == "Get" && r.ContainerKind == "class" && r.ContainerName == "Child");
+        Assert.Contains(references, r =>
+            r.SymbolName == "Parent" && r.ContainerKind == "function" && r.ContainerName == "Child");
+
+        // No `Attr` / `Get` references should be attributed to the synthetic function ctor.
+        Assert.DoesNotContain(references, r =>
+            (r.SymbolName == "Attr" || r.SymbolName == "Get")
+            && r.ContainerKind == "function" && r.ContainerName == "Child");
+    }
+
+    [Fact]
     public void TryExtractJavaCtorNameFromLine_QuotedAnnotationArg_ReturnsCtorName()
     {
         // Direct regression on the shared annotation scanner: an `)` inside a string literal
