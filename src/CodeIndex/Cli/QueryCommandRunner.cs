@@ -3161,11 +3161,18 @@ public static class QueryCommandRunner
         var baseGraphSupported = lang == null
             ? (bool?)null
             : ReferenceExtractor.SupportsLanguage(lang);
+        var graphLanguage = hasSupportedGraphDefinition ? lang : "csharp";
+        var graphSupported = hasSupportedGraphDefinition ? baseGraphSupported : false;
+        var graphSupportReason = ReferenceExtractor.BuildGraphSupportReasonWithUnsupportedEnumMemberGap(
+            graphLanguage,
+            graphSupported,
+            hasUnsupportedEnumMember: true,
+            hasSupportedGraphDefinition);
 
         return new GraphSupportOverride(
-            hasSupportedGraphDefinition ? lang : "csharp",
-            GraphSupported: hasSupportedGraphDefinition ? baseGraphSupported : false,
-            ReferenceExtractor.BuildGraphSupportReason("csharp", false, "enum", "enum")
+            graphLanguage,
+            GraphSupported: graphSupported,
+            graphSupportReason
                 ?? "Call-graph extraction is indexed for 'csharp', but enum-member access edges are not indexed yet.",
             "enum_member",
             GraphDegraded: true);

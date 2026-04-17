@@ -208,11 +208,14 @@ public partial class McpServer
         bool? graphSupported = hasEnumMemberGap && !hasSupportedGraphDefinition
             ? false
             : baseGraphSupported;
-        var graphSupportReason = hasEnumMemberGap
-            ? ReferenceExtractor.BuildGraphSupportReason("csharp", false, "enum", "enum")
-            : ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported);
+        var graphLanguage = hasEnumMemberGap && !hasSupportedGraphDefinition ? "csharp" : lang;
+        var graphSupportReason = ReferenceExtractor.BuildGraphSupportReasonWithUnsupportedEnumMemberGap(
+            graphLanguage,
+            graphSupported,
+            hasEnumMemberGap,
+            hasSupportedGraphDefinition);
         return (
-            GraphLanguage: hasEnumMemberGap && !hasSupportedGraphDefinition ? "csharp" : lang,
+            GraphLanguage: graphLanguage,
             GraphSupported: graphSupported,
             GraphSupportReason: graphSupportReason,
             UnsupportedSymbolKind: hasEnumMemberGap ? "enum_member" : null,

@@ -837,6 +837,8 @@ public class McpServerTests : IDisposable
         Assert.True(structured["graphDegraded"]!.GetValue<bool>());
         Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
         Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
+        Assert.Contains("Call-graph extraction is indexed for 'csharp'.", structured["graphSupportReason"]!.GetValue<string>());
+        Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", structured["graphSupportReason"]!.GetValue<string>());
     }
 
     [Fact]
@@ -867,6 +869,7 @@ public class McpServerTests : IDisposable
         Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
         Assert.Null(structured["graphLanguage"]);
         Assert.Null(structured["graphSupported"]);
+        Assert.Equal("Exact results also include C# enum members whose access edges are not indexed yet.", structured["graphSupportReason"]!.GetValue<string>());
     }
 
     [Fact]
@@ -945,6 +948,8 @@ public class McpServerTests : IDisposable
         Assert.True(structured["graphDegraded"]!.GetValue<bool>());
         Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
         Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
+        Assert.Contains("Call-graph extraction is indexed for 'csharp'.", structured["graphSupportReason"]!.GetValue<string>());
+        Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", structured["graphSupportReason"]!.GetValue<string>());
     }
 
     [Fact]
@@ -1034,6 +1039,8 @@ public class McpServerTests : IDisposable
         Assert.True(structured["graphDegraded"]!.GetValue<bool>());
         Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
         Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
+        Assert.Contains("Call-graph extraction is indexed for 'csharp'.", structured["graphSupportReason"]!.GetValue<string>());
+        Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", structured["graphSupportReason"]!.GetValue<string>());
     }
 
     [Fact]

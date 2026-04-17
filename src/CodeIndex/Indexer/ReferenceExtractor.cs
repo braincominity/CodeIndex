@@ -176,6 +176,24 @@ public static class ReferenceExtractor
         return $"Call-graph extraction is not indexed for '{lang}'. Use search, definition, excerpt, or files instead.";
     }
 
+    public static string? BuildGraphSupportReasonWithUnsupportedEnumMemberGap(string? lang, bool? graphSupported, bool hasUnsupportedEnumMember, bool hasSupportedGraphDefinition)
+    {
+        var baseReason = BuildGraphSupportReason(lang, graphSupported);
+        if (!hasUnsupportedEnumMember)
+            return baseReason;
+
+        var enumGapReason = hasSupportedGraphDefinition
+            ? "Exact results also include C# enum members whose access edges are not indexed yet."
+            : BuildGraphSupportReason("csharp", false, "enum", "enum");
+
+        if (string.IsNullOrWhiteSpace(baseReason))
+            return enumGapReason;
+        if (string.IsNullOrWhiteSpace(enumGapReason) || string.Equals(baseReason, enumGapReason, StringComparison.Ordinal))
+            return baseReason;
+
+        return $"{baseReason} {enumGapReason}";
+    }
+
     private static bool IsUnsupportedCSharpEnumMemberSymbol(string? lang, string? kind, string? containerKind)
     {
         return string.Equals(lang, "csharp", StringComparison.Ordinal)

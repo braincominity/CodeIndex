@@ -585,9 +585,11 @@ public partial class DbReader
         bool? graphSupported = hasUnsupportedEnumMember && !hasSupportedGraphDefinition
             ? false
             : baseGraphSupported;
-        var graphSupportReason = hasUnsupportedEnumMember
-            ? ReferenceExtractor.BuildGraphSupportReason("csharp", false, "enum", "enum")
-            : BuildGraphSupportReason(graphLanguage, graphSupported);
+        var graphSupportReason = ReferenceExtractor.BuildGraphSupportReasonWithUnsupportedEnumMemberGap(
+            graphLanguage,
+            graphSupported,
+            hasUnsupportedEnumMember,
+            hasSupportedGraphDefinition);
         var unsupportedSymbolKind = hasUnsupportedEnumMember ? "enum_member" : null;
         var exactSignal = exact
             ? GetAnalyzeSymbolExactQuerySignal(includeGraphSignal: hasGraphApplicableFiles)
