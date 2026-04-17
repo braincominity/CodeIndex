@@ -5415,6 +5415,18 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_DetectsUnicodeEnumMembers()
+    {
+        var content = "public enum Localized {\n    RÉSUMÉ,\n    NAÏVE;\n}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "RÉSUMÉ" && s.ContainerName == "Localized");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "NAÏVE" && s.ContainerName == "Localized");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "R" && s.ContainerName == "Localized");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "NA" && s.ContainerName == "Localized");
+    }
+
+    [Fact]
     public void Extract_Java_HandlesTrailingComma()
     {
         // `enum X { A, B, }` — trailing comma before closing brace must not emit an empty member.

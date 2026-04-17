@@ -1204,8 +1204,13 @@ public static class SymbolExtractor
             TryAddCSharpEnumMemberFromSpan(fileId, enumSymbol, rawLines, enumScannerLines, currentStart.Value, (bodyEndLineIndex, bodyEndColumnExclusive), symbols);
     }
 
-    // Java identifier start: letter / underscore / dollar. / Java 識別子の先頭: 英字・アンダースコア・ドル。
-    private static readonly Regex JavaEnumMemberNameRegex = new(@"(?<name>[A-Za-z_$][A-Za-z0-9_$]*)", RegexOptions.Compiled);
+    // Java identifier start: Unicode letter / letter-number / underscore / dollar. Continue chars also
+    // allow digits, connector punctuation, and combining marks so enum members like `RÉSUMÉ` survive intact.
+    // Java 識別子の先頭: Unicode の letter / letter-number / underscore / dollar。
+    // 継続文字は数字・connector punctuation・結合文字も許可し、`RÉSUMÉ` のような enum member を切らない。
+    private static readonly Regex JavaEnumMemberNameRegex = new(
+        @"(?<name>[\p{L}\p{Nl}_$][\p{L}\p{Nl}\p{Nd}\p{Mn}\p{Mc}\p{Pc}_$]*)",
+        RegexOptions.Compiled);
 
     // Line-based fallback used only when the primary body scanner exits with unbalanced delimiters,
     // which signals malformed input. Mirrors the pre-body-scope regex so mid-edit states still emit
