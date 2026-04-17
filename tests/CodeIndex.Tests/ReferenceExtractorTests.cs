@@ -133,6 +133,35 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpBraceSameLineAccessorNextLineProperty_AttributesToProperty()
+    {
+        // issue #233 fifth review follow-up: the common Microsoft-style block-bodied
+        // property — `{` on the same line as the declaration and the accessor on the
+        // following line — must have accessor-internal calls attributed to the property,
+        // not the enclosing class.
+        // issue #233 第5次レビュー指摘: `{` が宣言行末にあり、accessor が次行にある
+        // 標準的な block-bodied property でも、accessor 内部の呼び出しが外側クラスでは
+        // なく property に帰属する必要がある。
+        const string content = """
+            public class Calc
+            {
+                public int Compute() => 42;
+
+                public int Wrap {
+                    get { return Compute(); }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var computeRef = Assert.Single(references.Where(r => r.SymbolName == "Compute"));
+        Assert.Equal("property", computeRef.ContainerKind);
+        Assert.Equal("Wrap", computeRef.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpAllmanBlockBodiedProperty_WithBlockComment_AttributesToProperty()
     {
         // issue #233 fourth review follow-up: a multi-line /* ... */ block comment

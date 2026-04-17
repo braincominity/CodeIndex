@@ -285,19 +285,28 @@ public static class SymbolExtractor
             // Constructor (no return type, name followed by parenthesis) — needs visibility
             // コンストラクタ（戻り値なし、名前の後に括弧）— visibility 必須
             new("function",  new Regex(@"^\s*(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            // Property with get/set/init — visibility optional. Matches both same-line
-            // `{ get|set|init` (K&R style) and header-only lines whose `{` lives on a
-            // following line (Allman style). Allman-style matches are then verified by
-            // `ShouldSkipCSharpHeaderOnlyPropertyCandidate` to confirm the next non-blank
-            // line begins with `{`; the negative lookahead on returnType prevents keyword
-            // lines like `public class X` / `return Foo` from being misclassified.
-            // プロパティ（get/set/init）— visibility 省略可。同一行で `{ get|set|init` が
-            // 続く K&R スタイルと、`{` が次行にある Allman スタイルの両方にマッチする。
-            // Allman スタイルのマッチは `ShouldSkipCSharpHeaderOnlyPropertyCandidate` で
-            // 次の空白以外の行が `{` で始まることを確認してから採用する。returnType 前の
-            // negative lookahead が `public class X` / `return Foo` のようなキーワード行を
-            // property に誤分類するのを防ぐ。
-            new("property",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required|readonly|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?<returnType>(?:global::)?[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*(?:\{\s*(?:get|set|init)|$)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            // Property with get/set/init — visibility optional. Matches three shapes:
+            //   (1) same-line `{ get|set|init` (K&R),
+            //   (2) same-line bare `{` with the accessor on a following line (common
+            //       Microsoft-style form: `Name {` then `    get { ... }`),
+            //   (3) header-only lines whose `{` lives on a following line (Allman).
+            // All of these are verified by `ShouldSkipCSharpHeaderOnlyPropertyCandidate`:
+            // same-line `{ get|set|init` is accepted as-is, same-line bare `{` requires
+            // the next significant line to begin an accessor declaration, and header-only
+            // lines require the next significant line to begin with `{` or `=>`. The
+            // negative lookahead on returnType prevents keyword lines like `public class X`
+            // / `return Foo` from being misclassified.
+            // プロパティ（get/set/init）— visibility 省略可。3 つの形にマッチする:
+            //   (1) 同一行で `{ get|set|init`（K&R）、
+            //   (2) 同一行が bare `{` で終わり、accessor が次行以降にある（Microsoft の
+            //       標準的な形: `Name {` の次に `    get { ... }`）、
+            //   (3) `{` が次行以降にある header-only の Allman 形。
+            // いずれも `ShouldSkipCSharpHeaderOnlyPropertyCandidate` で検証する:
+            // 同一行 `{ get|set|init` はそのまま採用、同一行 bare `{` は次の有意行が accessor
+            // 宣言で始まることを要求し、header-only は次の有意行が `{` または `=>` で始まる
+            // ことを要求する。returnType 前の negative lookahead が `public class X` /
+            // `return Foo` のようなキーワード行を property に誤分類するのを防ぐ。
+            new("property",  new Regex(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required|readonly|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?<returnType>(?:global::)?[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*(?:\{\s*(?:get|set|init)?|$)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Expression-bodied property (public int X => ...) — must come before delegate.
             // Uses BodyStyle.Brace so FindCSharpBraceRange detects '=>' and assigns the
             // declaration line as the body range, enabling caller attribution through
@@ -5341,13 +5350,45 @@ public static class SymbolExtractor
         return next != null && next.StartsWith("=>", StringComparison.Ordinal);
     }
 
-    // Verify an Allman-style property candidate (header line matched without `{` on the
-    // same line) is actually followed by a block body or a continuation-style expression
-    // body. Without this guard, any bare `Type Name` line could be misclassified as a
-    // property when the widened regex alternation (`$`) matches end-of-line.
-    // Allman スタイルで property として候補になった行（同一行に `{` を持たない）が
-    // 実際に次行にブロック本体か継続式本体を持つかを確認する。このガードがないと、regex の
-    // 選択肢（`$`）に引っかかった `Type Name` だけの行が property と誤認される。
+    // Matches the same-line K&R form `{ get|set|init` inside a regex-captured match value.
+    // 同一行 K&R 形 `{ get|set|init` を regex マッチ値の中から検出するためのパターン。
+    private static readonly Regex CSharpPropertySameLineAccessorRegex = new(
+        @"\{\s*(?:get|set|init)\b",
+        RegexOptions.Compiled);
+
+    // Matches the start of an accessor declaration on a sanitized continuation line:
+    // accessor attribute list (`[...]`), optional visibility/access modifiers, and one
+    // of `get` / `set` / `init` as a whole word.
+    // 継続行の sanitized 出力が accessor 宣言として始まるかを判定するパターン。
+    // accessor attribute list (`[...]`)、任意の visibility / アクセス修飾子、そして
+    // 単語境界の `get` / `set` / `init` を許容する。
+    private static readonly Regex CSharpPropertyAccessorStartRegex = new(
+        @"^(?:\[|(?:(?:public|private|protected|internal|readonly)\s+)*(?:get|set|init)\b)",
+        RegexOptions.Compiled);
+
+    // Verify a property candidate matched by the widened regex actually resolves to a
+    // valid property body. Three shapes are accepted:
+    //   (1) same-line `{ get|set|init` (K&R) — accept unconditionally;
+    //   (2) same-line bare `{` (common Microsoft form) — require the next significant
+    //       line to begin an accessor declaration (`get` / `set` / `init`, optionally
+    //       prefixed by an accessor attribute `[...]` or visibility modifier);
+    //   (3) header-only (no `{` on the match line) — require the next significant line
+    //       to begin with `{` (Allman block body) or `=>` (multi-line expression body).
+    // Trivia between the declaration and the body (block comments spanning several
+    // lines, line comments, blank lines, string/char literals) is consumed by
+    // `FindCSharpNextSignificantSanitizedLine` using the running C# lex state, so
+    // `/* ... */` blocks between the header and the body are handled correctly.
+    // 広げた property 正規表現で候補となった行が実際に有効な property 本体を持つかを確認する。
+    // 受け入れる 3 形:
+    //   (1) 同一行 `{ get|set|init`（K&R） — 無条件に採用;
+    //   (2) 同一行 bare `{`（Microsoft 標準形） — 次の有意行が accessor 宣言で始まること
+    //       （`get` / `set` / `init`、先頭に accessor attribute `[...]` や visibility が
+    //       付く形も可）を要求;
+    //   (3) header-only（マッチ行に `{` なし） — 次の有意行が `{`（Allman ブロック本体）
+    //       または `=>`（multi-line 式本体）で始まることを要求。
+    // 宣言と本体の間のトリビア（複数行またがるブロックコメント、行コメント、空行、
+    // 文字列/文字リテラル）は `FindCSharpNextSignificantSanitizedLine` が running
+    // C# lex state でそのまま食い潰すため、ヘッダと本体の間に挟まる `/* ... */` も正しく扱える。
     private static bool ShouldSkipCSharpHeaderOnlyPropertyCandidate(
         string? lang,
         SymbolPattern pattern,
@@ -5359,9 +5400,9 @@ public static class SymbolExtractor
         if (lang != "csharp" || pattern.Kind != "property")
             return false;
 
-        // Same-line accessor block present (contains `{`) — no follow-up verification needed.
-        // 同一行に accessor block (`{`) があるケースはこのチェック不要。
-        if (match.Value.Contains('{', StringComparison.Ordinal))
+        // (1) Same-line `{ get|set|init` — unambiguously a property, accept as-is.
+        // (1) 同一行 `{ get|set|init` — 明確に property なので即採用。
+        if (CSharpPropertySameLineAccessorRegex.IsMatch(match.Value))
             return false;
 
         // Expression-bodied property (`=> expr`) — verified by FindCSharpBraceRange.
@@ -5369,15 +5410,25 @@ public static class SymbolExtractor
         if (match.Value.Contains("=>", StringComparison.Ordinal))
             return false;
 
-        // Accept either a block body (`{`) on the next significant line or a
-        // continuation-style expression body (`=> expr;`). Trivia (block comments,
-        // line comments, whitespace) between the declaration and the body is skipped
-        // via `LexCSharpLine` so multi-line block comments like `/* ... */` spanning
-        // several lines are handled correctly.
-        // 次の有意な行がブロック本体 (`{`) か継続式本体 (`=> expr;`) のどちらかで
-        // 始まることを許容する。宣言と本体の間にあるブロックコメント/行コメント/空白は
-        // `LexCSharpLine` によって適切に読み飛ばすため、複数行に跨る `/* ... */` も
-        // 正しく処理される。
+        // (2) Same-line bare `{` (no accessor after it on the same line). This is the
+        // common Microsoft-style form where the accessor lives on a following line. It
+        // must be distinguished from header-only Allman: if a `{` is already present we
+        // look for the accessor itself, not another `{`.
+        // (2) 同一行 bare `{`（同一行に accessor が続かない）。Microsoft 標準の書き方で、
+        // 次行以降に accessor が来る形。header-only Allman とは区別が必要で、既に `{` が
+        // 同一行にあるならもう一度 `{` を探すのではなく、accessor そのものを探す。
+        if (match.Value.Contains('{', StringComparison.Ordinal))
+        {
+            var accessorLine = FindCSharpNextSignificantSanitizedLine(lines, lineIndex, endLineState);
+            if (accessorLine == null)
+                return true;
+            return !CSharpPropertyAccessorStartRegex.IsMatch(accessorLine);
+        }
+
+        // (3) Header-only: accept either a block body (`{`) on the next significant line
+        // or a continuation-style expression body (`=> expr;`).
+        // (3) header-only: 次の有意行がブロック本体 (`{`) か継続式本体 (`=> expr;`) の
+        // どちらかで始まることを許容する。
         var next = FindCSharpNextSignificantSanitizedLine(lines, lineIndex, endLineState);
         if (next == null)
             return true;

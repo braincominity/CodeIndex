@@ -2049,6 +2049,59 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunCallers_ExactJson_FindsCallerInsideBraceSameLineAccessorNextLineProperty()
+    {
+        // issue #233 fifth review follow-up: the common Microsoft-style block-bodied
+        // property (`{` on the header line, accessor on the following line) must have
+        // CLI `callers` attribute the accessor call to the property itself.
+        // issue #233 第5次レビュー指摘: `{` が宣言行末にあり、accessor が次行にある
+        // 標準的な block-bodied property でも、CLI `callers` は accessor 内部の呼び出しを
+        // property に帰属させなければならない。
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callers_csharp_brace_same_line");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "calc.cs"),
+                """
+                public class Calc
+                {
+                    public int Compute() => 42;
+
+                    public int Wrap {
+                        get { return Compute(); }
+                    }
+                }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Compute", "--db", Path.Combine(projectRoot, ".cdidx", "codeindex.db"), "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("src/calc.cs", json.GetProperty("path").GetString());
+            Assert.Equal("property", json.GetProperty("caller_kind").GetString());
+            Assert.Equal("Wrap", json.GetProperty("caller_name").GetString());
+            Assert.Equal("Compute", json.GetProperty("callee_name").GetString());
+            Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunCallers_ExactJson_FindsCallerInsideAllmanPropertyWithBlockComment()
     {
         // issue #233 fourth review follow-up: a multi-line /* ... */ block comment

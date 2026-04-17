@@ -3727,6 +3727,59 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_BraceSameLineAccessorNextLineProperty_IsExtracted()
+    {
+        // issue #233 fifth review follow-up: the common Microsoft-style block-bodied
+        // property — `{` on the same line as the declaration and the accessor on the
+        // following line — must be recognized as a property with a body range spanning
+        // declaration through closing `}`.
+        // issue #233 第5次レビュー指摘: `{` が宣言行末にあり、accessor が次行にある
+        // 標準的な block-bodied property が property として抽出され、宣言行から `}` 行
+        // までを本体範囲として持つこと。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n    public int Wrap {\n        get { return Compute(); }\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrap = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Wrap"));
+        Assert.Equal(4, wrap.StartLine);
+        Assert.Equal(6, wrap.EndLine);
+        Assert.Equal(4, wrap.BodyStartLine);
+        Assert.Equal(6, wrap.BodyEndLine);
+        Assert.Equal("int", wrap.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_BraceSameLineAccessorNextLine_AcceptsAttributeAndVisibility()
+    {
+        // issue #233 fifth review follow-up: the bare-brace-same-line guard must also
+        // accept next lines that begin with accessor attributes (`[JsonIgnore]`) or a
+        // visibility modifier (`private set`) before the `get` / `set` / `init` token.
+        // issue #233 第5次レビュー指摘: 同一行 bare `{` のガードは、accessor attribute
+        // (`[JsonIgnore]`) や visibility 修飾子 (`private set`) で始まる行も受け入れる必要がある。
+        var content = "public class Calc\n{\n    public int Compute() => 42;\n"
+            + "    public int WithAttr {\n        [System.Obsolete] get => Compute();\n    }\n"
+            + "    public int WithVis {\n        private set { }\n        get { }\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "WithAttr");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "WithVis");
+    }
+
+    [Fact]
+    public void Extract_CSharp_BraceSameLineWithoutAccessor_IsNotMisclassifiedAsProperty()
+    {
+        // issue #233 fifth review follow-up: the bare-brace-same-line guard must reject
+        // non-property shapes that happen to be `Type Name {` followed by a body that
+        // does not start an accessor (for example a stray method-like block).
+        // issue #233 第5次レビュー指摘: 同一行 bare `{` のガードは、`Type Name {` に
+        // 続く行が accessor 宣言でない場合（例: accessor でない任意のブロック）を
+        // property として採用してはならない。
+        var content = "public class Calc\n{\n    public int Stray {\n        Console.WriteLine(1);\n    }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Stray");
+    }
+
+    [Fact]
     public void Extract_CSharp_HeaderOnlyNonProperty_IsNotMisclassified()
     {
         // issue #233 review follow-up: the header-only property alternation must not
