@@ -475,6 +475,43 @@ public class QueryCommandRunnerTests
         }
     }
 
+    // Pins `find --path=<value>` with a value that starts with `--`. ParseArgs supports
+    // this shape via inline `=`, but ValidateFindArgs previously saw only the bare token
+    // and `PrepareFindArgs` briefly tried to normalize the inline form by splitting it into
+    // two tokens — that split destroyed inline `--`-prefixed values. Locks the contract
+    // that `find` honors the CLI hint (`pass it as --path=<value>`) just like the other
+    // query commands.
+    // `find --path=<value>` で value が `--` で始まる合法な inline 値を壊さないよう固定する
+    // 回帰テスト。`PrepareFindArgs` 側で inline を分解すると `--path=--literal.txt` が
+    // `--path`/`--literal.txt` に割れ、`ParseArgs` が値を option と誤認して失敗していた。
+    [Fact]
+    public void RunFind_PathFilterAcceptsRecognizedOptionTokenViaInlineValue()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_path_inline_recognized_option");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/--json-dir/Demo.cs",
+                "csharp",
+                "class Demo { void Alpha() {} }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["Alpha", $"--db={dbPath}", "--path=--json-dir", "--count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            Assert.Equal(1, document.RootElement.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("--db", "/tmp/does-not-matter.db")]
     [InlineData("--db=")]
@@ -797,6 +834,106 @@ public class QueryCommandRunnerTests
             Assert.Contains(expectedErrorFragment, stderr);
             Assert.Contains($"got '{value}'", stderr);
             Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+            Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    // Regression lock for #196 follow-up: CLI `--max-line-width` above the shared ceiling
+    // (LineWidthFormatter.MaxAllowedLineWidth = 4096) must fail closed with UsageError and
+    // empty stdout, matching the MCP `maxLineWidth` contract. Previously the CLI silently
+    // clamped the value via LineWidthFormatter.ClampMaxLineWidth and ran to success, while
+    // MCP rejected the same 4097. Diverging contracts break automation that wires CLI and
+    // MCP together on a fail-close assumption.
+    // #196 のフォローアップ回帰ロック: CLI の `--max-line-width` が共有上限
+    // (LineWidthFormatter.MaxAllowedLineWidth = 4096) を超えた場合、UsageError と空 stdout で
+    // fail-close しなければならず、MCP の `maxLineWidth` 契約と一致させる。以前は
+    // LineWidthFormatter.ClampMaxLineWidth で黙って丸めて成功していたため、MCP は 4097 を拒否する
+    // 一方で CLI は通るという不整合があり、fail-close 前提の自動化を壊していた。
+    [Theory]
+    [InlineData("search", "4097", false)]
+    [InlineData("search", "8192", false)]
+    [InlineData("references", "4097", false)]
+    [InlineData("inspect", "4097", false)]
+    [InlineData("find", "4097", false)]
+    [InlineData("excerpt", "4097", false)]
+    // Inline `--max-line-width=<value>` form: catches the silent-clamp regression on
+    // the `=`-attached path too. `find` historically rejected every inline `=` form at
+    // ValidateFindArgs with `unsupported option for find: --max-line-width=4097`, so
+    // this row also pins the `PrepareFindArgs` inline-`=` normalization.
+    // インライン `--max-line-width=<value>` 形式の回帰ロック。`find` は歴史的に
+    // ValidateFindArgs の段階で inline `=` を全拒否していたため、`PrepareFindArgs` の
+    // inline-`=` 正規化もここで固定する。
+    [InlineData("search", "4097", true)]
+    [InlineData("references", "4097", true)]
+    [InlineData("inspect", "4097", true)]
+    [InlineData("find", "4097", true)]
+    [InlineData("excerpt", "4097", true)]
+    public void QueryEntrypoints_MaxLineWidthAboveCeilingFailClosed_Issue196(string command, string value, bool useInlineEquals)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(
+            $"cdidx_issue196_maxlinewidth_{command}_{value}_{(useInlineEquals ? "inline" : "space")}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Issue196Target.cs",
+                "csharp",
+                """
+                namespace Issue196;
+                public class Issue196Target
+                {
+                    public void Issue196Callee() { }
+                }
+                public class Issue196Caller
+                {
+                    public void Run()
+                    {
+                        var target = new Issue196Target();
+                        target.Issue196Callee();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var excerptDir = Path.Combine(projectRoot, "src");
+            Directory.CreateDirectory(excerptDir);
+            var excerptFilePath = Path.Combine(excerptDir, "Issue196Excerpt.cs");
+            File.WriteAllText(
+                excerptFilePath,
+                "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\n");
+
+            string[] maxLineWidthArgs = useInlineEquals
+                ? [$"--max-line-width={value}"]
+                : ["--max-line-width", value];
+            string[] args = command switch
+            {
+                "search" => ["Issue196", "--db", dbPath, "--json", .. maxLineWidthArgs],
+                "references" => ["Issue196Callee", "--db", dbPath, "--json", .. maxLineWidthArgs],
+                "inspect" => ["Issue196Target", "--db", dbPath, "--json", .. maxLineWidthArgs],
+                "find" => ["Issue196", "--path", excerptFilePath, "--db", dbPath, "--json", .. maxLineWidthArgs],
+                "excerpt" => [excerptFilePath, "--db", dbPath, "--start", "1", "--end", "1", "--json", .. maxLineWidthArgs],
+                _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+            };
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => command switch
+            {
+                "search" => QueryCommandRunner.RunSearch(args, _jsonOptions),
+                "references" => QueryCommandRunner.RunReferences(args, _jsonOptions),
+                "inspect" => QueryCommandRunner.RunInspect(args, _jsonOptions),
+                "find" => QueryCommandRunner.RunFind(args, _jsonOptions),
+                "excerpt" => QueryCommandRunner.RunExcerpt(args, _jsonOptions),
+                _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+            });
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains($"--max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth}", stderr);
+            Assert.Contains($"got '{value}'", stderr);
             Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
         }
         finally
@@ -2058,6 +2195,49 @@ public class QueryCommandRunnerTests
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal(0, json.GetProperty("references").GetArrayLength());
             Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("callers", "attribute")]
+    [InlineData("callers", "annotation")]
+    [InlineData("callees", "attribute")]
+    [InlineData("callees", "annotation")]
+    public void RunCallersCallees_RejectMetadataKind_WithUsageError(string command, string kind)
+    {
+        // issue #293 follow-up: `callers` / `callees` must reject `--kind attribute` and
+        // `--kind annotation` at the CLI boundary. Metadata references are attributed to the
+        // enclosing body-range symbol rather than the annotated target, so `callers Obsolete
+        // --kind attribute` would return `[Obsolete] void M()` under the enclosing class
+        // instead of `M`, and file-level targets like `[assembly: Foo]` drop entirely because
+        // `container_name` is NULL. The correct path for metadata enumeration is
+        // `references <name> --kind attribute|annotation`.
+        // issue #293 補足: `callers` / `callees` は CLI 境界で `--kind attribute` /
+        // `--kind annotation` を必ず弾かなければならない。metadata 参照は注釈対象ではなく
+        // body-range の外側シンボルに帰属するため、`callers Obsolete --kind attribute` では
+        // `[Obsolete] void M()` が `M` ではなく外側クラスに寄り、`[assembly: Foo]` のような
+        // file-level target は `container_name = NULL` で完全に脱落する。metadata 列挙の
+        // 正しい経路は `references <name> --kind attribute|annotation`。
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_{command}_reject_kind_{kind}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var args = new[] { "Symbol", "--db", dbPath, "--kind", kind };
+
+            var (exitCode, _, stderr) = command switch
+            {
+                "callers" => CaptureConsole(() => QueryCommandRunner.RunCallers(args, _jsonOptions)),
+                "callees" => CaptureConsole(() => QueryCommandRunner.RunCallees(args, _jsonOptions)),
+                _ => throw new InvalidOperationException($"Unexpected command: {command}")
+            };
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains($"'--kind {kind}' is not supported on '{command}'", stderr);
+            Assert.Contains($"references <name> --kind {kind}", stderr);
         }
         finally
         {
@@ -10951,6 +11131,137 @@ public class QueryCommandRunnerTests
         // Verify full (absolute) path is shown, not just the basename / フルパス表示を検証
         Assert.Contains(Path.GetFullPath(missingDbPath), stderr);
         Assert.Contains("Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.", stderr);
+    }
+
+    [Fact]
+    public void ParseArgs_NormalizesLangAndKindToLowercase()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["QueryCommandRunner", "--lang", "Python", "--kind", "FUNCTION"],
+            jsonDefault: false);
+
+        Assert.Equal("python", options.Lang);
+        Assert.Equal("function", options.Kind);
+    }
+
+    [Fact]
+    public void RunSymbols_AcceptsLangPythonCaseInsensitively()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_lang_case");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "a.py", "python", "def hello(): pass\n");
+
+            var (exitCodeUpper, stdoutUpper, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--lang", "Python"],
+                _jsonOptions));
+            var (exitCodeLower, stdoutLower, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--lang", "python"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCodeUpper);
+            Assert.Equal(CommandExitCodes.Success, exitCodeLower);
+            Assert.Contains("hello", stdoutUpper);
+            Assert.Equal(stdoutLower, stdoutUpper);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_AcceptsKindFunctionCaseInsensitively()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_kind_case");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "a.py", "python", "def hello(): pass\n");
+
+            var (exitCodeUpper, stdoutUpper, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--kind", "FUNCTION"],
+                _jsonOptions));
+            var (exitCodeLower, stdoutLower, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--kind", "function"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCodeUpper);
+            Assert.Equal(CommandExitCodes.Success, exitCodeLower);
+            Assert.Contains("hello", stdoutUpper);
+            Assert.Equal(stdoutLower, stdoutUpper);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_EmitsLangHintForUnknownLang()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_lang_hint");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "a.py", "python", "def hello(): pass\n");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--lang", "nonexistent"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Contains("'nonexistent' not found in index. Available: python", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDefinition_EmitsLangHintForUnknownLang()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_lang_hint");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "a.py", "python", "def hello(): pass\n");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["hello", "--db", dbPath, "--lang", "nonexistent"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Contains("'nonexistent' not found in index. Available: python", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDefinition_AcceptsLangPythonCaseInsensitively()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_lang_case");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "a.py", "python", "def hello(): pass\n");
+
+            var (exitCode, stdout, _) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["hello", "--db", dbPath, "--lang", "Python"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("hello", stdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     private static (T Result, string Stdout, string Stderr) CaptureConsole<T>(Func<T> action)
