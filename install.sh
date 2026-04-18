@@ -252,7 +252,11 @@ fetch_latest_release_version() {
                 report_error "${api_label} rate limit exceeded while fetching ${api_url}. Retry later, or pass an explicit version: 'curl ... | bash -s -- vX.Y.Z'."
                 return 1
             fi
-            report_error "${api_label} returned HTTP 403 while fetching ${api_url}. In restricted cloud/proxy environments, pass an explicit version (for example: 'bash ./install.sh vX.Y.Z') to skip the latest-release API call, or set CDIDX_GITHUB_API_BASE_URL to a reachable internal mirror API."
+            if [ "$GITHUB_API_BASE_URL" = "https://api.github.com" ]; then
+                report_error "${api_label} returned HTTP 403 while fetching ${api_url}. Pass an explicit version (for example: 'bash ./install.sh vX.Y.Z') to skip the latest-release API call, or set CDIDX_GITHUB_API_BASE_URL to a reachable internal mirror API."
+            else
+                report_error "${api_label} returned HTTP 403 while fetching ${api_url}. Check the configured API endpoint, credentials, path ACL, or proxy policy. You can also pass an explicit version (for example: 'bash ./install.sh vX.Y.Z') to skip the latest-release API call."
+            fi
             report_error "If every HTTPS endpoint fails with 'CONNECT tunnel failed, response 403', this is an upstream proxy/egress policy deny before TLS; route substitution alone will not fix it."
             return 1
             ;;
@@ -418,8 +422,13 @@ download_release_file() {
     case "$http_code" in
         200) ;;
         403)
-            report_error "Failed to download ${description} from $url (HTTP 403). GitHub, your proxy, or egress policy is blocking this route."
-            report_error "If both github.com and mirror/proxy hosts fail with 403 (or CONNECT tunnel failed), ask your network administrator to allow-list at least one artifact host path."
+            report_error "Failed to download ${description} from ${release_host_label} at $url (HTTP 403)."
+            if [ "$GITHUB_BASE_URL" = "https://github.com" ]; then
+                report_error "GitHub may be blocking or rate-limiting this route."
+            else
+                report_error "Check the configured mirror/proxy path, credentials, or access policy."
+            fi
+            report_error "If both github.com and the configured mirror/proxy host fail at CONNECT tunnel stage with 403, ask your network administrator to allow-list at least one artifact host path."
             return 1
             ;;
         404)
