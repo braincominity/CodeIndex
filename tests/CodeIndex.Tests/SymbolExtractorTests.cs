@@ -8325,6 +8325,32 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Html_UnterminatedOuterTagWithEmbeddedRawTextOpenerDoesNotMaskToEof()
+    {
+        // codex review #10 Blocker B: when the outer non-raw-text tag is itself
+        // mid-edit and never closes (no matching `"` anywhere), the mask pass
+        // must NOT re-enter the raw-text / comment branch at the `<!--` /
+        // `<script>` sitting inside the broken quoted value, because doing so
+        // masks through EOF and drops every sibling tag on the following lines.
+        // Advancing past the current line when a non-raw-text opener cannot be
+        // closed lets the later sibling tags still be walked. Closes #215 codex
+        // review #10 Blocker B.
+        // 外側の non-raw-text タグ自体が編集途中で EOF まで `"` が現れない場合、
+        // 破損した引用値の中の `<!--` / `<script>` を comment / raw-text 開始と
+        // 再解釈して EOF までマスクしてはならない。未終端 opener は現在行で
+        // 止めて次行以降の兄弟タグを拾う。#215 codex review #10 Blocker B 対応。
+        var commentOpenerInBrokenTag = "<div title=\"<!--\n<my-widget></my-widget>\n<link href=/app.css>";
+        var symbols1 = SymbolExtractor.Extract(1, "html", commentOpenerInBrokenTag);
+        Assert.Contains(symbols1, s => s.Kind == "class" && s.Name == "my-widget");
+        Assert.Contains(symbols1, s => s.Kind == "import" && s.Name == "/app.css");
+
+        var scriptOpenerInBrokenTag = "<div title=\"<script>\n<my-widget></my-widget>\n<link href=/app.css>";
+        var symbols2 = SymbolExtractor.Extract(1, "html", scriptOpenerInBrokenTag);
+        Assert.Contains(symbols2, s => s.Kind == "class" && s.Name == "my-widget");
+        Assert.Contains(symbols2, s => s.Kind == "import" && s.Name == "/app.css");
+    }
+
+    [Fact]
     public void Extract_Html_IgnoresNativeHyphenatedSvgAndMathmlTags()
     {
         // HTML/SVG/MathML have a small set of native hyphenated tag names

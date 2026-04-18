@@ -1635,6 +1635,22 @@ public static class SymbolExtractor
                     i = openerEnd + 1;
                     continue;
                 }
+
+                // Unterminated non-raw-text tag opener (mid-edit quoted attribute
+                // like `<div title="<!--` or `<div title="<script>`). Advance
+                // past the current line so the `<!--` / `<script>` inside the
+                // broken quoted value is not re-encountered on the very next
+                // character and misidentified as a real comment / raw-text
+                // opener that would mask through EOF. Sibling tags on later
+                // lines still get their chance to be walked.
+                // 未終端の non-raw-text タグ opener（`<div title="<!--` のような
+                // 編集途中の引用属性）に遭遇した場合、`i++` で戻ると引用値内の
+                // `<!--` / `<script>` が次文字で comment / raw-text opener として
+                // 再解釈されて EOF までマスクされるため、現在行末まで一気に進めて
+                // 次行以降の兄弟タグを拾えるようにする。
+                var eolIdx = text.IndexOf('\n', i);
+                i = eolIdx < 0 ? chars.Length : eolIdx + 1;
+                continue;
             }
 
             i++;
@@ -1703,43 +1719,116 @@ public static class SymbolExtractor
         // Scan forward for the matching closing quote. HTML5 allows newlines
         // inside quoted attribute values (`<meta description="line1\nline2">`)
         // and tag-like content (`<div title="<section id=x>">`), so we cross
-        // line boundaries and tag-name-like bytes without bailing. The close
-        // is identified by post-value context: per HTML5 the char immediately
-        // after a quoted attribute value must be whitespace, `>`, `/`, or EOF.
-        // If no quote with valid post-context exists before EOF, fall back to
-        // the first quote candidate (matches spec tokenizer recovery for
-        // malformed content like `<div id="foo"bar>`); if not even a bare
-        // quote was seen, return -1 so the caller can bound damage at EOL.
-        // An earlier `\n<tagstart>` bail heuristic was removed: it broke
-        // strictly-valid HTML5 where a multi-line title/alt value contains
-        // tag-like content (`<div title="line1\n<section></section>\nline3" id="real">`).
+        // line boundaries and tag-name-like bytes without bailing. A quote is
+        // accepted as the close when it has "strong valid" post-value context:
+        // per HTML5 the char immediately after a quoted attribute value must
+        // be whitespace, `>`, or EOF. `/` alone is intentionally excluded from
+        // strong context — a `/` following a quote is ambiguous between the
+        // self-closing marker (`attr="v"/>`) and the opening `"` of a later
+        // path-like attribute (`href="/app.css"`). Accepting bare `/` would
+        // let an earlier unterminated `title="...` silently steal the opening
+        // quote of `href="/app.css"` and swallow every sibling tag between
+        // them.
+        //
+        // When a non-strong `"` is encountered and it matches an "attribute-
+        // start" pattern (preceded by `[attr-name-chars]+=` with whitespace
+        // before the ident), the scanner treats it as a nested attribute
+        // opening: it walks past that attribute's value (finding the matching
+        // inner quote) and resumes scanning, instead of mis-taking the inner
+        // opening for our close. This preserves strict-HTML5 behavior on
+        // well-formed multi-line quoted values (they contain no spurious
+        // `ident="` patterns) while keeping mid-edit resilience — if the
+        // outer quote is truly unterminated, we'll walk through all nested
+        // attributes without finding a strong close, and return -1 so the
+        // attribute parser can bail at EOL and recover sibling tags on the
+        // next lines.
+        //
+        // If neither a strong close nor a nested pattern is ever seen, fall
+        // back to the first bare `"` candidate (matches spec tokenizer
+        // recovery for malformed content like `<div id="foo"bar>`). If nested
+        // patterns WERE seen but no strong close was found, return -1 to
+        // signal the attribute is effectively unterminated for our purposes.
+        //
         // 閉じ引用符を探す。HTML5 は属性値内の改行とタグ様テキストを許容するため、
-        // 改行やタグ様の文字で早期中断しない。引用符を閉じとして採用する条件は、
-        // 直後が空白 / `>` / `/` / EOF の「属性値終端として妥当な文脈」にあること。
-        // その条件を満たす候補が EOF までに無ければ、最初に見つけた bare quote を
-        // フォールバックに使う（`<div id="foo"bar>` のような壊れ入力でも
-        // 仕様の tokenizer 復帰に近い挙動にする）。候補すら無ければ -1 を返し、
-        // 呼び出し元が行末で被害を止められるようにする。以前の `\n<tagstart>`
-        // 早期中断は、仕様上妥当な複数行引用属性値（`<div title="line1\n
-        // <section></section>\nline3" id="real">`）を壊すため廃止した。
+        // 改行やタグ様の文字では早期中断しない。引用符を閉じとして採用する条件は、
+        // 直後が空白 / `>` / EOF の「strong な属性値終端」であること。`/` は
+        // self-closing (`attr="v"/>`) と後続属性の開始引用符 (`href="/app.css"`)
+        // の区別が文脈無しでは付かないため、`/` 単独は strong には含めない。
+        // bare `/` を許容すると、未終端の `title="...` が後続 `href="/app.css"`
+        // の開き `"` を奪って兄弟タグを丸呑みする。
+        //
+        // strong でない `"` が「属性開始パターン」(`[attr-name-chars]+=` の前が
+        // 空白) にマッチしたら、それは nested な属性開始と判断し、その属性の値を
+        // 次の引用符まで飛ばして外側 scan を再開する。これにより Blocker 2
+        // (`<div title="line1\n<section></section>\nline3" id="real">`) のような
+        // 真に妥当な複数行引用属性値は strong 終端まで到達して通り、一方で未終端な
+        // 外側 `"` は nested を何個かスキップしても strong 終端に到達せず、最終的に
+        // -1 を返して属性パーサが EOL で bail → 次行以降の兄弟タグを拾える。
+        //
+        // strong 終端にも nested にも該当しない `"` は弱い候補として記録し、EOF
+        // 到達時に nested を見ていなければ fallback として返す（`<div id="foo"bar>`
+        // のような malformed でも spec に近い形で拾う）。nested を見ていれば -1 を
+        // 返して、未終端扱いにする。
         var firstCandidate = -1;
+        var sawNested = false;
         var i = start;
         while (i < text.Length)
         {
             if (text[i] == quote)
             {
-                if (firstCandidate < 0)
-                    firstCandidate = i;
                 var after = i + 1;
                 if (after >= text.Length)
                     return i;
                 var nextCh = text[after];
-                if (nextCh == '>' || nextCh == '/' || char.IsWhiteSpace(nextCh))
+                if (nextCh == '>' || char.IsWhiteSpace(nextCh))
                     return i;
+
+                if (IsPrecededByHtmlAttributeStart(text, i, start))
+                {
+                    sawNested = true;
+                    var inner = i + 1;
+                    while (inner < text.Length && text[inner] != quote)
+                        inner++;
+                    if (inner >= text.Length)
+                        break;
+                    i = inner + 1;
+                    continue;
+                }
+
+                if (firstCandidate < 0)
+                    firstCandidate = i;
             }
             i++;
         }
+        if (sawNested)
+            return -1;
         return firstCandidate;
+    }
+
+    private static bool IsPrecededByHtmlAttributeStart(string text, int quotePos, int scanStart)
+    {
+        // Return true if the characters immediately before `quotePos` form a
+        // `[attr-name-chars]+=` pattern AND the ident is preceded by whitespace
+        // within the current scan — i.e. it looks like the start of a new
+        // attribute inside an outer quoted value. This is the signal that the
+        // `"` is more likely a nested attribute opening than the true close of
+        // the outer value.
+        // `quotePos` の直前が `[attr-name-chars]+=` で、その ident の前が
+        // scan 範囲内の空白文字なら true。外側引用値の中で新しい属性が
+        // 始まっているパターンと判定する。
+        if (quotePos <= scanStart)
+            return false;
+        if (text[quotePos - 1] != '=')
+            return false;
+        var j = quotePos - 2;
+        var identEnd = j + 1;
+        while (j >= scanStart && IsHtmlAttrNameChar(text[j]))
+            j--;
+        if (j + 1 >= identEnd)
+            return false;
+        if (j < scanStart)
+            return false;
+        return char.IsWhiteSpace(text[j]);
     }
 
     private static int FindHtmlRawTextClose(string text, int start, string tagName)
