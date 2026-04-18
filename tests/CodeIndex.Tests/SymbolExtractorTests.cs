@@ -3287,6 +3287,85 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsReadonlyIndexers()
+    {
+        // issue #352: `readonly` is a valid indexer modifier on C# 8+ struct members.
+        // Expression-body (`public readonly int this[int i] => _arr[i];`), block-body
+        // (`public readonly string this[string key] { get => key; }`), and generic
+        // (`public readonly T this[int i] { get => _items[i]; }`) shapes must all be
+        // captured as `function` rows with C#'s metadata name `Item` and `visibility` /
+        // `returnType` populated, not dropped because `readonly` is missing from the
+        // indexer-regex modifier slot. The non-readonly baseline indexer and the
+        // readonly method baseline must continue to extract as before.
+        // issue #352: C# 8+ 構造体メンバーの `readonly` はインデクサ修飾子として有効。
+        // 式本体 (`public readonly int this[int i] => _arr[i];`)、ブロック本体
+        // (`public readonly string this[string key] { get => key; }`)、ジェネリック
+        // (`public readonly T this[int i] { get => _items[i]; }`) のいずれも、C# メタ
+        // データ名 `Item` の `function` 行として `visibility` / `returnType` を保持
+        // したまま抽出される必要がある。インデクサ regex の修飾子スロットに `readonly`
+        // が無いことで silent drop されてはならない。非 readonly なインデクサと
+        // readonly メソッドのベースラインは従来どおり抽出される。
+        var content = """
+            namespace Demo;
+
+            public struct S
+            {
+                private int[] _arr;
+
+                public readonly int this[int i] => _arr[i];
+
+                public readonly string this[string key]
+                {
+                    get => key;
+                }
+
+                public int this[long key] => 0;
+
+                public readonly int ReadMe() => 0;
+            }
+
+            public struct Bag<T>
+            {
+                private T[] _items;
+
+                public readonly T this[int i] { get => _items[i]; }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var indexerItems = symbols.Where(s => s.Kind == "function" && s.Name == "Item").ToList();
+        Assert.Equal(4, indexerItems.Count);
+
+        // Expression-body readonly indexer (int) — visibility and returnType preserved.
+        // 式本体 readonly インデクサ (int) — visibility と returnType を保持。
+        var exprReadonlyInt = Assert.Single(indexerItems.Where(s => s.ReturnType == "int" && s.Signature != null && s.Signature.Contains("this[int i]")));
+        Assert.Equal("public", exprReadonlyInt.Visibility);
+        Assert.Contains("readonly", exprReadonlyInt.Signature);
+
+        // Block-body readonly indexer (string key) — visibility and returnType preserved.
+        // ブロック本体 readonly インデクサ (string key) — visibility と returnType を保持。
+        var blockReadonlyString = Assert.Single(indexerItems.Where(s => s.ReturnType == "string"));
+        Assert.Equal("public", blockReadonlyString.Visibility);
+        Assert.Contains("readonly", blockReadonlyString.Signature);
+
+        // Non-readonly baseline indexer (int this[long key]).
+        // 非 readonly ベースラインインデクサ (int this[long key])。
+        var baselineIntLong = Assert.Single(indexerItems.Where(s => s.ReturnType == "int" && s.Signature != null && s.Signature.Contains("this[long key]")));
+        Assert.Equal("public", baselineIntLong.Visibility);
+        Assert.DoesNotContain("readonly", baselineIntLong.Signature);
+
+        // Generic readonly indexer (`public readonly T this[int i] { get => _items[i]; }`).
+        // ジェネリック readonly インデクサ。
+        var genericReadonly = Assert.Single(indexerItems.Where(s => s.ReturnType == "T"));
+        Assert.Equal("public", genericReadonly.Visibility);
+        Assert.Contains("readonly", genericReadonly.Signature);
+
+        // Baseline: `readonly` methods continue to extract as `function` with the source name.
+        // ベースライン: `readonly` メソッドは従来どおり `function` として抽出される。
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ReadMe" && s.ReturnType == "int");
+    }
+
+    [Fact]
     public void Extract_CSharp_MultilinePropertyHeader_DoesNotCreatePhantomFunctionAndKeepsSignature()
     {
         var content = """
@@ -4269,6 +4348,190 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_ContextualKeywordWithTupleSuffixReturn_DoesNotLeakCtorRegexPhantom()
+    {
+        // Before #349, `public required (int, int) R1 { get; init; }` / `public partial (int, int)? P1();`
+        // / `public readonly (int, int)? M() => null;` could be claimed by the ctor regex
+        // (`^\s*visibility\s+\w+\s*\(`) with the modifier keyword captured as the ctor name, emitting
+        // phantom `function required` / `function partial` / `function readonly` rows and silently
+        // dropping the real property/method. The ctor regex now adds a negative lookahead at the
+        // opening paren that rejects lines where the matching `)` is followed by an identifier +
+        // `{` / `(` / `=>` (with optional `?` / `[]` tuple suffixes in between), so the more specific
+        // method/property regexes get a chance to match and no phantom is emitted. Closes #349.
+        // 修飾子キーワード + tuple-suffix 戻り値の行を ctor regex が greedy に喰い、
+        // modifier キーワード自体を ctor 名として拾ってしまう現象に対するガード。
+        // ctor regex の開き括弧の直後に否定先読みを入れ、「対応する `)` のあとに
+        // 識別子 + `{` / `(` / `=>`（間に `?` / `[]` の tuple サフィックスを許す）が続く行」を
+        // 弾くようにしたので、method / property 側の regex に先を譲り phantom
+        // `function required` / `function partial` / `function readonly` が出ない
+        // ことを担保する。Closes #349.
+        var content = """
+            namespace ModifierPhantom;
+
+            public partial class A
+            {
+                public partial (int, int)? P1();
+                public partial (int, int)[] P2();
+            }
+
+            public class B
+            {
+                public required (int, int) R1 { get; init; }
+                public required (int, int)? R2 { get; init; }
+            }
+
+            public class D
+            {
+                public readonly struct E
+                {
+                    public readonly (int, int)? M() => null;
+                }
+            }
+
+            public class F
+            {
+                public F() { }
+                public F(int x) { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        // No phantom rows whose name is a modifier keyword / 修飾子キーワードを name にした phantom は出ない。
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "partial");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "required");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "readonly");
+
+        // Real members are captured / 本物のメンバーが拾えていること。
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "P1");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "P2");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "R1");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "R2");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M");
+
+        // Baseline constructors must still be captured / 通常のコンストラクタは引き続き拾えること。
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "F"));
+    }
+
+    [Fact]
+    public void Extract_CSharp_CtorRegex_StillCapturesAllValidCtorForms()
+    {
+        // The #349 fix tightens the ctor regex with a negative lookahead that rejects lines where
+        // the matching `)` is followed by `IDENT { / IDENT ( / IDENT =>`. Any realistic ctor form
+        // must still be captured after the fix — otherwise we would silently drop real ctors to
+        // block phantom ones. This test locks in every major ctor form: brace body, expression
+        // body, `: base(...)` / `: this(...)` initializers, `extern` declaration ending in `;`,
+        // multi-line signature split across lines, and tuple parameter. A regression here means
+        // the lookahead is too aggressive.
+        // #349 の修正で ctor regex に否定先読み（閉じ括弧の後に `IDENT { / IDENT ( / IDENT =>`
+        // が続く行を弾く）を足した。phantom を止めるために本物の ctor を落とすと本末転倒なので、
+        // 主要な ctor 記法（brace 本体 / 式本体 / `: base(...)` / `: this(...)` 初期化子 /
+        // `;` で終わる extern 宣言 / 複数行に分かれたシグネチャ / tuple パラメータ）が全て
+        // 引き続き拾えることをここで担保する。これが壊れたら lookahead が強すぎるサイン。
+        var content = """
+            namespace CtorForms;
+
+            public class Brace
+            {
+                public Brace() { }
+                public Brace(int x) { }
+            }
+
+            public class ExpressionBody
+            {
+                public ExpressionBody() => System.Console.WriteLine();
+            }
+
+            public class WithInitializer
+            {
+                public WithInitializer() : this(0) { }
+                public WithInitializer(int x) : base() { }
+            }
+
+            public class Extern
+            {
+                public extern Extern();
+                public extern Extern(int x);
+            }
+
+            public class MultiLine
+            {
+                public MultiLine(
+                    int x,
+                    int y)
+                {
+                }
+            }
+
+            public class TupleParam
+            {
+                public TupleParam((int, int) t) { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "Brace"));
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ExpressionBody");
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "WithInitializer"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "Extern"));
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MultiLine");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "TupleParam");
+    }
+
+    [Fact]
+    public void Extract_CSharp_ContextualKeywordWithWhitespacedTupleSuffix_DoesNotLeakCtorRegexPhantom()
+    {
+        // Follow-up to #349: the initial positional-lookahead fix only rejected tuple suffixes
+        // directly abutting `)` (e.g. `(int, int)[]`), so legal C# that puts whitespace between
+        // `)` and the suffix token (`(int, int) []`, `(int, int) ?`, `(int, int)  ?`) fell
+        // through to the ctor regex and reintroduced phantom `function required` / `function
+        // readonly` / `function static` rows while dropping the real property / method. Both the
+        // ctor lookahead and CSharpTypePattern now share CSharpTupleSuffixPattern, which allows
+        // whitespace between `)` / identifier and each suffix token, so these formatting
+        // variants are rejected as ctor shapes via the lookahead and accepted as property /
+        // method shapes via the upstream rows.
+        // #349 のフォローアップ。初回の位置検査修正では `)` とサフィックストークンが密着した形
+        // （`(int, int)[]`）しか弾けず、`)` と `[]` / `?` の間に空白を置いた合法な書式
+        // （`(int, int) []` / `(int, int) ?` / `(int, int)  ?`）は ctor regex に落ち、
+        // phantom `function required` / `function readonly` / `function static` が再発し
+        // 本来の property / method が silent drop していた。CSharpTupleSuffixPattern を
+        // ctor 否定先読みと CSharpTypePattern で共有し、`)` や識別子と各サフィックストークンの
+        // 間に空白を許容することで、これらの整形バリエーションも ctor 形状として弾きつつ
+        // 上流の property / method 行で本物のシンボルとして拾えるようになる。
+        var content = """
+            namespace ModifierPhantomSpaced;
+
+            public partial class SpacedHost
+            {
+                public required (int, int) [] R4 { get; init; }
+                public readonly (int, int) ? F4 = null;
+                public static (int, int) ? M3() => default;
+                public partial (int, int)  ? P5 { get; init; }
+            }
+
+            public readonly struct SpacedStruct
+            {
+                public readonly (int, int) ? M4() => null;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        // No phantom rows whose name is a modifier keyword even when whitespace sits between
+        // `)` and the tuple suffix. / `)` とサフィックスの間に空白があっても、修飾子キーワードを
+        // name にした phantom 行は出ない。
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "required");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "readonly");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "static");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "partial");
+
+        // Real members are still captured with the correct kinds. / 本物のメンバーが正しい kind で拾えていること。
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "R4");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "F4");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M3");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P5");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M4");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsRecordVariants()
     {
         // record, record class, record struct with various modifiers
@@ -4896,6 +5159,35 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_NewNestedInterface_MemberHiding()
+    {
+        // Closes #376: a nested `new interface` that hides a base-class nested interface must
+        // still be extracted as its own symbol. Previously the interface regex modifier list
+        // did not include `new`, so `public new interface INested` was silently dropped.
+        // Closes #376: ベースクラスのネストしたインタフェースを `new interface` で隠蔽する
+        // 派生側のネスト interface も独立したシンボルとして抽出されること。以前は
+        // interface 正規表現の修飾子リストに `new` が無く、`public new interface INested`
+        // が無言で落ちていた。
+        var content = """
+            namespace NewIfaceTest;
+            public class Base
+            {
+                public interface INested { void M(); }
+            }
+            public class Derived : Base
+            {
+                public new interface INested { void M(); }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var nested = symbols.Where(s => s.Kind == "interface" && s.Name == "INested").ToList();
+        Assert.Equal(2, nested.Count);
+        Assert.Contains(nested, s => s.ContainerName == "Base");
+        Assert.Contains(nested, s => s.ContainerName == "Derived");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsExpressionBodiedMembers()
     {
         var content = "public class Calc\n{\n    public int X => 42;\n    public string Name => \"calc\";\n    public static double Pi => 3.14;\n}";
@@ -5279,6 +5571,34 @@ public class SymbolExtractorTests
         Assert.NotNull(indexer);
         Assert.Equal("function", indexer.Kind);
         Assert.Equal("string", indexer.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsMultiLineIndexer()
+    {
+        // #293 follow-up: `StripMultiLineCSharpAttributeInterior` must only blank
+        // attribute-position `[`. `public int this[\n int i\n] => _items[i];` opens `[`
+        // right after the `this` keyword, which is an indexer parameter list, not
+        // an attribute. If that `[` were blanked, the indexer would silently drop
+        // out of symbol extraction.
+        // #293 追加対応: `StripMultiLineCSharpAttributeInterior` は属性位置の `[` だけを
+        // 空白化する必要がある。`public int this[\n int i\n] => _items[i];` の `[` は
+        // インデクサのパラメータリストであり属性ではない。ここを空白化するとインデクサが
+        // シンボル抽出から静かに消える。
+        var content =
+            "public class Collection\n" +
+            "{\n" +
+            "    private int[] _items = new int[10];\n" +
+            "    public int this[\n" +
+            "        int i\n" +
+            "    ] => _items[i];\n" +
+            "}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var indexer = symbols.FirstOrDefault(s => s.Name == "Item");
+        Assert.NotNull(indexer);
+        Assert.Equal("function", indexer.Kind);
+        Assert.Equal("int", indexer.ReturnType);
     }
 
     [Fact]
@@ -7226,6 +7546,278 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_SameLineClassBodyFieldIsCapturedAndLocalIsRejected()
+    {
+        // Column-aware scope tracking: `public class C { public int X; }` must capture
+        // both the outer class C and the inner field X. Before #400, the type-body gate
+        // only looked at the scope at line start, so a same-line class body looked like
+        // "not inside a type body" and X was silently dropped. Conversely,
+        // `public void M() { int local = 1; }` inside a class must NOT emit a phantom
+        // `property local`: column-wise, col where `int local` starts sits inside a
+        // method body (not a class body), and the column-aware gate correctly rejects it.
+        // Closes #400.
+        // 列単位のスコープ追跡: `public class C { public int X; }` では外側の class C と
+        // 同一行のフィールド X をどちらも拾う必要がある。#400 以前は line-start のみを
+        // 見ていたため、同一行の class body は「型本体の中ではない」と誤判定され X が
+        // 取りこぼされた。逆に class 内の `public void M() { int local = 1; }` では、
+        // `int local` の列が method body の中（class body ではない）であることを列意識
+        // ゲートが認識するため、擬似的な `property local` を生成してはならない。
+        // Closes #400.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public class C { public int X; }",
+            "",
+            "public class D",
+            "{",
+            "    public void M() { int local = 1; }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "C");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "X"
+            && s.ContainerKind == "class" && s.ContainerName == "C"
+            && s.Signature == "public int X;");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "D");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M"
+            && s.ContainerKind == "class" && s.ContainerName == "D");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "local");
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineMultipleFieldsAreAllCaptured()
+    {
+        // `public class Multi { public int A; public int B; public int C; }` must
+        // produce three `property` symbols (A, B, C) plus the outer `Multi` class, with
+        // clean signatures that stop at the field terminator rather than trailing into
+        // the enclosing `} }`. Closes #400.
+        // `public class Multi { public int A; public int B; public int C; }` は外側 class
+        // Multi と A / B / C の 3 つの property を生成し、signature は末尾の `} }` を
+        // 含まずにフィールド終端（`;`）で切り詰められていなければならない。Closes #400.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public class Multi { public int A; public int B; public int C; }");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Multi");
+        foreach (var name in new[] { "A", "B", "C" })
+        {
+            var field = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == name));
+            Assert.Equal("class", field.ContainerKind);
+            Assert.Equal("Multi", field.ContainerName);
+            Assert.Equal($"public int {name};", field.Signature);
+            Assert.DoesNotContain("}", field.Signature);
+        }
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineNestedClassAttachesFieldToInnerType()
+    {
+        // `public class Outer { public class Inner { public int X; } }` must capture
+        // both Outer and Inner, and the field X must attach to Inner (not Outer).
+        // The container resolution uses a same-line `Signature.Contains` check, so the
+        // plain-field signature clamp from #400 is required for Inner to correctly
+        // "contain" X's signature. Closes #400.
+        // `public class Outer { public class Inner { public int X; } }` では Outer と
+        // Inner の双方を取得し、X は Outer ではなく Inner に紐づけること。同一行の
+        // コンテナ解決は `Signature.Contains` を使うため、#400 で追加した plain-field
+        // signature のクランプが無いと Inner が X の signature を「含む」と判定されず
+        // X が Outer に吸収されてしまう。Closes #400.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public class Outer { public class Inner { public int X; } }");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Outer");
+        var inner = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Inner"));
+        Assert.Equal("class", inner.ContainerKind);
+        Assert.Equal("Outer", inner.ContainerName);
+        var x = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "X"));
+        Assert.Equal("class", x.ContainerKind);
+        Assert.Equal("Inner", x.ContainerName);
+        Assert.Equal("public int X;", x.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineCompactEnumMembersDoNotLeakAsFields()
+    {
+        // `public enum Mode { [Obsolete] A = (int)B, ... }` must produce enum-member
+        // symbols only and must NOT emit phantom `property` symbols for `[Obsolete] A =`.
+        // The column-aware scope gate distinguishes class-like bodies (where fields are
+        // legal) from enum bodies (where members are not fields), so the plain-field
+        // regex is rejected inside enum bodies. Closes #400.
+        // `public enum Mode { [Obsolete] A = (int)B, ... }` は enum member のみを生成し、
+        // `[Obsolete] A =` を property として拾ってはならない。列意識スコープゲートが
+        // class-like body（field が正当）と enum body（member は field ではない）を
+        // 区別するため、enum body 内では plain-field regex がリジェクトされる。
+        // Closes #400.
+        var content = string.Join(
+            "\n",
+            "using System;",
+            "",
+            "public enum Mode { [Obsolete] A = 1, B = 2, C = 3 }");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Mode");
+        foreach (var name in new[] { "A", "B", "C" })
+        {
+            Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == name);
+        }
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineFieldWithInitializerFollowedByAnotherField()
+    {
+        // `public class Holder { public int A = 1; public int B; }` must capture
+        // both `A` and `B`. The prior fix broke out of the same-line scan as soon
+        // as the plain-field pattern matched a `=`-terminated declaration, which
+        // dropped any following same-line field statement. Closes #400.
+        // `public class Holder { public int A = 1; public int B; }` では `A` と
+        // `B` の両方が抽出される必要がある。旧修正は `=` 終端フィールドを拾った
+        // 時点で同一行スキャンを break してしまい、直後の同一行フィールドを
+        // 取り落としていた。Closes #400.
+        var content = "public class Holder { public int A = 1; public int B; }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Holder");
+        var a = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "A");
+        var b = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "B");
+        Assert.Equal("public int A = 1;", a.Signature);
+        Assert.Equal("public int B;", b.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineDeclaratorListFollowedByAnotherField()
+    {
+        // `public class Holder { public int A, B; public int C; }` must capture
+        // three property rows (A, B via declarator list, plus C from the second
+        // same-line field statement). The prior fix broke out of the same-line
+        // scan after declarator expansion and silently dropped `C`. Closes #400.
+        // `public class Holder { public int A, B; public int C; }` では declarator
+        // list 展開で A と B、続く同一行 field 文から C、合わせて 3 シンボルを
+        // 抽出する必要がある。旧修正は declarator 展開後に同一行スキャンを break
+        // して C を取り落としていた。Closes #400.
+        var content = "public class Holder { public int A, B; public int C; }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Holder");
+        Assert.Single(symbols, s => s.Kind == "property" && s.Name == "A");
+        Assert.Single(symbols, s => s.Kind == "property" && s.Name == "B");
+        var c = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "C");
+        Assert.Equal("public int C;", c.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_PlainFieldWithInitializerKeepsFullSignature()
+    {
+        // `private int _x = 42;` must store the full `private int _x = 42;` as
+        // signature, not the `=`-truncated `private int _x =`. An earlier version
+        // clamped the signature to `match.Length`, which cut off at `=`. The fix
+        // clamps to the statement's `;` (or an unbalanced `}` if one is hit
+        // first). Closes #400.
+        // `private int _x = 42;` の signature は `=` で切り詰めず完全な
+        // `private int _x = 42;` を保存する必要がある。旧実装は signature を
+        // `match.Length` で clamp して `=` の手前で切れていた。修正では文終端の
+        // `;` まで（あるいは先に出現する深さ 0 の `}` の手前まで）で clamp する。
+        // Closes #400.
+        var content = string.Join(
+            "\n",
+            "public class Holder",
+            "{",
+            "    private int _x = 42;",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var field = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "_x");
+        Assert.Equal("private int _x = 42;", field.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineGenericClassHeaderStillCapturesInnerField()
+    {
+        // `public class C<T1, T2>{int X;}` must still capture field X even though
+        // CollapseCSharpGenericTypeWhitespace removes the space inside `<T1, T2>`
+        // when building the match line. Before the fix, the collapsed-space
+        // `absoluteStartColumn` was handed directly to the raw-column
+        // CSharpTypeBodyScope lookup, so the scope-gate fired too early and
+        // the field was dropped. Closes #400.
+        // `public class C<T1, T2>{int X;}` では CollapseCSharpGenericTypeWhitespace が
+        // `<T1, T2>` の内部空白を詰めるため、collapsed 列 `absoluteStartColumn` を
+        // そのまま raw 列ベースの CSharpTypeBodyScope に渡すと scope gate が誤発火し
+        // X が落ちていた。Closes #400.
+        var content = "public class C<T1, T2>{int X;}\n";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var field = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "X");
+        Assert.Equal("int X;", field.Signature);
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "C");
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineGenericFieldSignatureKeepsTerminator()
+    {
+        // `public Dictionary<string, int> Map = new(); public int B;` on one line
+        // must produce Map with its trailing `;` and B without a leading `;`.
+        // Before the fix, collapsed-space endpoints from
+        // FindCSharpPlainFieldStatementEnd were used to slice the raw line, so
+        // the generic-whitespace compression shifted the cut: Map lost its `;`
+        // and B inherited the `;` as a leading character. Closes #400.
+        // `public Dictionary<string, int> Map = new(); public int B;` を 1 行に
+        // 書いた場合、Map の signature は末尾 `;` を保ち、B の signature は
+        // 先頭 `;` を持たないこと。修正前は FindCSharpPlainFieldStatementEnd が
+        // 返す collapsed 列で raw 行を slice していたため、generic 空白の圧縮
+        // 分だけ切断位置がずれていた。Closes #400.
+        var content = "public class C { public Dictionary<string, int> Map = new(); public int B; }\n";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var map = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "Map");
+        Assert.Equal("public Dictionary<string, int> Map = new();", map.Signature);
+
+        var b = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "B");
+        Assert.Equal("public int B;", b.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultiLineFieldFollowedBySameLineFieldDoesNotCrash()
+    {
+        // A multi-line field header whose continuation line also carries a
+        // second same-line field — `public Dictionary<string, int>\n    Map = new(); public int B;`
+        // — must extract both `Map` and `B` without throwing. In the prior fix,
+        // the plain-field same-line scan continued past the first `;` using
+        // absoluteStartColumn from the merged multi-line candidate, which sits
+        // in the merged-string column domain and is not valid inside lines[i].
+        // The follow-up regex hit then reached BuildCSharpMultilineSignature
+        // with startColumn > lines[i].Length and crashed indexing with
+        // `startIndex cannot be larger than length of string`. Closes #400.
+        // 複数行 field ヘッダの continuation 行に 2 個目の同一行 field が続く
+        // `public Dictionary<string, int>\n    Map = new(); public int B;` で、
+        // 例外なく `Map` と `B` 両方が抽出できる必要がある。旧実装では plain-field の
+        // 同一行継続 scan が、マージ済み候補の absoluteStartColumn を使って
+        // statementEnd 以降へ進み、2 個目の regex マッチで
+        // BuildCSharpMultilineSignature が lines[startLineIndex][startColumn..] で
+        // 範囲外アクセスし `startIndex cannot be larger than length of string` で
+        // indexing が落ちていた。Closes #400.
+        var content = string.Join(
+            "\n",
+            "public class C",
+            "{",
+            "    public Dictionary<string, int>",
+            "        Map = new(); public int B;",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "C");
+        Assert.Single(symbols, s => s.Kind == "property" && s.Name == "Map");
+        var b = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "B");
+        Assert.Equal("public int B;", b.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsFunctionPointerField()
     {
         // Function-pointer field (`delegate*<int, void> Callback;`) must be captured.
@@ -8089,6 +8681,682 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Html_CapturesIdAttributesAsProperties()
+    {
+        var content = """
+            <!DOCTYPE html>
+            <html>
+              <body>
+                <header id="main-header" class="site-header"><h1>Welcome</h1></header>
+                <main id='content'><article></article></main>
+                <section id="side-panel">legacy</section>
+              </body>
+            </html>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "main-header");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "content");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "side-panel");
+    }
+
+    [Fact]
+    public void Extract_Html_IgnoresDataIdAndAriaIdAndXmlIdAttributes()
+    {
+        // `data-id`, `aria-*id`, and `xml:id` must not be captured as plain id attributes.
+        // data-id / aria-*id / xml:id を通常の id として拾わない。
+        var content = """
+            <article data-id="1"></article>
+            <div aria-labelledby="x" aria-hiddenid="bogus"></div>
+            <span xml:id="ns"></span>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "1");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "bogus");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "ns");
+    }
+
+    [Fact]
+    public void Extract_Html_CapturesExternalScriptAndLinkAsImports()
+    {
+        var content = """
+            <link rel="stylesheet" href="style.css">
+            <link rel="icon" href='/favicon.ico'>
+            <script src="main.js"></script>
+            <script type="module" src='/static/app.mjs'></script>
+            <script>inline(); // no src — no import</script>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "style.css");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/favicon.ico");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "main.js");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/static/app.mjs");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "inline()");
+    }
+
+    [Fact]
+    public void Extract_Html_CapturesCustomWebComponentTagsAsClasses()
+    {
+        // Custom element tag names always contain a hyphen per the HTML spec.
+        // HTML 仕様上、カスタム要素名には必ずハイフンが含まれる。
+        var content = """
+            <my-button>ok</my-button>
+            <app-sidebar></app-sidebar>
+            <div>plain</div>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "my-button");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "app-sidebar");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "div");
+    }
+
+    [Fact]
+    public void Extract_Html_CapturesAllSymbolsOnSameLine()
+    {
+        // Minified HTML or a single line with multiple landmark-bearing tags must
+        // produce one symbol per match, not only the winning pattern's first hit.
+        // Closes #215 codex review blocker.
+        // ミニファイされた HTML や 1 行に複数の landmark タグが入るケースでも、
+        // 勝ちパターンの 1 件ではなく各マッチごとにシンボルが出る必要がある。
+        var content = "<alpha-card id=\"first\"></alpha-card><beta-card id=\"second\"></beta-card>" +
+            "<script src=\"a.js\"></script><link rel=\"stylesheet\" href=\"b.css\">";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "alpha-card");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "beta-card");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "first");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "second");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "a.js");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "b.css");
+    }
+
+    [Fact]
+    public void Extract_Html_IgnoresSymbolsInsideComments()
+    {
+        // HTML comments must not produce phantom imports / classes / properties,
+        // including multi-line comments. Closes #215 codex review blocker.
+        // HTML コメント内のタグ類を phantom シンボルとして拾わないこと。複数行に
+        // またがるコメントでも同様。
+        var content = """
+            <!-- <script src="commented.js"></script> -->
+            <article id="real"></article>
+            <!--
+              <my-widget id="fake"></my-widget>
+              <link rel="stylesheet" href="also-commented.css">
+            -->
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "commented.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "also-commented.css");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "my-widget");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "fake");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+    }
+
+    [Fact]
+    public void Extract_Html_IgnoresSymbolsInsideScriptAndStyleBodies()
+    {
+        // Inline <script> body content is raw text per the HTML spec and must not
+        // leak symbols from template strings. <style> body text follows the same
+        // raw-text rule. Closes #215 codex review blocker.
+        // HTML 仕様上、<script> 本体は raw text であり、テンプレート文字列から
+        // 疑似シンボルを漏らしてはいけない。<style> 本体も同じ raw text 規則。
+        var content = """
+            <script>
+              const tpl = '<inline-card id="inline-id"></inline-card>';
+            </script>
+            <style>
+              .rule { background: url('<bg-tag id="bg">'); }
+            </style>
+            <section id="visible"></section>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "inline-card");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "inline-id");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "bg-tag");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "bg");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "visible");
+    }
+
+    [Fact]
+    public void Extract_Html_StillCapturesExternalScriptSrcEvenWhenBodyHasRawText()
+    {
+        // The masker must preserve the <script src="..."> opening tag so external
+        // scripts are still indexed, while raw-text children stay masked.
+        // raw-text の子要素はマスクしつつ、<script src="..."> 開始タグは保ち、
+        // 外部 script が引き続き import として索引されることを固定する。
+        var content = "<script src=\"app.js\">const x = '<evil-tag id=\"evil\"></evil-tag>';</script>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "app.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "evil-tag");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "evil");
+    }
+
+    [Fact]
+    public void Extract_Html_CapturesMultiLineScriptAndLinkOpeningTags()
+    {
+        // Formatter-split opening tags must still match across lines so imports
+        // are not silently dropped. Closes #215 codex review finding.
+        // フォーマッタによって開始タグが改行されても、import を黙って落とさない
+        // ようクロス行で一致する必要がある。#215 codex review 指摘への対応。
+        var content = """
+            <script
+              type="module"
+              src="/app.js"></script>
+            <link
+              rel="stylesheet"
+              href="/app.css">
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.js");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.css");
+    }
+
+    [Fact]
+    public void Extract_Html_IgnoresSymbolsInsideTextareaAndTitleBodies()
+    {
+        // <textarea> / <title> bodies are RCDATA per the HTML spec and their
+        // contents must not leak phantom symbols. Closes #215 codex review finding.
+        // <textarea> / <title> の本体は HTML 仕様上 RCDATA であり、疑似シンボルを
+        // 漏らしてはならない。#215 codex review 指摘への対応。
+        var content = """
+            <textarea><my-widget id="fake"></my-widget></textarea>
+            <title><bogus-tag id="phantom"></bogus-tag></title>
+            <section id="real"></section>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "my-widget");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "fake");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "bogus-tag");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "phantom");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+    }
+
+    [Fact]
+    public void Extract_Html_MasksUnclosedRawTextAndRcdataBodies()
+    {
+        // cdidx indexes the working tree, so unclosed <script> / <style> /
+        // <textarea> / <title> are common mid-edit. Phantom symbols from those
+        // unclosed bodies must not leak. Closes #215 codex review finding.
+        // cdidx は working tree を対象にするため、編集途中で <script> / <style> /
+        // <textarea> / <title> が未閉鎖な状態は普通に起きる。未閉鎖でも本体から
+        // phantom シンボルを漏らしてはならない。#215 codex review 指摘への対応。
+        var unclosedScript = "<script>const tpl = '<evil-card id=\"phantom\"></evil-card>';";
+        var unclosedSymbols = SymbolExtractor.Extract(1, "html", unclosedScript);
+        Assert.DoesNotContain(unclosedSymbols, s => s.Kind == "class" && s.Name == "evil-card");
+        Assert.DoesNotContain(unclosedSymbols, s => s.Kind == "property" && s.Name == "phantom");
+
+        var unclosedStyle = "<style>\n  .r { content: '<rogue-tag id=\"styleid\"></rogue-tag>'; }";
+        var unclosedStyleSymbols = SymbolExtractor.Extract(1, "html", unclosedStyle);
+        Assert.DoesNotContain(unclosedStyleSymbols, s => s.Kind == "class" && s.Name == "rogue-tag");
+        Assert.DoesNotContain(unclosedStyleSymbols, s => s.Kind == "property" && s.Name == "styleid");
+
+        var unclosedTextarea = "<textarea><my-widget id=\"taid\"></my-widget>";
+        var unclosedTextareaSymbols = SymbolExtractor.Extract(1, "html", unclosedTextarea);
+        Assert.DoesNotContain(unclosedTextareaSymbols, s => s.Kind == "class" && s.Name == "my-widget");
+        Assert.DoesNotContain(unclosedTextareaSymbols, s => s.Kind == "property" && s.Name == "taid");
+
+        var unclosedTitle = "<title><bogus-tag id=\"titleid\"></bogus-tag>";
+        var unclosedTitleSymbols = SymbolExtractor.Extract(1, "html", unclosedTitle);
+        Assert.DoesNotContain(unclosedTitleSymbols, s => s.Kind == "class" && s.Name == "bogus-tag");
+        Assert.DoesNotContain(unclosedTitleSymbols, s => s.Kind == "property" && s.Name == "titleid");
+    }
+
+    [Fact]
+    public void Extract_Html_MultiLineOpeningTagReportsAttributeValueLine()
+    {
+        // When a `<script>` / `<link>` opening tag wraps across lines, the symbol's
+        // line must point at the line that actually carries the attribute value,
+        // not the opening `<`, so `definition` / `excerpt` jump to the right place.
+        // Closes #215 codex review finding.
+        // 開始タグが折り返された場合、symbol の行は開始 `<` の行ではなく属性値が
+        // 実在する行を指す必要がある。こうしないと `definition` / `excerpt` の
+        // ジャンプ先が先頭行にずれる。#215 codex review 指摘への対応。
+        var content = """
+            <script
+              type="module"
+              src="/app.js"></script>
+            <link
+              rel="stylesheet"
+              href="/app.css">
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        var scriptImport = Assert.Single(symbols, s => s.Kind == "import" && s.Name == "/app.js");
+        Assert.Equal(3, scriptImport.Line);
+        Assert.Equal(3, scriptImport.StartLine);
+
+        var linkImport = Assert.Single(symbols, s => s.Kind == "import" && s.Name == "/app.css");
+        Assert.Equal(6, linkImport.Line);
+        Assert.Equal(6, linkImport.StartLine);
+    }
+
+    [Fact]
+    public void Extract_Html_IgnoresIdLiteralsInDocumentText()
+    {
+        // Prose like `<p>documentation says id="fake" here</p>` must not be
+        // harvested as a DOM id — the `id=` pattern only matters inside an
+        // opening tag. Real `<section id="real">` still captures.
+        // Closes #215 codex review finding.
+        // 本文中の `id="..."` を DOM id として誤抽出してはならない。id 属性は開始タグ
+        // の内部でのみ意味を持つ。実在する `<section id="real">` は引き続き抽出する。
+        // #215 codex review 指摘への対応。
+        var content = """
+            <p>documentation says id="fake" here</p>
+            <article>inline prose id='phantom' mentioned</article>
+            <section id="real"></section>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "fake");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "phantom");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+    }
+
+    [Fact]
+    public void Extract_Html_MasksUnclosedComments()
+    {
+        // Unclosed `<!--` must also mask its suffix to EOF, matching the
+        // raw-text / RCDATA `|\z` policy. Without this, editing a comment
+        // live leaked every tag inside the unclosed comment as phantom
+        // symbols. Closes #215 codex review finding.
+        // `<!--` 未閉鎖でも EOF まで本体をマスクする必要がある。raw-text / RCDATA と
+        // 同じく編集途中の未閉鎖コメントから phantom シンボルを漏らさないためのもの。
+        // #215 codex review 指摘への対応。
+        var content = "<!--\n<script src=\"commented.js\"></script>\n<custom-tag id=\"phantom\"></custom-tag>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "commented.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "custom-tag");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "phantom");
+    }
+
+    [Fact]
+    public void Extract_Html_CommentLiteralInsideScriptDoesNotSwallowFollowingTags()
+    {
+        // `<script>` bodies that literally contain `<!--` must not be treated
+        // as unclosed comments. The raw-text masker has to run before the
+        // comment masker or everything after the literal gets blanked out,
+        // dropping every real subsequent symbol. Closes #215 codex review finding.
+        // `<script>` 本文に `<!--` リテラルが入っているだけで未閉鎖コメント扱いに
+        // してはならない。body マスクをコメントマスクより先に動かさないと、リテラル
+        // 以降の本物のタグまで全滅する。#215 codex review 指摘への対応。
+        var content = "<script>const s = \"<!--\";</script>\n<section id=\"real\"></section>\n<my-widget></my-widget>\n<link href=\"/app.css\">";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "my-widget");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.css");
+    }
+
+    [Fact]
+    public void Extract_Html_CapturesUnquotedAttributeValues()
+    {
+        // HTML5 allows unquoted attribute values. Dropping these silently meant
+        // `<section id=real>`, `<script src=/app.js>`, `<link href=/app.css>`
+        // all produced zero symbols. Closes #215 codex review finding.
+        // HTML5 では引用符なし属性値も許される。黙って無視していた結果
+        // `<section id=real>` / `<script src=/app.js>` / `<link href=/app.css>` が
+        // いずれも 0 シンボルを返していた。#215 codex review 指摘への対応。
+        var content = "<section id=real></section>\n<script src=/app.js></script>\n<link rel=stylesheet href=/app.css>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.js");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.css");
+    }
+
+    [Fact]
+    public void Extract_Html_IgnoresAttributeLookAlikesInsideSameTagQuotedValues()
+    {
+        // The `<script src=...>` / `<link href=...>` / `id=...` regexes anchor at the real
+        // outer tag so their `[^>]*?` prefix can reach forward into the same opening tag's
+        // other attribute values. Without checking the name capture position, literals like
+        // `data-note="src=evil.js"` on a real `<script>` leaked phantom imports. Pin that
+        // the name-capture mask catches these same-tag leaks. Closes #215 codex review finding.
+        // `<script src=...>` / `<link href=...>` / `id=...` の regex は実在する外側タグ
+        // 起点で走り、`[^>]*?` が同じ開始タグ内の別属性値へ進めてしまう。開始 `<` だけで
+        // 判定すると `<script data-note="src=evil.js">` のような同一タグ内の属性リテラル
+        // から phantom import が漏れるので、name capture 位置で mask をかけ直し、それが
+        // 同一タグ内の src=/href=/id= 文字列にも効くことを固定する。#215 codex review
+        // 指摘への対応。
+        var content = "<script data-note=\"src=evil.js\"></script>\n<link title=\"href=evil.css\" rel=stylesheet href=\"/real.css\">\n<div title=\"docs id=phantom\"></div>\n<section id=\"real\"></section>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "evil.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "evil.css");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "phantom");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/real.css");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+    }
+
+    [Fact]
+    public void Extract_Html_CapturesIdValuesWithPunctuation()
+    {
+        // Quoted id values can legally contain any non-whitespace character per the HTML5
+        // id attribute spec. The previous `[\w:.\-]+` class silently dropped real DOM
+        // anchors like `id="user@top"` and `id="group/main"`, so `definition` / `outline`
+        // couldn't jump to them. Pin the broadened quoted class while keeping
+        // unquoted values conservative (they still collide with CSS selector syntax).
+        // Closes #215 codex review finding.
+        // HTML5 では引用符付き id 値に任意の non-whitespace 文字が使える。従来の
+        // `[\w:.\-]+` クラスだと `id="user@top"` / `id="group/main"` のような実在の
+        // DOM アンカーを黙って落としていた。引用符付きは受け入れを広げつつ、
+        // 引用符なしは CSS セレクタ構文との衝突を避けて保守的なままにする。
+        // #215 codex review 指摘への対応。
+        var content = "<section id=\"user@top\"></section>\n<section id=\"group/main\"></section>\n<section id=\"plain.id\"></section>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "user@top");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "group/main");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "plain.id");
+    }
+
+    [Fact]
+    public void Extract_Html_QuotedGtInsideScriptOpenTagPreservesSiblingSymbols()
+    {
+        // A `>` character is legal inside a quoted attribute value, so the raw-text
+        // body masker must parse the `<script>` opening tag with quote awareness.
+        // The earlier `[^>]*>` class terminated at the first quoted `>` and blanked
+        // every following real attribute and sibling tag as masked body content,
+        // which dropped both the intended `src="/app.js"` import and the sibling
+        // `<section id="real">`. Closes #215 codex review blocker.
+        // 引用符付き属性値内の `>` でも raw-text 本体マスクの開始タグ解析が終端しない
+        // ことを固定する。以前の `[^>]*>` は先頭の引用符内 `>` でタグを切ってしまい、
+        // 後続の実属性と兄弟タグを body としてマスクしていたため、本来 emit すべき
+        // `src="/app.js"` の import と `<section id="real">` の両方を落としていた。
+        // #215 codex review blocker 対応。
+        var content = "<script data-note=\"a > b\" src=\"/app.js\"></script>\n<section id=\"real\"></section>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.js");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+    }
+
+    [Fact]
+    public void Extract_Html_UnterminatedQuotedAttributeDoesNotSwallowRestOfFile()
+    {
+        // Mid-edit working-tree content commonly leaves a quoted attribute unterminated
+        // (e.g. user is still typing `title="...`). When no valid-looking close exists
+        // to EOF, the parser must bound damage by bailing at the current line rather
+        // than scanning through every subsequent sibling tag looking for a matching
+        // quote. Otherwise every `<my-widget>` / `<link href=...>` after the broken
+        // tag drops out of `symbols` / `definition` / `outline` until the user types
+        // the matching quote. Closes #215 codex review finding.
+        // 編集中の working tree では `title="...` のような未閉鎖引用符が頻発する。
+        // EOF まで妥当な閉じ候補が無い真の未終端では、行末で止めて以降の
+        // `<my-widget>` / `<link href=...>` を symbols / definition / outline から
+        // 消さないこと。#215 codex review 指摘対応。
+        var content = "<div title=\"oops\n<my-widget></my-widget>\n<link href=/app.css>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "my-widget");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.css");
+    }
+
+    [Fact]
+    public void Extract_Html_MultiLineQuotedAttributeValueWithEmbeddedTagsPreservesSiblingAttributes()
+    {
+        // HTML5 allows newlines AND tag-like content inside quoted attribute values
+        // (`<div title="line1\n<section></section>\nline3" id="real">`). The earlier
+        // `\n<tagstart>` bail heuristic treated any `\n<` inside a quoted value as an
+        // unterminated-quote signal, which silently prematurely terminated valid
+        // multi-line title / data-note / alt values and either (1) leaked embedded
+        // `<section id=phantom>` as a phantom `property phantom` symbol, or (2)
+        // dropped the genuine `id="real"` attribute that followed the value. Pin
+        // that valid multi-line quoted values containing tag-like content are
+        // treated as single attribute values, and the following `id="real"` is
+        // emitted. Closes #215 codex review #9 blocker 2.
+        // HTML5 は引用符付き属性値の中に改行もタグ様テキストも許容する
+        // (`<div title="line1\n<section></section>\nline3" id="real">`)。以前の
+        // `\n<tagstart>` 早期中断ヒューリスティクスは、これを未終端と誤認して
+        // (1) 埋め込まれた `<section id=phantom>` を phantom な property として拾ったり、
+        // (2) 後続する本物の `id="real"` を落としたりしていた。妥当な複数行引用属性値を
+        // 正しく 1 つの値として扱い、後続の `id="real"` を emit することを固定する。
+        // #215 codex review #9 blocker 2 対応。
+        var content = "<div title=\"line1\n<section id=phantom></section>\nline3\" id=\"real\"></div>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "phantom");
+    }
+
+    [Fact]
+    public void Extract_Html_RawTextOpenerInsideQuotedAttributeValueDoesNotMaskFollowingContent()
+    {
+        // `<script>` / `<style>` / `<textarea>` / `<title>` embedded inside another
+        // tag's quoted attribute value is NOT a real raw-text opener. The mask pass
+        // must walk past the outer tag's quoted value rather than re-encountering
+        // `<script>` / `<!--` inside the value and masking through EOF. Pin that
+        // quoted `<script>` / `<!--` does not swallow sibling tags on following lines.
+        // Closes #215 codex review #9 blocker 1.
+        // 引用符付き属性値内に出てくる `<script>` / `<style>` / `<textarea>` / `<title>`
+        // や `<!--` は raw-text 開始でもコメント開始でもない。マスク処理は外側タグの
+        // 引用符付き値を飛ばして進まなければならず、さもないと値内の `<script>` を
+        // raw-text 開始と誤認して EOF までマスクし、後続の兄弟タグを全部落とす。
+        // #215 codex review #9 blocker 1 対応。
+        var scriptInAttr = "<div title=\"<script>\">ok</div>\n<section id=\"real\"></section>";
+        var symbols1 = SymbolExtractor.Extract(1, "html", scriptInAttr);
+        Assert.Contains(symbols1, s => s.Kind == "property" && s.Name == "real");
+
+        var commentInAttr = "<div title=\"<!--\">ok</div>\n<section id=\"realc\"></section>";
+        var symbols2 = SymbolExtractor.Extract(1, "html", commentInAttr);
+        Assert.Contains(symbols2, s => s.Kind == "property" && s.Name == "realc");
+    }
+
+    [Fact]
+    public void Extract_Html_SelfClosingVoidElementDoesNotDropSiblingAttributes()
+    {
+        // XHTML / formatter-wrapped HTML often writes void elements as
+        // `<link href="/app.css"/>`. Previously the closing `"` of the path-
+        // like attribute had post-context `/` which was NOT accepted as a
+        // strong close, and the nested-attribute fallback then mis-identified
+        // `id="real"` on the following sibling tag as a nested opener, causing
+        // FindHtmlQuoteClose to return -1 and the attribute parser to bail,
+        // dropping BOTH the `href` import and the sibling `id`. The self-
+        // closing shape `"/>` is now accepted as a strong post-context.
+        // Closes #215 codex review #11 Blocker 1.
+        // XHTML / フォーマッタ折り返しの HTML では `<link href="/app.css"/>` の
+        // 形を採ることがある。以前は閉じ `"` 直後が `/` のため strong でなく、
+        // 後続の `id="real"` を nested 属性と誤認して -1 → 行末 bail となり、
+        // `href` import も兄弟 `id` も落としていた。`"/>` を strong として
+        // 受理することで self-closing void 要素も後続も正しく拾う。
+        // #215 codex review #11 Blocker 1 対応。
+        var content = "<link href=\"/app.css\"/><section id=\"real\"></section>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.css");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+    }
+
+    [Fact]
+    public void Extract_Html_CdataAndProcessingInstructionContentsAreNotLeakedAsSymbols()
+    {
+        // XHTML / SVG / MathML content can contain `<![CDATA[...]]>` sections
+        // whose body is text, not markup. The old `<!`-branch in the extractor
+        // stopped at the first `>` which is often inside an inner element of
+        // the CDATA body, so the remainder was parsed as real HTML and leaked
+        // phantom tags / properties. Processing instructions `<?...?>` and
+        // DOCTYPE declarations have the same shape. Pin that CDATA / PI /
+        // DOCTYPE bodies do NOT emit symbols and that siblings after them
+        // still do. Closes #215 codex review #11 Blocker 2.
+        // XHTML / SVG / MathML の `<![CDATA[...]]>` 本体はマークアップではなく
+        // テキスト。旧実装は最初の `>` で終端扱いしたため、内部要素の `>` で
+        // 早期終了して残り本体が real HTML として抽出され phantom を漏らして
+        // いた。`<?...?>` や `<!DOCTYPE...>` も同様。CDATA / PI / DOCTYPE 本体
+        // は emit せず、それらの後続兄弟が emit されることを固定する。
+        // #215 codex review #11 Blocker 2 対応。
+        var cdata = "<![CDATA[ <two-widget id=\"phantom\"></two-widget><three-widget id=\"ghost\"></three-widget> ]]><section id=\"real\"></section>";
+        var symbolsCdata = SymbolExtractor.Extract(1, "html", cdata);
+        Assert.DoesNotContain(symbolsCdata, s => s.Name == "two-widget");
+        Assert.DoesNotContain(symbolsCdata, s => s.Name == "three-widget");
+        Assert.DoesNotContain(symbolsCdata, s => s.Name == "phantom");
+        Assert.DoesNotContain(symbolsCdata, s => s.Name == "ghost");
+        Assert.Contains(symbolsCdata, s => s.Kind == "property" && s.Name == "real");
+
+        var pi = "<?xml version=\"1.0\"?><?xml-stylesheet href=\"/evil.css\"?><section id=\"realpi\"></section>";
+        var symbolsPi = SymbolExtractor.Extract(1, "html", pi);
+        Assert.DoesNotContain(symbolsPi, s => s.Kind == "import" && s.Name == "/evil.css");
+        Assert.Contains(symbolsPi, s => s.Kind == "property" && s.Name == "realpi");
+
+        var doctype = "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\"><section id=\"realdt\"></section>";
+        var symbolsDt = SymbolExtractor.Extract(1, "html", doctype);
+        Assert.Contains(symbolsDt, s => s.Kind == "property" && s.Name == "realdt");
+    }
+
+    [Fact]
+    public void Extract_Html_UnterminatedOuterTagWithEmbeddedRawTextOpenerDoesNotMaskToEof()
+    {
+        // codex review #10 Blocker B: when the outer non-raw-text tag is itself
+        // mid-edit and never closes (no matching `"` anywhere), the mask pass
+        // must NOT re-enter the raw-text / comment branch at the `<!--` /
+        // `<script>` sitting inside the broken quoted value, because doing so
+        // masks through EOF and drops every sibling tag on the following lines.
+        // Advancing past the current line when a non-raw-text opener cannot be
+        // closed lets the later sibling tags still be walked. Closes #215 codex
+        // review #10 Blocker B.
+        // 外側の non-raw-text タグ自体が編集途中で EOF まで `"` が現れない場合、
+        // 破損した引用値の中の `<!--` / `<script>` を comment / raw-text 開始と
+        // 再解釈して EOF までマスクしてはならない。未終端 opener は現在行で
+        // 止めて次行以降の兄弟タグを拾う。#215 codex review #10 Blocker B 対応。
+        var commentOpenerInBrokenTag = "<div title=\"<!--\n<my-widget></my-widget>\n<link href=/app.css>";
+        var symbols1 = SymbolExtractor.Extract(1, "html", commentOpenerInBrokenTag);
+        Assert.Contains(symbols1, s => s.Kind == "class" && s.Name == "my-widget");
+        Assert.Contains(symbols1, s => s.Kind == "import" && s.Name == "/app.css");
+
+        var scriptOpenerInBrokenTag = "<div title=\"<script>\n<my-widget></my-widget>\n<link href=/app.css>";
+        var symbols2 = SymbolExtractor.Extract(1, "html", scriptOpenerInBrokenTag);
+        Assert.Contains(symbols2, s => s.Kind == "class" && s.Name == "my-widget");
+        Assert.Contains(symbols2, s => s.Kind == "import" && s.Name == "/app.css");
+    }
+
+    [Fact]
+    public void Extract_Html_IgnoresNativeHyphenatedSvgAndMathmlTags()
+    {
+        // HTML/SVG/MathML have a small set of native hyphenated tag names
+        // (`<font-face>`, `<color-profile>`, `<missing-glyph>`, `<annotation-xml>`).
+        // Per the HTML spec these are reserved and must NOT be treated as custom
+        // elements; otherwise any project with inline SVG / MathML gets phantom
+        // `class` symbols. Pin that genuine custom elements next to reserved tags
+        // are still captured. Closes #215 codex review finding.
+        // HTML / SVG / MathML にはハイフン付きだが仕様で予約された標準タグ（`<font-face>`
+        // / `<color-profile>` / `<missing-glyph>` / `<annotation-xml>`）が存在する。
+        // これらを custom element 扱いしないこと、および同居する本物のカスタム要素は
+        // 引き続き class として拾うことを固定する。#215 codex review 指摘対応。
+        var content = "<svg><font-face></font-face><color-profile></color-profile><missing-glyph></missing-glyph><my-widget></my-widget></svg>\n<math><annotation-xml></annotation-xml></math>\n<app-sidebar></app-sidebar>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "font-face");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "color-profile");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "missing-glyph");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "annotation-xml");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "my-widget");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "app-sidebar");
+    }
+
+    [Fact]
+    public void Extract_Html_MultiLineQuotedAttributeValuePreservesFollowingAttributes()
+    {
+        // HTML5 allows newlines inside quoted attribute values. Formatter-wrapped
+        // tags and verbose `title` / `alt` / `data-note` copy often span multiple
+        // lines. The state machine must NOT abort tag parsing at the first
+        // newline inside a quoted value — otherwise it silently drops sibling
+        // `src=` / `href=` / `id=` attributes on the same tag. Closes #215
+        // codex review #8 blocker.
+        // HTML5 は引用符付き属性値の中に改行を許容する。フォーマッタによる折り返し
+        // タグや長文の `title` / `alt` / `data-note` 等は複数行に跨ることがある。
+        // state machine は改行で属性解析を中断してはならない — さもないと同一タグ内の
+        // `src=` / `href=` / `id=` が兄弟属性として silent に落ちる。#215 codex
+        // review #8 blocker 対応。
+        var content = "<div title=\"line1\nline2\" id=\"real\">text</div>\n<link data-note=\"line1\nline2\" href=\"/app.css\">\n<script data-note=\"line1\nline2\" src=\"/app.js\"></script>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.css");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.js");
+    }
+
+    [Fact]
+    public void Extract_Html_UnterminatedQuoteInRawTextOpenerDoesNotLeakScriptBodySymbols()
+    {
+        // Mid-edit `<script>` / `<style>` / `<textarea>` / `<title>` openers with
+        // an unterminated quoted attribute MUST still have their body masked,
+        // otherwise the state machine walks into what should be raw-text /
+        // RCDATA content and emits phantom `class` / `property` / `import`
+        // symbols from embedded template-string markup. The mask falls back to
+        // EOF when the opener cannot be closed, matching HTML's raw-text spec
+        // behavior. Closes #215 codex review #8 blocker.
+        // 編集中の `<script>` 等の開始タグで引用符が未終端の場合も、本体は必ず
+        // マスクされなければならない。さもないと state machine が raw-text / RCDATA
+        // 本体に入り込み、埋め込まれたテンプレート文字列のタグ風テキストから phantom
+        // シンボルを漏らす。未終端時は仕様どおり EOF までマスクする。#215 codex
+        // review #8 blocker 対応。
+        var content = "<script data-note=\"oops\nconst tpl = '<evil-card id=\"phantom\"></evil-card>';\n<section id=\"real\"></section>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "evil-card");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "phantom");
+        // The `<section id="real">` after the unterminated `<script>` is inside
+        // the unclosed raw-text body per spec, so it is intentionally NOT
+        // emitted — this matches how a browser would treat the content.
+        // 仕様上 `<section id="real">` も未閉鎖 raw-text の中なので、ブラウザと同じく
+        // emit しないのが正しい。
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "real");
+    }
+
+    [Fact]
+    public void Extract_Html_IgnoresSymbolsNestedInsideQuotedAttributeValues()
+    {
+        // Tag-looking text embedded inside a quoted attribute value (commonly in
+        // doc generators, Markdown-to-HTML output, or `title="..."` blurbs) must
+        // not produce phantom custom-element, id, src, or href symbols. Closes
+        // #215 codex review finding.
+        // 引用符付き属性値の中に入ったタグ風テキスト（ドキュメント生成器や
+        // `title="..."` の注釈によくある）から、phantom な custom element / id /
+        // src / href を拾ってはならない。#215 codex review 指摘への対応。
+        var content = "<div title=\"<fake-widget>\" data-doc=\"<section id=phantom></section>\" aria-label=\"<script src=/evil.js></script><link href=/evil.css>\"></div>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "fake-widget");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "phantom");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "/evil.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "/evil.css");
+    }
+
+    [Fact]
     public void Extract_PythonTripleQuotedString_DoesNotLeakPhantomSymbols()
     {
         // Regression for issue #291: code-shaped fixture text inside """...""" /
@@ -8186,5 +9454,201 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(tsSymbols, s => s.Name == "FakeClassInTemplate");
         Assert.Contains(tsSymbols, s => s.Kind == "function" && s.Name == "realFunction");
         Assert.Contains(tsSymbols, s => s.Kind == "class" && s.Name == "RealClass");
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedStaticConstructor_EmitsOnceAtNameLine()
+    {
+        // Regression for issue #348: when `static` sits on its own physical line above
+        // the constructor name, the extractor must still emit the ctor exactly once,
+        // anchored at the name line, with a signature that reflects the full declaration.
+        // issue #348 の回帰: `static` が constructor 名の物理行の一つ上に単独で置かれた
+        // 場合でも、名前行を起点に重複なく 1 件だけ emit し、signature には宣言全体が
+        // 含まれる必要がある。
+        const string content = """
+            namespace WrappedCtor;
+
+            public class A
+            {
+                static
+                A() { _x = 1; }
+
+                private static int _x;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var ctors = symbols.Where(s => s.Kind == "function" && s.Name == "A").ToList();
+        Assert.Single(ctors);
+        Assert.Equal(6, ctors[0].Line);
+        Assert.Contains("static A()", ctors[0].Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedInstanceConstructor_EmitsOnceAtNameLine()
+    {
+        // issue #348 の回帰: `public` 等の可視性モディファイアが単独行に置かれた
+        // non-static constructor も同じく名前行で 1 件だけ emit する。
+        const string content = """
+            namespace WrappedCtor;
+
+            public class B
+            {
+                public
+                B() { _y = 1; }
+
+                private int _y;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var ctors = symbols.Where(s => s.Kind == "function" && s.Name == "B").ToList();
+        Assert.Single(ctors);
+        Assert.Equal(6, ctors[0].Line);
+        Assert.Contains("public B()", ctors[0].Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedAllmanStaticConstructor_CapturesBody()
+    {
+        // issue #348 の回帰: Allman スタイル（`static` 単独行 → 名前行 → `{` 単独行）の
+        // static constructor も 1 件だけ emit し、本体の閉じ brace まで range を追跡する。
+        const string content = """
+            namespace WrappedCtor;
+
+            public class F
+            {
+                static
+                F()
+                {
+                    _u = 1;
+                }
+
+                private static int _u;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var ctors = symbols.Where(s => s.Kind == "function" && s.Name == "F").ToList();
+        Assert.Single(ctors);
+        Assert.Equal(6, ctors[0].Line);
+        Assert.Contains("static F()", ctors[0].Signature);
+        Assert.True(ctors[0].BodyEndLine >= 9, $"expected body to reach closing brace on line 9 or later, got {ctors[0].BodyEndLine}");
+    }
+
+    [Fact]
+    public void Extract_CSharp_AttributedWrappedStaticConstructor_EmitsOnceAtNameLine()
+    {
+        // issue #348 の回帰: 属性行が挟まった wrapped static ctor でも、attribute 行は
+        // モディファイア連結に混入せず、名前行 1 件だけに集約される。
+        const string content = """
+            namespace WrappedCtor;
+
+            public class D
+            {
+                [System.Obsolete]
+                static
+                D() { _z = 1; }
+
+                private static int _z;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var ctors = symbols.Where(s => s.Kind == "function" && s.Name == "D").ToList();
+        Assert.Single(ctors);
+        Assert.Equal(7, ctors[0].Line);
+        Assert.Contains("static D()", ctors[0].Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultiModifierWrappedConstructor_EmitsOnceAtNameLine()
+    {
+        // issue #348 の回帰: 複数のモディファイアが別々の物理行に折り返された wrapped ctor
+        // （例: `public\nstatic\nE()`）でも、名前行 1 件だけ emit し、signature には両方の
+        // モディファイアを保持する。単純 prefix 合成では constructor regex も static ctor
+        // regex も受け付けない合成行になるため、static / visibility の variant を試す候補
+        // 列挙ロジックが無いと無言で落ちていた。
+        const string content = """
+            namespace WrappedCtor;
+
+            public class E
+            {
+                public
+                static
+                E() { _w = 1; }
+
+                private static int _w;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var ctors = symbols.Where(s => s.Kind == "function" && s.Name == "E").ToList();
+        Assert.Single(ctors);
+        Assert.Equal(7, ctors[0].Line);
+        Assert.Contains("public static E()", ctors[0].Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_CompositeVisibilityWrappedConstructor_EmitsOnceAtNameLine()
+    {
+        // issue #348 の回帰: 複合 visibility (`protected internal` / `private protected`) が
+        // 2 行に分割されて折り返された wrapped ctor でも、名前行 1 件だけ emit し、signature
+        // には複合 visibility を保持する。candidate 列挙の先頭に full prefix (`protected internal`)
+        // を yield するため、constructor regex の `protected\s+internal` 選択肢でそのまま一致する。
+        const string content = """
+            namespace WrappedCtor;
+
+            public class F
+            {
+                protected
+                internal
+                F() { _v = 1; }
+
+                private static int _v;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var ctors = symbols.Where(s => s.Kind == "function" && s.Name == "F").ToList();
+        Assert.Single(ctors);
+        Assert.Equal(7, ctors[0].Line);
+        Assert.Contains("protected internal F()", ctors[0].Signature);
+        Assert.Equal("protected internal", ctors[0].Visibility);
+    }
+
+    [Fact]
+    public void Extract_CSharp_VisibilityStaticExternWrappedConstructor_EmitsOnceAtNameLine()
+    {
+        // issue #348 の回帰: visibility + static + extern の 3 modifier が全て別行に折り返された
+        // wrapped ctor でも、名前行 1 件だけ emit し、signature には 3 modifier 全てを保持する。
+        // full prefix (`public static extern`) は constructor regex の visibility スロット後に
+        // static を置けないため単体では通らず、static variant も `()` 要求で引数付きを弾くので
+        // 通らないが、visibility-only variant (`public`) が constructor regex にヒットし、signature
+        // は full prefix 側から補完される。
+        const string content = """
+            namespace WrappedCtor;
+
+            public class G
+            {
+                public
+                static
+                extern
+                G(string s);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var ctors = symbols.Where(s => s.Kind == "function" && s.Name == "G").ToList();
+        Assert.Single(ctors);
+        Assert.Equal(8, ctors[0].Line);
+        Assert.Contains("public static extern G(string s)", ctors[0].Signature);
     }
 }

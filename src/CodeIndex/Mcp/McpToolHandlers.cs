@@ -90,6 +90,21 @@ public partial class McpServer
     /// </summary>
     private static int ClampLimit(int limit) => Math.Clamp(limit, 1, MaxLimit);
 
+    /// <summary>
+    /// Return true when the requested reference kind is a metadata kind (`attribute` /
+    /// `annotation`) — these are valid on the `references` tool but must be rejected on
+    /// `callers` / `callees`, whose data model cannot answer metadata questions correctly
+    /// (metadata rows are attributed to the enclosing body-range symbol rather than the
+    /// annotated target, so file-level targets drop entirely and method-level metadata
+    /// appears under the enclosing class).
+    /// `references` では有効だが `callers` / `callees` では構造的に誤答するため弾くべき
+    /// metadata kind (`attribute` / `annotation`) かを返す。metadata 行は注釈対象ではなく
+    /// body-range 上の外側シンボルに帰属するため、`callers` / `callees` はこの kind に
+    /// 正しく答えられない。
+    /// </summary>
+    private static bool IsMetadataReferenceKind(string? kind) =>
+        kind == "attribute" || kind == "annotation";
+
     private JsonNode? TryGetValidatedMaxLineWidth(JsonNode? id, JsonNode? args, out int maxLineWidth, string propertyName = "maxLineWidth")
     {
         var maxLineWidthValue = args?[propertyName]?.GetValue<int>();
@@ -240,7 +255,7 @@ public partial class McpServer
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
 
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
-        var lang = args?["lang"]?.GetValue<string>();
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var snippetLines = SearchSnippetFormatter.ClampSnippetLines(args?["snippetLines"]?.GetValue<int>() ?? SearchSnippetFormatter.DefaultSnippetLines);
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
@@ -324,8 +339,8 @@ public partial class McpServer
         }
         if (namesProvided && names.Count == 0)
             return CreateToolErrorResponse(id, "'names' is present but contains no usable entries (all were empty or whitespace).");
-        var kind = args?["kind"]?.GetValue<string>();
-        var lang = args?["lang"]?.GetValue<string>();
+        var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
@@ -418,8 +433,8 @@ public partial class McpServer
         if (query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
 
-        var kind = args?["kind"]?.GetValue<string>();
-        var lang = args?["lang"]?.GetValue<string>();
+        var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var includeBody = args?["includeBody"]?.GetValue<bool>() ?? false;
         var pathPatterns = ReadPathList(args, "path");
@@ -474,8 +489,8 @@ public partial class McpServer
         if (query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
 
-        var kind = args?["kind"]?.GetValue<string>();
-        var lang = args?["lang"]?.GetValue<string>();
+        var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
@@ -536,8 +551,10 @@ public partial class McpServer
         if (query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
 
-        var kind = args?["kind"]?.GetValue<string>();
-        var lang = args?["lang"]?.GetValue<string>();
+        var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
+        if (IsMetadataReferenceKind(kind))
+            return CreateToolErrorResponse(id, $"'kind: {kind}' is not supported on 'callers'. Metadata references are attributed to the enclosing body-range symbol, so `callers` cannot return accurate rows for kind '{kind}'. Use the 'references' tool with kind '{kind}' for metadata enumeration.");
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
@@ -595,8 +612,10 @@ public partial class McpServer
         if (query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
 
-        var kind = args?["kind"]?.GetValue<string>();
-        var lang = args?["lang"]?.GetValue<string>();
+        var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
+        if (IsMetadataReferenceKind(kind))
+            return CreateToolErrorResponse(id, $"'kind: {kind}' is not supported on 'callees'. Metadata references are attributed to the enclosing body-range symbol, so `callees` cannot return accurate rows for kind '{kind}'. Use the 'references' tool with kind '{kind}' for metadata enumeration.");
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
@@ -651,7 +670,7 @@ public partial class McpServer
         var query = args?["query"]?.GetValue<string>();
         if (query != null && query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
-        var lang = args?["lang"]?.GetValue<string>();
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
@@ -699,7 +718,7 @@ public partial class McpServer
 
     private JsonNode ExecuteMap(JsonNode? id, JsonNode? args)
     {
-        var lang = args?["lang"]?.GetValue<string>();
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 10);
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
@@ -733,7 +752,7 @@ public partial class McpServer
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
 
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 10);
-        var lang = args?["lang"]?.GetValue<string>();
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var includeBody = args?["includeBody"]?.GetValue<bool>() ?? false;
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
@@ -978,7 +997,7 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "Missing required parameter: path");
 
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
-        var lang = args?["lang"]?.GetValue<string>();
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var beforeValue = args?["before"]?.GetValue<int>();
@@ -1118,7 +1137,7 @@ public partial class McpServer
     private JsonNode ExecuteDeps(JsonNode? id, JsonNode? args)
     {
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 50);
-        var lang = args?["lang"]?.GetValue<string>();
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -1149,7 +1168,7 @@ public partial class McpServer
 
         var maxDepth = Math.Clamp(args?["maxDepth"]?.GetValue<int>() ?? 5, 1, 10);
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 50);
-        var lang = args?["lang"]?.GetValue<string>();
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -1221,7 +1240,7 @@ public partial class McpServer
 
     private JsonNode ExecuteValidate(JsonNode? id, JsonNode? args)
     {
-        var kind = args?["kind"]?.GetValue<string>();
+        var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         var pathPatterns = ReadPathList(args, "path");
 
         return WithDbReader(id, reader =>
@@ -1242,8 +1261,8 @@ public partial class McpServer
     private JsonNode ExecuteSymbolHotspots(JsonNode? id, JsonNode? args)
     {
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
-        var kind = args?["kind"]?.GetValue<string>();
-        var lang = args?["lang"]?.GetValue<string>();
+        var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -1285,8 +1304,8 @@ public partial class McpServer
     private JsonNode ExecuteUnusedSymbols(JsonNode? id, JsonNode? args)
     {
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 50);
-        var kind = args?["kind"]?.GetValue<string>();
-        var lang = args?["lang"]?.GetValue<string>();
+        var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;

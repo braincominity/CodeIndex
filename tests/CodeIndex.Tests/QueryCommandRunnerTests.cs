@@ -551,6 +551,32 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunLanguages_JsonListsHtmlWithSymbolExtractionAndAllExtensions()
+    {
+        // Pin the #215 surface: `cdidx languages --json` must report html with
+        // symbol_extraction=true and list all four extensions (.html, .htm, .xhtml, .shtml)
+        // so AI tools can discover HTML symbol support without indexing first.
+        // #215 の表面契約を pin: `cdidx languages --json` は html を symbol_extraction=true で
+        // 返し、`.html` / `.htm` / `.xhtml` / `.shtml` の 4 拡張子を列挙する必要がある。
+        // AI ツールがインデックス前でも HTML のシンボル対応を検出できるようにするため。
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var languages = document.RootElement.GetProperty("languages");
+        var html = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "html");
+
+        Assert.True(html.GetProperty("symbol_extraction").GetBoolean());
+        var extensions = html.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()).ToList();
+        Assert.Contains(".html", extensions);
+        Assert.Contains(".htm", extensions);
+        Assert.Contains(".xhtml", extensions);
+        Assert.Contains(".shtml", extensions);
+    }
+
+    [Fact]
     public void RunLanguages_Json_SearchOnlyBucketsAdvertiseZeroSymbolAndGraphSupport()
     {
         // Search-only languages that intentionally live outside the Python / CSS extractors
@@ -2195,6 +2221,49 @@ public class QueryCommandRunnerTests
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal(0, json.GetProperty("references").GetArrayLength());
             Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("callers", "attribute")]
+    [InlineData("callers", "annotation")]
+    [InlineData("callees", "attribute")]
+    [InlineData("callees", "annotation")]
+    public void RunCallersCallees_RejectMetadataKind_WithUsageError(string command, string kind)
+    {
+        // issue #293 follow-up: `callers` / `callees` must reject `--kind attribute` and
+        // `--kind annotation` at the CLI boundary. Metadata references are attributed to the
+        // enclosing body-range symbol rather than the annotated target, so `callers Obsolete
+        // --kind attribute` would return `[Obsolete] void M()` under the enclosing class
+        // instead of `M`, and file-level targets like `[assembly: Foo]` drop entirely because
+        // `container_name` is NULL. The correct path for metadata enumeration is
+        // `references <name> --kind attribute|annotation`.
+        // issue #293 補足: `callers` / `callees` は CLI 境界で `--kind attribute` /
+        // `--kind annotation` を必ず弾かなければならない。metadata 参照は注釈対象ではなく
+        // body-range の外側シンボルに帰属するため、`callers Obsolete --kind attribute` では
+        // `[Obsolete] void M()` が `M` ではなく外側クラスに寄り、`[assembly: Foo]` のような
+        // file-level target は `container_name = NULL` で完全に脱落する。metadata 列挙の
+        // 正しい経路は `references <name> --kind attribute|annotation`。
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_{command}_reject_kind_{kind}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var args = new[] { "Symbol", "--db", dbPath, "--kind", kind };
+
+            var (exitCode, _, stderr) = command switch
+            {
+                "callers" => CaptureConsole(() => QueryCommandRunner.RunCallers(args, _jsonOptions)),
+                "callees" => CaptureConsole(() => QueryCommandRunner.RunCallees(args, _jsonOptions)),
+                _ => throw new InvalidOperationException($"Unexpected command: {command}")
+            };
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains($"'--kind {kind}' is not supported on '{command}'", stderr);
+            Assert.Contains($"references <name> --kind {kind}", stderr);
         }
         finally
         {
@@ -11088,6 +11157,137 @@ public class QueryCommandRunnerTests
         // Verify full (absolute) path is shown, not just the basename / フルパス表示を検証
         Assert.Contains(Path.GetFullPath(missingDbPath), stderr);
         Assert.Contains("Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.", stderr);
+    }
+
+    [Fact]
+    public void ParseArgs_NormalizesLangAndKindToLowercase()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["QueryCommandRunner", "--lang", "Python", "--kind", "FUNCTION"],
+            jsonDefault: false);
+
+        Assert.Equal("python", options.Lang);
+        Assert.Equal("function", options.Kind);
+    }
+
+    [Fact]
+    public void RunSymbols_AcceptsLangPythonCaseInsensitively()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_lang_case");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "a.py", "python", "def hello(): pass\n");
+
+            var (exitCodeUpper, stdoutUpper, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--lang", "Python"],
+                _jsonOptions));
+            var (exitCodeLower, stdoutLower, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--lang", "python"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCodeUpper);
+            Assert.Equal(CommandExitCodes.Success, exitCodeLower);
+            Assert.Contains("hello", stdoutUpper);
+            Assert.Equal(stdoutLower, stdoutUpper);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_AcceptsKindFunctionCaseInsensitively()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_kind_case");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "a.py", "python", "def hello(): pass\n");
+
+            var (exitCodeUpper, stdoutUpper, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--kind", "FUNCTION"],
+                _jsonOptions));
+            var (exitCodeLower, stdoutLower, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--kind", "function"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCodeUpper);
+            Assert.Equal(CommandExitCodes.Success, exitCodeLower);
+            Assert.Contains("hello", stdoutUpper);
+            Assert.Equal(stdoutLower, stdoutUpper);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_EmitsLangHintForUnknownLang()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_lang_hint");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "a.py", "python", "def hello(): pass\n");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--lang", "nonexistent"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Contains("'nonexistent' not found in index. Available: python", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDefinition_EmitsLangHintForUnknownLang()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_lang_hint");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "a.py", "python", "def hello(): pass\n");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["hello", "--db", dbPath, "--lang", "nonexistent"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Contains("'nonexistent' not found in index. Available: python", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDefinition_AcceptsLangPythonCaseInsensitively()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_lang_case");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "a.py", "python", "def hello(): pass\n");
+
+            var (exitCode, stdout, _) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["hello", "--db", dbPath, "--lang", "Python"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("hello", stdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     private static (T Result, string Stdout, string Stderr) CaptureConsole<T>(Func<T> action)
