@@ -6018,6 +6018,102 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_DetectsTSqlDdlKinds()
+    {
+        var content =
+            "CREATE SCHEMA sales AUTHORIZATION dbo;\n" +
+            "CREATE TYPE sales.Money FROM DECIMAL(18, 4) NOT NULL;\n" +
+            "CREATE SEQUENCE sales.OrderSeq START WITH 1 INCREMENT BY 1;\n" +
+            "CREATE SYNONYM dbo.Customers FOR external.Customers;\n" +
+            "CREATE LOGIN [app_service] WITH PASSWORD = 'x';\n" +
+            "CREATE USER app_service FOR LOGIN app_service;\n" +
+            "CREATE ROLE sales_writer AUTHORIZATION dbo;\n" +
+            "CREATE DATABASE sales_db;\n" +
+            "CREATE CERTIFICATE svc_cert WITH SUBJECT = 'svc';\n" +
+            "CREATE PARTITION FUNCTION pf_OrdersByYear (datetime2) AS RANGE RIGHT FOR VALUES ('2024-01-01');\n" +
+            "CREATE PARTITION SCHEME ps_OrdersByYear AS PARTITION pf_OrdersByYear TO ([primary]);\n" +
+            "CREATE FULLTEXT CATALOG ftc_sales WITH ACCENT_SENSITIVITY=OFF;\n" +
+            "CREATE PROC dbo.sp_DailyReport @Date DATE AS BEGIN SELECT 1; END\n" +
+            "CREATE PROCEDURE [dbo].[sp_GetOrder] @Id INT AS SELECT 1;\n" +
+            "CREATE OR ALTER PROCEDURE dbo.sp_UpsertUser AS SELECT 1;\n" +
+            "CREATE OR ALTER VIEW dbo.v_ActiveOrders AS SELECT 1;\n" +
+            "ALTER PROCEDURE dbo.sp_DailyReport AS SELECT 2;\n" +
+            "ALTER FUNCTION dbo.fn_Total() RETURNS INT AS BEGIN RETURN 1 END;\n" +
+            "ALTER PARTITION FUNCTION pf_OrdersByYear() SPLIT RANGE ('2025-01-01');\n" +
+            "ALTER SCHEMA sales TRANSFER dbo.Customers;\n" +
+            "ALTER EXTENSION hstore UPDATE TO '1.5';\n" +
+            "ALTER CERTIFICATE svc_cert WITH PRIVATE KEY (DECRYPTION BY PASSWORD = 'x');\n" +
+            "ALTER DOMAIN us_postal_code DROP NOT NULL;\n";
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "sales");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.Money");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.OrderSeq");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "dbo.Customers");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "[app_service]");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "app_service");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales_writer");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales_db");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "svc_cert");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "pf_OrdersByYear");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ps_OrdersByYear");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ftc_sales");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "dbo.sp_DailyReport");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "[dbo].[sp_GetOrder]");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "dbo.sp_UpsertUser");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "dbo.v_ActiveOrders");
+        // ALTER on an object kind other than TABLE must now be captured with the same kind
+        // contract as the matching CREATE row (function for procedure-like, namespace for schema,
+        // import for extension, class for everything else).
+        // TABLE 以外のオブジェクトに対する ALTER も、対応する CREATE 行と同じ kind 契約で
+        // 捕捉されること（プロシージャ類は function、SCHEMA は namespace、EXTENSION は import、
+        // その他は class）。
+        Assert.Equal(2, symbols.Count(s => s.Name == "dbo.sp_DailyReport"));
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "dbo.sp_DailyReport" && s.Signature != null && s.Signature.StartsWith("ALTER PROCEDURE", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "dbo.fn_Total");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "pf_OrdersByYear" && s.Signature != null && s.Signature.StartsWith("ALTER PARTITION FUNCTION", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "sales" && s.Signature != null && s.Signature.StartsWith("ALTER SCHEMA", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "hstore");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "svc_cert" && s.Signature != null && s.Signature.StartsWith("ALTER CERTIFICATE", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "us_postal_code");
+
+        // SQL `CREATE SCHEMA sales;` and `ALTER SCHEMA sales TRANSFER ...;` are body-less
+        // namespace-kind symbols. They must NOT be treated as C# file-scoped namespaces and
+        // must not wrap every subsequent top-level SQL symbol as their container — SQL
+        // schema is expressed through qualified names (`sales.Money`) rather than containment.
+        // SQL の `CREATE SCHEMA sales;` と `ALTER SCHEMA sales TRANSFER ...;` は body 無しの
+        // namespace kind だが、C# の file-scoped namespace 扱いにしてはならない。SQL の schema
+        // は包含ではなく `sales.Money` のような修飾名で表すので、後続の top-level シンボルを
+        // schema 配下に吸い込んではいけない。
+        var containerPollutionVictims = new[]
+        {
+            "dbo.fn_Total",
+            "pf_OrdersByYear",
+            "hstore",
+            "us_postal_code",
+            "[app_service]",
+            "app_service",
+            "sales_writer",
+            "sales_db",
+            "svc_cert",
+            "ps_OrdersByYear",
+            "ftc_sales",
+            "dbo.sp_DailyReport",
+            "[dbo].[sp_GetOrder]",
+            "dbo.sp_UpsertUser",
+            "dbo.v_ActiveOrders",
+        };
+        foreach (var name in containerPollutionVictims)
+        {
+            Assert.All(
+                symbols.Where(s => s.Name == name),
+                s => Assert.True(
+                    s.ContainerKind != "namespace" || s.ContainerName != "sales",
+                    $"{s.Kind} {s.Name} was wrapped under namespace=sales — ALTER/CREATE SCHEMA must not act as a C# file-scoped namespace container."));
+        }
+    }
+
+    [Fact]
     public void Extract_Terraform_DetectsResources()
     {
         var content = "resource \"aws_s3_bucket\" \"my_bucket\" {\n  bucket = \"my-bucket\"\n}\n\nvariable \"region\" {\n  default = \"us-east-1\"\n}\n\noutput \"bucket_arn\" {\n  value = aws_s3_bucket.my_bucket.arn\n}\n\nmodule \"vpc\" {\n  source = \"./modules/vpc\"\n}";
