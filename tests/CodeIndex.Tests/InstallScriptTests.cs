@@ -2253,12 +2253,18 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
-    public void SelfTestLocalMirror_AllowOverwriteFlag_ProceedsDespiteRiskyInstallDir()
+    public void SelfTestLocalMirror_EnvSelfTestAllowOverwrite_IsNotHonoredAsSilentBypass()
     {
+        // Regression: a pre-exported SELF_TEST_ALLOW_OVERWRITE=1 in the caller's
+        // shell or CI must NOT silently bypass the install-dir guard. The only
+        // supported escape hatch is the explicit --self-test-allow-overwrite CLI flag.
+        // 呼び出し側シェルや CI に残った SELF_TEST_ALLOW_OVERWRITE=1 は
+        // install-dir ガードを黙って無効化してはならない。唯一の解除手段は
+        // --self-test-allow-overwrite CLI フラグ。
         if (OperatingSystem.IsWindows())
             return;
 
-        var homeDir = Path.Combine(_tempRoot, "self_test_allow_home");
+        var homeDir = Path.Combine(_tempRoot, "self_test_env_bypass_home");
         var realInstallDir = Path.Combine(homeDir, ".local", "bin");
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             $$"""
@@ -2271,29 +2277,97 @@ public sealed class InstallScriptTests : IDisposable
             wait_for_local_mirror_ready() { :; }
             python3() { sleep 30; }
             curl() { :; }
-            main() {
-                echo "MAIN_INSTALL_DIR:$INSTALL_DIR"
-                mkdir -p "$INSTALL_DIR"
-                printf '%s\n' '#!/usr/bin/env bash' 'echo "cdidx v1.2.3"' > "$INSTALL_DIR/cdidx"
-                chmod +x "$INSTALL_DIR/cdidx"
-                printf '{"version":"1.2.3"}' > "$INSTALL_DIR/version.json"
-                printf 'self-test-lib' > "$INSTALL_DIR/libe_sqlite3.so"
-            }
+            main() { echo "MAIN_SHOULD_NOT_RUN"; }
 
-            SELF_TEST_ALLOW_OVERWRITE=1
+            # After sourcing install.sh the SELF_TEST_ALLOW_OVERWRITE shell var
+            # must be reset to 0 regardless of any inherited env value.
+            # install.sh を source した後、SELF_TEST_ALLOW_OVERWRITE は env から
+            # 継承した値にかかわらず 0 にリセットされていること。
+            echo "ALLOW_FLAG_AFTER_SOURCE:${SELF_TEST_ALLOW_OVERWRITE:-unset}"
             run_local_mirror_self_test v1.2.3
-            echo "OVERWRITE_ALLOWED"
             """,
             new Dictionary<string, string?>
             {
                 ["CDIDX_INSTALL_DIR"] = realInstallDir,
+                ["SELF_TEST_ALLOW_OVERWRITE"] = "1",
             },
             enforceStrictMode: false);
 
+        Assert.Contains("ALLOW_FLAG_AFTER_SOURCE:0", stdout);
+        Assert.NotEqual(0, exitCode);
+        Assert.DoesNotContain("MAIN_SHOULD_NOT_RUN", stdout);
+        Assert.Contains("points at a real install path", stderr);
+        Assert.Contains("--self-test-allow-overwrite", stderr);
+        Assert.Contains("Local mirror self-test aborted to protect an existing install", stderr);
+
+        var realCdidx = File.ReadAllText(Path.Combine(realInstallDir, "cdidx"));
+        Assert.Contains("REAL_EXISTING_BINARY", realCdidx);
+    }
+
+    [Theory]
+    [InlineData("/usr/local/bin/")]
+    [InlineData("/usr/bin/")]
+    [InlineData("/opt/homebrew/bin/")]
+    [InlineData("/opt/local/bin/")]
+    public void SelfTestLocalMirror_WellKnownSystemPathWithTrailingSlash_IsStillRiskyAndAborts(string systemPath)
+    {
+        // The risky-path detector must normalize trailing slashes so
+        // CDIDX_INSTALL_DIR="/usr/local/bin/" is caught just like "/usr/local/bin".
+        // 末尾スラッシュがあっても既知のシステム install 先として検出されること。
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            export BINARY_NAME="cdidx_does_not_exist_here"
+            is_self_test_install_dir_risky "{{systemPath}}"
+            echo "RISKY_EXIT:$?"
+            """,
+            null,
+            enforceStrictMode: false);
+
         Assert.Equal(0, exitCode);
-        Assert.Contains("OVERWRITE_ALLOWED", stdout);
-        Assert.Contains($"MAIN_INSTALL_DIR:{realInstallDir}", stdout);
-        Assert.DoesNotContain("Local mirror self-test aborted", stderr);
+        Assert.Contains("RISKY_EXIT:0", stdout);
+        _ = stderr;
+    }
+
+    [Fact]
+    public void SelfTestLocalMirror_HomeLocalBinWithTrailingSlash_IsStillRiskyAndAborts()
+    {
+        // A CDIDX_INSTALL_DIR of "$HOME/.local/bin/" (with trailing slash, no
+        // existing cdidx yet) must still abort — previously it slipped past the
+        // exact-string comparison and only got caught after a real binary existed.
+        // 末尾スラッシュ付きの "$HOME/.local/bin/" も、実バイナリがまだ無い段階で
+        // ガードに引っかかること。
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var homeDir = Path.Combine(_tempRoot, "self_test_trailing_slash_home");
+        var realInstallDir = Path.Combine(homeDir, ".local", "bin");
+        Directory.CreateDirectory(realInstallDir);
+        var installDirWithSlash = realInstallDir.EndsWith("/") ? realInstallDir : realInstallDir + "/";
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            export HOME="{{homeDir}}"
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            wait_for_local_mirror_ready() { :; }
+            python3() { sleep 30; }
+            curl() { :; }
+            main() { echo "MAIN_SHOULD_NOT_RUN"; }
+
+            run_local_mirror_self_test v1.2.3
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDirWithSlash,
+            },
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.DoesNotContain("MAIN_SHOULD_NOT_RUN", stdout);
+        Assert.Contains("points at a real install path", stderr);
+        Assert.Contains("--self-test-allow-overwrite", stderr);
     }
 
     [Fact]

@@ -43,7 +43,13 @@ LOCAL_MIRROR_DIR_CLEANUP=""
 LOCAL_MIRROR_PID=""
 SELF_TEST_INSTALL_DIR_CLEANUP=""
 SELF_TEST_LOCAL_MIRROR=0
-SELF_TEST_ALLOW_OVERWRITE="${SELF_TEST_ALLOW_OVERWRITE:-0}"
+# Only set via the --self-test-allow-overwrite CLI flag. We intentionally do
+# NOT inherit this from the environment so that a stale SELF_TEST_ALLOW_OVERWRITE=1
+# in the caller's shell / CI cannot silently bypass the install-dir guard.
+# CLI フラグ --self-test-allow-overwrite 経由でのみ 1 になる。環境変数からは
+# 継承しない (呼び出し側のシェルに残った SELF_TEST_ALLOW_OVERWRITE=1 が
+# install-dir ガードを黙って無効化しないようにするため)。
+SELF_TEST_ALLOW_OVERWRITE=0
 EXISTING_BIN=""
 EXISTING_VERSION=""
 EXPLICIT_VERSION_REQUESTED=0
@@ -230,6 +236,18 @@ is_self_test_install_dir_risky() {
             fi
             ;;
     esac
+
+    # Normalize trailing slashes so /usr/local/bin and /usr/local/bin/ (or
+    # "$HOME/.local/bin/") match the well-known-path branches below. Leave a
+    # lone "/" intact so we don't turn it into an empty string.
+    # 末尾スラッシュを正規化し、/usr/local/bin と /usr/local/bin/ などを同一視する。
+    # ルート "/" は空文字にならないよう保持する。
+    while [ "${#dir}" -gt 1 ]; do
+        case "$dir" in
+            */) dir="${dir%/}" ;;
+            *) break ;;
+        esac
+    done
 
     case "$dir" in
         /usr/local/bin|/usr/bin|/opt/homebrew/bin|/opt/local/bin)
