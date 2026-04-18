@@ -8328,4 +8328,62 @@ public class SymbolExtractorTests
         Assert.Equal(7, ctors[0].Line);
         Assert.Contains("public static E()", ctors[0].Signature);
     }
+
+    [Fact]
+    public void Extract_CSharp_CompositeVisibilityWrappedConstructor_EmitsOnceAtNameLine()
+    {
+        // issue #348 の回帰: 複合 visibility (`protected internal` / `private protected`) が
+        // 2 行に分割されて折り返された wrapped ctor でも、名前行 1 件だけ emit し、signature
+        // には複合 visibility を保持する。candidate 列挙の先頭に full prefix (`protected internal`)
+        // を yield するため、constructor regex の `protected\s+internal` 選択肢でそのまま一致する。
+        const string content = """
+            namespace WrappedCtor;
+
+            public class F
+            {
+                protected
+                internal
+                F() { _v = 1; }
+
+                private static int _v;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var ctors = symbols.Where(s => s.Kind == "function" && s.Name == "F").ToList();
+        Assert.Single(ctors);
+        Assert.Equal(7, ctors[0].Line);
+        Assert.Contains("protected internal F()", ctors[0].Signature);
+        Assert.Equal("protected internal", ctors[0].Visibility);
+    }
+
+    [Fact]
+    public void Extract_CSharp_VisibilityStaticExternWrappedConstructor_EmitsOnceAtNameLine()
+    {
+        // issue #348 の回帰: visibility + static + extern の 3 modifier が全て別行に折り返された
+        // wrapped ctor でも、名前行 1 件だけ emit し、signature には 3 modifier 全てを保持する。
+        // full prefix (`public static extern`) は constructor regex の visibility スロット後に
+        // static を置けないため単体では通らず、static variant も `()` 要求で引数付きを弾くので
+        // 通らないが、visibility-only variant (`public`) が constructor regex にヒットし、signature
+        // は full prefix 側から補完される。
+        const string content = """
+            namespace WrappedCtor;
+
+            public class G
+            {
+                public
+                static
+                extern
+                G(string s);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var ctors = symbols.Where(s => s.Kind == "function" && s.Name == "G").ToList();
+        Assert.Single(ctors);
+        Assert.Equal(8, ctors[0].Line);
+        Assert.Contains("public static extern G(string s)", ctors[0].Signature);
+    }
 }
