@@ -431,40 +431,51 @@ public static class SymbolExtractor
             // `unsafe public S(int* p) {}` and `extern public S(int x);` are still captured
             // with visibility populated. Closes #355.
             // The negative lookahead after the opening paren rejects lines where the matching
-            // `)` is followed by an identifier + `{` / `(` / `=>` (with optional tuple-type
-            // suffixes `?` / `[]` / `[,]` / `[,,]` and whitespaced variants like `) []` / `) ?`
-            // in between via CSharpTupleSuffixPattern), which is the shape of a property with a
-            // modifier + tuple return type (`public required (int, int) R1 { get; init; }`,
-            // `public required (int, int) [] R4 { get; init; }`) or an expression-bodied method
-            // with a modifier (`public readonly (int, int)? M() => null;`,
-            // `public readonly (int, int) ? M3() => default;`). A plain ctor signature cannot
-            // match because there is no identifier between the closing `)` and the body opener.
-            // Using a positional check (not a keyword deny-list) preserves support for legal
-            // (though unusual) type names that collide with contextual keywords. Multi-line ctor
-            // signatures where the closing `)` is on a later line are unaffected because the
-            // lookahead only triggers when a `)` is visible on the current line. Sharing
-            // CSharpTupleSuffixPattern with CSharpTypePattern keeps the ctor lookahead and the
-            // upstream property / method rows in sync on which formatting variants count as a
-            // tuple-suffix return type. Closes #349.
+            // `)` is followed by an identifier + `{` / `(` / `;` / `=>` / `=` (with optional
+            // tuple-type suffixes `?` / `[]` / `[,]` / `[,,]` and whitespaced variants like
+            // `) []` / `) ?` in between via CSharpTupleSuffixPattern), which is the shape of a
+            // property with a modifier + tuple return type (`public required (int, int) R1
+            // { get; init; }`, `public required (int, int) [] R4 { get; init; }`), an
+            // expression-bodied method with a modifier (`public readonly (int, int)? M() =>
+            // null;`, `public readonly (int, int) ? M3() => default;`), or a plain field with a
+            // modifier + tuple type — both the uninitialized form (`public readonly (int, int) ?
+            // F5;`, terminated by `;`) and the initialized form (`public readonly (int, int) ?
+            // F4 = null;`, terminated by `=` excluding `==` / `=>`). A plain ctor signature
+            // cannot match because there is no identifier between the closing `)` and the body
+            // opener. The plain-field shapes are covered because #400's same-line plain-field
+            // advance no longer sets stopAfterFirstPatternMatch, so the ctor regex now runs on
+            // lines the plain-field pattern already claimed and would otherwise re-emit a phantom
+            // `function readonly` ctor row. Using a positional check (not a keyword deny-list)
+            // preserves support for legal (though unusual) type names that collide with
+            // contextual keywords. Multi-line ctor signatures where the closing `)` is on a
+            // later line are unaffected because the lookahead only triggers when a `)` is
+            // visible on the current line. Sharing CSharpTupleSuffixPattern with CSharpTypePattern
+            // keeps the ctor lookahead and the upstream property / method / plain-field rows in
+            // sync on which formatting variants count as a tuple-suffix return type. Closes #349.
             // コンストラクタ（戻り値なし、名前の後に括弧）— visibility 必須。
             // `unsafe` / `extern` は visibility の前後どちらにも置けるため、
             // `unsafe public S(int* p) {}` や `extern public S(int x);` でも visibility を
             // 拾える。Closes #355.
-            // 開き括弧の直後に置いた否定先読みは、「対応する `)` のあとに識別子 + `{` / `(` / `=>`
-            // が続く（間に `?` / `[]` / `[,]` / `[,,]` の tuple サフィックス、および
+            // 開き括弧の直後に置いた否定先読みは、「対応する `)` のあとに識別子 + `{` / `(` / `;` /
+            // `=>` / `=`（間に `?` / `[]` / `[,]` / `[,,]` の tuple サフィックス、および
             // CSharpTupleSuffixPattern によって `) []` / `) ?` のような空白を挟んだ整形バリエーションも
             // 許す）」形の行を弾く。これは `public required (int, int) R1 { get; init; }` や
             // `public required (int, int) [] R4 { get; init; }` のような modifier 付き property、
             // `public readonly (int, int)? M() => null;` や `public readonly (int, int) ? M3() => default;`
-            // のような modifier 付き式形式メソッドの形であり、従来はどちらも `required` / `readonly` を
-            // ctor 名として greedy に喰っていた。通常の ctor シグネチャでは閉じ括弧と本体開始の間に
-            // 識別子が入らないためマッチし続ける。キーワード deny-list ではなく位置検査なので、
-            // contextual keyword と綴りが衝突する合法な型名のコンストラクタも弾かない。
-            // 複数行にまたがる ctor シグネチャ（閉じ括弧が次行以降にある場合）は、現在行に
-            // `)` が出ないため lookahead が発動せずそのままマッチする。CSharpTupleSuffixPattern を
-            // CSharpTypePattern と共有することで、ctor 否定先読みと上流の property / method 行が
-            // tuple サフィックス戻り値の受理形について常に一致する。Closes #349.
-            new("function",  new Regex($@"^\s*(?:(?:unsafe|extern)\s+)*(?<visibility>{CSharpVisibilityPattern})\s+(?:(?:unsafe|extern)\s+)*(?<name>\w+)\s*\((?!.*\){CSharpTupleSuffixPattern}\s*\w+\s*(?:[{{(]|=>))", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // のような modifier 付き式形式メソッド、および modifier 付き tuple 型の plain field —
+            // `public readonly (int, int) ? F5;` のような未初期化（`;` 終端）形、
+            // `public readonly (int, int) ? F4 = null;` のような初期化（`=` 終端、`==` / `=>` は除外）形 —
+            // であり、従来はいずれも `required` / `readonly` を ctor 名として greedy に喰っていた。
+            // 通常の ctor シグネチャでは閉じ括弧と本体開始の間に識別子が入らないためマッチし続ける。
+            // plain field 形が対象に入ったのは、#400 の同一行 plain-field 前進が
+            // stopAfterFirstPatternMatch をセットしなくなったため、ctor 正規表現が plain-field
+            // パターン既取得の行にも再走して phantom `function readonly` を再発する経路ができたため。
+            // キーワード deny-list ではなく位置検査なので、contextual keyword と綴りが衝突する合法な
+            // 型名のコンストラクタも弾かない。複数行にまたがる ctor シグネチャ（閉じ括弧が次行以降にある場合）は、
+            // 現在行に `)` が出ないため lookahead が発動せずそのままマッチする。
+            // CSharpTupleSuffixPattern を CSharpTypePattern と共有することで、ctor 否定先読みと上流の
+            // property / method / plain-field 行が tuple サフィックス戻り値の受理形について常に一致する。Closes #349.
+            new("function",  new Regex($@"^\s*(?:(?:unsafe|extern)\s+)*(?<visibility>{CSharpVisibilityPattern})\s+(?:(?:unsafe|extern)\s+)*(?<name>\w+)\s*\((?!.*\){CSharpTupleSuffixPattern}\s*\w+\s*(?:[{{(;]|=>|=(?![=>])))", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Property with get/set/init — visibility optional
             // Reject statement keywords (return/throw/switch/...) as the return type so that
             // multi-line statement fragments merged by BuildCSharpPropertyMatchLine — e.g.
