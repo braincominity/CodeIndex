@@ -79,15 +79,21 @@ public static class ReferenceExtractor
             "require", "require_once", "include", "include_once",
             "echo", "print", "exit", "die", "eval", "unset", "isset", "empty",
         },
-        // SQL keywords (uppercase only to avoid collisions with other languages)
-        // SQL キーワード（他言語との衝突を避けるため大文字のみ）
-        ["sql"] = new HashSet<string>(StringComparer.Ordinal)
+        // SQL keywords. Case-insensitive because SQL is written both upper- and lowercase in real code,
+        // and the `EXEC|EXECUTE|CALL` extractor preserves the original casing of the captured name.
+        // The entries themselves stay uppercase for readability.
+        // SQL のキーワード。実コードでは大文字・小文字が混在するうえ、`EXEC|EXECUTE|CALL` 抽出が
+        // 元のケースをそのまま保持するため、比較は大文字小文字非依存にする（リストは読みやすさのため大文字表記）。
+        ["sql"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "SELECT", "FROM", "WHERE", "INSERT", "UPDATE", "DELETE", "JOIN", "INTO",
             "VALUES", "ORDER", "GROUP", "HAVING", "LIMIT", "OFFSET", "UNION",
             "EXISTS", "BETWEEN", "LIKE", "CASE", "WHEN", "THEN", "ELSE",
             "AS", "ON", "AND", "OR", "NOT", "NULL", "IN", "IS",
             "CREATE", "ALTER", "DROP", "TABLE", "INDEX", "VIEW", "IF",
+            // `EXECUTE IMMEDIATE 'dynamic SQL'` (Oracle / PL/pgSQL) — `IMMEDIATE` is not a call target.
+            // `EXECUTE IMMEDIATE '動的SQL'` (Oracle / PL/pgSQL) — `IMMEDIATE` は呼び出し対象ではない。
+            "IMMEDIATE",
         },
         // R keywords / R キーワード
         ["r"] = new HashSet<string>(StringComparer.Ordinal)
@@ -131,6 +137,20 @@ public static class ReferenceExtractor
         RegexOptions.Compiled);
     private static readonly Regex InlineBlockCommentRegex = new(@"/\*.*?\*/", RegexOptions.Compiled);
     private static readonly Regex CallRegex = new(@"(?<![\w$])(?<name>[A-Za-z_]\w*)(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
+    // SQL stored-procedure call without parentheses: T-SQL `EXEC` / `EXECUTE` and MySQL / SQL-PSM `CALL`.
+    // The shared CallRegex requires a trailing `(`, which misses the dominant real-world form such as
+    // `EXEC dbo.sp_Target;`, `EXEC dbo.sp_Target @x = 1, @y = 2;`, `CALL sp_Helper;`, and the bracketed
+    // form `EXEC [dbo].[sp_Target]`. The regex captures only the final identifier (schema prefixes are
+    // consumed as a prefix) and tolerates the optional T-SQL return-value assignment
+    // `EXEC @retval = dbo.sp_Target ...`. Bracket handling is done at emission time so `[sp_Target]`
+    // is normalized back to `sp_Target`. See issue #232.
+    // SQL のストアドプロシージャを `(` なしで呼び出す T-SQL `EXEC` / `EXECUTE` と MySQL / SQL-PSM `CALL`。
+    // 共通 CallRegex は末尾 `(` を要求するため、`EXEC dbo.sp_Target;` など実運用で圧倒的に多い形を取りこぼす。
+    // 先頭側の schema prefix は吸収し、末端の識別子だけを `name` として捕捉する。T-SQL 固有の
+    // `EXEC @retval = dbo.sp_Target ...` 形にも対応し、`[sp_Target]` のような角括弧識別子は発行時に除去する。
+    private static readonly Regex SqlProcCallRegex = new(
+        @"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?(?:(?:\[[\w ]+\]|\w+)\.)*(?<name>\[[\w ]+\]|\w+)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // C# event subscription/unsubscription: Click += OnClick — both LHS and RHS must be PascalCase identifiers
     // C# イベント購読・解除: Click += OnClick — LHS と RHS の両方が PascalCase 識別子のみ
     private static readonly Regex EventSubscriptionRegex = new(@"(?<name>[A-Z]\w*)\s*[+-]=\s*(?:new\s+)?[A-Z]\w*", RegexOptions.Compiled);
@@ -461,6 +481,45 @@ public static class ReferenceExtractor
                 {
                     var argGroup = match.Groups["arg"];
                     AddTypeReferenceSegments(references, seen, fileId, argGroup.Value, argGroup.Index, context, lineNumber, container, language);
+                }
+            }
+
+            // SQL stored-procedure calls without parentheses: `EXEC`, `EXECUTE`, and `CALL` forms that
+            // the shared CallRegex cannot see because there is no trailing `(`. Emits the same
+            // reference kind ("call") so the edge merges with the rare parenthesized form via dedupe.
+            // See issue #232.
+            // 末尾 `(` が無いため汎用 CallRegex で取れない SQL の `EXEC` / `EXECUTE` / `CALL` 形。
+            // 参照 kind は "call" で揃え、稀な `(...)` 付き形式との重複は dedupe で吸収する。issue #232 参照。
+            if (language is "sql")
+            {
+                foreach (Match match in SqlProcCallRegex.Matches(preparedLine))
+                {
+                    var nameGroup = match.Groups["name"];
+                    var rawName = nameGroup.Value;
+                    int nameIndex = nameGroup.Index;
+                    string resolvedName;
+                    if (rawName.Length >= 2 && rawName[0] == '[' && rawName[^1] == ']')
+                    {
+                        // Normalize `[sp_Target]` to `sp_Target` so it matches the indexed symbol name,
+                        // and point the column at the inner identifier instead of the `[`.
+                        // `[sp_Target]` は識別子名と一致させるため括弧を除去し、列位置は中身の先頭に寄せる。
+                        resolvedName = rawName.Substring(1, rawName.Length - 2);
+                        nameIndex += 1;
+                    }
+                    else
+                    {
+                        resolvedName = rawName;
+                    }
+
+                    if (IsIgnoredCallName(language, resolvedName))
+                        continue;
+                    if (definitionNames != null && definitionNames.Contains(resolvedName))
+                        continue;
+
+                    var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
+                    AddChainReference(
+                        references, seen, fileId, resolvedName, nameIndex + 1,
+                        "call", context, lineNumber, sqlCallContainer);
                 }
             }
 

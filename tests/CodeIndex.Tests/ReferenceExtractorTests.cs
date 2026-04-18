@@ -3364,4 +3364,106 @@ public class ReferenceExtractorTests
             r.SymbolName == "Root" && r.ReferenceKind == "call"
             && r.ContainerKind == "function" && r.ContainerName == "Leaf");
     }
+
+    [Fact]
+    public void Extract_SqlExecNoParens_CapturesStoredProcedureCall()
+    {
+        // issue #232: T-SQL `EXEC <proc>;` (no parentheses) is the dominant stored-procedure
+        // call form. CallRegex requires a trailing `(`, so without SqlProcCallRegex the
+        // reference graph misses every `EXEC`/`EXECUTE`/`CALL` site that does not use parens.
+        // issue #232: T-SQL の `EXEC <proc>;` (括弧なし) がストアド呼び出しの主要形。
+        const string content = """
+            EXEC dbo.sp_Target;
+            EXECUTE sp_Target;
+            EXEC dbo.sp_Target @x = 1, @y = 2;
+            EXEC dbo.sp_Target 1, 2;
+            EXEC dbo.sp_Target();
+            EXEC [dbo].[sp_Target];
+            CALL sp_Target();
+            CALL sp_Target;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRefs = references.Where(r => r.SymbolName == "sp_Target").ToList();
+        Assert.Equal(8, targetRefs.Count);
+        Assert.All(targetRefs, r => Assert.Equal("call", r.ReferenceKind));
+    }
+
+    [Fact]
+    public void Extract_SqlExecWithReturnAssignment_CapturesStoredProcedureCall()
+    {
+        // T-SQL return-value assignment: `EXEC @retval = dbo.sp_Target ...`. The call target
+        // is still `sp_Target`, not `@retval`.
+        // T-SQL の戻り値代入形式。呼び出し対象はあくまで `sp_Target`。
+        const string content = """
+            DECLARE @r int;
+            EXEC @r = dbo.sp_Target @x = 1;
+            EXECUTE @r = sp_Target;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRefs = references.Where(r => r.SymbolName == "sp_Target").ToList();
+        Assert.Equal(2, targetRefs.Count);
+        Assert.All(targetRefs, r => Assert.Equal("call", r.ReferenceKind));
+    }
+
+    [Fact]
+    public void Extract_SqlExecuteAs_NotExtractedAsReference()
+    {
+        // `EXECUTE AS '<user>'` is a context switch, not a stored-procedure call. `AS` must not
+        // leak into the reference graph as `call AS`. Same for lowercase `as`.
+        // `EXECUTE AS` はコンテキスト切替でありプロシージャ呼び出しではない。大文字小文字どちらでも参照化しない。
+        const string content = """
+            EXECUTE AS 'dbo';
+            execute as user = 'admin';
+            EXECUTE IMMEDIATE 'SELECT 1';
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName.Equals("AS", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(references, r => r.SymbolName.Equals("IMMEDIATE", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Extract_SqlExecInsideStringLiteral_NotExtractedAsReference()
+    {
+        // `EXEC` text inside a SQL string literal must not produce a reference — the literal is
+        // dynamic SQL stored as data, not a call site.
+        // SQL 文字列リテラル内の `EXEC` は動的 SQL の中身であり呼び出し箇所ではない。
+        const string content = """
+            DECLARE @sql nvarchar(max) = 'EXEC dbo.sp_InsideString;';
+            EXEC sp_executesql @sql;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "sp_InsideString");
+        // The outer EXEC of sp_executesql still becomes a reference.
+        // 外側の EXEC による sp_executesql の参照は残る。
+        Assert.Contains(references, r => r.SymbolName == "sp_executesql" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SqlExecCallDedup_DoesNotEmitDuplicateForParenForm()
+    {
+        // When a call already has a trailing `(`, the shared CallRegex and SqlProcCallRegex both
+        // match the same name at the same column. Dedup must collapse them into one reference row.
+        // `(` 付きの形は CallRegex と SqlProcCallRegex の両方がヒットするが、dedup で 1 件に収まる。
+        const string content = """
+            EXEC dbo.sp_Target();
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRefs = references.Where(r => r.SymbolName == "sp_Target").ToList();
+        Assert.Single(targetRefs);
+    }
 }
