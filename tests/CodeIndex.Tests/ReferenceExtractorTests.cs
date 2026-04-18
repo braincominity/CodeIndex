@@ -1440,6 +1440,78 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_TsTemplateHoleEnumBodyRegexLiteral_PreservesFollowingCall()
+    {
+        // Regression for issue #291 follow-up: a TypeScript `enum Local {}` inside
+        // an arrow-body template hole must be classified as a statement block
+        // (not an object-literal expression brace). Otherwise the matching `}`
+        // flips the following `/regex/` into division, the regex body's backtick
+        // is read as a phantom template opener, and the subsequent real call is
+        // lost.
+        // issue #291 続編: テンプレートホール内 arrow body に書かれた TypeScript
+        // の `enum Local {}` は（object literal の expression brace ではなく）
+        // statement block として扱うこと。そうしないと直後の `/regex/` が
+        // division に倒れ、regex 本文の backtick を template と誤認して後続の
+        // 実呼び出しが落ちる。
+        const string content = "function caller(value: string) {\n"
+            + "    const s = `${(() => { enum Local { A } /`/.test(value); runTask(); return 1; })()}`;\n"
+            + "    realCall();\n"
+            + "}\n"
+            + "function runTask() {}\n"
+            + "function realCall() {}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "runTask" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
+    }
+
+    [Fact]
+    public void Extract_TsTemplateHoleInterfaceBodyRegexLiteral_PreservesFollowingCall()
+    {
+        // Regression for issue #291 follow-up: TypeScript `interface Local {}`
+        // follows the same statement-block rule as `enum` / `class`.
+        // issue #291 続編: TypeScript の `interface Local {}` も `enum` / `class`
+        // と同様 statement block として扱うこと。
+        const string content = "function caller(value: string) {\n"
+            + "    const s = `${(() => { interface Local { a: string } /`/.test(value); runTask(); return 1; })()}`;\n"
+            + "    realCall();\n"
+            + "}\n"
+            + "function runTask() {}\n"
+            + "function realCall() {}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "runTask" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
+    }
+
+    [Fact]
+    public void Extract_TsTemplateHoleNamespaceBodyRegexLiteral_PreservesFollowingCall()
+    {
+        // Regression for issue #291 follow-up: TypeScript `namespace Local {}`
+        // (and the legacy `module Local {}` alias) share the declaration-body
+        // statement-block rule with `class` / `enum` / `interface`.
+        // issue #291 続編: TypeScript の `namespace Local {}`（および legacy
+        // 記法の `module Local {}`）も `class` / `enum` / `interface` と同じく
+        // declaration body の statement block として扱うこと。
+        const string content = "function caller(value: string) {\n"
+            + "    const s = `${(() => { namespace Local { } /`/.test(value); runTask(); return 1; })()}`;\n"
+            + "    realCall();\n"
+            + "}\n"
+            + "function runTask() {}\n"
+            + "function realCall() {}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "runTask" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
+    }
+
+    [Fact]
     public void Extract_JsTemplateHoleMultilineDivisionContinuation_PreservesCallAttribution()
     {
         // Regression for issue #291 follow-up: when a template-literal `${...}` hole

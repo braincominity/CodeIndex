@@ -1211,16 +1211,21 @@ internal static class StructuralLineMasker
         // `switch` / `catch` / `with`）だったかを追跡し、対応する `)` の直後に
         // 続く `/` を division ではなく regex literal として扱えるようにする。
         public Stack<bool> ParenStatementHead;
-        // True after the `class` keyword until the next `{` opens its body. This
-        // forces `class Foo {}` (and `class Foo extends Bar {}`) to be classified
-        // as a statement block instead of an object-literal expression brace, so
-        // the matching `}` stays regex-legal and a following `/regex/` does not
-        // flip to division and swallow backticks as a phantom template opener.
-        // `class` キーワードの後から次の `{` で class body が開くまで true。
-        // `class Foo {}` / `class Foo extends Bar {}` の `{` を object literal
-        // ではなく statement block として扱わせ、対応する `}` を regex-legal に
-        // 保つことで、続く `/regex/` が division に倒れて regex 本文の backtick を
-        // phantom template 開始として読んでしまうのを防ぐ。
+        // True after a declaration keyword (`class`, TypeScript `enum` /
+        // `interface` / `namespace` / `module`) until the next `{` opens its
+        // body. Forces `class Foo {}`, `enum Local {}`, `interface Local {}`,
+        // `namespace Local {}`, and `module Local {}` to be classified as a
+        // statement block instead of an object-literal expression brace, so
+        // the matching `}` stays regex-legal and a following `/regex/` does
+        // not flip to division and swallow backticks as a phantom template
+        // opener.
+        // `class` や TypeScript の `enum` / `interface` / `namespace` /
+        // `module` キーワードの後から次の `{` で body が開くまで true。
+        // `class Foo {}` / `enum Local {}` / `interface Local {}` /
+        // `namespace Local {}` / `module Local {}` の `{` を object literal
+        // ではなく statement block として扱わせ、対応する `}` を regex-legal
+        // に保つことで、続く `/regex/` が division に倒れて regex 本文の
+        // backtick を phantom template 開始として読んでしまうのを防ぐ。
         public bool ClassHeaderPending;
         // True after `case` / `default` keyword and cleared at the first `:` at
         // paren depth 0. Used to recognize the following `:` as a case-label
@@ -1275,7 +1280,7 @@ internal static class StructuralLineMasker
         {
             PrevTokenKind = JsPrevTokenKind.Identifier;
             PrevIdentifier = word;
-            if (word == "class")
+            if (IsJsDeclarationBodyKeyword(word))
                 ClassHeaderPending = true;
             if (word == "case" || word == "default")
             {
@@ -1287,6 +1292,15 @@ internal static class StructuralLineMasker
 
     private static bool IsJsStatementHeadKeyword(string word) =>
         word is "if" or "while" or "for" or "switch" or "catch" or "with";
+
+    // Keywords whose body is a statement block, not an object-literal expression brace.
+    // `class` is JS/TS; `enum`, `interface`, `namespace`, and `module` are TypeScript
+    // declarations whose `{...}` body must also keep a following `/regex/` regex-legal.
+    // body が statement block になる宣言キーワード。`class` は JS/TS、
+    // `enum` / `interface` / `namespace` / `module` は TypeScript の宣言で、
+    // 対応する `}` の直後の `/regex/` を regex-legal に保つ必要がある。
+    private static bool IsJsDeclarationBodyKeyword(string word) =>
+        word is "class" or "enum" or "interface" or "namespace" or "module";
 
     // JavaScript/TypeScript template literals: `...` with ${expr} interpolation holes.
     // Interpolation hole contents are preserved (not masked) so the call-graph keeps real call edges.
