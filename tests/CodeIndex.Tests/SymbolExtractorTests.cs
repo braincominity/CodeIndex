@@ -7283,6 +7283,41 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_MultiLineFieldFollowedBySameLineFieldDoesNotCrash()
+    {
+        // A multi-line field header whose continuation line also carries a
+        // second same-line field — `public Dictionary<string, int>\n    Map = new(); public int B;`
+        // — must extract both `Map` and `B` without throwing. In the prior fix,
+        // the plain-field same-line scan continued past the first `;` using
+        // absoluteStartColumn from the merged multi-line candidate, which sits
+        // in the merged-string column domain and is not valid inside lines[i].
+        // The follow-up regex hit then reached BuildCSharpMultilineSignature
+        // with startColumn > lines[i].Length and crashed indexing with
+        // `startIndex cannot be larger than length of string`. Closes #400.
+        // 複数行 field ヘッダの continuation 行に 2 個目の同一行 field が続く
+        // `public Dictionary<string, int>\n    Map = new(); public int B;` で、
+        // 例外なく `Map` と `B` 両方が抽出できる必要がある。旧実装では plain-field の
+        // 同一行継続 scan が、マージ済み候補の absoluteStartColumn を使って
+        // statementEnd 以降へ進み、2 個目の regex マッチで
+        // BuildCSharpMultilineSignature が lines[startLineIndex][startColumn..] で
+        // 範囲外アクセスし `startIndex cannot be larger than length of string` で
+        // indexing が落ちていた。Closes #400.
+        var content = string.Join(
+            "\n",
+            "public class C",
+            "{",
+            "    public Dictionary<string, int>",
+            "        Map = new(); public int B;",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "C");
+        Assert.Single(symbols, s => s.Kind == "property" && s.Name == "Map");
+        var b = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "B");
+        Assert.Equal("public int B;", b.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsFunctionPointerField()
     {
         // Function-pointer field (`delegate*<int, void> Callback;`) must be captured.

@@ -1339,6 +1339,40 @@ public static class SymbolExtractor
                         {
                             break;
                         }
+                        // Only continue the same-pattern same-line scan when the regex
+                        // ran on a per-line single-line candidate (patternMatchLine ===
+                        // csharpMatchLines[i]). For multi-line merged candidates,
+                        // BuildCSharpPropertyMatchLine joined the header line with one
+                        // or more continuation lines, so absoluteStartColumn sits in
+                        // the merged-string column domain and does not line up with
+                        // lines[i]'s raw columns. Continuing past statementEnd into a
+                        // second regex hit would then feed a column > lines[i].Length
+                        // into BuildCSharpMultilineSignature (which slices
+                        // lines[startLineIndex][startColumn..]) and crash indexing with
+                        // `startIndex cannot be larger than length of string`. The
+                        // continuation line is revisited by the outer physical-line
+                        // loop anyway (csharpSuppressedContinuationUntil is only bumped
+                        // for expression-bodied properties), so for multi-line merged
+                        // candidates we break here and let the outer loop handle any
+                        // additional fields on that line. Closes #400.
+                        // same-pattern での同一行 scan 継続は、per-line の単一行候補
+                        // （patternMatchLine === csharpMatchLines[i]）のときだけ許す。
+                        // BuildCSharpPropertyMatchLine が header 行と continuation 行を
+                        // マージした複数行候補では、absoluteStartColumn がマージ後文字列の
+                        // 列を指しており lines[i] の raw 列として使えない。この状態で
+                        // statementEnd を越えて 2 個目の regex ヒットに進むと、
+                        // BuildCSharpMultilineSignature の lines[startLineIndex][startColumn..]
+                        // で範囲外アクセスとなり
+                        // 「startIndex cannot be larger than length of string」で indexing が
+                        // 落ちる。continuation 行は外側の物理行ループが再訪する
+                        // （csharpSuppressedContinuationUntil は expression-bodied property
+                        // でしか進まない）ため、複数行候補ではここで break して後続の
+                        // 同一行フィールド抽出を外側ループに任せる。Closes #400.
+                        if (csharpMatchLines == null
+                            || !ReferenceEquals(patternMatchLine, csharpMatchLines[i]))
+                        {
+                            break;
+                        }
                         var advance = statementEnd;
                         if (advance <= lineOffset)
                             advance = lineOffset + 1;
