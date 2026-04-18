@@ -7945,26 +7945,30 @@ public class SymbolExtractorTests
     {
         // Covers issue #217: batch (.bat / .cmd) labels are the only navigation anchors
         // in a batch script (goto :X / call :X targets). Without label symbols every batch
-        // file indexed with zero symbol rows.
+        // file indexed with zero symbol rows. Also pins:
+        //   - `:EOF` is the reserved `goto :EOF` / `call :EOF` target and must NOT surface.
+        //   - `::` / `:::` comment lines must not produce bogus symbols.
+        //   - `SET` / `Set` / `SET /A` / `SET /P` variations are all picked up.
+        //   - CRLF line endings behave the same as LF.
         // issue #217 対応: batch (.bat / .cmd) のラベルは batch スクリプトにおける唯一の
         // ナビゲーションアンカー (goto :X / call :X の着地点)。ラベルシンボルが無いと
-        // 全ての batch ファイルがシンボル 0 件のまま索引されてしまっていた。
-        var content = "@echo off\nREM Build script\nsetlocal\n\nset VERSION=1.0.0\nset OUTPUT_DIR=%~dp0out\nset /a COUNT=1\nset /p INPUT=Enter: \nset \"QUOTED=value with spaces\"\n\n:main\ncall :compile\nif errorlevel 1 goto :error\ncall :test\ngoto :end\n\n:compile\necho Compiling...\ndotnet build\nexit /b %ERRORLEVEL%\n\n:test\necho Testing...\nexit /b %ERRORLEVEL%\n\n:error\necho Build failed\nexit /b 1\n\n:end\nendlocal\n\n:: This is a batch comment and must not produce a symbol\n";
+        // 全ての batch ファイルがシンボル 0 件のまま索引されてしまっていた。あわせて以下を固定:
+        //   - `:EOF` は `goto :EOF` / `call :EOF` 用の予約ターゲットなのでシンボル化しない。
+        //   - `::` / `:::` コメント行は偽シンボルを生成しない。
+        //   - `SET` / `Set` / `SET /A` / `SET /P` の大小文字混在・オプション違いも拾う。
+        //   - CRLF 行末でも LF と同じ結果になる。
+        var content = "@echo off\r\nREM Build script\r\nsetlocal\r\n\r\nset VERSION=1.0.0\r\nSET OUTPUT_DIR=%~dp0out\r\nSet /A COUNT=1\r\nSET /P INPUT=Enter: \r\nset \"QUOTED=value with spaces\"\r\n\r\n:main\r\ncall :compile\r\nif errorlevel 1 goto :error\r\ncall :test\r\ngoto :end\r\n\r\n:compile\r\necho Compiling...\r\ndotnet build\r\nexit /b %ERRORLEVEL%\r\n\r\n:test\r\necho Testing...\r\nexit /b %ERRORLEVEL%\r\n\r\n:error\r\necho Build failed\r\ngoto :EOF\r\n\r\n:end\r\ncall :eOf\r\nendlocal\r\n\r\n:: This is a batch comment and must not produce a symbol\r\n::: triple-colon comment must not produce a symbol either\r\n";
         var symbols = SymbolExtractor.Extract(1, "batch", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "main");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "compile");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "test");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "error");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "end");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "VERSION");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "OUTPUT_DIR");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "COUNT");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "INPUT");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "QUOTED");
-        // `::` comment form must not produce a bogus function symbol.
-        // `::` コメント形式は偽のシンボルを生成しない。
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name.StartsWith(":"));
+        // Exact function label set — nothing extra (no `:EOF`, no comment-derived names).
+        // function ラベル集合は厳密一致 — `:EOF` / コメント由来の偽名は混ざらない。
+        var functionNames = symbols.Where(s => s.Kind == "function").Select(s => s.Name).ToHashSet();
+        Assert.Equal(new HashSet<string> { "main", "compile", "test", "error", "end" }, functionNames);
+
+        // Exact property name set — nothing extra from comments / echo lines.
+        // property 名集合は厳密一致 — コメントや echo 行由来の偽名は混ざらない。
+        var propertyNames = symbols.Where(s => s.Kind == "property").Select(s => s.Name).ToHashSet();
+        Assert.Equal(new HashSet<string> { "VERSION", "OUTPUT_DIR", "COUNT", "INPUT", "QUOTED" }, propertyNames);
     }
 
     [Fact]

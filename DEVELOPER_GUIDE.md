@@ -370,7 +370,7 @@ The step size is `80 - 10 = 70` lines. A file with N lines produces `ceil((N - 8
 
 Most languages still use **compiled regex patterns**, matched one line at a time for functions, classes, and sometimes imports. JavaScript and TypeScript now add a lightweight lexer/state machine on top of the regex pass for cases that line-oriented regex cannot handle reliably, such as class-body bare methods, computed and modifier-prefixed methods, scope-aware synthetic class expressions, and JS/TS-specific range resolution. Named capture groups still extract identifiers for the regex-driven paths.
 
-Supported symbol kinds by language (32 languages with symbol extraction):
+Supported symbol kinds by language (33 languages with symbol extraction):
 
 | Language | function | class | struct | interface | enum | property | event/delegate | import | Graph |
 |---|---|---|---|---|---|---|---|---|:---:|
@@ -1392,7 +1392,7 @@ LIMIT 20;
 
 大半の言語では、今も **コンパイル済み正規表現パターン**を1行ずつ適用して関数、クラス、場合によってはインポートを抽出します。一方で JavaScript / TypeScript には、行単位の正規表現だけでは安定して扱えない class body の bare method、computed / modifier 付き method、scope-aware な synthetic class expression、JS/TS 専用の range 解決を補うため、軽量な lexer / state machine を追加しています。正規表現ベースの経路では引き続き名前付きキャプチャグループで識別子を取得します。
 
-言語別対応シンボル種別（シンボル抽出対応32言語）:
+言語別対応シンボル種別（シンボル抽出対応33言語）:
 
 | 言語 | function | class | struct | interface | enum | property | event/delegate | import | Graph |
 |---|---|---|---|---|---|---|---|---|:---:|
