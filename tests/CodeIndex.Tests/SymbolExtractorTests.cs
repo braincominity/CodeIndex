@@ -8041,4 +8041,64 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "phantom");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
     }
+
+    [Fact]
+    public void Extract_Html_MasksUnclosedRawTextAndRcdataBodies()
+    {
+        // cdidx indexes the working tree, so unclosed <script> / <style> /
+        // <textarea> / <title> are common mid-edit. Phantom symbols from those
+        // unclosed bodies must not leak. Closes #215 codex review finding.
+        // cdidx は working tree を対象にするため、編集途中で <script> / <style> /
+        // <textarea> / <title> が未閉鎖な状態は普通に起きる。未閉鎖でも本体から
+        // phantom シンボルを漏らしてはならない。#215 codex review 指摘への対応。
+        var unclosedScript = "<script>const tpl = '<evil-card id=\"phantom\"></evil-card>';";
+        var unclosedSymbols = SymbolExtractor.Extract(1, "html", unclosedScript);
+        Assert.DoesNotContain(unclosedSymbols, s => s.Kind == "class" && s.Name == "evil-card");
+        Assert.DoesNotContain(unclosedSymbols, s => s.Kind == "property" && s.Name == "phantom");
+
+        var unclosedStyle = "<style>\n  .r { content: '<rogue-tag id=\"styleid\"></rogue-tag>'; }";
+        var unclosedStyleSymbols = SymbolExtractor.Extract(1, "html", unclosedStyle);
+        Assert.DoesNotContain(unclosedStyleSymbols, s => s.Kind == "class" && s.Name == "rogue-tag");
+        Assert.DoesNotContain(unclosedStyleSymbols, s => s.Kind == "property" && s.Name == "styleid");
+
+        var unclosedTextarea = "<textarea><my-widget id=\"taid\"></my-widget>";
+        var unclosedTextareaSymbols = SymbolExtractor.Extract(1, "html", unclosedTextarea);
+        Assert.DoesNotContain(unclosedTextareaSymbols, s => s.Kind == "class" && s.Name == "my-widget");
+        Assert.DoesNotContain(unclosedTextareaSymbols, s => s.Kind == "property" && s.Name == "taid");
+
+        var unclosedTitle = "<title><bogus-tag id=\"titleid\"></bogus-tag>";
+        var unclosedTitleSymbols = SymbolExtractor.Extract(1, "html", unclosedTitle);
+        Assert.DoesNotContain(unclosedTitleSymbols, s => s.Kind == "class" && s.Name == "bogus-tag");
+        Assert.DoesNotContain(unclosedTitleSymbols, s => s.Kind == "property" && s.Name == "titleid");
+    }
+
+    [Fact]
+    public void Extract_Html_MultiLineOpeningTagReportsAttributeValueLine()
+    {
+        // When a `<script>` / `<link>` opening tag wraps across lines, the symbol's
+        // line must point at the line that actually carries the attribute value,
+        // not the opening `<`, so `definition` / `excerpt` jump to the right place.
+        // Closes #215 codex review finding.
+        // 開始タグが折り返された場合、symbol の行は開始 `<` の行ではなく属性値が
+        // 実在する行を指す必要がある。こうしないと `definition` / `excerpt` の
+        // ジャンプ先が先頭行にずれる。#215 codex review 指摘への対応。
+        var content = """
+            <script
+              type="module"
+              src="/app.js"></script>
+            <link
+              rel="stylesheet"
+              href="/app.css">
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        var scriptImport = Assert.Single(symbols, s => s.Kind == "import" && s.Name == "/app.js");
+        Assert.Equal(3, scriptImport.Line);
+        Assert.Equal(3, scriptImport.StartLine);
+
+        var linkImport = Assert.Single(symbols, s => s.Kind == "import" && s.Name == "/app.css");
+        Assert.Equal(6, linkImport.Line);
+        Assert.Equal(6, linkImport.StartLine);
+    }
 }

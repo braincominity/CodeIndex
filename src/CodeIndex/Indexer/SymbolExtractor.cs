@@ -1523,17 +1523,23 @@ public static class SymbolExtractor
     private static readonly Regex HtmlCommentRegex = new(
         @"<!--.*?-->",
         RegexOptions.Compiled | RegexOptions.Singleline);
+    // Closing tag is optional (`|\z`) because working-tree HTML often lacks one
+    // mid-edit, and an unclosed raw-text / RCDATA body must still be masked to
+    // prevent phantom symbols from leaking on every keystroke.
+    // 編集中の HTML では終了タグが未入力のことが多いため、閉じタグは省略可
+    // (`|\z`) とし、未閉鎖でも raw-text / RCDATA 本体をマスクして phantom
+    // シンボルが途中段階で漏れないようにする。
     private static readonly Regex HtmlScriptBodyRegex = new(
-        @"(?<open><script\b[^>]*>)(?<body>.*?)(?<close></script\s*>)",
+        @"(?<open><script\b[^>]*>)(?<body>.*?)(?<close></script\s*>|\z)",
         RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
     private static readonly Regex HtmlStyleBodyRegex = new(
-        @"(?<open><style\b[^>]*>)(?<body>.*?)(?<close></style\s*>)",
+        @"(?<open><style\b[^>]*>)(?<body>.*?)(?<close></style\s*>|\z)",
         RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
     private static readonly Regex HtmlTextareaBodyRegex = new(
-        @"(?<open><textarea\b[^>]*>)(?<body>.*?)(?<close></textarea\s*>)",
+        @"(?<open><textarea\b[^>]*>)(?<body>.*?)(?<close></textarea\s*>|\z)",
         RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
     private static readonly Regex HtmlTitleBodyRegex = new(
-        @"(?<open><title\b[^>]*>)(?<body>.*?)(?<close></title\s*>)",
+        @"(?<open><title\b[^>]*>)(?<body>.*?)(?<close></title\s*>|\z)",
         RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
 
     private static string MaskHtmlRawTextRegions(string text)
@@ -1599,13 +1605,23 @@ public static class SymbolExtractor
         {
             foreach (Match match in pattern.Regex.Matches(maskedText))
             {
-                var name = match.Groups["name"].Success
-                    ? match.Groups["name"].Value.Trim()
+                var nameGroup = match.Groups["name"];
+                var name = nameGroup.Success
+                    ? nameGroup.Value.Trim()
                     : match.Value.Trim();
                 if (name.Length == 0)
                     continue;
 
-                var startLine = FindHtmlLineNumber(lineStarts, match.Index);
+                // Anchor the symbol to the captured name (e.g. the `src="..."` value)
+                // rather than the opening `<` so cross-line tags like
+                // `<script\n  type="module"\n  src="/app.js">` report the line that
+                // actually carries the attribute value, keeping `definition` /
+                // `excerpt` jump targets accurate.
+                // 属性値が折り返されたタグでもジャンプ先が正しくなるよう、symbol の
+                // 位置は開始 `<` ではなく name capture（例: `src="..."` の値）の
+                // オフセットを基準にする。
+                var symbolOffset = nameGroup.Success ? nameGroup.Index : match.Index;
+                var startLine = FindHtmlLineNumber(lineStarts, symbolOffset);
                 var endOffset = match.Index + Math.Max(0, match.Length - 1);
                 var endLine = FindHtmlLineNumber(lineStarts, endOffset);
                 var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
