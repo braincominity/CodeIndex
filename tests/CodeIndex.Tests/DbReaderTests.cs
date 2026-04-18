@@ -2431,6 +2431,103 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchReferences_CSharpAttributeSuffixAlias_NotAppliedToCallKind()
+    {
+        // Adversarial review #7 follow-up: the suffix alias must NOT bleed into
+        // `--kind call` queries. `references FooAttribute --kind call --lang csharp`
+        // must not match a plain `Foo()` call — that would be a false positive.
+        // adversarial review #7 補足: suffix alias を `--kind call` クエリに波及させない。
+        // `references FooAttribute --kind call --lang csharp` が素の `Foo()` 呼び出しに
+        // 一致してはならない（誤一致になる）。
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            public class Svc
+            {
+                public void Call()
+                {
+                    MyAudit();
+                }
+            }
+            """);
+
+        var results = _reader.SearchReferences("MyAuditAttribute", lang: "csharp", referenceKind: "call");
+
+        Assert.DoesNotContain(results, r => r.SymbolName == "MyAudit");
+    }
+
+    [Fact]
+    public void SearchReferences_CSharpAttributeSuffixAlias_UnscopedLangStillLimitsToCSharpAttributeRows()
+    {
+        // When `--lang` is omitted, the alias must still only match C# attribute rows.
+        // A Java `@MyAudit(...)` or a bare `MyAudit()` call must not leak through.
+        // `--lang` を省略したときも、alias は C# の attribute 行にしか一致してはならない。
+        // Java の `@MyAudit(...)` や素の `MyAudit()` 呼び出しが漏れてはならない。
+        InsertIndexedFile("src/Svc.java", "java",
+            """
+            @MyAudit
+            public class Svc {
+            }
+            """);
+        InsertIndexedFile("src/Caller.cs", "csharp",
+            """
+            public class Caller
+            {
+                public void Go()
+                {
+                    MyAudit();
+                }
+            }
+            """);
+        InsertIndexedFile("src/Target.cs", "csharp",
+            """
+            [MyAudit]
+            public class Target
+            {
+            }
+            """);
+
+        var results = _reader.SearchReferences("MyAuditAttribute");
+
+        // Should include the C# attribute site on Target.cs …
+        Assert.Contains(results, r => r.Path == "src/Target.cs" && r.ReferenceKind == "attribute");
+        // … but must NOT include the Java annotation nor the C# call row via alias.
+        Assert.DoesNotContain(results, r => r.Path == "src/Svc.java");
+        Assert.DoesNotContain(results, r => r.Path == "src/Caller.cs" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void SearchReferences_CSharpAttributeSuffixAlias_CaseInsensitiveQuery()
+    {
+        // The surrounding exact / substring paths are case-insensitive (folded or
+        // NOCASE), so the suffix-stripping step must also be case-insensitive —
+        // `references myauditattribute` / `MyAuditATTRIBUTE --exact` / etc. must
+        // still produce the `MyAudit` alias and reach the `[MyAudit]` site.
+        // 周辺の exact / substring 経路は case-insensitive（folded or NOCASE）なので、
+        // suffix 除去も case-insensitive であるべき。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            using System;
+
+            public sealed class MyAuditAttribute : Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var lowercaseResults = _reader.SearchReferences("myauditattribute", lang: "csharp");
+        Assert.Contains(lowercaseResults, r => r.Path == "src/Svc.cs" && r.ReferenceKind == "attribute");
+
+        var mixedCaseExactResults = _reader.SearchReferences("MyAuditATTRIBUTE", lang: "csharp", exact: true);
+        Assert.Contains(mixedCaseExactResults, r => r.Path == "src/Svc.cs" && r.ReferenceKind == "attribute");
+    }
+
+    [Fact]
     public void GetGroupedSymbolHotspots_CollapsesDuplicateNamesWithoutBareJoinInflation()
     {
         InsertIndexedFile("src/Alpha.cs", "csharp",

@@ -677,7 +677,17 @@ public partial class DbReader
         if (referenceKind != null)
             sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
-        var referencesSuffixAlias = ComputeCSharpAttributeSuffixAlias(query, lang);
+        var referencesSuffixAlias = ComputeCSharpAttributeSuffixAlias(query, lang, referenceKind);
+        // When the alias fires without an explicit `lang` / `--kind` scope we still need
+        // to keep it from bleeding into non-C# rows or non-attribute rows. The SQL guard
+        // clamps the alias disjunct to `f.lang = 'csharp' AND r.reference_kind = 'attribute'`
+        // so unscoped `references FooAttribute` only picks up real C# attribute sites.
+        // alias が `--lang` / `--kind` スコープなしで発火するときも、C# 以外の行や
+        // attribute 以外の行を拾わないように、SQL 側で `f.lang = 'csharp' AND
+        // r.reference_kind = 'attribute'` に限定する。
+        var referencesAliasScope = referencesSuffixAlias != null
+            ? " AND f.lang = 'csharp' AND r.reference_kind = 'attribute'"
+            : string.Empty;
         if (query != null)
         {
             // --exact: Unicode-aware equality when FoldReady (#86), else ASCII COLLATE NOCASE.
@@ -688,21 +698,23 @@ public partial class DbReader
             // `[Foo]` reference site stored with `symbol_name = "Foo"`. In substring mode we
             // still LIKE-match `%FooAttribute%` and add only the exact stripped alias to avoid
             // overmatching unrelated names (e.g. `FooAuditLog`) that share the stripped prefix.
+            // The alias disjunct is scoped to C# attribute rows to avoid false positives.
             // --exact: FoldReady なら Unicode 折り畳み経路、未 ready なら ASCII NOCASE へ fallback。
             // C# の `Attribute` suffix が付いたクエリは、suffix を外した別名とも照合する。
             // 部分一致モードでは `%FooAttribute%` をそのまま使い、別名側は exact 照合だけを OR
             // することで `FooAuditLog` など無関係な名前を巻き込まないようにする。
+            // 別名節は C# の attribute 行に限定し、誤一致を避ける。
             if (exact && _foldReady)
                 sql += referencesSuffixAlias != null
-                    ? " AND (r.symbol_name_folded = @query OR r.symbol_name_folded = @queryAttributeAlias)"
+                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{referencesAliasScope}))"
                     : " AND r.symbol_name_folded = @query";
             else if (exact)
                 sql += referencesSuffixAlias != null
-                    ? " AND (r.symbol_name = @query COLLATE NOCASE OR r.symbol_name = @queryAttributeAlias COLLATE NOCASE)"
+                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}))"
                     : " AND r.symbol_name = @query COLLATE NOCASE";
             else
                 sql += referencesSuffixAlias != null
-                    ? " AND (r.symbol_name LIKE @query ESCAPE '\\' OR r.symbol_name = @queryAttributeAlias COLLATE NOCASE)"
+                    ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}))"
                     : " AND r.symbol_name LIKE @query ESCAPE '\\'";
         }
         if (referenceKind != null)
@@ -799,20 +811,23 @@ public partial class DbReader
             WHERE 1=1";
         innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
-        var countSuffixAlias = ComputeCSharpAttributeSuffixAlias(query, lang);
+        var countSuffixAlias = ComputeCSharpAttributeSuffixAlias(query, lang, referenceKind);
+        var countAliasScope = countSuffixAlias != null
+            ? " AND f.lang = 'csharp' AND r.reference_kind = 'attribute'"
+            : string.Empty;
         if (query != null)
         {
             if (exact && _foldReady)
                 innerSql += countSuffixAlias != null
-                    ? " AND (r.symbol_name_folded = @query OR r.symbol_name_folded = @queryAttributeAlias)"
+                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{countAliasScope}))"
                     : " AND r.symbol_name_folded = @query";
             else if (exact)
                 innerSql += countSuffixAlias != null
-                    ? " AND (r.symbol_name = @query COLLATE NOCASE OR r.symbol_name = @queryAttributeAlias COLLATE NOCASE)"
+                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}))"
                     : " AND r.symbol_name = @query COLLATE NOCASE";
             else
                 innerSql += countSuffixAlias != null
-                    ? " AND (r.symbol_name LIKE @query ESCAPE '\\' OR r.symbol_name = @queryAttributeAlias COLLATE NOCASE)"
+                    ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}))"
                     : " AND r.symbol_name LIKE @query ESCAPE '\\'";
         }
         if (referenceKind != null)
@@ -868,20 +883,23 @@ public partial class DbReader
                 WHERE 1=1";
         innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
-        var totalSuffixAlias = ComputeCSharpAttributeSuffixAlias(query, lang);
+        var totalSuffixAlias = ComputeCSharpAttributeSuffixAlias(query, lang, referenceKind);
+        var totalAliasScope = totalSuffixAlias != null
+            ? " AND f.lang = 'csharp' AND r.reference_kind = 'attribute'"
+            : string.Empty;
         if (query != null)
         {
             if (exact && _foldReady)
                 innerSql += totalSuffixAlias != null
-                    ? " AND (r.symbol_name_folded = @query OR r.symbol_name_folded = @queryAttributeAlias)"
+                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{totalAliasScope}))"
                     : " AND r.symbol_name_folded = @query";
             else if (exact)
                 innerSql += totalSuffixAlias != null
-                    ? " AND (r.symbol_name = @query COLLATE NOCASE OR r.symbol_name = @queryAttributeAlias COLLATE NOCASE)"
+                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}))"
                     : " AND r.symbol_name = @query COLLATE NOCASE";
             else
                 innerSql += totalSuffixAlias != null
-                    ? " AND (r.symbol_name LIKE @query ESCAPE '\\' OR r.symbol_name = @queryAttributeAlias COLLATE NOCASE)"
+                    ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}))"
                     : " AND r.symbol_name LIKE @query ESCAPE '\\'";
         }
         if (referenceKind != null)
@@ -1689,12 +1707,26 @@ public partial class DbReader
     // `symbol_name = "Foo"` で保存される。ユーザーがクラス名で問い合わせたとき
     // (`references FooAttribute` 等) でも慣用的な利用サイトに到達できるよう、
     // suffix を外した別名を返す。C# 以外の言語ではこの規約を持たないので適用しない。
-    private static string? ComputeCSharpAttributeSuffixAlias(string? query, string? lang)
+    private static string? ComputeCSharpAttributeSuffixAlias(string? query, string? lang, string? referenceKind)
     {
         if (string.IsNullOrEmpty(query)) return null;
         if (lang != null && !lang.Equals("csharp", StringComparison.OrdinalIgnoreCase)) return null;
+        // Only metadata lookups should apply the suffix alias: ordinary call-graph
+        // queries (`--kind call` / `instantiate` / `subscribe`) must not match `Foo()`
+        // call rows when the user typed `FooAttribute`. When `referenceKind` is null,
+        // the SQL side additionally constrains the alias clause to attribute rows only.
+        // metadata 参照の問い合わせ時だけ alias を適用する: `--kind call` などの call-graph
+        // クエリは `FooAttribute` と入力されたときに `Foo()` の call 行に一致してはならない。
+        // referenceKind が null のときは SQL 側でも alias 節を attribute 行に限定する。
+        if (referenceKind != null && !referenceKind.Equals("attribute", StringComparison.OrdinalIgnoreCase))
+            return null;
         const string suffix = "Attribute";
-        if (!query!.EndsWith(suffix, StringComparison.Ordinal)) return null;
+        // Case-insensitive suffix detection so `references myauditattribute` and
+        // `inspect MyAuditATTRIBUTE` still produce the `MyAudit` alias, matching the
+        // NOCASE / folded contract of the surrounding exact/substring query paths.
+        // 大文字小文字を無視して suffix を検出することで、`myauditattribute` や
+        // `MyAuditATTRIBUTE` のような形でも alias を生成できる。
+        if (!query!.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) return null;
         if (query.Length <= suffix.Length) return null;
         return query.Substring(0, query.Length - suffix.Length);
     }
