@@ -1666,16 +1666,20 @@ public partial class DbReader
                        " + GetLogicalReferenceKindSql("r.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references r
                 JOIN files src ON r.file_id = src.id
-                WHERE src.path != @impactTargetPath
-                  AND r.reference_kind IN " + CallGraphReferenceKindsSql;
-        // Metadata reference kinds (`attribute`, `annotation`) only touch a type/symbol
-        // as compile-time metadata and should NOT form a logical file dependency edge
-        // (e.g. `[JsonConverter(typeof(User))]` or `@Inject(User.class)` must not make
-        // the annotated file depend on `User`). Restrict to call-graph kinds.
-        // `attribute` / `annotation` は compile-time metadata で型や記号に触れるだけなので、
-        // ファイル間の論理的な依存 edge として扱ってはいけない（例:
-        // `[JsonConverter(typeof(User))]` / `@Inject(User.class)` で annotated ファイルが
-        // `User` に依存しているかのように見える）。call-graph kind に絞る。
+                WHERE src.path != @impactTargetPath";
+        // `impact` heuristic file hints intentionally include metadata-only reference
+        // kinds (`attribute` / `annotation`). A rename or removal of `User` breaks
+        // `[JsonConverter(typeof(User))]` / `@Inject(User.class)` at compile time just
+        // as surely as it breaks `new User()`, so file-level blast-radius analysis
+        // must surface those sites as real dependencies. `callers` / `callees` still
+        // reject metadata kinds at the CLI / MCP boundary because those commands model
+        // the dynamic call graph, not the dependency graph.
+        // `impact` の heuristic file hint は metadata-only な参照 (`attribute` /
+        // `annotation`) も意図的に含める。`User` を rename / 削除すると
+        // `[JsonConverter(typeof(User))]` / `@Inject(User.class)` も compile-time で
+        // 壊れるため、ファイル単位の blast-radius 分析ではそれらも本物の依存として
+        // 出す必要がある。`callers` / `callees` は call graph を扱うので、metadata 種別
+        // の拒否は引き続き CLI / MCP boundary 側で行う。
         innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "src", "impactDepsLang")}";
         if (lang != null)
             innerSql += " AND src.lang = @lang";
@@ -2326,13 +2330,22 @@ public partial class DbReader
                        " + GetLogicalReferenceKindSql("r.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references r
                 JOIN files src ON r.file_id = src.id
-                WHERE 1 = 1
-                  AND r.reference_kind IN " + CallGraphReferenceKindsSql;
-        // Same rationale as GetFileDependencyHintsToResolvedType: metadata kinds
-        // (`attribute` / `annotation`) must not form dependency edges because they
-        // only record compile-time metadata usage, not logical runtime dependencies.
-        // `GetFileDependencyHintsToResolvedType` と同じ理由で、`attribute` / `annotation`
-        // は実行時の論理依存ではないため、file-level dependency edge を作らない。
+                WHERE 1 = 1";
+        // `deps` intentionally includes metadata-only reference kinds
+        // (`attribute` / `annotation`). Same rationale as
+        // `GetFileDependencyHintsToResolvedType`: renaming or removing a type that
+        // is only referenced via `[JsonConverter(typeof(User))]` or
+        // `@Inject(User.class)` still breaks the annotated file at compile time, so
+        // file-level dependency analysis must treat those sites as real edges.
+        // Call-graph-specific commands (`callers` / `callees`) keep rejecting
+        // metadata kinds at the CLI / MCP boundary — that is a separate contract.
+        // `deps` は metadata-only 参照 (`attribute` / `annotation`) も意図的に
+        // 含める。`GetFileDependencyHintsToResolvedType` と同じ理由で、
+        // `[JsonConverter(typeof(User))]` や `@Inject(User.class)` 経由でしか参照
+        // されない型でも、rename / 削除すれば annotated ファイルは compile-time
+        // で壊れるため、ファイル単位の依存分析では本物の edge として扱う必要が
+        // ある。call-graph 専用コマンド (`callers` / `callees`) 側では metadata
+        // 種別の拒否を CLI / MCP boundary で引き続き行う — そちらは別契約。
         sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "src", "depsLang")}";
         if (lang != null)
             sql += " AND src.lang = @lang";
