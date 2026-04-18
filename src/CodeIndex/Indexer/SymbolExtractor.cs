@@ -878,6 +878,22 @@ public static class SymbolExtractor
     // `const` も他の field 対応修飾子と一緒に列挙する。Closes #355.
     private static readonly Regex CSharpPropertyHeaderPrefixRegex = new($@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|volatile|unsafe|extern|const|ref(?:\s+readonly)?)\s+)*(?:{CSharpTypePattern})\s*(?:\w+)?\s*\{{?\s*$", RegexOptions.Compiled);
 
+    // Detect physical lines that consist solely of C# modifier keywords (no identifier,
+    // no parentheses, no punctuation). Used by TryFindCSharpWrappedHeaderModifier to
+    // re-assemble wrapped declarations such as `static\nFoo() { ... }` or
+    // `public\nBar() { ... }` whose identifier line alone does not satisfy the
+    // constructor / static-constructor regexes. Closes #348.
+    // 識別子・括弧・句読点を含まず、C# のモディファイアキーワードのみで構成される物理行を検出する。
+    // `static\nFoo() { ... }` や `public\nBar() { ... }` のようにラップされた宣言の
+    // 識別子行だけでは constructor / static constructor の regex を満たせないため、
+    // TryFindCSharpWrappedHeaderModifier が prefix を再構築する用途で使う。Closes #348.
+    private static readonly Regex CSharpWrappedHeaderModifierLineRegex = new(
+        @"^\s*(?:public|private|protected|internal|static|partial|readonly|abstract|sealed|virtual|override|async|new|file|unsafe|extern|required|volatile)(?:\s+(?:public|private|protected|internal|static|partial|readonly|abstract|sealed|virtual|override|async|new|file|unsafe|extern|required|volatile))*\s*$",
+        RegexOptions.Compiled);
+
+    private readonly record struct CSharpWrappedHeaderModifierInfo(string Prefix);
+
+
     /// <summary>
     /// Extract symbols from the given source content.
     /// 指定されたソース内容からシンボルを抽出する。
@@ -964,9 +980,46 @@ public static class SymbolExtractor
                 var lineOffset = lang is "javascript" or "typescript"
                     ? FindNextJavaScriptTypeScriptStatementStart(patternMatchLine, 0)
                     : 0;
+                string? csharpWrappedModifierPrefix = null;
                 while (lineOffset >= 0 && lineOffset < patternMatchLine.Length)
                 {
                     var match = pattern.Regex.Match(patternMatchLine[lineOffset..]);
+                    if (!match.Success
+                        && lang == "csharp"
+                        && pattern.Kind == "function"
+                        && lineOffset == 0
+                        && csharpMatchLines != null
+                        && csharpWrappedModifierPrefix == null)
+                    {
+                        // Wrapped leading modifier recovery: when a C# function-kind pattern
+                        // fails at column 0 of the identifier line, try prepending the
+                        // modifier prefix accumulated from preceding modifier-only lines
+                        // (`static\nFoo() { ... }`, `public\nBar() { ... }`, etc.) and retry.
+                        // The method regex already tolerates an omitted modifier run, so it
+                        // matches on the identifier line alone — this branch only fires for
+                        // constructor / static-constructor shapes that require the modifier
+                        // on the same line as the name. Closes #348.
+                        // ラップされた先頭モディファイアの救済: C# の function 系パターンが
+                        // 識別子行の先頭マッチに失敗した場合、直前のモディファイアのみ行
+                        // （`static\nFoo() { ... }` や `public\nBar() { ... }` 等）から
+                        // 再構築した prefix を付け直して再試行する。メソッド regex は
+                        // 先頭モディファイアが無くても識別子行単体でマッチするため、この
+                        // 分岐は修飾子が識別子と同行に必要な constructor / static ctor
+                        // シェイプでのみ発火する。Closes #348.
+                        var wrappedInfo = TryFindCSharpWrappedHeaderModifier(csharpMatchLines!, i);
+                        if (wrappedInfo != null)
+                        {
+                            var wrappedMatchLine = wrappedInfo.Value.Prefix + " " + patternMatchLine.TrimStart();
+                            var wrappedMatch = pattern.Regex.Match(wrappedMatchLine);
+                            if (wrappedMatch.Success)
+                            {
+                                match = wrappedMatch;
+                                patternMatchLine = wrappedMatchLine;
+                                csharpWrappedModifierPrefix = wrappedInfo.Value.Prefix;
+                            }
+                        }
+                    }
+
                     if (!match.Success)
                     {
                         if (lang is "javascript" or "typescript" or "csharp" or "css")
@@ -1092,7 +1145,24 @@ public static class SymbolExtractor
                         ? FindSameLineBraceEndColumn(line, absoluteStartColumn, lang, kind)
                         : -1;
                     string signature;
-                    if (sameLineEndColumn >= absoluteStartColumn)
+                    if (csharpWrappedModifierPrefix != null)
+                    {
+                        // Wrapped ctor signature: prepend the modifier prefix recovered from
+                        // preceding modifier-only lines so the stored signature reflects the
+                        // full declaration (`static Foo() { ... }`) rather than only the name
+                        // line. Honor the same-line brace body truncation when present so the
+                        // signature does not absorb the entire ctor body. Closes #348.
+                        // ラップされたコンストラクタのシグネチャ: 直前のモディファイアのみ行から
+                        // 復元した prefix を付与し、識別子行だけでなく宣言全体
+                        // (`static Foo() { ... }`) を保存する。同一行に brace 本体が閉じる
+                        // ケースではその末尾で切り詰め、シグネチャが本体全体を飲み込まない
+                        // ようにする。Closes #348.
+                        var nameLineContent = sameLineEndColumn >= absoluteStartColumn
+                            ? line[absoluteStartColumn..(sameLineEndColumn + 1)]
+                            : line[absoluteStartColumn..];
+                        signature = (csharpWrappedModifierPrefix + " " + nameLineContent.TrimStart()).Trim();
+                    }
+                    else if (sameLineEndColumn >= absoluteStartColumn)
                     {
                         signature = line[absoluteStartColumn..(sameLineEndColumn + 1)].Trim();
                     }
@@ -7233,13 +7303,65 @@ public static class SymbolExtractor
         return -1;
     }
 
+    // Walk upward from the identifier line looking for a contiguous run of modifier-only
+    // physical lines, skipping blank lines and attribute-stripped whitespace. Returns the
+    // concatenated modifier prefix (in declaration order) so callers can prepend it to the
+    // identifier line for regex matching. Returns null when no modifier-only predecessor
+    // exists. Used to recover wrapped C# constructors whose leading `static` / `public` /
+    // etc. sits on its own physical line. Closes #348.
+    // 識別子行から上に遡り、空行や属性ストリップで空白化された行をスキップしつつ、
+    // モディファイアのみの物理行を連続して連結する。宣言順に連結したプレフィックスを返し、
+    // 呼び出し元は識別子行の先頭に付けて regex マッチに使える。先頭モディファイア行が
+    // 見つからなければ null を返す。C# の `static` / `public` などが単独行に書かれた
+    // ラップ型コンストラクタを拾うために使う。Closes #348.
+    private static CSharpWrappedHeaderModifierInfo? TryFindCSharpWrappedHeaderModifier(
+        string[] csharpMatchLines,
+        int nameLineIndex)
+    {
+        if (nameLineIndex <= 0)
+            return null;
+
+        string? prefix = null;
+        for (int index = nameLineIndex - 1; index >= 0; index--)
+        {
+            var structural = csharpMatchLines[index];
+            if (string.IsNullOrWhiteSpace(structural))
+                continue;
+
+            if (!CSharpWrappedHeaderModifierLineRegex.IsMatch(structural))
+                break;
+
+            var structuralTrimmed = structural.Trim();
+            prefix = prefix == null
+                ? structuralTrimmed
+                : structuralTrimmed + " " + prefix;
+        }
+
+        if (prefix == null)
+            return null;
+
+        return new CSharpWrappedHeaderModifierInfo(prefix);
+    }
+
     private static CSharpPropertyMatchCandidate BuildCSharpPropertyMatchLine(string[] lines, string[] csharpMatchLines, int startLineIndex)
     {
         var matchLine = csharpMatchLines[startLineIndex];
         if (string.IsNullOrWhiteSpace(matchLine)
             || !CSharpPropertyHeaderPrefixRegex.IsMatch(matchLine)
-            || HasCSharpPropertyAccessorStart(matchLine))
+            || HasCSharpPropertyAccessorStart(matchLine)
+            || CSharpWrappedHeaderModifierLineRegex.IsMatch(matchLine))
         {
+            // Modifier-only lines (`static`, `public`, etc. on their own physical line)
+            // are handled by the name-line wrapped-modifier recovery in the extraction
+            // loop. If the field-header merger runs here, it joins the next line and
+            // produces a phantom emission at the modifier line with a truncated
+            // signature. Returning the raw matchLine lets the pattern match fail at the
+            // modifier line so only the name line emits a symbol. Closes #348.
+            // 単独行に書かれたモディファイア（`static`、`public` 等）は、抽出ループ側の
+            // 名前行ラップド救済が処理する。フィールドヘッダ結合がここで動くと、次の行を
+            // 結合してモディファイア行に signature の切れた幻のエミットを残してしまう。
+            // 生の matchLine を返してモディファイア行ではパターンに失敗させ、名前行のみが
+            // シンボルを emit するようにする。Closes #348.
             return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
         }
 
