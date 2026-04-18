@@ -59,6 +59,142 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DetectsHocWrappedComponentBindings()
+    {
+        // HOC-wrapped / call-result / tagged-template component bindings must not be
+        // silently dropped — every PascalCase `const Name = <non-arrow RHS>` shape
+        // should produce a `function` symbol so that `definition`, `callers`,
+        // `inspect`, and default exports can resolve the name. Closes #240.
+        // React.memo / React.forwardRef / React.lazy / connect(...)(...) /
+        // styled.div`...` / withAuth(Home) のような HOC ラップと呼び出し結果・
+        // タグ付きテンプレート代入の束縛が漏れないことを確認する。どの PascalCase
+        // 名 `const Name = <非 arrow の RHS>` も `function` シンボルになることで、
+        // `definition` / `callers` / `inspect` と default export が名前解決できる。
+        // Closes #240.
+        var content = """
+            import React from 'react';
+
+            const Box = React.forwardRef(function Box(props, ref) {
+                return React.createElement('div', { ref }, props.children);
+            });
+
+            const Expensive = React.memo(function Expensive({ data }) {
+                return React.createElement('div', null, data);
+            });
+
+            const Wrapped = React.memo(() => React.createElement('div', null, 'arrow'));
+
+            const Lazy = React.lazy(() => import('./X'));
+
+            const Connected = connect(mapState)(MyComponent);
+
+            const Styled = styled.div`color: red`;
+
+            const WithAuth = withAuthentication(Home);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Box");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Expensive");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Wrapped");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Lazy");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Connected");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Styled");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "WithAuth");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_HocBindingPatternSkipsLowercaseBindings()
+    {
+        // Lowercase names are NOT captured by the HOC/call-result binding row so
+        // ordinary non-component constants (`const count = 5;`, `const total = sum(a, b);`)
+        // do not gain phantom `function` rows. The capitalization gate also keeps
+        // every non-arrow ordinary constant out of the symbol table; only the
+        // PascalCase shape — which matches the React / component naming
+        // convention — is surfaced. Closes #240.
+        // 小文字始まり名は HOC / 呼び出し結果束縛パターンで取り込まれない。通常の
+        // 非コンポーネント定数（`const count = 5;`、`const total = sum(a, b);`）に
+        // 架空の `function` 行が生えないことを確認する。大文字始まりのゲートにより、
+        // React / コンポーネント命名規則に沿う PascalCase 形だけがシンボルテーブル
+        // に出る。Closes #240.
+        var content = """
+            const count = 5;
+            const total = sum(a, b);
+            const config = loadConfig();
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "count");
+        Assert.DoesNotContain(symbols, s => s.Name == "total");
+        Assert.DoesNotContain(symbols, s => s.Name == "config");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_HocBindingPatternDoesNotShadowCapitalizedArrow()
+    {
+        // A capitalized arrow-function binding (`const Foo = () => <div/>`) still
+        // matches the pre-existing arrow pattern, which runs FIRST and sets the
+        // same-line stop flag. The new HOC row must not produce a second,
+        // BodyStyle.None duplicate for the same symbol — the arrow row already
+        // captures the function with a brace body range. Closes #240.
+        // 大文字始まりの arrow 関数束縛（`const Foo = () => <div/>`）は既存 arrow
+        // パターンに先行一致し、同一行の stop flag が立つ。今回の HOC 行で重複
+        // シンボル（BodyStyle.None の `function Foo`）を追加で生やしてはいけない —
+        // arrow 行がすでに本体範囲つきで捕捉している。Closes #240.
+        var content = """
+            const Foo = () => {
+                return 1;
+            };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        // Assert.Single already guarantees no duplicate was emitted by the new HOC
+        // row on the same line — the arrow row still wins via stopAfterFirstPatternMatch.
+        // Assert.Single で、新 HOC 行が同一行に重複シンボルを生やしていないことを保証する。
+        // arrow 行が stopAfterFirstPatternMatch で先勝ちしている。
+        var foo = Assert.Single(symbols.Where(s => s.Name == "Foo"));
+        Assert.Equal("function", foo.Kind);
+        // Arrow pattern uses BodyStyle.Brace, so EndLine is advanced past StartLine
+        // when the body spans multiple lines. The HOC row (BodyStyle.None) would
+        // leave EndLine equal to StartLine; a strictly greater end line proves the
+        // arrow row won.
+        // arrow パターンは BodyStyle.Brace なので、本体が複数行の場合 EndLine は
+        // StartLine より後まで伸びる。HOC 行（BodyStyle.None）は EndLine を
+        // StartLine のまま残すため、StartLine より大きい EndLine は arrow 行が
+        // 勝ったことの証拠になる。
+        Assert.True(foo.EndLine > foo.StartLine);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsHocWrappedComponentBindingsWithTypeAnnotation()
+    {
+        // TypeScript HOC bindings frequently carry an explicit type annotation
+        // between the name and `=`; the TypeScript row's optional `:` branch
+        // must consume the annotation so the name is still captured. Closes #240.
+        // TypeScript の HOC 束縛では名前と `=` の間に型注釈が入ることが多い。
+        // TypeScript 行のオプションの `:` 分岐が型注釈を消費し、名前が正しく
+        // 取得できることを確認する。Closes #240.
+        var content = """
+            import React from 'react';
+
+            const Connected: React.ComponentType<Props> = connect(mapState)(MyComponent);
+
+            const Styled: StyledComponent<'div', Theme> = styled.div`color: red`;
+
+            const Callback: (x: number) => number = (x) => x + 1;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Connected");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Styled");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Callback");
+    }
+
+    [Fact]
     public void Extract_JavaScript_StringBraceDoesNotBreakFollowingContainerAssignment()
     {
         var content = """
