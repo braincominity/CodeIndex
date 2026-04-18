@@ -5342,4 +5342,79 @@ public class DbReaderTests : IDisposable
 
         Assert.Empty(results);
     }
+
+    // Count-only SQL paths (search --count / symbols --count / definition --count) are compiled
+    // independently from the list paths above, so they need their own regressions against the
+    // ToString("O") vs DateTimeSqliteDefaultFormat mismatch. Without these, a future refactor that
+    // reintroduces ToString("O") on any single count binding would pass the list-path tests.
+    // `--count` 経路の SQL は一覧経路とは別に組み立てられているため、`ToString("O")` と
+    // DateTimeSqliteDefaultFormat の非対称が再発しても一覧側テストだけでは検出できない。
+    // カウント経路専用の回帰テストで各 bind を独立に守る。
+
+    [Fact]
+    public void CountSearchResults_WithTimeOfDaySince_CountsOnlyNewerChunks()
+    {
+        InsertIndexedFile(
+            "src/countsearch_new.py",
+            "python",
+            "def countsearch_only_new():\n    return 'needle_203_count'\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/countsearch_old.py",
+            "python",
+            "def countsearch_only_old():\n    return 'needle_203_count'\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+        var summary = _reader.CountSearchResults("needle_203_count", since: since);
+
+        Assert.Equal(1, summary.FileCount);
+        Assert.True(summary.Count >= 1);
+    }
+
+    [Fact]
+    public void CountSearchSymbolsTotal_WithTimeOfDaySince_CountsOnlyNewerSymbols()
+    {
+        InsertIndexedFile(
+            "src/countsym_new.py",
+            "python",
+            "def countsym_only_new():\n    return 1\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/countsym_old.py",
+            "python",
+            "def countsym_only_old():\n    return 0\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+
+        var newSummary = _reader.CountSearchSymbolsTotal("countsym_only_new", since: since);
+        Assert.Equal(1, newSummary.Count);
+
+        var oldSummary = _reader.CountSearchSymbolsTotal("countsym_only_old", since: since);
+        Assert.Equal(0, oldSummary.Count);
+    }
+
+    [Fact]
+    public void CountDefinitionsTotal_WithTimeOfDaySince_CountsOnlyNewerDefinitions()
+    {
+        InsertIndexedFile(
+            "src/countdef_new.py",
+            "python",
+            "def countdef_only_new():\n    return 1\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/countdef_old.py",
+            "python",
+            "def countdef_only_old():\n    return 0\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+
+        var newSummary = _reader.CountDefinitionsTotal("countdef_only_new", since: since);
+        Assert.Equal(1, newSummary.Count);
+
+        var oldSummary = _reader.CountDefinitionsTotal("countdef_only_old", since: since);
+        Assert.Equal(0, oldSummary.Count);
+    }
 }
