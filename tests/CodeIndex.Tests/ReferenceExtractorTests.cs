@@ -3661,4 +3661,84 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "server1");
         Assert.DoesNotContain(references, r => r.SymbolName == "AdventureWorks");
     }
+
+    [Fact]
+    public void Extract_SqlExecOmittedQualifierSegments_CapturesTerminalIdentifier()
+    {
+        // SQL Server's four-part naming permits any middle segment to be omitted (e.g. using the
+        // default database / schema), producing literal `..` in the qualifier chain. The previous
+        // pattern accepted only non-empty qualifier segments, so `EXEC AdventureWorks..sp_GetCustomer;`
+        // and `EXEC [AdventureWorks]..[proc-name];` terminated at the first segment and mis-emitted
+        // the qualifier (`AdventureWorks`) as the proc name.
+        // SQL Server の 4 パート名は中間セグメント（既定データベース／スキーマ）を省略でき、
+        // `..` が残る。以前は空セグメントを許さなかったため、末端ではなく先頭修飾子を proc 名と
+        // して誤発行していた。省略形でも必ず末端識別子を取ることを固定する。
+        const string content = """
+            EXEC AdventureWorks..sp_GetCustomer;
+            EXEC [AdventureWorks]..[proc-name];
+            EXEC srv.db..sp_with_omitted_schema;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "sp_GetCustomer" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "proc-name" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "sp_with_omitted_schema" && r.ReferenceKind == "call" && r.Line == 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "AdventureWorks" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "srv" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "db" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SqlCallBacktickQuotedIdentifier_IsCapturedAndDoesNotMisattributeQualifier()
+    {
+        // MySQL / MariaDB / SQL-PSM use backticks to quote identifiers. The shared PrepareLine
+        // would strip backtick content as a string literal, so the SQL path uses a SQL-aware
+        // sanitizer that preserves backticks. Bare backticks (`` CALL `proc-name` ``), qualified
+        // backticks (`` CALL db.`proc-name` ``), and fully-quoted qualifier chains
+        // (`` CALL `mydb`.`do_stuff` ``) should surface the terminal identifier without emitting
+        // the qualifier as a phantom call edge.
+        // MySQL / MariaDB / SQL-PSM はバッククォートで識別子を引用する。共有 PrepareLine は
+        // バッククォート内容を文字列として除去するため、SQL 経路では専用サニタイザで保持する。
+        // 単独のバッククォート、修飾子付き、完全引用 (`` `mydb`.`do_stuff` ``) のいずれも末端
+        // 識別子だけを拾い、修飾子の幽霊エッジが出ないことを固定する。
+        const string content = """
+            CALL `proc-name`;
+            CALL db.`proc-name`;
+            CALL `mydb`.`do_stuff`;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "proc-name" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "proc-name" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "do_stuff" && r.ReferenceKind == "call" && r.Line == 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "db" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "mydb" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SqlCallBacktickReservedWord_SurvivesQuoteStripping()
+    {
+        // A MySQL user may legitimately name a procedure after a reserved word by backtick-quoting
+        // it (`` CALL `order`; ``). After quote stripping, the resulting `order` should still surface
+        // as a call edge rather than being silently dropped by the SQL keyword ignore list —
+        // mirroring the T-SQL `[ORDER]` / `[AS]` behavior pinned by
+        // `Extract_SqlExecBracketedReservedWord_IsCapturedAfterBracketStripping` / bracketed-EXEC tests.
+        // MySQL ではバッククォート引用で予約語を proc 名として使える。引用除去後の `order` を
+        // keyword ignore list で黙って落とさず、T-SQL の `[ORDER]` / `[AS]` と同じく call エッジが
+        // 残ることを固定する。
+        const string content = """
+            CALL `order`;
+            CALL `select`;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "order" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "select" && r.ReferenceKind == "call" && r.Line == 2);
+    }
 }
