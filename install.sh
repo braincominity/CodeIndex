@@ -701,8 +701,16 @@ report_local_mirror_start_failure() {
         else
             cat "$local_mirror_log" >&2 || true
         fi
+
+        if grep -qi 'Address already in use' "$local_mirror_log"; then
+            error "Local mirror self-test aborted because 127.0.0.1:${local_mirror_port} is already in use. Set CDIDX_LOCAL_MIRROR_PORT to a free port."
+        fi
+
+        if grep -Eqi 'PermissionError|Operation not permitted|Permission denied' "$local_mirror_log"; then
+            error "Local mirror self-test aborted because this environment does not permit binding a loopback TCP port. Run it in a less-restricted shell or use a pre-hosted mirror."
+        fi
     fi
-    error "Local mirror self-test aborted before download. Check the local mirror error above, or set CDIDX_LOCAL_MIRROR_PORT to a free port."
+    error "Local mirror self-test aborted before download. Check the local mirror error above."
 }
 
 wait_for_local_mirror_ready() {

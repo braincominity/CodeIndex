@@ -80,6 +80,10 @@ bash ./install.sh --self-test-local-mirror
 By default, this self-test installs into a temporary directory so it does not
 overwrite an existing `~/.local/bin/cdidx`. Only set `CDIDX_INSTALL_DIR`
 explicitly if you intentionally want to inspect the mock install output.
+It also requires `python3` and permission to bind a loopback listener on
+`127.0.0.1`; some restricted sandboxes forbid local listen sockets entirely,
+in which case this self-test must run in a less-restricted shell or against a
+pre-hosted mirror instead.
 If port `18765` is already taken, move the local mirror to a different port:
 
 ```bash
@@ -283,6 +287,10 @@ bash ./install.sh --self-test-local-mirror
 この self-test は既定では一時ディレクトリへインストールするため、既存の
 `~/.local/bin/cdidx` を上書きしません。mock の配置結果をあえて観察したい
 ときだけ `CDIDX_INSTALL_DIR` を明示してください。
+また、この self-test には `python3` と `127.0.0.1` への loopback listen
+権限が必要です。restricted sandbox によってはローカル listen socket 自体が
+禁止されるため、その場合はより制約の弱い shell か、事前に用意した mirror に
+対して実行してください。
 既定ポート `18765` が使用中なら、local mirror を別ポートへ逃がせます:
 
 ```bash

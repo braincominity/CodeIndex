@@ -623,6 +623,16 @@ session (for example Claude Code or OpenAI Codex) that follows
 in the install path is invisible to anyone who can just run `dotnet build` —
 the cloud session is the canary for the published release experience.
 
+The bootstrap prompt now documents three cloud-specific installer knobs that
+matter for maintainers. `CDIDX_GITHUB_BASE_URL` and
+`CDIDX_GITHUB_API_BASE_URL` let restricted-egress sessions swap the release
+download host and latest-release API host independently. The built-in
+`--self-test-local-mirror` path is intentionally isolated from the real
+`~/.local/bin` install unless a non-empty `CDIDX_INSTALL_DIR` is provided, but
+it still requires `python3` plus permission to bind a loopback listener on
+`127.0.0.1`; some sandboxes forbid that outright, in which case the self-test
+must run in a less-restricted shell or against a pre-hosted mirror.
+
 ### The moving parts
 
 Four artifacts have to end up in three correct places for `cdidx` to work:
@@ -1636,6 +1646,8 @@ READMEの[終了コード](README.md#終了コード)セクションを参照し
 > **Maintainer・forker 向け** — 全体の索引は [MAINTAINERS.md](MAINTAINERS.md) を参照。エンドユーザーは読み飛ばして構いません。
 
 このセクションでは、[CLOUD_BOOTSTRAP_PROMPT.md](CLOUD_BOOTSTRAP_PROMPT.md) に従う Cloud AI コーディングセッション（例: Claude Code / OpenAI Codex）が、.NET SDK がインストールされていないコンテナにもかかわらず、動作する `cdidx` バイナリと SQLite ランタイムを手に入れるまでの仕組みを詳述する。インストールパスのリグレッションは `dotnet build` が動く環境では不可視なため、Cloud セッションは公開リリース体験のカナリアとなる（「炭鉱のカナリア」に由来する比喩。ここでいうカナリアはペットとして飼われる小型の鳴鳥で、体が小さく呼吸も速いため人間より遥かに少ない量の有毒ガスで中毒症状を起こす。かつて炭鉱ではこの性質を利用し、人間より先に一酸化炭素などの有毒ガスに反応して鳴き止む・倒れるカナリアを坑内に連れて入り、作業員がまだ気付けない危険を早期に検知する生体センサーとして使っていた。そこから転じて IT では、本番のユーザーが被害を受ける前に異常を真っ先に検知する役割を指す）。各層を理解することが重要である理由はここにある。
+
+bootstrap prompt では、maintainer が押さえるべき cloud 向け installer knob も明示している。`CDIDX_GITHUB_BASE_URL` と `CDIDX_GITHUB_API_BASE_URL` は、egress 制限付きセッションで release download host と latest-release API host を別々に差し替えるためのもの。組み込みの `--self-test-local-mirror` 経路は、非空の `CDIDX_INSTALL_DIR` を与えない限り実 `~/.local/bin` install を汚さないよう隔離されているが、それでも `python3` と `127.0.0.1` への loopback listen 権限は必要であり、sandbox によっては完全に禁止される。その場合、この self-test はより制約の弱い shell か、事前に用意した mirror に対して実行する必要がある。
 
 ### 構成要素
 

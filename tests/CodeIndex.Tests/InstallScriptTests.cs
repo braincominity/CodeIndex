@@ -1449,6 +1449,54 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void ResolveVersion_UsesConfiguredApiBaseUrl()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var urlLogPath = Path.Combine(_tempRoot, "configured_api_base_url.log");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            curl() {
+                local output_path=""
+                local url=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o)
+                            output_path="$2"
+                            shift 2
+                            ;;
+                        -w)
+                            shift 2
+                            ;;
+                        *)
+                            url="$1"
+                            shift
+                            ;;
+                    esac
+                done
+
+                printf '%s\n' "$url" > "{{urlLogPath}}"
+                printf '{"tag_name":"v1.2.3"}' > "$output_path"
+                printf '200'
+                return 0
+            }
+
+            resolve_version ""
+            cat "{{urlLogPath}}"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_GITHUB_API_BASE_URL"] = "https://mirror.example/api",
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("Version: v1.2.3", stdout);
+        Assert.Contains("https://mirror.example/api/repos/Widthdom/CodeIndex/releases/latest", stdout);
+    }
+
+    [Fact]
     public void SelfTestLocalMirror_WithoutExplicitInstallDir_UsesIsolatedTempInstallDir()
     {
         if (OperatingSystem.IsWindows())
@@ -1703,6 +1751,120 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("This is a self-test harness failure, not an external network/proxy problem.", stderr);
         Assert.Contains("SELF_TEST_BIND_FAILED", stderr);
         Assert.DoesNotContain("Check your connection or corporate proxy", stderr);
+        Assert.DoesNotContain("CDIDX_LOCAL_MIRROR_PORT", stderr);
+    }
+
+    [Fact]
+    public void SelfTestLocalMirror_BindPermissionFailure_PrintsPermissionSpecificGuidance()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "self_test_permission_failure");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            python3() {
+                echo "PermissionError: [Errno 1] Operation not permitted" >&2
+                return 1
+            }
+            curl() { :; }
+            main() { echo "MAIN_SHOULD_NOT_RUN"; }
+
+            run_local_mirror_self_test v1.2.3
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(1, exitCode);
+        Assert.DoesNotContain("MAIN_SHOULD_NOT_RUN", stdout);
+        Assert.Contains("Local mirror self-test could not start a loopback HTTP server", stderr);
+        Assert.Contains("PermissionError: [Errno 1] Operation not permitted", stderr);
+        Assert.Contains("does not permit binding a loopback TCP port", stderr);
+        Assert.DoesNotContain("CDIDX_LOCAL_MIRROR_PORT", stderr);
+        Assert.DoesNotContain("free port", stderr);
+    }
+
+    [Fact]
+    public void DownloadAndInstall_UsesConfiguredReleaseBaseUrl()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "configured_release_base_install");
+        var payloadDir = Path.Combine(_tempRoot, "configured_release_base_payload");
+        var archivePath = Path.Combine(_tempRoot, "configured_release_base.tar.gz");
+        var checksumsPath = Path.Combine(_tempRoot, "configured_release_base.sha256sums.txt");
+        var urlLogPath = Path.Combine(_tempRoot, "configured_release_base_urls.log");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            mkdir -p "{{payloadDir}}"
+            printf '%s\n' '#!/usr/bin/env bash' 'echo "cdidx v1.2.3"' > "{{Path.Combine(payloadDir, "cdidx")}}"
+            chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
+            printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
+            printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
+            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+
+            if command -v sha256sum > /dev/null 2>&1; then
+                checksum="$(sha256sum "{{archivePath}}" | awk '{print $1}')"
+            elif command -v shasum > /dev/null 2>&1; then
+                checksum="$(shasum -a 256 "{{archivePath}}" | awk '{print $1}')"
+            else
+                checksum="$(openssl dgst -sha256 "{{archivePath}}" | awk '{print $NF}')"
+            fi
+            printf '%s  CodeIndex-linux-x64.tar.gz\n' "$checksum" > "{{checksumsPath}}"
+
+            VERSION="v1.2.3"
+            OS_NAME="linux"
+            ARCH_NAME="x64"
+            RID="linux-x64"
+
+            curl() {
+                local output_path=""
+                local url=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o)
+                            output_path="$2"
+                            shift 2
+                            ;;
+                        -w)
+                            shift 2
+                            ;;
+                        *)
+                            url="$1"
+                            shift
+                            ;;
+                    esac
+                done
+
+                printf '%s\n' "$url" >> "{{urlLogPath}}"
+                case "$url" in
+                    */sha256sums.txt) command cp "{{checksumsPath}}" "$output_path" ;;
+                    *) command cp "{{archivePath}}" "$output_path" ;;
+                esac
+
+                printf '200'
+                return 0
+            }
+
+            download_and_install
+            cat "{{urlLogPath}}"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+                ["CDIDX_GITHUB_BASE_URL"] = "https://mirror.example/releases",
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("https://mirror.example/releases/Widthdom/CodeIndex/releases/download/v1.2.3/CodeIndex-linux-x64.tar.gz", stdout);
+        Assert.Contains("https://mirror.example/releases/Widthdom/CodeIndex/releases/download/v1.2.3/sha256sums.txt", stdout);
     }
 
     [UnsupportedOSPlatform("windows")]
