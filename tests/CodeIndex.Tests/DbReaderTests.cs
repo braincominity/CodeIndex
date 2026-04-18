@@ -3360,6 +3360,55 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetFileDependencies_CSharp_LegacyDbWithNullSignature_StillResolvesAttributeEdge()
+    {
+        // issue #293 round-19: the metadata-target signature clause must degrade
+        // gracefully when the `symbols.signature` column exists but individual
+        // rows carry NULL values — the common shape of a DB whose schema was
+        // migrated in place (`TryMigrateForRead`) without reindexing. Requiring
+        // `signature LIKE '%: %'` would silently drop the real
+        // `[MyAudit]` → `class MyAuditAttribute : System.Attribute` edge there,
+        // so the clause must treat NULL signature as eligible (equivalent to the
+        // column-missing `1 = 1` fallback).
+        // issue #293 round-19: metadata-target の signature 句は、列は存在するが
+        // row の値が NULL の legacy-migration DB でも degrade する必要がある。
+        // LIKE を強要すると本物の `[MyAudit]` edge が silent に落ちる。
+        // 列欠落時の `1 = 1` fallback と同じく NULL も eligible にする。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        // Simulate the partial-migration shape: signature column is present but the
+        // C# class row has a NULL signature, as if the schema were upgraded in place
+        // without re-running extraction.
+        // partial-migration の形を再現: signature 列はあるが C# class 行の signature が
+        // NULL の状態 — その場 schema 移行後に再抽出していない DB と同じ。
+        using (var cmd = _db.Connection.CreateCommand())
+        {
+            cmd.CommandText = "UPDATE symbols SET signature = NULL WHERE name = 'MyAuditAttribute' AND kind = 'class'";
+            cmd.ExecuteNonQuery();
+        }
+
+        var deps = _reader.GetFileDependencies(
+            limit: 50,
+            lang: "csharp");
+
+        Assert.Contains(deps, d =>
+            d.SourcePath == "src/Svc.cs" &&
+            d.TargetPath == "src/MyAuditAttribute.cs");
+    }
+
+    [Fact]
     public void GetFileDependencies_CSharp_SameNameInterface_DoesNotBlockMetadataEdge()
     {
         // issue #293 round-18: ambiguity should only count truly attribute-eligible

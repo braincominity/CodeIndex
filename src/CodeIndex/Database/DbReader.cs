@@ -2599,15 +2599,27 @@ public partial class DbReader
     //     class-like declaration, so keep the original class-like candidate
     //     set (`class` / `struct` / `interface`).
     // `deps` と `impact` で共有する言語別 metadata-target 適格性判定。
-    // C# は class 限定 + 継承節チェック(signature 列欠落時は class 限定のみ)。
+    // C# は class 限定 + 継承節チェック(signature 列欠落時、または row 側 signature が
+    // NULL の legacy-migration DB では class 限定のみへ縮退)。
     // JS / TS は decorator が function factory も対象にするため function を許容。
     // それ以外は従来どおり class-like を候補にする。
     private string BuildMetadataTargetKindExpr(string fileAlias)
     {
         // C# clause — class only (interface/struct cannot be attribute targets).
+        // When the `signature` column exists but an individual row's signature is
+        // NULL (e.g. a DB whose schema was migrated in-place without reindexing),
+        // we cannot verify the inheritance clause, so we conservatively keep such
+        // rows eligible just like the column-missing `1 = 1` fallback. Otherwise a
+        // real `[MyAudit]` → `class MyAuditAttribute : System.Attribute` edge would
+        // silently disappear from `deps` / `impact` on legacy-migration DBs.
         // C# は class のみ（interface/struct は attribute target にできない）。
+        // signature 列は存在するが row の signature が NULL のケース(その場 migration で列だけ
+        // 追加された legacy DB)では inheritance clause を検証できないため、列欠落時の
+        // `1 = 1` fallback と同じ扱いで eligibility を保守的に維持する。そうしないと
+        // 本物の `[MyAudit]` → `class MyAuditAttribute : System.Attribute` edge が
+        // legacy-migration DB で silent に落ちる。
         var csharpClause = _symbolColumns.Contains("signature")
-            ? $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND s.signature IS NOT NULL AND s.signature LIKE '%: %')"
+            ? $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND (s.signature IS NULL OR s.signature LIKE '%: %'))"
             : $"({fileAlias}.lang = 'csharp' AND s.kind = 'class')";
         // JS / TS clause — decorators target classes and factory functions.
         // JS / TS は decorator が class と factory function を対象にする。
