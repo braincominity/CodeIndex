@@ -868,8 +868,9 @@ public static class SymbolExtractor
         var cssScannerLines = lang == "css"
             ? MaskCssScannerLines(lines)
             : null;
+        int[]?[] csharpMatchColumnToRaw = null!;
         var csharpMatchLines = lang == "csharp"
-            ? BuildCSharpMatchLines(structuralLines)
+            ? BuildCSharpMatchLines(structuralLines, out csharpMatchColumnToRaw)
             : null;
         var privateScopeColumns = lang is "javascript" or "typescript"
             ? BuildJavaScriptTypeScriptPrivateScopeColumns(lines, lang)
@@ -972,12 +973,36 @@ public static class SymbolExtractor
                         break;
 
                     var absoluteStartColumn = lineOffset + match.Index;
+                    // For C#, collapsed-space column (from CollapseCSharpGenericTypeWhitespace)
+                    // has to be translated back to raw-space before it can be compared against
+                    // CSharpTypeBodyScope's per-line transitions, which were built from
+                    // structural (raw) columns. Only translate when the pattern match runs on
+                    // the per-line collapsed string (single-line case); multi-line merged
+                    // candidates use a different composed string whose column domain does not
+                    // line up with a single line's map, so we leave the column alone there to
+                    // preserve pre-existing behavior. Closes #400.
+                    // C# では CollapseCSharpGenericTypeWhitespace で空白を取り除いた列を、
+                    // structural 行の生列で構築された CSharpTypeBodyScope に渡す前に
+                    // raw 列へ戻す必要がある。複数行を結合した match では単一行の map が
+                    // 使えないため、単一行ケース（per-line collapsed line そのものにマッチした
+                    // 場合）だけ変換する。Closes #400.
+                    var csharpGateRawStartColumn = absoluteStartColumn;
+                    if (lang == "csharp"
+                        && csharpMatchLines != null
+                        && ReferenceEquals(patternMatchLine, csharpMatchLines[i]))
+                    {
+                        csharpGateRawStartColumn = TranslateCSharpCollapsedColumnToRaw(
+                            csharpMatchColumnToRaw,
+                            i,
+                            absoluteStartColumn,
+                            line.Length);
+                    }
 
                     if (lang == "csharp"
                         && pattern.Kind == "property"
                         && pattern.BodyStyle == BodyStyle.None
                         && csharpInsideTypeBody != null
-                        && !csharpInsideTypeBody.IsInsideTypeBodyAt(i, absoluteStartColumn))
+                        && !csharpInsideTypeBody.IsInsideTypeBodyAt(i, csharpGateRawStartColumn))
                     {
                         // Move the cursor past this same-line candidate so a later
                         // column on the same line (e.g. a real field that lives after
@@ -1144,11 +1169,47 @@ public static class SymbolExtractor
                         // ContainsSymbol 判定が正しく動いて X が Inner ではなく Outer に
                         // ぶら下がる事故が起きない。Closes #400.
                         var statementEnd = FindCSharpPlainFieldStatementEnd(patternMatchLine, absoluteStartColumn);
-                        if (statementEnd > line.Length)
-                            statementEnd = line.Length;
-                        if (statementEnd <= absoluteStartColumn)
-                            statementEnd = Math.Min(absoluteStartColumn + Math.Max(1, match.Length), line.Length);
-                        signature = line[absoluteStartColumn..statementEnd].Trim();
+                        if (csharpMatchLines != null
+                            && ReferenceEquals(patternMatchLine, csharpMatchLines[i]))
+                        {
+                            // Single-line candidate: translate both endpoints through the
+                            // per-line collapsed→raw column map so the raw slice keeps the
+                            // `;` terminator and does not absorb a phantom leading `;` from
+                            // the next declarator on the same line. Without this, a line like
+                            // `public Dictionary<string, int> Map = new(); public int B;`
+                            // returned `Map` without `;` and `B` with a leading `;` because
+                            // the collapsed-space endpoints no longer lined up with raw
+                            // character positions. Closes #400.
+                            // 単一行候補では、per-line collapsed→raw map で両端点を raw 列に
+                            // 戻してから slice する。こうしないと、
+                            // `public Dictionary<string, int> Map = new(); public int B;` のような行で
+                            // `Map` の終端 `;` が欠け、後続の `B` の先頭に `;` が混入する。Closes #400.
+                            var rawStart = TranslateCSharpCollapsedColumnToRaw(
+                                csharpMatchColumnToRaw,
+                                i,
+                                absoluteStartColumn,
+                                line.Length);
+                            var rawEnd = TranslateCSharpCollapsedColumnToRaw(
+                                csharpMatchColumnToRaw,
+                                i,
+                                statementEnd,
+                                line.Length);
+                            if (rawEnd > line.Length)
+                                rawEnd = line.Length;
+                            if (rawStart > line.Length)
+                                rawStart = line.Length;
+                            if (rawEnd <= rawStart)
+                                rawEnd = Math.Min(rawStart + Math.Max(1, match.Length), line.Length);
+                            signature = line[rawStart..rawEnd].Trim();
+                        }
+                        else
+                        {
+                            if (statementEnd > line.Length)
+                                statementEnd = line.Length;
+                            if (statementEnd <= absoluteStartColumn)
+                                statementEnd = Math.Min(absoluteStartColumn + Math.Max(1, match.Length), line.Length);
+                            signature = line[absoluteStartColumn..statementEnd].Trim();
+                        }
                     }
                     else
                     {
@@ -8163,12 +8224,36 @@ public static class SymbolExtractor
     }
 
     private static string CollapseCSharpGenericTypeWhitespace(string line)
+        => CollapseCSharpGenericTypeWhitespace(line, out _);
+
+    // Collapse only the whitespace that sits between generic type-argument angle brackets
+    // so patterns like `Dictionary<string, int>` normalize to `Dictionary<string,int>`.
+    // Also emits a column-mapping array so callers can translate a column in the collapsed
+    // string back to the corresponding column in the raw source. `collapsedToRaw[c]` is
+    // the raw index of the character at collapsed column `c`; the final element
+    // (`collapsedToRaw[collapsed.Length]`) is the sentinel `raw.Length`, which lets
+    // translation use exclusive-end indices safely. When nothing collapses (early return
+    // path), the map is emitted as `null` to signal identity — callers fall back to the
+    // original collapsed column in that case. Closes #400.
+    // ジェネリック型引数の `<...>` 内部の空白だけを取り除き、`Dictionary<string, int>` の
+    // ような型を `Dictionary<string,int>` に正規化する。併せて column map を出力する。
+    // `collapsedToRaw[c]` は collapsed 列 `c` に対応する raw 列で、末尾 sentinel には
+    // `raw.Length` を入れているため、排他終端インデックスの変換にもそのまま使える。
+    // 折り畳みが発生しない early return 経路では `null` を返し、呼び出し元は識別写像を
+    // 用いる運用にしている。Closes #400.
+    private static string CollapseCSharpGenericTypeWhitespace(string line, out int[]? collapsedToRaw)
     {
         if (string.IsNullOrEmpty(line) || !line.Contains('<') || !line.Contains(' '))
+        {
+            collapsedToRaw = null;
             return line;
+        }
 
         var builder = new StringBuilder(line.Length);
         var angleDepth = 0;
+        var map = new int[line.Length + 1];
+        var mapLength = 0;
+        var collapsed = false;
 
         for (int i = 0; i < line.Length; i++)
         {
@@ -8176,6 +8261,7 @@ public static class SymbolExtractor
             if (ch == '<' && LooksLikeRecordGenericAngleStart(line, i))
             {
                 angleDepth++;
+                map[mapLength++] = i;
                 builder.Append(ch);
                 continue;
             }
@@ -8183,16 +8269,31 @@ public static class SymbolExtractor
             if (ch == '>' && angleDepth > 0)
             {
                 angleDepth--;
+                map[mapLength++] = i;
                 builder.Append(ch);
                 continue;
             }
 
             if (angleDepth > 0 && char.IsWhiteSpace(ch))
+            {
+                collapsed = true;
                 continue;
+            }
 
+            map[mapLength++] = i;
             builder.Append(ch);
         }
 
+        if (!collapsed)
+        {
+            collapsedToRaw = null;
+            return line;
+        }
+
+        map[mapLength] = line.Length;
+        if (mapLength + 1 != map.Length)
+            Array.Resize(ref map, mapLength + 1);
+        collapsedToRaw = map;
         return builder.ToString();
     }
 
@@ -8209,8 +8310,12 @@ public static class SymbolExtractor
         && matchLine.Contains("=>", StringComparison.Ordinal);
 
     private static string[] BuildCSharpMatchLines(string[] structuralLines)
+        => BuildCSharpMatchLines(structuralLines, out _);
+
+    private static string[] BuildCSharpMatchLines(string[] structuralLines, out int[]?[] collapsedToRaw)
     {
         var matchLines = new string[structuralLines.Length];
+        collapsedToRaw = new int[]?[structuralLines.Length];
         var csharpLexState = new CSharpLexState();
         var inLeadingAttributeBlock = false;
         var attributeBracketDepth = 0;
@@ -8227,7 +8332,9 @@ public static class SymbolExtractor
                     ref inLeadingAttributeBlock,
                     ref attributeBracketDepth,
                     ref attributeParenDepth,
-                    activeEnumBodyDepth > 0));
+                    activeEnumBodyDepth > 0),
+                out var lineCollapsedToRaw);
+            collapsedToRaw[lineIndex] = lineCollapsedToRaw;
 
             var matchLine = matchLines[lineIndex];
             var trimmed = matchLine.Trim();
@@ -8256,6 +8363,31 @@ public static class SymbolExtractor
         }
 
         return matchLines;
+    }
+
+    // Translate a column in a CollapseCSharpGenericTypeWhitespace-collapsed match line back
+    // to the matching column in the raw source line. Used by the plain-field scope gate and
+    // signature clamp so `public class C<T1, T2>{int X;}` does not misalign the type-body
+    // scope lookup when internal generic whitespace has been collapsed away, and so field
+    // signatures sliced out of the raw line preserve the original separators instead of
+    // picking up phantom leading `;` from the next declarator on the same line. Closes #400.
+    // CollapseCSharpGenericTypeWhitespace で空白を詰めた match 行上の列を、元の raw 行の
+    // 列に戻す。`public class C<T1, T2>{int X;}` のような行で CSharpTypeBodyScope の参照列が
+    // ずれないようにしたり、同一行に続くフィールドを raw から slice したときに
+    // 先頭に余計な `;` が混入しないようにするため、プレーンフィールドのゲートと
+    // signature clamp で利用する。Closes #400.
+    private static int TranslateCSharpCollapsedColumnToRaw(int[]?[] mapPerLine, int lineIndex, int collapsedColumn, int rawLength)
+    {
+        if (mapPerLine == null || lineIndex < 0 || lineIndex >= mapPerLine.Length)
+            return collapsedColumn;
+        var map = mapPerLine[lineIndex];
+        if (map == null)
+            return collapsedColumn;
+        if (collapsedColumn < 0)
+            return 0;
+        if (collapsedColumn >= map.Length)
+            return rawLength;
+        return map[collapsedColumn];
     }
 
     // Gate only the block-bodied property pattern (requires `{ get|set|init ... }`).

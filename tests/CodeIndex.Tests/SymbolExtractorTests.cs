@@ -7238,6 +7238,51 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_SameLineGenericClassHeaderStillCapturesInnerField()
+    {
+        // `public class C<T1, T2>{int X;}` must still capture field X even though
+        // CollapseCSharpGenericTypeWhitespace removes the space inside `<T1, T2>`
+        // when building the match line. Before the fix, the collapsed-space
+        // `absoluteStartColumn` was handed directly to the raw-column
+        // CSharpTypeBodyScope lookup, so the scope-gate fired too early and
+        // the field was dropped. Closes #400.
+        // `public class C<T1, T2>{int X;}` では CollapseCSharpGenericTypeWhitespace が
+        // `<T1, T2>` の内部空白を詰めるため、collapsed 列 `absoluteStartColumn` を
+        // そのまま raw 列ベースの CSharpTypeBodyScope に渡すと scope gate が誤発火し
+        // X が落ちていた。Closes #400.
+        var content = "public class C<T1, T2>{int X;}\n";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var field = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "X");
+        Assert.Equal("int X;", field.Signature);
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "C");
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineGenericFieldSignatureKeepsTerminator()
+    {
+        // `public Dictionary<string, int> Map = new(); public int B;` on one line
+        // must produce Map with its trailing `;` and B without a leading `;`.
+        // Before the fix, collapsed-space endpoints from
+        // FindCSharpPlainFieldStatementEnd were used to slice the raw line, so
+        // the generic-whitespace compression shifted the cut: Map lost its `;`
+        // and B inherited the `;` as a leading character. Closes #400.
+        // `public Dictionary<string, int> Map = new(); public int B;` を 1 行に
+        // 書いた場合、Map の signature は末尾 `;` を保ち、B の signature は
+        // 先頭 `;` を持たないこと。修正前は FindCSharpPlainFieldStatementEnd が
+        // 返す collapsed 列で raw 行を slice していたため、generic 空白の圧縮
+        // 分だけ切断位置がずれていた。Closes #400.
+        var content = "public class C { public Dictionary<string, int> Map = new(); public int B; }\n";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var map = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "Map");
+        Assert.Equal("public Dictionary<string, int> Map = new();", map.Signature);
+
+        var b = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "B");
+        Assert.Equal("public int B;", b.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsFunctionPointerField()
     {
         // Function-pointer field (`delegate*<int, void> Callback;`) must be captured.
