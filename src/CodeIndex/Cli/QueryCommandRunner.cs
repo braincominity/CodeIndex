@@ -2279,6 +2279,11 @@ public static class QueryCommandRunner
         }
         else
         {
+            // Fixed-width Extensions column for short lists; spill long lists onto a continuation
+            // line so the Symbols / Graph columns are never swallowed by a wide extension string.
+            // 拡張子が短い場合は固定幅テーブル、長い場合は継続行に退避させることで、
+            // Symbols / Graph 列が拡張子文字列に埋もれないようにする。
+            const int ExtensionColumnWidth = 36;
             Console.WriteLine($"{"Language",-14} {"Extensions",-36} {"Symbols",-9} {"Graph",-7}");
             Console.WriteLine(new string('-', 66));
             foreach (var (lang, info) in sorted)
@@ -2286,7 +2291,15 @@ public static class QueryCommandRunner
                 var exts = string.Join(" ", info.Extensions.OrderBy(e => e));
                 var sym = info.Symbols ? "yes" : "-";
                 var graph = info.Graph ? "yes" : "-";
-                Console.WriteLine($"{lang,-14} {exts,-36} {sym,-9} {graph,-7}");
+                if (exts.Length <= ExtensionColumnWidth)
+                {
+                    Console.WriteLine($"{lang,-14} {exts,-36} {sym,-9} {graph,-7}");
+                }
+                else
+                {
+                    Console.WriteLine($"{lang,-14} {"",-36} {sym,-9} {graph,-7}");
+                    Console.WriteLine($"  Extensions: {exts}");
+                }
             }
             Console.Error.WriteLine($"\n({sorted.Count} languages)");
         }

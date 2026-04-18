@@ -64,9 +64,60 @@ public class FileIndexerTests
     [InlineData("Justfile", "justfile")]
     [InlineData("CMakeLists.txt", "cmake")]
     [InlineData("Vagrantfile", "ruby")]
+    // Issue #189: additional filename maps / 追加ファイル名マッピング
+    [InlineData("Gemfile", "ruby")]
+    [InlineData("Rakefile", "ruby")]
+    [InlineData("Podfile", "ruby")]
+    [InlineData("Guardfile", "ruby")]
+    [InlineData("Capfile", "ruby")]
+    [InlineData("GNUmakefile", "makefile")]
+    [InlineData("Containerfile", "dockerfile")]
+    [InlineData("BUILD", "python")]
+    [InlineData("BUILD.bazel", "python")]
+    [InlineData("WORKSPACE", "python")]
+    [InlineData("WORKSPACE.bazel", "python")]
+    // Issue #189: additional extensions / 追加拡張子
+    [InlineData("types.pyi", "python")]
+    [InlineData("windowed.pyw", "python")]
+    [InlineData("module.pyx", "cython")]
+    [InlineData("module.pxd", "cython")]
+    [InlineData("tasks.rake", "ruby")]
+    [InlineData("mygem.gemspec", "ruby")]
+    [InlineData("MyPod.podspec", "ruby")]
+    [InlineData("common.mk", "makefile")]
+    [InlineData("page.htm", "html")]
+    [InlineData("style.less", "css")]
+    [InlineData("style.sass", "sass")]
+    [InlineData("style.styl", "stylus")]
+    [InlineData("style.pcss", "css")]
+    [InlineData("schema.pgsql", "sql")]
+    [InlineData("proc.tsql", "sql")]
+    [InlineData("pkg.plsql", "sql")]
+    [InlineData("migrate.psql", "sql")]
+    // Issue #189: filename prefix matching for Dockerfile.* / Makefile.* / GNUmakefile.*
+    [InlineData("Dockerfile.dev", "dockerfile")]
+    [InlineData("Dockerfile.prod", "dockerfile")]
+    [InlineData("Dockerfile.test", "dockerfile")]
+    [InlineData("Containerfile.dev", "dockerfile")]
+    [InlineData("Makefile.am", "makefile")]
+    [InlineData("Makefile.in", "makefile")]
+    [InlineData("Makefile.common", "makefile")]
+    [InlineData("GNUmakefile.am", "makefile")]
     public void DetectLanguage_KnownExtensions_ReturnsCorrectLang(string filename, string expected)
     {
         Assert.Equal(expected, FileIndexer.DetectLanguage(filename));
+    }
+
+    [Theory]
+    // Bare trailing-dot forms should not match prefix rules — suffix must be non-empty.
+    // 末尾ドットだけの形はプレフィックス規則に一致しない（サフィックス必須）。
+    [InlineData("Dockerfile.")]
+    [InlineData("Containerfile.")]
+    [InlineData("Makefile.")]
+    [InlineData("GNUmakefile.")]
+    public void DetectLanguage_BareTrailingDot_DoesNotMatchPrefix(string filename)
+    {
+        Assert.Null(FileIndexer.DetectLanguage(filename));
     }
 
     [Theory]
@@ -157,6 +208,93 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFiles_IndexesIssue189FilenameAndExtensionCoverage()
+    {
+        // Locks in the full Issue #189 repro: Ruby / Docker / Makefile / .pyi / .less / .mk /
+        // .htm and Dockerfile.* / Makefile.* prefix variants are all indexed (not silently dropped).
+        // Issue #189 のリプロを網羅。Ruby / Docker / Makefile / .pyi / .less / .mk / .htm と
+        // Dockerfile.* / Makefile.* のプレフィックス変種が黙って落ちないことをロックする。
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var files = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["Gemfile"]         = "source 'https://rubygems.org'\ngem 'rails', '~> 7.0'\n",
+                ["Rakefile"]        = "task :default => [:test]\n",
+                ["Containerfile"]   = "FROM alpine\nRUN echo hi\n",
+                ["Dockerfile.dev"]  = "FROM alpine AS builder\nRUN echo dev\n",
+                ["GNUmakefile"]     = "all:\n\techo hi\n",
+                ["common.mk"]       = "OBJ = foo.o bar.o\n",
+                ["stub.pyi"]        = "def foo() -> int: ...\n",
+                ["style.less"]      = ".foo { color: red; }\n",
+                ["page.htm"]        = "<html><body>old-school</body></html>\n",
+                ["Makefile.am"]     = "SUBDIRS = lib\n",
+            };
+            foreach (var (name, content) in files)
+                File.WriteAllText(Path.Combine(tempDir, name), content);
+
+            var scanned = new FileIndexer(tempDir).ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            var expected = files.Keys.OrderBy(n => n, StringComparer.Ordinal).ToList();
+            Assert.Equal(expected, scanned);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void GetLanguageExtensions_ExposesPrefixAndFileNameVariants()
+    {
+        // `cdidx languages` (and the MCP listing) should advertise everything TryDetectLanguage
+        // actually recognizes, including exact-name Dockerfile / Makefile / Gemfile and the
+        // Dockerfile.<suffix> / Makefile.<suffix> prefix variants added for Issue #189.
+        // `cdidx languages`（および MCP の一覧）は TryDetectLanguage が実際に解釈するものを
+        // 網羅すべき。Dockerfile / Makefile / Gemfile の完全一致に加え、Issue #189 で追加した
+        // Dockerfile.<suffix> / Makefile.<suffix> などのプレフィックス変種も露出させる。
+        var map = FileIndexer.GetLanguageExtensions();
+
+        // Exact filenames surface with their language.
+        // 完全一致ファイル名が言語付きで露出する。
+        Assert.Equal("dockerfile", map["Dockerfile"]);
+        Assert.Equal("dockerfile", map["Containerfile"]);
+        Assert.Equal("makefile", map["Makefile"]);
+        Assert.Equal("makefile", map["GNUmakefile"]);
+        Assert.Equal("ruby", map["Gemfile"]);
+        Assert.Equal("ruby", map["Rakefile"]);
+        Assert.Equal("python", map["BUILD.bazel"]);
+
+        // Prefix variants (Dockerfile.dev, Makefile.am, ...) surface as `<Prefix><suffix>` pseudo-entries.
+        // プレフィックス変種は `<Prefix><suffix>` 形の擬似エントリとして露出する。
+        Assert.Equal("dockerfile", map["Dockerfile.<suffix>"]);
+        Assert.Equal("dockerfile", map["Containerfile.<suffix>"]);
+        Assert.Equal("makefile", map["Makefile.<suffix>"]);
+        Assert.Equal("makefile", map["GNUmakefile.<suffix>"]);
+
+        // Sass / Stylus are distinct buckets now (indented syntax is incompatible with the CSS extractor).
+        // Sass / Stylus は別バケット（インデント構文が CSS のシンボル抽出と非互換のため）。
+        Assert.Equal("sass", map[".sass"]);
+        Assert.Equal("stylus", map[".styl"]);
+        Assert.Equal("css", map[".scss"]);
+        Assert.Equal("css", map[".less"]);
+
+        // Cython lives in its own bucket for the same reason: `cdef class` / `cpdef` / `cdef` are
+        // not parsed by the Python symbol extractor, so advertising `.pyx` / `.pxd` as `python`
+        // would claim `symbol_extraction=true` while emitting zero symbols.
+        // Cython も同様の理由で別バケット。`cdef class` / `cpdef` / `cdef` は Python の抽出器で
+        // 拾えないため、python として広告すると実際には 0 件しか出ない齟齬になる。
+        Assert.Equal("cython", map[".pyx"]);
+        Assert.Equal("cython", map[".pxd"]);
+        Assert.Equal("python", map[".py"]);
+        Assert.Equal("python", map[".pyi"]);
+    }
+
+    [Fact]
     public void ScanFiles_SkipsExcludedDirectories()
     {
         // Create a temp directory structure to test scanning
@@ -237,6 +375,130 @@ public class FileIndexerTests
         finally
         {
             Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_SkipsDirectorySymlinkPointingAtAncestor()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            var subDir = Path.Combine(tempDir, "sub");
+            Directory.CreateDirectory(subDir);
+            File.WriteAllText(Path.Combine(subDir, "foo.py"), "def hello(): pass\n");
+            // Directory symlink pointing at the ancestor (self-recursion if followed).
+            // 先祖を指すディレクトリ symlink（辿ると無限再帰になる）。
+            Directory.CreateSymbolicLink(Path.Combine(subDir, "parent_loop"), "..");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["sub/foo.py"], files);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_SkipsFileSymlinkToRealFileInProject()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            var nested = Path.Combine(tempDir, "a", "b", "c");
+            Directory.CreateDirectory(nested);
+            File.WriteAllText(Path.Combine(nested, "foo.py"), "def hello(): pass\n");
+            // File symlink that would otherwise cause the same content to be indexed under a second path.
+            // 同じ内容が2つ目の path としても index されてしまうのを防ぐ確認。
+            File.CreateSymbolicLink(Path.Combine(tempDir, "file_symlink.py"), Path.Combine("a", "b", "c", "foo.py"));
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["a/b/c/foo.py"], files);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void GetFileIndexability_RejectsFileSymlinkSoUpdateModeSkipsIt()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var realFile = Path.Combine(tempDir, "real.py");
+            File.WriteAllText(realFile, "x = 1\n");
+            // File symlink pointing at the same-tree real file. The Unix stat() path would follow this
+            // symlink and see it as a regular file, so GetFileIndexability must gate on the reparse-point
+            // check to keep --files / --commits update paths symlink-safe.
+            // 同ツリー内の実ファイルを指すファイル symlink。Unix の stat() は symlink を辿ってしまうため、
+            // GetFileIndexability は reparse-point ガードで弾かないと --files / --commits 経路で
+            // 素通りしてしまう。
+            var linkPath = Path.Combine(tempDir, "alias.py");
+            File.CreateSymbolicLink(linkPath, realFile);
+
+            Assert.True(FileIndexer.CanIndexFile(realFile));
+            Assert.False(FileIndexer.CanIndexFile(linkPath));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_SkipsDanglingSymlinksWithoutAbortingScan()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, "real.py"), "def real(): pass\n");
+            // Dangling symlinks (target does not exist) must be skipped without aborting the scan.
+            // target が存在しない dangling symlink は、scan 全体を落とさずスキップする。
+            File.CreateSymbolicLink(Path.Combine(tempDir, "dangling.py"), "missing_target.py");
+            Directory.CreateSymbolicLink(Path.Combine(tempDir, "dangling_dir"), Path.Combine(Path.GetTempPath(), $"missing_{Guid.NewGuid():N}"));
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["real.py"], files);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
         }
     }
 

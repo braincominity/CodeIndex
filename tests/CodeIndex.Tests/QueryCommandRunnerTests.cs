@@ -550,6 +550,99 @@ public class QueryCommandRunnerTests
         Assert.Contains(".mts", typescript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
     }
 
+    [Fact]
+    public void RunLanguages_Json_SearchOnlyBucketsAdvertiseZeroSymbolAndGraphSupport()
+    {
+        // Search-only languages that intentionally live outside the Python / CSS extractors
+        // (Cython .pyx/.pxd, Sass .sass, Stylus .styl) must advertise
+        // symbol_extraction=false / graph_queries=false so AI clients can tell the difference
+        // between "indexed with symbols" and "indexed for search only".
+        // 意図的に Python / CSS 抽出器の対象外になっている search-only 言語
+        // （Cython の .pyx/.pxd、Sass の .sass、Stylus の .styl）は、
+        // symbol_extraction=false / graph_queries=false で広告しなければならない。
+        // こうしないと、AI クライアントが「シンボル付きインデックス」と「検索のみインデックス」を区別できない。
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var languages = document.RootElement.GetProperty("languages").EnumerateArray()
+            .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
+
+        foreach (var searchOnly in new[] { "cython", "sass", "stylus" })
+        {
+            Assert.True(languages.ContainsKey(searchOnly), $"expected '{searchOnly}' to be listed");
+            var entry = languages[searchOnly];
+            Assert.False(entry.GetProperty("symbol_extraction").GetBoolean(),
+                $"{searchOnly} must advertise symbol_extraction=false");
+            Assert.False(entry.GetProperty("graph_queries").GetBoolean(),
+                $"{searchOnly} must advertise graph_queries=false");
+        }
+
+        // Cython owns .pyx / .pxd exclusively; python keeps .py / .pyi / .pyw and Bazel filenames.
+        // Cython は .pyx / .pxd を専有し、python は .py / .pyi / .pyw と Bazel ファイル名を維持。
+        var cythonExts = languages["cython"].GetProperty("extensions").EnumerateArray()
+            .Select(ext => ext.GetString()).ToList();
+        Assert.Contains(".pyx", cythonExts);
+        Assert.Contains(".pxd", cythonExts);
+
+        var pythonExts = languages["python"].GetProperty("extensions").EnumerateArray()
+            .Select(ext => ext.GetString()).ToList();
+        Assert.DoesNotContain(".pyx", pythonExts);
+        Assert.DoesNotContain(".pxd", pythonExts);
+        Assert.Contains(".py", pythonExts);
+        Assert.Contains(".pyi", pythonExts);
+    }
+
+    [Fact]
+    public void RunLanguages_HumanOutput_WideExtensionListSpillsOntoContinuationLine()
+    {
+        // The human-readable table must not let long extension lists (dockerfile / makefile /
+        // python / ruby / xml) swallow the Symbols / Graph columns. Instead, spill onto a
+        // continuation line so the row is still readable.
+        // 人間向けテーブルは、長い拡張子リスト（dockerfile / makefile / python / ruby / xml）が
+        // Symbols / Graph 列を食い潰さないようにし、継続行へ退避させて可読性を保つこと。
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages([], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Contains("languages)", stderr);
+
+        var lines = stdout.Split('\n').Select(line => line.TrimEnd('\r')).ToArray();
+
+        // Sanity: short rows still fit the fixed-width layout on a single line.
+        // 短い行は従来通り 1 行の固定幅レイアウトに収まる。
+        var csharpLine = lines.Single(line => line.StartsWith("csharp ", StringComparison.Ordinal));
+        Assert.Matches(@"^csharp\s+\.cs\s+\.cshtml\s+\.razor\s+yes\s+yes\s*$", csharpLine);
+
+        // Dockerfile / Makefile / Python / Ruby / XML rows spill extensions to a continuation line.
+        // Dockerfile / Makefile / Python / Ruby / XML 行は拡張子を継続行に退避する。
+        var wideLangs = new[] { "dockerfile", "makefile", "python", "ruby", "xml" };
+        foreach (var wide in wideLangs)
+        {
+            var headerIndex = Array.FindIndex(lines, line => line.StartsWith($"{wide} ", StringComparison.Ordinal));
+            Assert.True(headerIndex >= 0, $"expected row for {wide}");
+            var header = lines[headerIndex];
+            // Header row carries only lang + sym + graph, never the extension list itself.
+            // ヘッダ行には言語名・シンボル・グラフのみが含まれ、拡張子文字列は含まれない。
+            Assert.DoesNotContain("Dockerfile", header);
+            Assert.DoesNotContain("Makefile", header);
+            Assert.DoesNotContain("WORKSPACE", header);
+            Assert.DoesNotContain("Gemfile", header);
+            Assert.DoesNotContain(".csproj", header);
+            var continuation = lines[headerIndex + 1];
+            Assert.StartsWith("  Extensions: ", continuation);
+        }
+
+        // Spot-check: the continuation line for dockerfile contains both the bare filename and the
+        // `<Prefix><suffix>` pseudo-entry added for Issue #189 follow-up.
+        // dockerfile 継続行に完全一致ファイル名と `<Prefix><suffix>` 擬似エントリが両方入る。
+        var dockerIndex = Array.FindIndex(lines, line => line.StartsWith("dockerfile ", StringComparison.Ordinal));
+        var dockerContinuation = lines[dockerIndex + 1];
+        Assert.Contains("Dockerfile ", dockerContinuation);
+        Assert.Contains("Dockerfile.<suffix>", dockerContinuation);
+        Assert.Contains("Containerfile", dockerContinuation);
+    }
+
     [Theory]
     [InlineData("search")]
     [InlineData("definition")]
@@ -12385,6 +12478,86 @@ public class QueryCommandRunnerTests
             Assert.Equal("none", json.GetProperty("impact_mode").GetString());
             Assert.Equal(1, json.GetProperty("definition_count").GetInt32());
             Assert.Equal("non_callable_symbol_kind", json.GetProperty("zero_result_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbolsAndReferences_JsTemplateLiteral_SuppressesPhantomsButKeepsInterpolationCalls()
+    {
+        // Issue #291 CLI integration: a multi-line JS template literal must not
+        // surface phantom function/class symbols for code-shaped body text, while
+        // a real call inside a ${...} interpolation hole must still produce a
+        // reference edge via the call-graph pipeline.
+        // issue #291 の CLI 統合: 複数行 JS テンプレートリテラルはコード風本文から
+        // phantom な function/class を発生させず、${...} ホール内の本物の呼び出しは
+        // 参照グラフに edge として残ること。
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_js_template_literal_masking");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.js"),
+                """
+                function caller() {
+                    const src = `
+                function fakeFromTemplate() {}
+                class FakeClassInTemplate {}
+                    ${runTask()} trailing
+                    `;
+                    realCall();
+                }
+
+                function runTask() {}
+                function realCall() {}
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+
+            var (phantomFnExit, _, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["fakeFromTemplate", "--db", dbPath, "--json", "--exact-name", "--lang", "javascript"],
+                _jsonOptions));
+            var (phantomClsExit, _, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["FakeClassInTemplate", "--db", dbPath, "--json", "--exact-name", "--lang", "javascript"],
+                _jsonOptions));
+
+            var (refsExit, refsStdout, refsStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["runTask", "--db", dbPath, "--json", "--exact-name", "--lang", "javascript"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            // Phantom symbols must not exist — both queries should return NotFound.
+            // phantom シンボルは存在してはならない — どちらのクエリも NotFound になること。
+            Assert.Equal(CommandExitCodes.NotFound, phantomFnExit);
+            Assert.Equal(CommandExitCodes.NotFound, phantomClsExit);
+
+            // The real call inside the `${...}` interpolation hole must still be visible.
+            // ${...} 補間ホール内の本物の呼び出しは参照として残っていること。
+            Assert.Equal(CommandExitCodes.Success, refsExit);
+            Assert.Equal(string.Empty, refsStderr);
+            var referenceDocuments = ParseJsonLines(refsStdout);
+            try
+            {
+                Assert.Contains(referenceDocuments, doc =>
+                    doc.RootElement.GetProperty("symbol_name").GetString() == "runTask"
+                    && doc.RootElement.GetProperty("reference_kind").GetString() == "call"
+                    && doc.RootElement.GetProperty("container_name").GetString() == "caller");
+            }
+            finally
+            {
+                foreach (var doc in referenceDocuments)
+                {
+                    doc.Dispose();
+                }
+            }
         }
         finally
         {

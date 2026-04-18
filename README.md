@@ -501,7 +501,8 @@ The database reflects the working tree at the time of the last index. After swit
 
 | Language | Extensions | Symbols |
 |---|---|:---:|
-| Python | `.py` | yes |
+| Python | `.py`, `.pyi`, `.pyw`, `BUILD`, `BUILD.bazel`, `WORKSPACE`, `WORKSPACE.bazel` (Bazel Starlark) | yes |
+| Cython | `.pyx`, `.pxd` | -- |
 | JavaScript | `.js`, `.jsx`, `.cjs`, `.mjs` | yes |
 | TypeScript | `.ts`, `.tsx`, `.cts`, `.mts` | yes |
 | C# | `.cs` | yes |
@@ -509,7 +510,7 @@ The database reflects the working tree at the time of the last index. After swit
 | Rust | `.rs` | yes |
 | Java | `.java` | yes |
 | Kotlin | `.kt` | yes |
-| Ruby | `.rb` | yes |
+| Ruby | `.rb`, `.rake`, `.gemspec`, `.podspec`, `Gemfile`, `Rakefile`, `Podfile`, `Guardfile`, `Capfile`, `Vagrantfile` | yes |
 | C | `.c`, `.h` | yes |
 | C++ | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx` | yes |
 | PHP | `.php` | yes |
@@ -526,8 +527,8 @@ The database reflects the working tree at the time of the last index. After swit
 | Protobuf | `.proto` | yes |
 | GraphQL | `.graphql`, `.gql` | yes |
 | Gradle | `.gradle` | yes |
-| Makefile | `Makefile` | yes |
-| Dockerfile | `Dockerfile` | yes |
+| Makefile | `Makefile`, `GNUmakefile`, `Makefile.<suffix>`, `GNUmakefile.<suffix>`, `.mk` | yes |
+| Dockerfile | `Dockerfile`, `Containerfile`, `Dockerfile.<suffix>`, `Containerfile.<suffix>` | yes |
 | Zig | `.zig` | yes |
 | XAML | `.xaml`, `.axaml` | -- |
 | MSBuild | `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets` | -- |
@@ -535,13 +536,15 @@ The database reflects the working tree at the time of the last index. After swit
 | PowerShell | `.ps1`, `.psm1`, `.psd1` | yes |
 | Batch | `.bat`, `.cmd` | -- |
 | CMake | `.cmake`, `CMakeLists.txt` | -- |
-| SQL | `.sql` | yes |
+| SQL | `.sql`, `.pgsql`, `.tsql`, `.plsql`, `.psql` | yes |
 | Markdown | `.md` | -- |
 | YAML | `.yaml`, `.yml` | -- |
 | JSON | `.json` | -- |
 | TOML | `.toml` | -- |
-| HTML | `.html` | -- |
-| CSS | `.css`, `.scss` | yes |
+| HTML | `.html`, `.htm` | -- |
+| CSS | `.css`, `.scss`, `.less`, `.pcss` | yes |
+| Sass (indented) | `.sass` | -- |
+| Stylus | `.styl` | -- |
 | Vue | `.vue` | -- |
 | Svelte | `.svelte` | -- |
 | Terraform | `.tf` | -- |
@@ -811,8 +814,8 @@ Once configured, the AI can directly call these tools:
 | `search` | Full-text search across code chunks |
 | `definition` | Reconstruct a symbol declaration and optional body |
 | `references` | Find indexed references for supported languages; identical constructor `call` + `instantiate` rows collapse by default |
-| `callers` | List callers for a named symbol in supported languages; `kind` filters by reference kind, and the default keeps all indexed kinds visible while collapsing identical constructor `call` + `instantiate` rows at one physical site |
-| `callees` | List callees for a named symbol in supported languages; the default keeps all indexed kinds visible while collapsing identical constructor `call` + `instantiate` rows at one physical site |
+| `callers` | List callers for a named symbol in supported languages; `kind` filters by reference kind, and the default keeps invocation-like kinds (`call`, `instantiate`, `subscribe`) visible, hides compile-time `type_reference` rows (e.g. `nameof(X)` / `typeof(T)`), and collapses identical constructor `call` + `instantiate` rows at one physical site |
+| `callees` | List callees for a named symbol in supported languages; the default keeps invocation-like kinds (`call`, `instantiate`, `subscribe`) visible, hides compile-time `type_reference` rows, and collapses identical constructor `call` + `instantiate` rows at one physical site |
 | `symbols` | Find functions, classes, interfaces, imports, and namespaces by name |
 | `files` | List indexed files |
 | `find_in_file` | Find literal substring matches inside known indexed files with line/column context |
@@ -1373,7 +1376,8 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 
 | 言語 | 拡張子 | シンボル |
 |---|---|:---:|
-| Python | `.py` | yes |
+| Python | `.py`, `.pyi`, `.pyw`, `BUILD`, `BUILD.bazel`, `WORKSPACE`, `WORKSPACE.bazel`（Bazel Starlark） | yes |
+| Cython | `.pyx`, `.pxd` | -- |
 | JavaScript | `.js`, `.jsx`, `.cjs`, `.mjs` | yes |
 | TypeScript | `.ts`, `.tsx`, `.cts`, `.mts` | yes |
 | C# | `.cs` | yes |
@@ -1381,7 +1385,7 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 | Rust | `.rs` | yes |
 | Java | `.java` | yes |
 | Kotlin | `.kt` | yes |
-| Ruby | `.rb` | yes |
+| Ruby | `.rb`, `.rake`, `.gemspec`, `.podspec`, `Gemfile`, `Rakefile`, `Podfile`, `Guardfile`, `Capfile`, `Vagrantfile` | yes |
 | C | `.c`, `.h` | yes |
 | C++ | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx` | yes |
 | PHP | `.php` | yes |
@@ -1398,8 +1402,8 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 | Protobuf | `.proto` | yes |
 | GraphQL | `.graphql`, `.gql` | yes |
 | Gradle | `.gradle` | yes |
-| Makefile | `Makefile` | yes |
-| Dockerfile | `Dockerfile` | yes |
+| Makefile | `Makefile`, `GNUmakefile`, `Makefile.<suffix>`, `GNUmakefile.<suffix>`, `.mk` | yes |
+| Dockerfile | `Dockerfile`, `Containerfile`, `Dockerfile.<suffix>`, `Containerfile.<suffix>` | yes |
 | Zig | `.zig` | yes |
 | XAML | `.xaml`, `.axaml` | -- |
 | MSBuild | `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets` | -- |
@@ -1407,13 +1411,15 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 | PowerShell | `.ps1`, `.psm1`, `.psd1` | yes |
 | Batch | `.bat`, `.cmd` | -- |
 | CMake | `.cmake`, `CMakeLists.txt` | -- |
-| SQL | `.sql` | yes |
+| SQL | `.sql`, `.pgsql`, `.tsql`, `.plsql`, `.psql` | yes |
 | Markdown | `.md` | -- |
 | YAML | `.yaml`, `.yml` | -- |
 | JSON | `.json` | -- |
 | TOML | `.toml` | -- |
-| HTML | `.html` | -- |
-| CSS | `.css`, `.scss` | yes |
+| HTML | `.html`, `.htm` | -- |
+| CSS | `.css`, `.scss`, `.less`, `.pcss` | yes |
+| Sass（インデント構文） | `.sass` | -- |
+| Stylus | `.styl` | -- |
 | Vue | `.vue` | -- |
 | Svelte | `.svelte` | -- |
 | Terraform | `.tf` | -- |
@@ -1682,8 +1688,8 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `search` | コードチャンクの全文検索 |
 | `definition` | シンボルの宣言と必要なら本体を再構成して取得 |
 | `references` | 対応言語でインデックス済み参照を検索。constructor site の `call` + `instantiate` 重複は既定で集約 |
-| `callers` | 対応言語で指定シンボルの caller を列挙。`kind` は reference kind を指し、未指定時は全 reference kind を表示したまま同じ物理位置にある constructor の `call` + `instantiate` 重複を集約 |
-| `callees` | 対応言語で指定シンボルの callee を列挙。未指定時は全 reference kind を表示したまま同じ物理位置にある constructor の `call` + `instantiate` 重複を集約 |
+| `callers` | 対応言語で指定シンボルの caller を列挙。`kind` は reference kind を指し、未指定時は invocation 系の kind（`call` / `instantiate` / `subscribe`）を表示しつつコンパイル時の `type_reference`（`nameof(X)` / `typeof(T)` 等）を既定で非表示にし、同じ物理位置にある constructor の `call` + `instantiate` 重複を集約 |
+| `callees` | 対応言語で指定シンボルの callee を列挙。未指定時は invocation 系の kind（`call` / `instantiate` / `subscribe`）を表示しつつコンパイル時の `type_reference` を既定で非表示にし、同じ物理位置にある constructor の `call` + `instantiate` 重複を集約 |
 | `symbols` | 関数・クラス・インターフェース・import・namespace を名前で検索 |
 | `files` | インデックス済みファイル一覧 |
 | `find_in_file` | 既知のインデックス済みファイル内でリテラル部分文字列一致を行・列付きで検索 |

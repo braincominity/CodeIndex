@@ -37,7 +37,8 @@ public class FileIndexer
         IReadOnlyList<string> NonIndexablePaths,
         IReadOnlyList<string> ProbeFailedFilePaths,
         IReadOnlyList<string> ListedDirectories,
-        IReadOnlyList<string> FullyScannedDirectories)
+        IReadOnlyList<string> FullyScannedDirectories,
+        IReadOnlyList<string> SymlinkPrunedDirectories)
     {
         public bool HadErrors => Errors.Any(error => error.IsFatal);
     }
@@ -68,6 +69,18 @@ public class FileIndexer
     private static readonly Dictionary<string, string> LangMap = new(StringComparer.OrdinalIgnoreCase)
     {
         [".py"]     = "python",
+        [".pyi"]    = "python",  // Python type stub (PEP 561) / Python 型スタブ
+        [".pyw"]    = "python",  // Windowed Python script / Windows 用 Python スクリプト
+        // Cython's `.pyx` / `.pxd` live in their own search-only bucket: they extend Python syntax
+        // with `cdef class` / `cpdef` / `cdef` forms that the Python regex extractor cannot parse,
+        // so mapping them to `python` would advertise `symbol_extraction=true` while emitting zero
+        // symbols — the same "advertised contract vs. actual behavior" gap that sunk the earlier
+        // `.sass` / `.styl` → `css` mapping.
+        // Cython の `.pyx` / `.pxd` は `cdef class` / `cpdef` / `cdef` を含み Python 用正規表現では
+        // 拾えない。python にマップすると `symbol_extraction=true` と広告しつつ 0 件しか出ない
+        // 齟齬になるため、`.sass` / `.styl` と同じく独立の search-only バケットに分ける。
+        [".pyx"]    = "cython",  // Cython source / Cython ソース
+        [".pxd"]    = "cython",  // Cython declaration / Cython 宣言
         [".js"]     = "javascript",
         [".cjs"]    = "javascript",
         [".mjs"]    = "javascript",
@@ -77,6 +90,9 @@ public class FileIndexer
         [".jsx"]    = "javascript",
         [".tsx"]    = "typescript",
         [".rb"]     = "ruby",
+        [".rake"]   = "ruby",    // Rake tasks / Rake タスク
+        [".gemspec"]= "ruby",    // RubyGems spec / RubyGems スペック
+        [".podspec"]= "ruby",    // CocoaPods spec (Ruby DSL) / CocoaPods スペック
         [".go"]     = "go",
         [".rs"]     = "rust",
         [".java"]   = "java",
@@ -95,6 +111,10 @@ public class FileIndexer
         [".php"]    = "php",
         [".sh"]     = "shell",
         [".sql"]    = "sql",
+        [".pgsql"]  = "sql",     // PostgreSQL dialect / PostgreSQL 方言
+        [".tsql"]   = "sql",     // T-SQL (SQL Server) / T-SQL (SQL Server)
+        [".plsql"]  = "sql",     // PL/SQL (Oracle) / PL/SQL (Oracle)
+        [".psql"]   = "sql",     // psql scripts / psql スクリプト
         [".md"]     = "markdown",
         [".yaml"]   = "yaml",
         [".yml"]    = "yaml",
@@ -108,8 +128,18 @@ public class FileIndexer
         [".props"]  = "xml",    // MSBuild props / MSBuild プロパティ
         [".targets"]= "xml",    // MSBuild targets / MSBuild ターゲット
         [".html"]   = "html",
+        [".htm"]    = "html",   // Legacy HTML extension / 旧来の HTML 拡張子
         [".css"]    = "css",
         [".scss"]   = "css",
+        [".less"]   = "css",    // Less preprocessor / Less プリプロセッサ
+        [".pcss"]   = "css",    // PostCSS / PostCSS
+        // Sass indented syntax / Stylus use indentation instead of braces, so they live in
+        // separate search-only buckets — the CSS symbol extractor's brace-based patterns do
+        // not apply, but exact-name search still works.
+        // Sass インデント構文と Stylus は波括弧ではなくインデントで構造化するため、
+        // CSS のシンボル抽出（波括弧ベース）は使わず、検索用の別バケットに分ける。
+        [".sass"]   = "sass",
+        [".styl"]   = "stylus",
         [".vue"]    = "vue",
         [".svelte"] = "svelte",
         [".tf"]     = "terraform",
@@ -134,6 +164,7 @@ public class FileIndexer
         [".gql"]    = "graphql",
         [".gradle"] = "gradle",    // Gradle build scripts / Gradle ビルドスクリプト
         [".cmake"]  = "cmake",     // CMake scripts / CMake スクリプト
+        [".mk"]     = "makefile",  // Makefile fragment / Makefile フラグメント
         [".ps1"]    = "powershell",// PowerShell scripts / PowerShell スクリプト
         [".psm1"]   = "powershell",// PowerShell modules / PowerShell モジュール
         [".psd1"]   = "powershell",// PowerShell data files / PowerShell データファイル
@@ -148,14 +179,37 @@ public class FileIndexer
     private static readonly Dictionary<string, string> FileNameMap = new(StringComparer.OrdinalIgnoreCase)
     {
         ["Dockerfile"]    = "dockerfile",
+        ["Containerfile"] = "dockerfile",   // Podman's Dockerfile alternative / Podman の Dockerfile 代替
         ["Makefile"]      = "makefile",
+        ["GNUmakefile"]   = "makefile",     // GNU Make explicit filename / GNU Make 明示ファイル名
         ["Justfile"]      = "justfile",     // Just command runner / Just コマンドランナー
         ["CMakeLists.txt"]= "cmake",
         ["Vagrantfile"]   = "ruby",         // Vagrant uses Ruby DSL / Vagrant は Ruby DSL
+        ["Gemfile"]       = "ruby",         // Bundler dependency manifest / Bundler 依存マニフェスト
+        ["Rakefile"]      = "ruby",         // Rake task runner / Rake タスクランナー
+        ["Podfile"]       = "ruby",         // CocoaPods dependency manifest / CocoaPods 依存マニフェスト
+        ["Guardfile"]     = "ruby",         // Guard file-watcher / Guard ファイルウォッチャー
+        ["Capfile"]       = "ruby",         // Capistrano deployment / Capistrano デプロイ
+        ["BUILD"]         = "python",       // Bazel Starlark build file / Bazel Starlark ビルドファイル
+        ["BUILD.bazel"]   = "python",
+        ["WORKSPACE"]     = "python",       // Bazel workspace / Bazel ワークスペース
+        ["WORKSPACE.bazel"]= "python",
         [".editorconfig"] = "editorconfig",
         [".gitignore"]    = "gitignore",
         [".dockerignore"] = "dockerignore",
     };
+
+    // Filename prefixes (with trailing dot) mapped to language for suffixed variants like
+    // Dockerfile.dev / Makefile.common / GNUmakefile.am. The suffix must be non-empty.
+    // Dockerfile.dev / Makefile.common / GNUmakefile.am のようにサフィックス付きで使われる
+    // ファイル名のプレフィックス→言語マッピング。サフィックスは1文字以上必須。
+    private static readonly (string Prefix, string Language)[] FileNamePrefixMap =
+    [
+        ("Dockerfile.",  "dockerfile"),
+        ("Containerfile.", "dockerfile"),
+        ("Makefile.",    "makefile"),
+        ("GNUmakefile.", "makefile"),
+    ];
 
     // Directories to skip (case-insensitive for cross-platform) / スキップするディレクトリ（クロスプラットフォーム対応で大文字小文字を区別しない）
     private static readonly HashSet<string> SkipDirs = new(StringComparer.OrdinalIgnoreCase)
@@ -743,6 +797,12 @@ public class FileIndexer
         var merged = new Dictionary<string, string>(LangMap, StringComparer.OrdinalIgnoreCase);
         foreach (var (name, lang) in FileNameMap)
             merged.TryAdd(name, lang);
+        // Surface suffixed variants like Dockerfile.dev / Makefile.am as `<Prefix><suffix>` entries
+        // so `cdidx languages` and the MCP listing reflect what TryDetectLanguage actually handles.
+        // Dockerfile.dev / Makefile.am のようなサフィックス付き変種も `<Prefix><suffix>` 形で
+        // 露出させ、`cdidx languages` や MCP の一覧が TryDetectLanguage の実挙動と一致するようにする。
+        foreach (var (prefix, lang) in FileNamePrefixMap)
+            merged.TryAdd($"{prefix}<suffix>", lang);
         return merged;
     }
 
@@ -763,6 +823,19 @@ public class FileIndexer
         if (FileNameMap.TryGetValue(fileName, out var nameLang))
             return new LanguageDetectionResult(FileProbeStatus.Supported, nameLang);
 
+        // Then try known filename prefixes for suffixed variants like Dockerfile.dev / Makefile.am.
+        // The suffix must be non-empty so a bare `Dockerfile.` with trailing dot does not match.
+        // Dockerfile.dev や Makefile.am のようなサフィックス付き変種を検出する。
+        // `Dockerfile.` のような末尾ドットだけの形には一致させないため、サフィックスは1文字以上必須。
+        foreach (var (prefix, prefixLang) in FileNamePrefixMap)
+        {
+            if (fileName.Length > prefix.Length &&
+                fileName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return new LanguageDetectionResult(FileProbeStatus.Supported, prefixLang);
+            }
+        }
+
         if (!string.IsNullOrEmpty(ext))
             return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
 
@@ -772,8 +845,52 @@ public class FileIndexer
     internal static bool CanIndexFile(string filePath)
         => GetFileIndexability(filePath) == FileProbeStatus.Supported;
 
+    // Detect symbolic links / reparse points so the scanner can skip them.
+    // Treats probe failures (e.g. dangling symlinks whose target is gone) as reparse points
+    // so the scanner skips them instead of trying to read the missing target.
+    // symlink / reparse point を検出し、スキャナでスキップできるようにする。
+    // プロバ失敗（例: target が消えた dangling symlink）は missing target を読もうとせずスキップするため、
+    // reparse point 扱いにする。
+    private static bool IsReparsePoint(string path)
+    {
+        try
+        {
+            var attributes = File.GetAttributes(path);
+            return (attributes & FileAttributes.ReparsePoint) != 0;
+        }
+        catch (FileNotFoundException)
+        {
+            return true;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
+
     internal static FileProbeStatus GetFileIndexability(string filePath)
     {
+        // Reject symlinks/reparse points here so every caller (full scan, --files / --commits update mode,
+        // dry-run) gets the same symlink skip behavior. Using File.GetAttributes uses lstat-like semantics
+        // on .NET (does not follow the symlink target), which is what we need on both Windows and Unix.
+        // The Unix stat() path below follows symlinks, so without this guard a symlink-to-regular-file
+        // would otherwise slip through as Supported.
+        // ここで symlink / reparse point を弾くことで、フルスキャン・--files/--commits の update モード・
+        // dry-run など全呼び出し元に同じ symlink skip 挙動を効かせる。File.GetAttributes は .NET 上で
+        // lstat 相当（symlink target を辿らない）なので、Windows でも Unix でも必要な判定になる。
+        // Unix 側の stat() は symlink を辿るため、このガードが無いと symlink→通常ファイルが
+        // Supported として通過してしまう。
+        if (IsReparsePoint(filePath))
+            return FileProbeStatus.Unsupported;
+
         if (OperatingSystem.IsWindows())
             return FileProbeStatus.Supported;
 
@@ -1007,11 +1124,12 @@ public class FileIndexer
         var probeFailedFilePaths = new HashSet<string>(StringComparer.Ordinal);
         var listedDirectories = new HashSet<string>(StringComparer.Ordinal);
         var fullyScannedDirectories = new HashSet<string>(StringComparer.Ordinal);
+        var symlinkPrunedDirectories = new HashSet<string>(StringComparer.Ordinal);
         var fullyScanned = true;
         var preloadResult = LoadAncestorIgnoreRules(errors, ref fullyScanned);
         if (preloadResult.IgnoreRulesAvailable)
         {
-            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, preloadResult.Rules, isProjectRoot: true);
+            ScanDirectory(_projectRoot, files, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, symlinkPrunedDirectories, preloadResult.Rules, isProjectRoot: true);
         }
         return new ScanFilesResult(
             files,
@@ -1019,7 +1137,8 @@ public class FileIndexer
             nonIndexablePaths.ToList(),
             probeFailedFilePaths.ToList(),
             listedDirectories.ToList(),
-            fullyScannedDirectories.ToList());
+            fullyScannedDirectories.ToList(),
+            symlinkPrunedDirectories.ToList());
     }
 
     private bool ScanDirectory(
@@ -1030,6 +1149,7 @@ public class FileIndexer
         HashSet<string> probeFailedFilePaths,
         HashSet<string> listedDirectories,
         HashSet<string> fullyScannedDirectories,
+        HashSet<string> symlinkPrunedDirectories,
         IgnoreRuleSet activeIgnoreRules,
         bool isProjectRoot = false)
     {
@@ -1043,7 +1163,7 @@ public class FileIndexer
             return true;
         }
 
-        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, activeIgnoreRules);
+        return EnumerateDirectory(dir, results, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, symlinkPrunedDirectories, activeIgnoreRules);
     }
 
     private bool EnumerateDirectory(
@@ -1054,6 +1174,7 @@ public class FileIndexer
         HashSet<string> probeFailedFilePaths,
         HashSet<string> listedDirectories,
         HashSet<string> fullyScannedDirectories,
+        HashSet<string> symlinkPrunedDirectories,
         IgnoreRuleSet inheritedIgnoreRules)
     {
         var fullyScanned = true;
@@ -1075,8 +1196,10 @@ public class FileIndexer
                 if (activeIgnoreRules.IsIgnored(file, isDirectory: false))
                     continue;
 
-                // Only regular files are indexable on Unix. This avoids blocking on FIFOs/sockets/devices.
-                // Unix では通常ファイルのみをインデックス対象にする。FIFO/socket/device でのブロックを避ける。
+                // GetFileIndexability also rejects file symlinks/reparse points so the update-mode
+                // (--files / --commits) path gets the same skip behavior without a second probe here.
+                // GetFileIndexability もファイル symlink / reparse point を拒否するため、
+                // update モード (--files / --commits) でも同じ skip 挙動が二重プローブ無しで効く。
                 var indexability = GetFileIndexability(file);
                 if (indexability == FileProbeStatus.ProbeFailed)
                 {
@@ -1117,7 +1240,25 @@ public class FileIndexer
 
             foreach (var subDir in Directory.EnumerateDirectories(dir))
             {
-                fullyScanned &= ScanDirectory(subDir, results, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, activeIgnoreRules);
+                // Skip directory symlinks/reparse points to prevent infinite recursion on ancestor loops
+                // and duplicate indexing when a symlink points inside the same tree. Record the symlink
+                // itself as listed (for the immediate-parent purge path) AND as a prune prefix so the
+                // purge walker can authoritatively drop deep descendants that earlier symlink-following
+                // runs left behind.
+                // ディレクトリ symlink / reparse point は親方向ループでの無限再帰や、
+                // ツリー内を指す symlink での二重 index を防ぐためスキップする。symlink 自身を
+                // listed 扱い（immediate parent purge 用）かつ prune prefix として記録することで、
+                // 以前の symlink 追従でできた深い子孫エントリも purge walker が確実に削除できる。
+                if (IsReparsePoint(subDir))
+                {
+                    var subRelative = ToRelativePath(subDir);
+                    listedDirectories.Add(subRelative);
+                    fullyScannedDirectories.Add(subRelative);
+                    symlinkPrunedDirectories.Add(subRelative);
+                    continue;
+                }
+
+                fullyScanned &= ScanDirectory(subDir, results, errors, nonIndexablePaths, probeFailedFilePaths, listedDirectories, fullyScannedDirectories, symlinkPrunedDirectories, activeIgnoreRules);
             }
         }
         catch (UnauthorizedAccessException)

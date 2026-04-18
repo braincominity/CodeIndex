@@ -286,6 +286,52 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void PurgeFilesOutsideRetainedSetWithinListedDirectories_PurgesDeepDescendantsUnderSymlinkPrunedDirectory()
+    {
+        // Regression for #190 follow-up: earlier symlink-following runs can leave entries like
+        // "sub/parent_loop/nested/deep.py" whose immediate parent ("sub/parent_loop/nested") is not in
+        // the current scan's listedDirectories. The partial-purge walker must still remove them because
+        // the symlink directory itself is authoritatively skipped in the current scan.
+        // #190 追補の回帰: 過去の symlink 追従により "sub/parent_loop/nested/deep.py" のような深い
+        // 子孫エントリが残るが、その immediate parent は今回の scan の listedDirectories には含まれない。
+        // symlink ディレクトリ自身を authoritative に skip している以上、partial-purge は
+        // この子孫を確実に削除しなければならない。
+        _writer.UpsertFile(new FileRecord { Path = "sub/parent_loop/shallow.py", Lang = "python", Size = 1, Lines = 1, Modified = DateTime.UtcNow });
+        _writer.UpsertFile(new FileRecord { Path = "sub/parent_loop/nested/deep.py", Lang = "python", Size = 1, Lines = 1, Modified = DateTime.UtcNow });
+        _writer.UpsertFile(new FileRecord { Path = "sub/parent_loop_sibling/keep.py", Lang = "python", Size = 1, Lines = 1, Modified = DateTime.UtcNow });
+        _writer.UpsertFile(new FileRecord { Path = "sub/foo.py", Lang = "python", Size = 1, Lines = 1, Modified = DateTime.UtcNow });
+
+        var retained = new HashSet<string>(StringComparer.Ordinal) { "sub/foo.py", "sub/parent_loop_sibling/keep.py" };
+        var listedDirectories = new HashSet<string>(StringComparer.Ordinal) { string.Empty, "sub", "sub/parent_loop", "sub/parent_loop_sibling" };
+        var symlinkPrunedDirectories = new HashSet<string>(StringComparer.Ordinal) { "sub/parent_loop" };
+
+        var purged = _writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retained, listedDirectories, symlinkPrunedDirectories);
+
+        Assert.Equal(2, purged);
+        Assert.False(_writer.HasFileAtPath("sub/parent_loop/shallow.py"));
+        Assert.False(_writer.HasFileAtPath("sub/parent_loop/nested/deep.py"));
+        Assert.True(_writer.HasFileAtPath("sub/parent_loop_sibling/keep.py"));
+        Assert.True(_writer.HasFileAtPath("sub/foo.py"));
+    }
+
+    [Fact]
+    public void PurgeFilesOutsideRetainedSetWithinListedDirectories_DoesNotConfuseSymlinkPrefixWithSiblingDirectory()
+    {
+        // Guard: "sub/parent_loop" prune prefix must not match "sub/parent_loop_x/inside.py".
+        // ガード: prune prefix "sub/parent_loop" は "sub/parent_loop_x/inside.py" を巻き込まない。
+        _writer.UpsertFile(new FileRecord { Path = "sub/parent_loop_x/inside.py", Lang = "python", Size = 1, Lines = 1, Modified = DateTime.UtcNow });
+
+        var retained = new HashSet<string>(StringComparer.Ordinal) { "sub/parent_loop_x/inside.py" };
+        var listedDirectories = new HashSet<string>(StringComparer.Ordinal) { "sub", "sub/parent_loop_x" };
+        var symlinkPrunedDirectories = new HashSet<string>(StringComparer.Ordinal) { "sub/parent_loop" };
+
+        var purged = _writer.PurgeFilesOutsideRetainedSetWithinListedDirectories(retained, listedDirectories, symlinkPrunedDirectories);
+
+        Assert.Equal(0, purged);
+        Assert.True(_writer.HasFileAtPath("sub/parent_loop_x/inside.py"));
+    }
+
+    [Fact]
     public void DropAll_RemovesAllTables()
     {
         // Insert some data, then drop all
