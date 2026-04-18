@@ -6306,6 +6306,246 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_ProcedureBodyRange_TSqlBeginEnd()
+    {
+        // Multi-line T-SQL CREATE PROCEDURE with explicit BEGIN/END body terminated by GO.
+        // ReferenceExtractor.ResolveContainerForCall depends on BodyStartLine/BodyEndLine
+        // covering the lines that hold EXEC / CALL calls inside the procedure (issue #429).
+        // GO で終わる複数行 T-SQL CREATE PROCEDURE（BEGIN/END 本体）。
+        // ReferenceExtractor.ResolveContainerForCall は本体内の EXEC / CALL を含む行を
+        // カバーする BodyStartLine / BodyEndLine に依存する（issue #429）。
+        var content =
+            "CREATE PROCEDURE dbo.sp_Outer\n" +  // line 1
+            "AS\n" +                              // line 2
+            "BEGIN\n" +                           // line 3
+            "  EXEC dbo.sp_Inner;\n" +            // line 4
+            "  SELECT 1;\n" +                     // line 5
+            "END\n" +                             // line 6
+            "GO\n" +                              // line 7
+            "CREATE PROCEDURE dbo.sp_Inner\n" +   // line 8
+            "AS\n" +                              // line 9
+            "BEGIN\n" +                           // line 10
+            "  SELECT 2;\n" +                     // line 11
+            "END\n" +                             // line 12
+            "GO\n";                               // line 13
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        var outer = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "dbo.sp_Outer");
+        Assert.Equal(1, outer.StartLine);
+        Assert.NotNull(outer.BodyStartLine);
+        Assert.NotNull(outer.BodyEndLine);
+        // Body must cover the EXEC call on line 4 so callers/impact can attribute it.
+        // EXEC 行（4 行目）を本体が覆う必要がある（callers / impact が帰属させられるように）。
+        Assert.True(outer.BodyStartLine!.Value <= 4, $"BodyStartLine={outer.BodyStartLine} must be <= 4");
+        Assert.True(outer.BodyEndLine!.Value >= 6, $"BodyEndLine={outer.BodyEndLine} must be >= 6 (body END)");
+        // Body must not leak into the next procedure on line 8.
+        // 8 行目の次のプロシージャまで本体が伸びてはいけない。
+        Assert.True(outer.BodyEndLine!.Value < 8, $"BodyEndLine={outer.BodyEndLine} must not leak into the next CREATE at line 8");
+
+        var inner = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "dbo.sp_Inner");
+        Assert.Equal(8, inner.StartLine);
+        Assert.NotNull(inner.BodyStartLine);
+        Assert.NotNull(inner.BodyEndLine);
+        Assert.True(inner.BodyStartLine!.Value <= 11, $"BodyStartLine={inner.BodyStartLine} must cover SELECT on line 11");
+        Assert.True(inner.BodyEndLine!.Value >= 12, $"BodyEndLine={inner.BodyEndLine} must cover END on line 12");
+    }
+
+    [Fact]
+    public void Extract_SQL_ProcedureBodyRange_PostgresDollarQuoted()
+    {
+        // PostgreSQL CREATE FUNCTION ... AS $$ ... $$ must resolve BodyEndLine to the line
+        // containing the closing `$$`, regardless of BEGIN / END / GO / ; inside the body.
+        // PostgreSQL の `CREATE FUNCTION ... AS $$ ... $$` は、本体内の BEGIN / END / GO / ;
+        // に関係なく、閉じ `$$` の行で BodyEndLine を解決できる必要がある。
+        var content =
+            "CREATE OR REPLACE FUNCTION public.notify_user(uid INT) RETURNS void AS $$\n" +  // line 1
+            "DECLARE msg TEXT;\n" +                                                            // line 2
+            "BEGIN\n" +                                                                        // line 3
+            "  msg := 'hi; GO -- fake terminator';\n" +                                        // line 4
+            "  PERFORM public.enqueue(uid, msg);\n" +                                          // line 5
+            "END;\n" +                                                                         // line 6
+            "$$ LANGUAGE plpgsql;\n" +                                                         // line 7
+            "\n" +                                                                             // line 8
+            "CREATE FUNCTION public.enqueue(uid INT, msg TEXT) RETURNS void AS $$\n" +         // line 9
+            "BEGIN\n" +                                                                        // line 10
+            "  INSERT INTO outbox VALUES (uid, msg);\n" +                                      // line 11
+            "END;\n" +                                                                         // line 12
+            "$$ LANGUAGE plpgsql;\n";                                                          // line 13
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        var notify = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "public.notify_user");
+        Assert.Equal(1, notify.StartLine);
+        Assert.NotNull(notify.BodyStartLine);
+        Assert.NotNull(notify.BodyEndLine);
+        Assert.True(notify.BodyStartLine!.Value <= 5, $"BodyStartLine={notify.BodyStartLine} must cover PERFORM on line 5");
+        Assert.Equal(7, notify.BodyEndLine);
+
+        var enqueue = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "public.enqueue");
+        Assert.Equal(9, enqueue.StartLine);
+        Assert.NotNull(enqueue.BodyStartLine);
+        Assert.NotNull(enqueue.BodyEndLine);
+        Assert.True(enqueue.BodyStartLine!.Value <= 11, $"BodyStartLine={enqueue.BodyStartLine} must cover INSERT on line 11");
+        Assert.Equal(13, enqueue.BodyEndLine);
+    }
+
+    [Fact]
+    public void Extract_SQL_ProcedureBodyRange_ClosesAtNextCreateWithoutGo()
+    {
+        // No `GO` between two procedures — the new-DDL-start guard must still close the
+        // previous body so the second CREATE's header is not swallowed into sp_First's body.
+        // プロシージャ間に `GO` が無い場合でも、次の DDL 行で前のボディを閉じる必要がある
+        // （そうしないと次の CREATE 行が sp_First のボディに吸い込まれる）。
+        var content =
+            "CREATE PROCEDURE dbo.sp_First AS\n" +  // line 1
+            "BEGIN\n" +                              // line 2
+            "  EXEC dbo.sp_Helper;\n" +              // line 3
+            "END\n" +                                // line 4
+            "CREATE PROCEDURE dbo.sp_Second AS\n" +  // line 5
+            "BEGIN\n" +                              // line 6
+            "  SELECT 2;\n" +                        // line 7
+            "END\n";                                 // line 8
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        var first = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "dbo.sp_First");
+        Assert.NotNull(first.BodyEndLine);
+        Assert.True(first.BodyEndLine!.Value <= 4, $"BodyEndLine={first.BodyEndLine} must close before the next CREATE on line 5");
+
+        var second = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "dbo.sp_Second");
+        Assert.Equal(5, second.StartLine);
+    }
+
+    [Fact]
+    public void Extract_SQL_ProcedureBodyRange_SingleLineAsBeginEnd()
+    {
+        // Single-line `CREATE PROC ... AS BEGIN ... END` must still expose a body range so
+        // that any call on that same line (e.g. an EXEC inside a single-line body) can be
+        // attributed back to the procedure.
+        // 1 行で書かれた `CREATE PROC ... AS BEGIN ... END` でも、同一行の呼び出しを
+        // プロシージャに帰属させるため、必ず body range を返す必要がある。
+        var content =
+            "CREATE PROC dbo.sp_A AS BEGIN EXEC dbo.sp_B; END\n" +
+            "CREATE PROC dbo.sp_B AS BEGIN SELECT 1; END\n";
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        var a = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "dbo.sp_A");
+        Assert.NotNull(a.BodyStartLine);
+        Assert.NotNull(a.BodyEndLine);
+        Assert.True(a.BodyStartLine!.Value <= 1 && a.BodyEndLine!.Value >= 1,
+            $"single-line sp_A body range must cover line 1 (got [{a.BodyStartLine}, {a.BodyEndLine}])");
+        Assert.True(a.BodyEndLine!.Value < 2, $"sp_A body must not leak into sp_B on line 2 (got {a.BodyEndLine})");
+    }
+
+    [Fact]
+    public void Extract_SQL_ProcedureBodyRange_IgnoresTerminatorsInStringsAndComments()
+    {
+        // A `GO` inside a string literal or a block comment must not close the body
+        // prematurely — MaskSqlLineForBodyScan strips strings/comments before the scan.
+        // 文字列や `/* ... */` 内の `GO` で本体を閉じないこと
+        // （MaskSqlLineForBodyScan が文字列・コメントを除去するため）。
+        var content =
+            "CREATE PROCEDURE dbo.sp_NoisyBody AS\n" +       // line 1
+            "BEGIN\n" +                                       // line 2
+            "  DECLARE @msg NVARCHAR(100) = 'GO ahead';\n" +  // line 3 — 'GO' in string
+            "  /* GO */\n" +                                  // line 4 — GO in block comment
+            "  -- GO line-comment\n" +                        // line 5 — GO in line comment
+            "  EXEC dbo.sp_Target;\n" +                       // line 6
+            "END\n" +                                         // line 7
+            "GO\n" +                                          // line 8 — real terminator
+            "CREATE PROCEDURE dbo.sp_Target AS\n" +           // line 9
+            "BEGIN SELECT 1; END\n" +                         // line 10
+            "GO\n";                                           // line 11
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        var noisy = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "dbo.sp_NoisyBody");
+        Assert.NotNull(noisy.BodyStartLine);
+        Assert.NotNull(noisy.BodyEndLine);
+        // Body must cover the real EXEC on line 6 and must not stop at the fake GO on line 3/4/5.
+        // 本体は line 6 の本物の EXEC を覆い、line 3/4/5 の偽 GO で止まってはいけない。
+        Assert.True(noisy.BodyEndLine!.Value >= 6, $"BodyEndLine={noisy.BodyEndLine} must cover the real EXEC on line 6");
+        Assert.True(noisy.BodyEndLine!.Value < 9, $"BodyEndLine={noisy.BodyEndLine} must not leak into sp_Target on line 9");
+
+        var target = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "dbo.sp_Target");
+        Assert.Equal(9, target.StartLine);
+    }
+
+    [Fact]
+    public void Extract_SQL_ProcedureBodyRange_AlterProcedureHasBody()
+    {
+        // ALTER PROCEDURE / ALTER FUNCTION / ALTER TRIGGER share the body shape with CREATE
+        // and must get a body range so replacement implementations' inner calls resolve too.
+        // ALTER PROCEDURE / ALTER FUNCTION / ALTER TRIGGER は CREATE と本体形状を共有するので、
+        // 置換実装内の呼び出しも解決できるよう body range を持つ必要がある。
+        var content =
+            "ALTER PROCEDURE dbo.sp_Reset AS\n" +   // line 1
+            "BEGIN\n" +                              // line 2
+            "  EXEC dbo.sp_Clear;\n" +               // line 3
+            "END\n" +                                // line 4
+            "GO\n";                                  // line 5
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        var reset = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "dbo.sp_Reset");
+        Assert.NotNull(reset.BodyStartLine);
+        Assert.NotNull(reset.BodyEndLine);
+        Assert.True(reset.BodyEndLine!.Value >= 3, $"BodyEndLine={reset.BodyEndLine} must cover the EXEC on line 3");
+        Assert.True(reset.BodyEndLine!.Value < 5, $"BodyEndLine={reset.BodyEndLine} must not include the GO batch terminator on line 5");
+    }
+
+    [Fact]
+    public void Extract_SQL_AlterPartitionFunctionHasNoBody()
+    {
+        // ALTER PARTITION FUNCTION only changes partition boundaries (no code body), so it
+        // must keep BodyStartLine / BodyEndLine unset even though ALTER PROCEDURE / FUNCTION
+        // / TRIGGER now resolve a body via SqlProcBody.
+        // ALTER PARTITION FUNCTION は境界変更のみ（コード本体なし）のため、
+        // ALTER PROCEDURE / FUNCTION / TRIGGER が SqlProcBody で本体を取るようになっても、
+        // BodyStartLine / BodyEndLine は null のまま維持する必要がある。
+        var content =
+            "ALTER PARTITION FUNCTION pf_OrdersByYear() SPLIT RANGE ('2025-01-01');\n" +
+            "CREATE PROCEDURE dbo.sp_After AS BEGIN SELECT 1; END\n";
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        var partition = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "pf_OrdersByYear");
+        Assert.Null(partition.BodyStartLine);
+        Assert.Null(partition.BodyEndLine);
+    }
+
+    [Fact]
+    public void Extract_SQL_ProcedureBodyRange_DoesNotPolluteContainer()
+    {
+        // Regression guard for the schema-pollution invariant (existing
+        // Extract_SQL_DetectsTSqlDdlKinds) extended to proc-body ranges: a CREATE PROCEDURE
+        // with a real body must not wrap the *next* proc as its container.
+        // スキーマ汚染防止の不変量（既存の Extract_SQL_DetectsTSqlDdlKinds）を、今回追加した
+        // プロシージャ本体にも拡張する。本体を持つ CREATE PROCEDURE が「次の」プロシージャを
+        // コンテナとして囲ってはならない。
+        var content =
+            "CREATE PROCEDURE dbo.sp_First AS\n" +
+            "BEGIN\n" +
+            "  SELECT 1;\n" +
+            "END\n" +
+            "GO\n" +
+            "CREATE PROCEDURE dbo.sp_Second AS\n" +
+            "BEGIN\n" +
+            "  SELECT 2;\n" +
+            "END\n" +
+            "GO\n";
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        var second = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "dbo.sp_Second");
+        Assert.True(
+            second.ContainerKind != "function" || second.ContainerName != "dbo.sp_First",
+            $"dbo.sp_Second was wrapped under container=dbo.sp_First — CREATE PROCEDURE body must not wrap sibling procedures.");
+    }
+
+    [Fact]
     public void Extract_Terraform_DetectsResources()
     {
         var content = "resource \"aws_s3_bucket\" \"my_bucket\" {\n  bucket = \"my-bucket\"\n}\n\nvariable \"region\" {\n  default = \"us-east-1\"\n}\n\noutput \"bucket_arn\" {\n  value = aws_s3_bucket.my_bucket.arn\n}\n\nmodule \"vpc\" {\n  source = \"./modules/vpc\"\n}";
