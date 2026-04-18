@@ -99,7 +99,13 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "maxLineWidth must be greater than or equal to 1");
         }
 
-        maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidthValue ?? LineWidthFormatter.DefaultMaxLineWidth);
+        if (maxLineWidthValue.HasValue && maxLineWidthValue.Value > LineWidthFormatter.MaxAllowedLineWidth)
+        {
+            maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth;
+            return CreateToolErrorResponse(id, $"maxLineWidth must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth}");
+        }
+
+        maxLineWidth = maxLineWidthValue ?? LineWidthFormatter.DefaultMaxLineWidth;
         return null;
     }
 
