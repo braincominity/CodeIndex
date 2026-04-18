@@ -3582,6 +3582,43 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SqlExecBracketedExecKeyword_IsCapturedAsProcedureName()
+    {
+        // A user who genuinely names a procedure `[EXEC]` uses bracket quoting to bypass the reserved
+        // word. SqlProcCallRegex captures it, bracket stripping yields `EXEC`, and the bracketed branch
+        // skips the keyword ignore list so `EXEC` surfaces as a proc-name call reference — distinct
+        // from the dynamic-SQL path where the keyword is suppressed because there is no identifier.
+        // ユーザが本当に `[EXEC]` という proc 名を使った場合は、SqlProcCallRegex → bracket 除去後に
+        // `EXEC` が残り、bracketed 分岐で keyword ignore list を通過して call エッジとして残ることを固定する。
+        const string content = """
+            EXEC [dbo].[EXEC];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "EXEC" && r.ReferenceKind == "call" && r.Line == 1);
+    }
+
+    [Fact]
+    public void Extract_SqlExecVariableProcName_DoesNotEmitReference()
+    {
+        // `EXEC @spName @param = 1` invokes a procedure whose name lives in a variable at runtime.
+        // There is no static identifier to index, so no call edge should be emitted for the variable
+        // and no phantom EXEC / `@spName` reference should surface.
+        // `EXEC @spName @param` は実行時決定の変数名呼び出し。静的な識別子がないため edge は出さないし、
+        // `EXEC` / `@spName` の幽霊エッジも出ないことを固定する。
+        const string content = """
+            EXEC @spName @param = 1;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Empty(references.Where(r => r.ReferenceKind == "call"));
+    }
+
+    [Fact]
     public void Extract_SqlExecLinkedServerFourPartName_CapturesTerminalIdentifier()
     {
         // Linked-server / four-part names like `EXEC server.db.schema.proc` should surface the final
