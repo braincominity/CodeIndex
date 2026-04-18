@@ -825,14 +825,22 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*:(?!eof(?![\w.-]))(?<name>[\w.\-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // Variable assignment — set VAR=value, set /a VAR=expr, set /p VAR=prompt, set "VAR=value".
             // Also handles `@set VAR=...` (echo suppression prefix), `set /a VAR+=1` (compound
-            // assignment operators), and `if ... set VAR=...` (inline assignment inside a one-line
-            // control statement). Leading `@` with optional whitespace, an optional `if <cond>`
-            // clause, and compound arithmetic operators are all covered in a single pattern.
+            // assignment operators), `if ... set VAR=...` (inline assignment inside a one-line
+            // control statement), and same-line multi-statement forms `set A=1 & set B=2`,
+            // `( set X=1 )`, `if ... ( set P=1 ) else set Q=2`, `for ... do set LOOPVAR=...`.
+            // Boundary alternation: line-leading `^`, or after `&` / `(` / `\belse` / `\bdo` so
+            // the regex (paired with the batch multi-match advance in the extractor loop) can
+            // emit one symbol per `set` occurrence on the same line instead of dropping every
+            // assignment after the first match. `rem` / `::` comment lines lack the required
+            // boundary token and therefore stay excluded.
             // 変数代入 — set VAR=value、set /a VAR=expr、set /p VAR=prompt、set "VAR=value" に対応。
             // 併せて `@set VAR=...` (echo 抑止プレフィクス) 、`set /a VAR+=1` (複合代入演算子) 、
-            // `if ... set VAR=...` (1 行制御文内の代入) も拾う。先頭の `@` + 任意の空白、任意の `if <条件>` 節、
-            // 複合算術演算子を 1 本のパターンにまとめている。
-            new("property", new Regex(@"^\s*(?:@\s*)?(?:if\s+.+?\s+)?set\s+(?:/[aApP]\s+)?""?(?<name>[A-Za-z_][\w]*)\s*(?:[+\-*/%&^|]|<<|>>)?=", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // `if ... set VAR=...` (1 行制御文内の代入) 、および `set A=1 & set B=2` / `( set X=1 )` /
+            // `if ... ( set P=1 ) else set Q=2` / `for ... do set LOOPVAR=...` のような同一行複数ステートメント形も拾う。
+            // 境界は `^` / `&` / `(` / `\belse` / `\bdo` のいずれかで、extractor 側の batch 専用
+            // multi-match advance と組み合わせて 1 行中の `set` ごとに 1 シンボルを出す。
+            // `rem` / `::` コメント行はこの境界トークンを伴わないため引き続き拾わない。
+            new("property", new Regex(@"(?:(?:^|&|\()\s*|(?:\belse|\bdo)\s+)(?:@\s*)?(?:if\s+.+?\s+)?set\s+(?:/[aApP]\s+)?""?(?<name>[A-Za-z_][\w]*)\s*(?:[+\-*/%&^|]|<<|>>)?=", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
         ],
         ["zig"] =
         [
@@ -1239,6 +1247,29 @@ public static class SymbolExtractor
 
                     if (!CanContinueScanningSameLineBraceBody(lang, kind, pattern.BodyStyle, bodyEndLine, startLine, sameLineEndColumn, absoluteStartColumn))
                     {
+                        // Batch `set` assignments can legitimately repeat on a single line via
+                        // `&` command-chaining (`set A=1 & set B=2`), parenthesized grouping
+                        // (`if ... ( set P=1 ) else set Q=2`), or `for`-loop bodies
+                        // (`for %%I in (1) do set LOOPVAR=%%I`). The brace-body rescan path
+                        // above is JS/TS/CSS/C#-only, so drive the advance explicitly for the
+                        // batch property pattern instead of short-circuiting after the first
+                        // match. Forward progress is guaranteed because `match.Length >= 1`
+                        // (the regex requires a literal `set\s+NAME=` tail).
+                        // batch の `set` 代入は `&` 連結や `( ... ) else ... `、`for ... do ...` で
+                        // 1 行に複数回現れうる。上の brace-body 再スキャンは JS/TS/CSS/C# 限定なので、
+                        // batch の property パターンだけは explicit に advance して追加マッチも拾う。
+                        // 前進は `match.Length >= 1` (正規表現が `set\s+NAME=` を要求するため) で保証される。
+                        if (lang == "batch"
+                            && pattern.BodyStyle == BodyStyle.None
+                            && pattern.Kind == "property")
+                        {
+                            var nextBatchOffset = absoluteStartColumn + Math.Max(1, match.Length);
+                            if (nextBatchOffset <= lineOffset)
+                                break;
+                            lineOffset = nextBatchOffset;
+                            continue;
+                        }
+
                         // Stop after first match per line to avoid duplicate symbols
                         // (e.g. C# method pattern + constructor pattern both matching)
                         // 1行につき最初のマッチのみ採用し重複を防ぐ
