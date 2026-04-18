@@ -1533,6 +1533,146 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void SelfTestLocalMirror_EmptyInstallDirEnv_StillUsesIsolatedTempInstallDir()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var homeDir = Path.Combine(_tempRoot, "self_test_empty_env_home");
+        var realInstallDir = Path.Combine(homeDir, ".local", "bin");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            export HOME="{{homeDir}}"
+            mkdir -p "{{realInstallDir}}"
+            printf '%s\n' '#!/usr/bin/env bash' 'echo "REAL_EXISTING_BINARY"' > "{{Path.Combine(realInstallDir, "cdidx")}}"
+            chmod +x "{{Path.Combine(realInstallDir, "cdidx")}}"
+            printf '{"version":"9.9.9"}' > "{{Path.Combine(realInstallDir, "version.json")}}"
+            printf 'real-lib' > "{{Path.Combine(realInstallDir, "libe_sqlite3.so")}}"
+
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            wait_for_local_mirror_ready() { :; }
+            python3() { sleep 30; }
+            curl() { :; }
+            main() {
+                echo "MAIN_INSTALL_DIR:$INSTALL_DIR"
+                mkdir -p "$INSTALL_DIR"
+                printf '%s\n' '#!/usr/bin/env bash' 'echo "cdidx v1.2.3"' > "$INSTALL_DIR/cdidx"
+                chmod +x "$INSTALL_DIR/cdidx"
+                printf '{"version":"1.2.3"}' > "$INSTALL_DIR/version.json"
+                printf 'self-test-lib' > "$INSTALL_DIR/libe_sqlite3.so"
+            }
+
+            run_local_mirror_self_test v1.2.3
+            grep -q 'REAL_EXISTING_BINARY' "{{Path.Combine(realInstallDir, "cdidx")}}" && echo "REAL_INSTALL_PRESERVED"
+            [ "$INSTALL_DIR" = "{{realInstallDir}}" ] && echo "USED_REAL_INSTALL_DIR"
+            echo "SELF_TEST_DONE"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = "",
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Using isolated self-test install dir:", stdout);
+        Assert.Contains("REAL_INSTALL_PRESERVED", stdout);
+        Assert.DoesNotContain($"MAIN_INSTALL_DIR:{realInstallDir}", stdout);
+        Assert.DoesNotContain("USED_REAL_INSTALL_DIR", stdout);
+        Assert.DoesNotContain("ERROR:", stderr);
+    }
+
+    [Fact]
+    public void SelfTestLocalMirror_AddsLoopbackNoProxyAndUsesCurlNoProxy()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "self_test_no_proxy_install");
+        var curlLogPath = Path.Combine(_tempRoot, "self_test_no_proxy.log");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            python3() { sleep 30; }
+            curl() {
+                case " $* " in
+                    *" --noproxy 127.0.0.1,localhost "*) printf 'HAS_NOPROXY\n' >> "{{curlLogPath}}" ;;
+                    *) printf 'MISSING_NOPROXY\n' >> "{{curlLogPath}}" ;;
+                esac
+                printf 'NO_PROXY=%s\n' "${NO_PROXY:-}" >> "{{curlLogPath}}"
+                printf 'no_proxy=%s\n' "${no_proxy:-}" >> "{{curlLogPath}}"
+                printf '200'
+                return 0
+            }
+            main() {
+                local output_file
+                output_file="$(mktemp)"
+                curl_http_get "http://127.0.0.1:18765/download" "$output_file" > /dev/null
+                rm -f "$output_file"
+                mkdir -p "$INSTALL_DIR"
+                printf '%s\n' '#!/usr/bin/env bash' 'echo "cdidx v1.2.3"' > "$INSTALL_DIR/cdidx"
+                chmod +x "$INSTALL_DIR/cdidx"
+                printf '{"version":"1.2.3"}' > "$INSTALL_DIR/version.json"
+                printf 'self-test-lib' > "$INSTALL_DIR/libe_sqlite3.so"
+            }
+
+            run_local_mirror_self_test v1.2.3
+            cat "{{curlLogPath}}"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+                ["NO_PROXY"] = "example.internal",
+                ["no_proxy"] = "svc.local",
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("MISSING_NOPROXY", stdout);
+        Assert.Contains("HAS_NOPROXY", stdout);
+        Assert.Contains("NO_PROXY=example.internal,127.0.0.1,localhost", stdout);
+        Assert.Contains("no_proxy=svc.local,127.0.0.1,localhost", stdout);
+        Assert.DoesNotContain("ERROR:", stderr);
+    }
+
+    [Fact]
+    public void SelfTestLocalMirror_CustomPort_UsesConfiguredPort()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "self_test_custom_port_install");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            wait_for_local_mirror_ready() {
+                echo "READY_URL:$1"
+            }
+            python3() { sleep 30; }
+            curl() { :; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                printf '%s\n' '#!/usr/bin/env bash' 'echo "cdidx v1.2.3"' > "$INSTALL_DIR/cdidx"
+                chmod +x "$INSTALL_DIR/cdidx"
+                printf '{"version":"1.2.3"}' > "$INSTALL_DIR/version.json"
+                printf 'self-test-lib' > "$INSTALL_DIR/libe_sqlite3.so"
+            }
+
+            run_local_mirror_self_test v1.2.3
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+                ["CDIDX_LOCAL_MIRROR_PORT"] = "18766",
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("READY_URL:http://127.0.0.1:18766/Widthdom/CodeIndex/releases/download/v1.2.3/CodeIndex-linux-x64.tar.gz", stdout);
+        Assert.Contains("Running local mirror self-test against http://127.0.0.1:18766/", stdout);
+        Assert.DoesNotContain("ERROR:", stderr);
+    }
+
+    [Fact]
     public void SelfTestLocalMirror_LocalMirrorStartFailure_PrintsSelfTestSpecificError()
     {
         if (OperatingSystem.IsWindows())

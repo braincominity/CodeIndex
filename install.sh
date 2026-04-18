@@ -136,6 +136,47 @@ latest_release_api_url() {
     printf '%s/repos/%s/releases/latest' "$GITHUB_API_BASE_URL" "$REPO"
 }
 
+is_loopback_url() {
+    case "$1" in
+        http://127.0.0.1:*|https://127.0.0.1:*|http://localhost:*|https://localhost:*)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+append_loopback_no_proxy_list() {
+    local current_value="${1:-}"
+
+    if [ -n "$current_value" ]; then
+        printf '%s,%s' "$current_value" "127.0.0.1,localhost"
+    else
+        printf '%s' "127.0.0.1,localhost"
+    fi
+}
+
+prepare_loopback_no_proxy_env() {
+    NO_PROXY="$(append_loopback_no_proxy_list "${NO_PROXY:-}")"
+    no_proxy="$(append_loopback_no_proxy_list "${no_proxy:-}")"
+    export NO_PROXY no_proxy
+}
+
+run_curl_with_optional_loopback_bypass() {
+    if is_loopback_url "$1"; then
+        shift
+        curl --noproxy 127.0.0.1,localhost "$@"
+    else
+        shift
+        curl "$@"
+    fi
+}
+
+has_explicit_self_test_install_dir() {
+    [ -n "${CDIDX_INSTALL_DIR:-}" ]
+}
+
 release_download_base_url() {
     printf '%s/%s/releases/download/%s' "$GITHUB_BASE_URL" "$REPO" "$VERSION"
 }
@@ -145,7 +186,7 @@ curl_http_get() {
     local output_path="$2"
     local http_code
 
-    if http_code="$(curl -sSL -o "$output_path" -w '%{http_code}' "$url")"; then
+    if http_code="$(run_curl_with_optional_loopback_bypass "$url" -sSL -o "$output_path" -w '%{http_code}' "$url")"; then
         printf '%s' "$http_code"
         return 0
     else
@@ -676,7 +717,7 @@ wait_for_local_mirror_ready() {
             report_local_mirror_start_failure "$local_mirror_port" "$local_mirror_log"
         fi
 
-        http_code="$(curl -sS -o /dev/null -w '%{http_code}' "$ready_url" 2>/dev/null || true)"
+        http_code="$(run_curl_with_optional_loopback_bypass "$ready_url" -sS -o /dev/null -w '%{http_code}' "$ready_url" 2>/dev/null || true)"
         if [ "$http_code" = "200" ]; then
             return 0
         fi
@@ -760,7 +801,7 @@ EOF
     fi
     printf '%s  %s\n' "$checksum" "$archive_name" > "${local_release_base}/sha256sums.txt"
 
-    if [ -z "${CDIDX_INSTALL_DIR+x}" ]; then
+    if ! has_explicit_self_test_install_dir; then
         if ! self_test_install_dir="$(mktemp -d /tmp/cdidx-self-test-install.XXXXXX)"; then
             error "Failed to create isolated install directory for local mirror self-test."
         fi
@@ -771,10 +812,11 @@ EOF
     python3 -m http.server "$local_mirror_port" --bind 127.0.0.1 --directory "$local_mirror_root" > "$local_mirror_log" 2>&1 &
     LOCAL_MIRROR_PID=$!
     local_mirror_base_url="http://127.0.0.1:${local_mirror_port}"
+    prepare_loopback_no_proxy_env
     wait_for_local_mirror_ready "${local_mirror_base_url}/${REPO}/releases/download/${rehearsal_version}/${archive_name}" "$local_mirror_port" "$local_mirror_log"
 
     info "Running local mirror self-test against ${local_mirror_base_url}/"
-    if [ -n "${CDIDX_INSTALL_DIR+x}" ]; then
+    if has_explicit_self_test_install_dir; then
         info "Using explicit self-test install dir: ${INSTALL_DIR}"
     else
         info "Using isolated self-test install dir: ${INSTALL_DIR}"

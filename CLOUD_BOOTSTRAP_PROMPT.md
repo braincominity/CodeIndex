@@ -80,6 +80,12 @@ bash ./install.sh --self-test-local-mirror
 By default, this self-test installs into a temporary directory so it does not
 overwrite an existing `~/.local/bin/cdidx`. Only set `CDIDX_INSTALL_DIR`
 explicitly if you intentionally want to inspect the mock install output.
+If port `18765` is already taken, move the local mirror to a different port:
+
+```bash
+export CDIDX_LOCAL_MIRROR_PORT=18766
+bash ./install.sh --self-test-local-mirror
+```
 
 This mode uses a mock payload only to validate installer flow (download URL
 selection, checksum verification, extraction, placement). It is not a
@@ -277,6 +283,12 @@ bash ./install.sh --self-test-local-mirror
 この self-test は既定では一時ディレクトリへインストールするため、既存の
 `~/.local/bin/cdidx` を上書きしません。mock の配置結果をあえて観察したい
 ときだけ `CDIDX_INSTALL_DIR` を明示してください。
+既定ポート `18765` が使用中なら、local mirror を別ポートへ逃がせます:
+
+```bash
+export CDIDX_LOCAL_MIRROR_PORT=18766
+bash ./install.sh --self-test-local-mirror
+```
 
 このモードは installer の処理経路（取得URL選択・checksum 検証・展開・配置）
 を確認するための mock payload を使います。ネットワークが開いた環境での

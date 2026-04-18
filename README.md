@@ -81,6 +81,8 @@ This includes AI cloud harnesses such as **Claude Code** and **OpenAI Codex**
 containers when they can execute shell commands and reach the release assets.
 For restricted-network cloud sessions, see
 [CLOUD_BOOTSTRAP_PROMPT.md](CLOUD_BOOTSTRAP_PROMPT.md).
+That guide also covers the isolated local-mirror self-test path and how to
+move it off the default port with `CDIDX_LOCAL_MIRROR_PORT=18766`.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
@@ -960,6 +962,8 @@ cdidx search "handleRequest"
 （シェル実行とリリース取得が可能な場合）も含みます。ネットワーク制約のある
 クラウドセッション向け手順は
 [CLOUD_BOOTSTRAP_PROMPT.md](CLOUD_BOOTSTRAP_PROMPT.md) を参照してください。
+同ガイドには、隔離された local-mirror self-test の使い方と、
+既定ポートを `CDIDX_LOCAL_MIRROR_PORT=18766` で変更する方法もあります。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
