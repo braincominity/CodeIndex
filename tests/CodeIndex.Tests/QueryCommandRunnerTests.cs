@@ -712,6 +712,91 @@ public class QueryCommandRunnerTests
         }
     }
 
+    // Regression lock for #196 follow-up: CLI `--max-line-width` above the shared ceiling
+    // (LineWidthFormatter.MaxAllowedLineWidth = 4096) must fail closed with UsageError and
+    // empty stdout, matching the MCP `maxLineWidth` contract. Previously the CLI silently
+    // clamped the value via LineWidthFormatter.ClampMaxLineWidth and ran to success, while
+    // MCP rejected the same 4097. Diverging contracts break automation that wires CLI and
+    // MCP together on a fail-close assumption.
+    // #196 のフォローアップ回帰ロック: CLI の `--max-line-width` が共有上限
+    // (LineWidthFormatter.MaxAllowedLineWidth = 4096) を超えた場合、UsageError と空 stdout で
+    // fail-close しなければならず、MCP の `maxLineWidth` 契約と一致させる。以前は
+    // LineWidthFormatter.ClampMaxLineWidth で黙って丸めて成功していたため、MCP は 4097 を拒否する
+    // 一方で CLI は通るという不整合があり、fail-close 前提の自動化を壊していた。
+    [Theory]
+    [InlineData("search", "4097")]
+    [InlineData("search", "8192")]
+    [InlineData("references", "4097")]
+    [InlineData("inspect", "4097")]
+    [InlineData("find", "4097")]
+    [InlineData("excerpt", "4097")]
+    public void QueryEntrypoints_MaxLineWidthAboveCeilingFailClosed_Issue196(string command, string value)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(
+            $"cdidx_issue196_maxlinewidth_{command}_{value}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Issue196Target.cs",
+                "csharp",
+                """
+                namespace Issue196;
+                public class Issue196Target
+                {
+                    public void Issue196Callee() { }
+                }
+                public class Issue196Caller
+                {
+                    public void Run()
+                    {
+                        var target = new Issue196Target();
+                        target.Issue196Callee();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var excerptDir = Path.Combine(projectRoot, "src");
+            Directory.CreateDirectory(excerptDir);
+            var excerptFilePath = Path.Combine(excerptDir, "Issue196Excerpt.cs");
+            File.WriteAllText(
+                excerptFilePath,
+                "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\n");
+
+            string[] args = command switch
+            {
+                "search" => ["Issue196", "--db", dbPath, "--json", "--max-line-width", value],
+                "references" => ["Issue196Callee", "--db", dbPath, "--json", "--max-line-width", value],
+                "inspect" => ["Issue196Target", "--db", dbPath, "--json", "--max-line-width", value],
+                "find" => ["Issue196", "--path", excerptFilePath, "--db", dbPath, "--json", "--max-line-width", value],
+                "excerpt" => [excerptFilePath, "--db", dbPath, "--start", "1", "--end", "1", "--json", "--max-line-width", value],
+                _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+            };
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => command switch
+            {
+                "search" => QueryCommandRunner.RunSearch(args, _jsonOptions),
+                "references" => QueryCommandRunner.RunReferences(args, _jsonOptions),
+                "inspect" => QueryCommandRunner.RunInspect(args, _jsonOptions),
+                "find" => QueryCommandRunner.RunFind(args, _jsonOptions),
+                "excerpt" => QueryCommandRunner.RunExcerpt(args, _jsonOptions),
+                _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+            });
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains($"--max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth}", stderr);
+            Assert.Contains($"got '{value}'", stderr);
+            Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void RunValidate_KindFilterNarrowsIssues()
     {
