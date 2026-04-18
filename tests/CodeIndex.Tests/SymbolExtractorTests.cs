@@ -7046,6 +7046,131 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_SameLineClassBodyFieldIsCapturedAndLocalIsRejected()
+    {
+        // Column-aware scope tracking: `public class C { public int X; }` must capture
+        // both the outer class C and the inner field X. Before #400, the type-body gate
+        // only looked at the scope at line start, so a same-line class body looked like
+        // "not inside a type body" and X was silently dropped. Conversely,
+        // `public void M() { int local = 1; }` inside a class must NOT emit a phantom
+        // `property local`: column-wise, col where `int local` starts sits inside a
+        // method body (not a class body), and the column-aware gate correctly rejects it.
+        // Closes #400.
+        // 列単位のスコープ追跡: `public class C { public int X; }` では外側の class C と
+        // 同一行のフィールド X をどちらも拾う必要がある。#400 以前は line-start のみを
+        // 見ていたため、同一行の class body は「型本体の中ではない」と誤判定され X が
+        // 取りこぼされた。逆に class 内の `public void M() { int local = 1; }` では、
+        // `int local` の列が method body の中（class body ではない）であることを列意識
+        // ゲートが認識するため、擬似的な `property local` を生成してはならない。
+        // Closes #400.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public class C { public int X; }",
+            "",
+            "public class D",
+            "{",
+            "    public void M() { int local = 1; }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "C");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "X"
+            && s.ContainerKind == "class" && s.ContainerName == "C"
+            && s.Signature == "public int X;");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "D");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M"
+            && s.ContainerKind == "class" && s.ContainerName == "D");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "local");
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineMultipleFieldsAreAllCaptured()
+    {
+        // `public class Multi { public int A; public int B; public int C; }` must
+        // produce three `property` symbols (A, B, C) plus the outer `Multi` class, with
+        // clean signatures that stop at the field terminator rather than trailing into
+        // the enclosing `} }`. Closes #400.
+        // `public class Multi { public int A; public int B; public int C; }` は外側 class
+        // Multi と A / B / C の 3 つの property を生成し、signature は末尾の `} }` を
+        // 含まずにフィールド終端（`;`）で切り詰められていなければならない。Closes #400.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public class Multi { public int A; public int B; public int C; }");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Multi");
+        foreach (var name in new[] { "A", "B", "C" })
+        {
+            var field = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == name));
+            Assert.Equal("class", field.ContainerKind);
+            Assert.Equal("Multi", field.ContainerName);
+            Assert.Equal($"public int {name};", field.Signature);
+            Assert.DoesNotContain("}", field.Signature);
+        }
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineNestedClassAttachesFieldToInnerType()
+    {
+        // `public class Outer { public class Inner { public int X; } }` must capture
+        // both Outer and Inner, and the field X must attach to Inner (not Outer).
+        // The container resolution uses a same-line `Signature.Contains` check, so the
+        // plain-field signature clamp from #400 is required for Inner to correctly
+        // "contain" X's signature. Closes #400.
+        // `public class Outer { public class Inner { public int X; } }` では Outer と
+        // Inner の双方を取得し、X は Outer ではなく Inner に紐づけること。同一行の
+        // コンテナ解決は `Signature.Contains` を使うため、#400 で追加した plain-field
+        // signature のクランプが無いと Inner が X の signature を「含む」と判定されず
+        // X が Outer に吸収されてしまう。Closes #400.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public class Outer { public class Inner { public int X; } }");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Outer");
+        var inner = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Inner"));
+        Assert.Equal("class", inner.ContainerKind);
+        Assert.Equal("Outer", inner.ContainerName);
+        var x = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "X"));
+        Assert.Equal("class", x.ContainerKind);
+        Assert.Equal("Inner", x.ContainerName);
+        Assert.Equal("public int X;", x.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineCompactEnumMembersDoNotLeakAsFields()
+    {
+        // `public enum Mode { [Obsolete] A = (int)B, ... }` must produce enum-member
+        // symbols only and must NOT emit phantom `property` symbols for `[Obsolete] A =`.
+        // The column-aware scope gate distinguishes class-like bodies (where fields are
+        // legal) from enum bodies (where members are not fields), so the plain-field
+        // regex is rejected inside enum bodies. Closes #400.
+        // `public enum Mode { [Obsolete] A = (int)B, ... }` は enum member のみを生成し、
+        // `[Obsolete] A =` を property として拾ってはならない。列意識スコープゲートが
+        // class-like body（field が正当）と enum body（member は field ではない）を
+        // 区別するため、enum body 内では plain-field regex がリジェクトされる。
+        // Closes #400.
+        var content = string.Join(
+            "\n",
+            "using System;",
+            "",
+            "public enum Mode { [Obsolete] A = 1, B = 2, C = 3 }");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Mode");
+        foreach (var name in new[] { "A", "B", "C" })
+        {
+            Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == name);
+        }
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsFunctionPointerField()
     {
         // Function-pointer field (`delegate*<int, void> Callback;`) must be captured.

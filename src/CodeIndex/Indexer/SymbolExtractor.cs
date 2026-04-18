@@ -968,17 +968,30 @@ public static class SymbolExtractor
                     // ラムダの内部にあるローカル変数宣言が同じ形でマッチしてしまい、
                     // `symbols` / `definition` / `outline` / `inspect` / `unused` に
                     // 擬似シンボルが混入する。Closes #298 の codex レビュー blocker 対応。
-                    if (lang == "csharp"
-                        && pattern.Kind == "property"
-                        && pattern.BodyStyle == BodyStyle.None
-                        && csharpInsideTypeBody != null
-                        && !csharpInsideTypeBody[i])
-                        break;
-
                     if (ShouldSkipCssNestedSelectorCandidate(lang, pattern, patternMatchLine, cssQualifiedRuleAncestors, i))
                         break;
 
                     var absoluteStartColumn = lineOffset + match.Index;
+
+                    if (lang == "csharp"
+                        && pattern.Kind == "property"
+                        && pattern.BodyStyle == BodyStyle.None
+                        && csharpInsideTypeBody != null
+                        && !csharpInsideTypeBody.IsInsideTypeBodyAt(i, absoluteStartColumn))
+                    {
+                        // Move the cursor past this same-line candidate so a later
+                        // column on the same line (e.g. a real field that lives after
+                        // a same-line method body or similar non-type-body scope) can
+                        // still be evaluated against its own column-aware scope.
+                        // Without this advance, the outer `while` would exit the line
+                        // entirely on the first rejection and drop any following match.
+                        // 同一行に続く別候補（例: 同一行の method 本体など非型本体の
+                        // 後ろにある実フィールド）を取りこぼさないよう、次の候補探索
+                        // 位置へ進める。この進行が無いと最初の拒否で while ループが
+                        // 行を抜けてしまい、後続候補が失われる。Closes #400.
+                        lineOffset = FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang);
+                        continue;
+                    }
                     if (privateScopeColumns != null
                         && pattern.Kind == "class"
                         && IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, i, absoluteStartColumn, matchLine, includeBlockScope: true))
@@ -1107,6 +1120,30 @@ public static class SymbolExtractor
                             csharpTypeHeaderLastLineIndex,
                             csharpTypeHeaderLastLineExclusiveEndColumn);
                     }
+                    else if (lang == "csharp"
+                        && pattern.Kind == "property"
+                        && pattern.BodyStyle == BodyStyle.None)
+                    {
+                        // For a plain C# field (kind `property`, BodyStyle.None), clamp the
+                        // signature to the declarator itself rather than `line[start..]`.
+                        // Without this clamp, `public int X; } }` inside a same-line nested
+                        // type carries the trailing `} }` into X's signature, which breaks
+                        // the same-line `ContainsSymbol` check in AssignContainers (the
+                        // enclosing `Inner` class signature ends in a single `}` so it does
+                        // not "contain" a signature that ends in `} }`) and makes X attach
+                        // to Outer instead of Inner. Closes #400.
+                        // C# の通常フィールド（kind `property`、BodyStyle.None）では、signature を
+                        // 行末まで取らず宣言終端（`;` または `=`）までに絞る。このクランプが無いと
+                        // `public int X; } }` のような同一行ネスト型内のフィールドでは trailing
+                        // `} }` まで signature に含まれてしまい、AssignContainers の同一行
+                        // ContainsSymbol 判定（囲む `Inner` の signature が単一の `}` で終わるため、
+                        // `} }` で終わる signature を「含む」と見なせない）が壊れ、X が Inner ではなく
+                        // Outer にぶら下がる。Closes #400.
+                        var clampedEnd = absoluteStartColumn + Math.Max(1, match.Length);
+                        if (clampedEnd > line.Length)
+                            clampedEnd = line.Length;
+                        signature = line[absoluteStartColumn..clampedEnd].Trim();
+                    }
                     else
                     {
                         signature = line[absoluteStartColumn..].Trim();
@@ -1182,6 +1219,57 @@ public static class SymbolExtractor
                         pendingRecordPrimaryComponents,
                         symbols);
 
+                    // C# plain-field (kind `property`, BodyStyle.None) matches need their own
+                    // advance path. The generic `sameLineEndColumn`-based advance below resolves
+                    // to -1 for BodyStyle.None and would set `stopAfterFirstPatternMatch`, which
+                    // prevents structural siblings on the same line (e.g. the enclosing
+                    // `public class C` in `public class C { public int X; }`) from being
+                    // captured by later patterns. Instead, advance past the field terminator
+                    // and continue the same-pattern scan so multiple same-line fields are
+                    // still collected, and skip the stop flag so later patterns can still run.
+                    // Closes #400.
+                    // C# 通常フィールド（kind `property`、BodyStyle.None）は専用の前進経路を使う。
+                    // 既定の `sameLineEndColumn` ベースの前進は BodyStyle.None では -1 に落ち、
+                    // `stopAfterFirstPatternMatch` を立ててしまうため、同一行に存在する構造宣言
+                    // （例: `public class C { public int X; }` の外側 class）を後続パターンで
+                    // 取得できなくなる。代わりにフィールド終端を越えて同一パターンのスキャンを
+                    // 続け、stop フラグを立てずに次のパターンにも機会を残す。Closes #400.
+                    if (lang == "csharp"
+                        && pattern.Kind == "property"
+                        && pattern.BodyStyle == BodyStyle.None)
+                    {
+                        // Only continue scanning the same line if the match was a clean
+                        // single-declarator `;`-terminated field. When the match ended at
+                        // `=` (initializer), or when a multi-declarator expansion fired,
+                        // the declarator expander has already consumed through the
+                        // terminating `;` and any trailing text after the match belongs to
+                        // the very same statement. Re-running the regex over that tail
+                        // re-interprets fragments like `1, _b, _c =` as a new field with
+                        // `return_type = "1, _b,"`, which then produces phantom declarator
+                        // symbols. Break out in those cases without setting
+                        // `stopAfterFirstPatternMatch` so later unrelated patterns on the
+                        // same line still get a chance to run. Closes #400.
+                        // 同一行での property スキャン継続は、宣言が単一 declarator かつ `;`
+                        // 終端のときに限る。マッチが `=` で終わっている（初期化子がある）
+                        // ケースや多 declarator 展開が走ったケースでは、declarator 展開側が
+                        // 既に `;` まで消費しており、マッチ後の残り文字列は同一ステートメント
+                        // の一部である。再度正規表現を回すと `1, _b, _c =` のような残骸を
+                        // `return_type = "1, _b,"` の新しい field として拾い、擬似的な
+                        // declarator シンボルを量産してしまう。そうしたケースでは
+                        // `stopAfterFirstPatternMatch` を立てずに break し、同じ行の
+                        // 他パターン（class 等）には機会を残す。Closes #400.
+                        var matchEndIndex = absoluteStartColumn + Math.Max(1, match.Length);
+                        var matchEndedAtEquals = matchEndIndex > 0
+                            && matchEndIndex <= line.Length
+                            && line[matchEndIndex - 1] == '=';
+                        if (declaratorEntries != null || matchEndedAtEquals)
+                            break;
+                        if (matchEndIndex <= lineOffset)
+                            matchEndIndex = lineOffset + 1;
+                        lineOffset = matchEndIndex;
+                        continue;
+                    }
+
                     if (!CanContinueScanningSameLineBraceBody(lang, kind, pattern.BodyStyle, bodyEndLine, startLine, sameLineEndColumn, absoluteStartColumn))
                     {
                         // Stop after first match per line to avoid duplicate symbols
@@ -1191,7 +1279,22 @@ public static class SymbolExtractor
                         break;
                     }
 
-                    lineOffset = FindNextSameLineBraceStatementStart(matchLine, sameLineEndColumn + 1, lang);
+                    // For C# class-like kinds with a same-line brace body, step into the body
+                    // (advance just past the match header) instead of jumping past the closing
+                    // `}`. This lets nested same-line declarations be captured, e.g.
+                    // `public class Outer { public class Inner { public int X; } }` matches
+                    // Outer and Inner, with X correctly attached to Inner. JavaScript/TypeScript
+                    // does not need this because class-body members there are extracted via the
+                    // separate JS/TS lexer/state machine; the brace-skip path only handles
+                    // same-line siblings like `class A {} class B {}`. Closes #400.
+                    // C# の class 系 kind は同一行の `{...}` 本体を飛び越えず、ヘッダ直後へ
+                    // 進めて本体内部の宣言（例: `public class Outer { public class Inner { ... } }`
+                    // の Inner）を拾えるようにする。JavaScript/TypeScript は class body の
+                    // member 抽出を専用 lexer/state machine で行うため従来通り終端の後ろへ
+                    // 進め、同一行 sibling（`class A {} class B {}` など）だけを扱う。Closes #400.
+                    lineOffset = lang == "csharp" && kind is "class" or "struct" or "interface" or "enum" or "namespace"
+                        ? FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang)
+                        : FindNextSameLineBraceStatementStart(matchLine, sameLineEndColumn + 1, lang);
                 }
 
                 if (stopAfterFirstPatternMatch)
@@ -8106,8 +8209,20 @@ public static class SymbolExtractor
     // 騙されない。`new { ... }` や collection initializer、ラムダ本体の `{` は
     // 直前バッファに `class|struct|interface|record|enum` を含まないため
     // 非型本体として扱われる。Closes #298 の codex レビュー blocker 対応。
+    // Marks `{` that opens a class-like body where C# plain fields are legal.
+    // `enum` is intentionally excluded: enum bodies contain enum members (not
+    // fields), and the field regex would otherwise match enum member shapes like
+    // `[Obsolete] A = (int)B,` as phantom `property` symbols. The column-aware
+    // scope gate relies on this distinction to reject field candidates inside
+    // enum bodies while still accepting legitimate fields inside class / struct
+    // / interface / record bodies. Closes #400.
+    // 型本体に相当する `{` を識別する正規表現。`enum` を意図的に除外することで、
+    // enum 本体内の `[Obsolete] A = (int)B,` のような enum member を plain field
+    // regex が `property` として拾ってしまう問題を防ぐ。列意識スコープゲートは
+    // この区別を使って、enum 本体内の field 候補は拒否し、class / struct /
+    // interface / record 本体内の本物のフィールドは引き続き許容する。Closes #400.
     private static readonly Regex CSharpTypeBodyDeclarationMarker = new(
-        @"\b(?:class|struct|interface|record|enum)\b\s+\w",
+        @"\b(?:class|struct|interface|record)\b\s+\w",
         RegexOptions.Compiled);
 
     // Expand a C# plain-field regex match into one entry per declarator when the
@@ -8237,6 +8352,26 @@ public static class SymbolExtractor
                 return result;
             if (tail[i] == ',')
                 i++;
+        }
+        else
+        {
+            // A plain-field match that ended at `;` is a complete declaration with no
+            // continuation declarators — whatever follows on the same line belongs to a
+            // separate statement (e.g. a second `public int B;` on the same line inside
+            // a same-line class body). Treating that residual text as `A, <tail>` would
+            // pick up stray tokens like `public` and emit phantom declarator symbols.
+            // Multi-declarator forms like `public int A, B;` already flow through the
+            // `hasCommaInReturnType` branch in TryExpandCSharpFieldDeclaratorList, so
+            // returning empty here only disables the buggy `;`-separated path.
+            // Closes #400.
+            // `;` で終わった plain-field マッチは、それ自体で宣言が完結しており、同一行に
+            // 続く内容（例: 同一行 class 本体内の 2 つ目の `public int B;`）は別の文。
+            // ここで tail をスキャンすると `public` のような周辺トークンが declarator 名
+            // として拾われ、phantom シンボルになる。`public int A, B;` のような多重
+            // declarator は TryExpandCSharpFieldDeclaratorList の `hasCommaInReturnType`
+            // 経路で既に処理されるため、このガードは `;` 区切り経路の誤検出だけを
+            // 無効化する。Closes #400.
+            return result;
         }
 
         while (i < tail.Length)
@@ -8517,16 +8652,61 @@ public static class SymbolExtractor
         return true;
     }
 
-    private static bool[] BuildCSharpTypeBodyScope(string[] structuralLines)
+    /// <summary>
+    /// Column-aware record of the C# type-body scope on each line. Captures the state
+    /// at the start of the line plus every same-line `{` / `}` transition, so a plain-field
+    /// candidate at any column can be gated against the scope that actually applies there.
+    /// Closes #400.
+    /// 各行の C# 型本体スコープを列位置まで含めて保持する。行頭の状態と、同一行内で
+    /// 発生する `{` / `}` による遷移を記録することで、任意の列にある field 候補を
+    /// その位置で実際に効いているスコープで判定できるようにする。Closes #400.
+    /// </summary>
+    private sealed class CSharpTypeBodyScope
     {
-        var insideTypeBody = new bool[structuralLines.Length];
+        private readonly bool[] _lineStartInsideTypeBody;
+        private readonly List<(int Column, bool IsTypeBody)>?[] _transitions;
+
+        public CSharpTypeBodyScope(bool[] lineStartInsideTypeBody, List<(int Column, bool IsTypeBody)>?[] transitions)
+        {
+            _lineStartInsideTypeBody = lineStartInsideTypeBody;
+            _transitions = transitions;
+        }
+
+        /// <summary>
+        /// Returns whether the given (lineIndex, column) position is directly inside a type body.
+        /// `{` / `}` at column X flips the state starting at column X+1, so a candidate whose
+        /// match starts at column C sees every transition with `transitionColumn &lt; C`.
+        /// 指定の (lineIndex, column) が型本体の直下にあるかを返す。列 X の `{` / `}` は
+        /// 列 X+1 以降に状態を反映するため、列 C から始まる候補は
+        /// `transitionColumn &lt; C` を満たす遷移だけを適用する。
+        /// </summary>
+        public bool IsInsideTypeBodyAt(int lineIndex, int column)
+        {
+            var state = _lineStartInsideTypeBody[lineIndex];
+            var transitions = _transitions[lineIndex];
+            if (transitions == null)
+                return state;
+            foreach (var (col, isTypeBody) in transitions)
+            {
+                if (col >= column)
+                    break;
+                state = isTypeBody;
+            }
+            return state;
+        }
+    }
+
+    private static CSharpTypeBodyScope BuildCSharpTypeBodyScope(string[] structuralLines)
+    {
+        var lineStartInsideTypeBody = new bool[structuralLines.Length];
+        var transitions = new List<(int Column, bool IsTypeBody)>?[structuralLines.Length];
         var scopeStack = new Stack<bool>();
         scopeStack.Push(false);
         var declBuffer = new StringBuilder();
 
         for (int lineIndex = 0; lineIndex < structuralLines.Length; lineIndex++)
         {
-            insideTypeBody[lineIndex] = scopeStack.Peek();
+            lineStartInsideTypeBody[lineIndex] = scopeStack.Peek();
 
             var line = structuralLines[lineIndex];
             for (int cursor = 0; cursor < line.Length; cursor++)
@@ -8536,12 +8716,14 @@ public static class SymbolExtractor
                 {
                     var isTypeBody = CSharpTypeBodyDeclarationMarker.IsMatch(declBuffer.ToString());
                     scopeStack.Push(isTypeBody);
+                    (transitions[lineIndex] ??= new List<(int, bool)>()).Add((cursor, isTypeBody));
                     declBuffer.Clear();
                 }
                 else if (ch == '}')
                 {
                     if (scopeStack.Count > 1)
                         scopeStack.Pop();
+                    (transitions[lineIndex] ??= new List<(int, bool)>()).Add((cursor, scopeStack.Peek()));
                     declBuffer.Clear();
                 }
                 else if (ch == ';')
@@ -8555,7 +8737,7 @@ public static class SymbolExtractor
             }
         }
 
-        return insideTypeBody;
+        return new CSharpTypeBodyScope(lineStartInsideTypeBody, transitions);
     }
 
     private static bool[] FindCSharpSwitchExpressionLines(string[] structuralLines)
