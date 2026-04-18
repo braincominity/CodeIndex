@@ -467,6 +467,31 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void ResolveVersion_TunnelForbiddenLatestLookup_PrintsProxyDenyGuidance()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            curl() {
+                printf 'curl: (56) CONNECT tunnel failed, response 403\n' >&2
+                return 56
+            }
+
+            resolve_version ""
+            """);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Fetching latest release version", stdout);
+        Assert.Contains("CONNECT tunnel failed with HTTP 403 while reaching GitHub API", stderr);
+        Assert.Contains("curl exit 56", stderr);
+        Assert.Contains("route substitution alone will not fix it", stderr);
+        Assert.Contains("allow-list at least one required API or artifact host path", stderr);
+        Assert.DoesNotContain("Network error reaching GitHub API while fetching", stderr);
+    }
+
+    [Fact]
     public void DownloadAndInstall_ForbiddenGitHubAssetDownload_PrintsGitHubAndAllowListHints()
     {
         if (OperatingSystem.IsWindows())
@@ -531,6 +556,41 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("GitHub release host", stderr);
         Assert.Contains("GitHub may be blocking or rate-limiting this route.", stderr);
         Assert.Contains("allow-list at least one artifact host path", stderr);
+    }
+
+    [Fact]
+    public void DownloadAndInstall_TunnelForbiddenAssetDownload_PrintsProxyDenyGuidance()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "tunnel_forbidden_asset_target");
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            VERSION="v1.2.3"
+            OS_NAME="linux"
+            ARCH_NAME="x64"
+            RID="linux-x64"
+
+            curl() {
+                printf 'curl: (56) CONNECT tunnel failed, response 403\n' >&2
+                return 56
+            }
+
+            download_and_install
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            });
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("CONNECT tunnel failed with HTTP 403 while reaching GitHub release host", stderr);
+        Assert.Contains("curl exit 56", stderr);
+        Assert.Contains("route substitution alone will not fix it", stderr);
+        Assert.Contains("allow-list at least one required API or artifact host path", stderr);
+        Assert.DoesNotContain("Network error reaching GitHub release host while fetching", stderr);
     }
 
     [Fact]

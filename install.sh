@@ -202,12 +202,31 @@ curl_http_get() {
     local output_path="$2"
     local source_label="${3:-remote host}"
     local http_code
+    local curl_stderr
 
-    if http_code="$(run_curl_with_optional_loopback_bypass "$url" -sSL -o "$output_path" -w '%{http_code}' "$url")"; then
+    if ! curl_stderr="$(mktemp)"; then
+        report_error "Failed to create temporary curl stderr capture while fetching ${source_label} at $url."
+        return 1
+    fi
+
+    if http_code="$(run_curl_with_optional_loopback_bypass "$url" -sSL -o "$output_path" -w '%{http_code}' "$url" 2>"$curl_stderr")"; then
+        rm -f "$curl_stderr"
         printf '%s' "$http_code"
         return 0
     else
         local curl_status=$?
+        local stderr_text=""
+        if [ -f "$curl_stderr" ]; then
+            stderr_text="$(cat "$curl_stderr")"
+            rm -f "$curl_stderr"
+        fi
+
+        if [ "$curl_status" -eq 56 ] && printf '%s' "$stderr_text" | grep -qi "CONNECT tunnel failed, response 403"; then
+            report_error "CONNECT tunnel failed with HTTP 403 while reaching ${source_label} at $url (curl exit 56). This deny is happening in an upstream proxy/egress policy before TLS."
+            report_error "If every HTTPS endpoint fails with 'CONNECT tunnel failed, response 403', route substitution alone will not fix it."
+            report_error "Ask your network administrator to allow-list at least one required API or artifact host path."
+            return 1
+        fi
 
         case "$curl_status" in
             6|7|28|35|52|56)
