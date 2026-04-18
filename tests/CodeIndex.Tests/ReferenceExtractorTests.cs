@@ -426,6 +426,67 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpInterpolatedAndVerbatimStrings_Issue264_Repro_CapturesHoleCallsAndSuppressesPhantoms()
+    {
+        // Regression for issue #264 exact repro: single-line $"..." interpolated
+        // strings, multi-line $@"..." AND the alternate @$"..." verbatim-interpolated
+        // ordering, and non-interpolated @"..." verbatim strings must all be handled
+        // correctly: interpolation-hole call sites are captured (for both $@" and @$"
+        // orderings, which StructuralLineMasker handles via dedicated branches) while
+        // pure verbatim bodies never leak phantom references.
+        // issue #264 repro 回帰: 単行 $"..."、複数行 $@"..." と代替順序 @$"..." の
+        // 双方の補間ホール内の呼び出しが捕捉され、非補間 @"..." 本体からは phantom
+        // 参照を漏らさないこと。
+        const string content = """"
+            namespace Demo;
+            public class Helper
+            {
+                public static string GetName() => "bob";
+                public static int    GetAge()  => 42;
+                public static string Format(string s) => s;
+            }
+            public class Caller
+            {
+                public void Work()
+                {
+                    var s1 = $"Hello {Helper.GetName()}";
+                    var s2 = $"Age: {Helper.GetAge()} years";
+                    var s3 = $"Nested {Helper.Format(Helper.GetName())}";
+                    var s4 = $@"Multi
+            line {Helper.GetName()} text";
+                    var s6 = @$"Alt
+            order {Helper.GetName()} {Helper.GetAge()} end";
+                    var s5 = Helper.GetName();
+                    var sql = @"SELECT PhantomCall() FROM PhantomTable()
+            MoreFake() lines";
+                }
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var getNameCalls = references
+            .Where(r => r.SymbolName == "GetName" && r.ReferenceKind == "call")
+            .ToList();
+        Assert.Equal(5, getNameCalls.Count);
+        Assert.All(getNameCalls, r => Assert.Equal("Work", r.ContainerName));
+
+        var getAgeCalls = references
+            .Where(r => r.SymbolName == "GetAge" && r.ReferenceKind == "call")
+            .ToList();
+        Assert.Equal(2, getAgeCalls.Count);
+        Assert.All(getAgeCalls, r => Assert.Equal("Work", r.ContainerName));
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Format" && r.ReferenceKind == "call" && r.ContainerName == "Work");
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "PhantomCall");
+        Assert.DoesNotContain(references, r => r.SymbolName == "PhantomTable");
+        Assert.DoesNotContain(references, r => r.SymbolName == "MoreFake");
+    }
+
+    [Fact]
     public void Extract_CsharpMultiLineRawString_IssueRepro_DoesNotLeakPhantomCallReferences()
     {
         // Regression for issue #288 exact repro: C# 11 raw strings, interpolated raw
