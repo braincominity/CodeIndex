@@ -5221,4 +5221,125 @@ public class DbReaderTests : IDisposable
         Assert.Contains("target", result.Snippet);
         Assert.True(result.Snippet.Length <= 96);
     }
+
+    // Issue #203 regression: --since thresholds with a time-of-day component used to silently
+    // return zero rows because `@since` was bound via ToString("O") (yyyy-MM-ddTHH:mm:ss.fffffffZ)
+    // while files.modified is stored by Microsoft.Data.Sqlite as "yyyy-MM-dd HH:mm:ss.FFFFFFF"
+    // (space separator, no T, no Z). SQLite compares TEXT lexicographically, and "T" (0x54) is
+    // greater than " " (0x20) at position 10, so `f.modified >= @since` was always false for
+    // T-formatted thresholds regardless of actual temporal ordering. These tests bind DateTimes
+    // straight through AddWithValue so both sides share the same serialization.
+    // Issue #203 回帰: --since に時刻成分を渡すと無条件に0件だったバグの再発防止。
+    // `@since` は ToString("O") で T 区切り + Z 付きに整形されていた一方、`files.modified` は
+    // Microsoft.Data.Sqlite の既定 "yyyy-MM-dd HH:mm:ss.FFFFFFF"（空白区切り、T や Z なし）で
+    // 保存されており、位置10の文字比較（スペース 0x20 vs T 0x54）で必ず保存値 < @since に
+    // なっていた。DateTime をそのままバインドすれば書き込み側と完全に同じ文字列になる。
+
+    [Fact]
+    public void ListFiles_WithTimeOfDaySince_IncludesNewerFiles()
+    {
+        InsertIndexedFile(
+            "src/since203_new.py",
+            "python",
+            "def new_func():\n    return 1\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/since203_old.py",
+            "python",
+            "def old_func():\n    return 0\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        // Threshold 1h before the newer file; the newer file must be included.
+        // より新しいファイルの1時間前を閾値にした場合、その新しいファイルが含まれるはず。
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+        var results = _reader.ListFiles(
+            pathPatterns: new[] { "src/since203_" },
+            since: since);
+
+        Assert.Contains(results, r => r.Path == "src/since203_new.py");
+        Assert.DoesNotContain(results, r => r.Path == "src/since203_old.py");
+    }
+
+    [Fact]
+    public void CountListFiles_WithTimeOfDaySince_CountsOnlyNewerFiles()
+    {
+        InsertIndexedFile(
+            "src/count203_new.py",
+            "python",
+            "def new_func():\n    return 1\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/count203_old.py",
+            "python",
+            "def old_func():\n    return 0\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+        var summary = _reader.CountListFiles(
+            pathPatterns: new[] { "src/count203_" },
+            since: since);
+
+        Assert.Equal(1, summary.Count);
+    }
+
+    [Fact]
+    public void SearchSymbols_WithTimeOfDaySince_IncludesNewerFiles()
+    {
+        InsertIndexedFile(
+            "src/sym_new.py",
+            "python",
+            "def sym_only_new():\n    return 1\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/sym_old.py",
+            "python",
+            "def sym_only_old():\n    return 0\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+
+        var newHits = _reader.SearchSymbols("sym_only_new", since: since);
+        Assert.Single(newHits, s => s.Path == "src/sym_new.py");
+
+        var oldHits = _reader.SearchSymbols("sym_only_old", since: since);
+        Assert.Empty(oldHits);
+    }
+
+    [Fact]
+    public void Search_WithTimeOfDaySince_IncludesNewerFiles()
+    {
+        InsertIndexedFile(
+            "src/search_new.py",
+            "python",
+            "def search_only_new():\n    return 'needle_203'\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/search_old.py",
+            "python",
+            "def search_only_old():\n    return 'needle_203'\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+        var results = _reader.Search("needle_203", since: since);
+
+        Assert.Contains(results, r => r.Path == "src/search_new.py");
+        Assert.DoesNotContain(results, r => r.Path == "src/search_old.py");
+    }
+
+    [Fact]
+    public void ListFiles_WithTimeOfDaySince_ExcludesFilesBeforeThreshold()
+    {
+        InsertIndexedFile(
+            "src/excl_only.py",
+            "python",
+            "def excl():\n    return 1\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+
+        // Threshold 1h after the file; must exclude everything.
+        // ファイルより1時間後を閾値にした場合は除外されるはず。
+        var since = new DateTime(2025, 6, 20, 23, 0, 0, DateTimeKind.Utc);
+        var results = _reader.ListFiles(pathPatterns: new[] { "src/excl_only.py" }, since: since);
+
+        Assert.Empty(results);
+    }
 }
