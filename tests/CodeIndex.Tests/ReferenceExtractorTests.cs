@@ -1613,6 +1613,46 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonNestedTripleFStringInnerHoleTripleQuotedString_PreservesInnerCall()
+    {
+        // Regression for issue #291 follow-up: the inner hole of a nested triple
+        // f-string (outer f""" → its hole → nested f""" → its hole) can itself
+        // contain a triple-quoted string `'''...'''` whose body includes `}`.
+        // Previously the inner-hole scanner treated the first two `'` characters
+        // as an empty single-line string, left the third `'` as stray, and then
+        // consumed the `}` on the next line as the inner hole closer — erasing
+        // the real call that followed on the line after the triple closes.
+        // issue #291 続編: ネスト三重 f-string の内側ホール（外側 f""" → hole →
+        // ネスト f""" → hole）に `'''...'''` が現れ、本体に `}` を含むケース。
+        // 以前は先頭 2 つの `'` を空の単行文字列として処理してしまい、3 つ目の
+        // `'` が取り残され、翌行の `}` を内側ホールの閉じと誤認して三重閉じ
+        // 直後の実呼び出しを消していた。
+        const string content = "def caller():\n"
+            + "    msg = f\"\"\"\n"
+            + "    {format(f\"\"\"{len('''\n"
+            + "}\n"
+            + "''') + real_call()}\"\"\")}\n"
+            + "    \"\"\"\n"
+            + "    tail()\n"
+            + "\n"
+            + "def format(_):\n"
+            + "    return \"\"\n"
+            + "\n"
+            + "def real_call():\n"
+            + "    pass\n"
+            + "\n"
+            + "def tail():\n"
+            + "    pass\n";
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "real_call" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "format" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "tail" && r.ContainerName == "caller");
+    }
+
+    [Fact]
     public void Extract_PythonFStringHole_NestedSingleLineFStringPreservesInnerCall()
     {
         // Regression for issue #291 follow-up: a nested single-line f-string inside an

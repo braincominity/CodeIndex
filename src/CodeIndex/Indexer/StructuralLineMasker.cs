@@ -440,6 +440,16 @@ internal static class StructuralLineMasker
         // -1 when outside the nested triple's own hole, >=0 when inside it (tracks `{` depth).
         // ネスト triple 自身のホール外は -1、ホール内は 0 以上（`{` の深さを追跡）。
         int nestedTripleHoleDepth = -1;
+        // Triple-quoted string that appears *inside* the nested f-string's own
+        // hole. Persists across lines so multi-line triples buried three levels
+        // deep (outer f-string hole → nested triple f-string → its inner hole)
+        // do not leak `}` into the inner hole's brace depth.
+        // ネスト f-string の内側ホールに現れる三重引用符文字列の状態。行を
+        // またいで保持し、3 段深いネスト（外側ホール → ネスト三重 f-string →
+        // その内側ホール）に置かれた複数行三重が内側ホールの brace 数え上げに
+        // `}` を漏らさないようにする。
+        char innerHoleTripleChar = '\0';
+        bool innerHoleTripleRaw = false;
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -484,11 +494,61 @@ internal static class StructuralLineMasker
                             if (nestedTripleIsFString && nestedTripleHoleDepth >= 0)
                             {
                                 // Inside the nested f-string's own hole: preserve chars.
-                                // Skip nested single-line strings and Python `#` comments so
-                                // their braces do not mis-close the hole.
+                                // Skip nested single-line / triple-quoted strings and Python
+                                // `#` comments so their braces do not mis-close the hole.
                                 // ネスト f-string 内部のホール: 文字を残して call edge を
-                                // 抽出に見せる。単行文字列と `#` コメントはスキップし、
-                                // 内部の `{` / `}` がホール深度に影響しないようにする。
+                                // 抽出に見せる。単行文字列・三重引用符文字列・`#` コメントは
+                                // スキップし、内部の `{` / `}` がホール深度に影響しないようにする。
+                                if (innerHoleTripleChar != '\0')
+                                {
+                                    // Currently inside a triple-quoted string that opened in
+                                    // the inner hole. Blank its body so downstream extraction
+                                    // does not see `}` / `'` / `"` as real tokens, and close
+                                    // on the matching triple.
+                                    // 内側ホール内で開いた三重引用符文字列を走査中。下流が
+                                    // `}` / `'` / `"` を実トークンとして読まないよう本体を
+                                    // 空白化し、閉じ三重で抜ける。
+                                    if (!innerHoleTripleRaw && line[pos] == '\\' && pos + 1 < line.Length)
+                                    {
+                                        ReplaceWithSpaces(masked, pos, 2);
+                                        pos += 2;
+                                        continue;
+                                    }
+
+                                    if (pos + 2 < line.Length
+                                        && line[pos] == innerHoleTripleChar
+                                        && line[pos + 1] == innerHoleTripleChar
+                                        && line[pos + 2] == innerHoleTripleChar)
+                                    {
+                                        ReplaceWithSpaces(masked, pos, 3);
+                                        pos += 3;
+                                        innerHoleTripleChar = '\0';
+                                        innerHoleTripleRaw = false;
+                                        continue;
+                                    }
+
+                                    masked[pos] = ' ';
+                                    pos++;
+                                    continue;
+                                }
+
+                                if (TryOpenPythonTripleString(line, pos, out var innerPrefixLen, out var innerQuote, out var innerRawFlag, out _))
+                                {
+                                    // A triple-quoted string starts inside the inner hole.
+                                    // Its body is opaque; the closing triple restores inner-
+                                    // hole scanning. SkipPythonSingleLineString can only
+                                    // find a same-line match, so detect triples up front.
+                                    // 内側ホール内で三重引用符文字列が開始。本体は opaque と
+                                    // 見なし、閉じ三重で内側ホール走査に戻る。
+                                    // SkipPythonSingleLineString は同一行の対を探すだけなので、
+                                    // 三重を先に検出する必要がある。
+                                    ReplaceWithSpaces(masked, pos, innerPrefixLen + 3);
+                                    pos += innerPrefixLen + 3;
+                                    innerHoleTripleChar = innerQuote;
+                                    innerHoleTripleRaw = innerRawFlag;
+                                    continue;
+                                }
+
                                 if (line[pos] == '\'' || line[pos] == '"')
                                 {
                                     pos = SkipPythonSingleLineString(line, pos);
