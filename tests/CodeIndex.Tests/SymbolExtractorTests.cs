@@ -3677,6 +3677,90 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_MultilineEnumMemberSpan_NormalizesCrlfToLf()
+    {
+        // Enum members whose value expression or attribute block crosses physical lines go
+        // through GetSourceSpanText via TryAddCSharpEnumMemberFromSpan. Content is split on
+        // '\n', so CRLF sources leave '\r' on every non-final line and the concatenated
+        // signature would contain '\r\n' between physical lines on Windows. Pin this to '\n'
+        // so signature equality is OS-independent (#405 follow-up to #382).
+        // enum メンバーの値式や属性ブロックが行を跨ぐ場合、TryAddCSharpEnumMemberFromSpan
+        // 経由で GetSourceSpanText に入る。content は '\n' で分割しているため、CRLF ソース
+        // では各行末に '\r' が残り、Windows では signature に '\r\n' が混入していた。OS
+        // 差分で signature が変わらないよう '\n' に揃える（#382 に続く #405 対応）。
+        var content =
+            "public enum Modes\r\n" +
+            "{\r\n" +
+            "    Red = 1 |\r\n" +
+            "        2,\r\n" +
+            "    Blue = 3,\r\n" +
+            "}\r\n";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var red = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "Red"));
+        Assert.NotNull(red.Signature);
+        Assert.DoesNotContain('\r', red.Signature);
+        Assert.Contains("\n", red.Signature);
+    }
+
+    [Fact]
+    public void Extract_JavaScript_WrappedBareMethodHeader_NormalizesCrlfToLf()
+    {
+        // JS/TS class-body methods whose header wraps across physical lines go through
+        // TryCaptureJavaScriptTypeScriptMethodHeader, which appends each line with a '\n'
+        // prefix. Without CRLF normalization, Windows sources (autocrlf=true, VS saves)
+        // produce a Signature carrying '\r\n' between lines. Pin to '\n' for OS-independent
+        // signature equality (#405 follow-up to #382).
+        // JS/TS の class body method で header が行を跨ぐ場合、
+        // TryCaptureJavaScriptTypeScriptMethodHeader が各行を '\n' 接頭辞で連結する。
+        // CRLF 正規化がないと Windows ソース（autocrlf=true、VS 保存など）で Signature に
+        // '\r\n' が混入していた。OS 差分で一致判定が崩れないよう '\n' に揃える
+        // （#382 に続く #405 対応）。
+        var content =
+            "class Foo {\r\n" +
+            "    myMethod(\r\n" +
+            "        a,\r\n" +
+            "        b,\r\n" +
+            "    ) {\r\n" +
+            "    }\r\n" +
+            "}\r\n";
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        var method = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "myMethod"));
+        Assert.NotNull(method.Signature);
+        Assert.DoesNotContain('\r', method.Signature);
+        Assert.Contains("\n", method.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultilineRecordPrimaryComponents_SurviveCrlfInput()
+    {
+        // Record primary constructors with a wrapped component list feed
+        // CollectRecordDeclarationText, which appends each physical line with a '\n' prefix.
+        // Without CRLF normalization, the collected declaration text carries '\r' in the
+        // middle, which — while parsing still scans only for structural characters — breaks
+        // text-equality assumptions downstream. Pin the property extraction to succeed on
+        // CRLF input so the fix stays tied to observable behavior (#405 follow-up to #382).
+        // record の primary constructor で component リストが行を跨ぐ場合、
+        // CollectRecordDeclarationText が各行を '\n' 接頭辞で連結する。CRLF 正規化がないと
+        // collected text に '\r' が混じり、parsing 自体は構造文字しか見ないものの、下流の
+        // 文字列比較前提が崩れる。CRLF 入力でも property 抽出が壊れないことを固定し、修正
+        // を観測可能な挙動に紐づける（#382 に続く #405 対応）。
+        var content =
+            "namespace App;\r\n" +
+            "\r\n" +
+            "public record Point(\r\n" +
+            "    int X,\r\n" +
+            "    int Y);\r\n";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var x = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "X" && s.ContainerName == "Point"));
+        Assert.Equal("int", x.ReturnType);
+        var y = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Y" && s.ContainerName == "Point"));
+        Assert.Equal("int", y.ReturnType);
+    }
+
+    [Fact]
     public void Extract_CSharp_WrappedHeaderWithInterpolationHoleContainingNestedVerbatim_PreservesInnerLiteral()
     {
         // An interpolation hole in an outer `$"..."` must be classified as Code so the
