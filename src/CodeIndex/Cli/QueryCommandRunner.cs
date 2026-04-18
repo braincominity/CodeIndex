@@ -65,14 +65,14 @@ public static class QueryCommandRunner
     private const string FindUsage = "Usage: cdidx find <query> --path <pattern> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]\n       cdidx find --query <query> --path <pattern> [...]\n       cdidx find [options] -- <query>";
     public static int RunSearch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var previewOptionError = ValidatePreviewOptions("search", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        var previewOptionError = ValidatePreviewOptions("search", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
         if (previewOptionError != null)
         {
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (TryWriteUnsupportedOptionError("search", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--snippet-lines", "--fts", "--count", "--since", "--no-dedup", "--exact", "--exact-substring", "--exact-name"]))
+        if (TryWriteUnsupportedOptionError("search", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--snippet-lines", "--max-line-width", "--fts", "--count", "--since", "--no-dedup", "--exact", "--exact-substring", "--exact-name"]))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "search"))
             return CommandExitCodes.UsageError;
@@ -127,14 +127,14 @@ public static class QueryCommandRunner
             if (options.Json)
             {
                 foreach (var r in results)
-                    Console.WriteLine(JsonSerializer.Serialize(SearchSnippetFormatter.ToCompactResult(r, options.Query, options.SnippetLines, exact), jsonOptions));
+                    Console.WriteLine(JsonSerializer.Serialize(SearchSnippetFormatter.ToCompactResult(r, options.Query, options.SnippetLines, exact, options.MaxLineWidth), jsonOptions));
             }
             else
             {
                 foreach (var r in results)
                 {
                     Console.WriteLine($"{r.Path}:{r.StartLine}-{r.EndLine}");
-                    var snippetLines = SearchSnippetFormatter.Format(r.Content, options.Query, options.SnippetLines, exact);
+                    var snippetLines = SearchSnippetFormatter.Format(r.Content, options.Query, options.SnippetLines, exact, options.MaxLineWidth);
                     foreach (var line in snippetLines)
                         Console.WriteLine($"  {line}");
                     Console.WriteLine();
@@ -230,6 +230,7 @@ public static class QueryCommandRunner
                     Console.Error.WriteLine("No definitions found.");
                     WriteExactZeroHint(exactZeroHint);
                     WriteKindHint(options.Kind, reader);
+                    WriteLangHint(options.Lang, reader);
                     WriteZeroResultHints(options, reader, "Try 'search' for full-text matches instead of symbol lookup.");
                 }
                 return CommandExitCodes.NotFound;
@@ -705,6 +706,7 @@ public static class QueryCommandRunner
                     Console.Error.WriteLine("No symbols found.");
                     WriteExactZeroHint(exactZeroHint);
                     WriteKindHint(options.Kind, reader);
+                    WriteLangHint(options.Lang, reader);
                     WriteZeroResultHints(options, reader);
                 }
                 return CommandExitCodes.NotFound;
@@ -1036,14 +1038,44 @@ public static class QueryCommandRunner
         var queryCount = 0;
         for (int i = 0; i < args.Length; i++)
         {
-            var arg = args[i];
+            var rawArg = args[i];
+            // Accept both `--opt value` and `--opt=value` so ValidateFindArgs and ParseArgs
+            // agree on inline-`=` shape; splitting the token in PrepareFindArgs would
+            // destroy legitimate inline values that start with `--` (e.g. `--path=--literal.txt`).
+            // ParseArgs と同じく `--opt value` と `--opt=value` の両形を受け入れる。
+            // PrepareFindArgs でトークンを分解すると `--path=--literal.txt` のような `--` 始まりの合法な
+            // inline 値が壊れるため、validation 側で inline 値を解決する。
+            string arg;
+            string? inlineValue;
+            if (TrySplitInlineOptionValue(rawArg, out var inlineOptionName))
+            {
+                arg = inlineOptionName!;
+                inlineValue = rawArg[(inlineOptionName!.Length + 1)..];
+            }
+            else
+            {
+                arg = rawArg;
+                inlineValue = null;
+            }
+
             if (allowedWithValues.Contains(arg))
             {
-                if (i + 1 >= args.Length)
-                    return $"Error: {arg} requires a value";
-                var value = args[i + 1];
+                string value;
+                if (inlineValue != null)
+                {
+                    value = inlineValue;
+                }
+                else
+                {
+                    if (i + 1 >= args.Length)
+                        return $"Error: {arg} requires a value";
+                    value = args[i + 1];
+                    i++;
+                }
                 if ((arg == "--limit" || arg == "--top" || arg == "--max-line-width") && (!int.TryParse(value, out var limit) || limit <= 0))
                     return $"Error: {arg} requires a positive integer, got '{value}'";
+                if (arg == "--max-line-width" && int.TryParse(value, out var widthCeil) && widthCeil > LineWidthFormatter.MaxAllowedLineWidth)
+                    return $"Error: --max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth} (got '{value}').";
                 if ((arg == "--before" || arg == "--after") && (!int.TryParse(value, out var context) || context < 0))
                     return $"Error: {arg} requires a non-negative integer, got '{value}'";
                 if (arg == "--query")
@@ -1052,15 +1084,14 @@ public static class QueryCommandRunner
                     if (queryCount > 1)
                         return "Error: find accepts exactly one query argument";
                 }
-                i++;
                 continue;
             }
 
             if (allowedFlags.Contains(arg))
                 continue;
 
-            if (arg.StartsWith('-'))
-                return $"Error: unsupported option for find: {arg}";
+            if (rawArg.StartsWith('-'))
+                return $"Error: unsupported option for find: {rawArg}";
 
             queryCount++;
             if (queryCount > 1)
@@ -1279,7 +1310,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
 
-        var filePath = cmdArgs[0].Replace('\\', '/');
+        var filePath = FileIndexer.NormalizePathSeparators(cmdArgs[0]);
         var previewOptionError = ValidatePreviewOptions("outline", cmdArgs[1..], allowMaxLineWidth: false, allowFocusOptions: false);
         if (previewOptionError != null)
         {
@@ -2250,6 +2281,11 @@ public static class QueryCommandRunner
         }
         else
         {
+            // Fixed-width Extensions column for short lists; spill long lists onto a continuation
+            // line so the Symbols / Graph columns are never swallowed by a wide extension string.
+            // 拡張子が短い場合は固定幅テーブル、長い場合は継続行に退避させることで、
+            // Symbols / Graph 列が拡張子文字列に埋もれないようにする。
+            const int ExtensionColumnWidth = 36;
             Console.WriteLine($"{"Language",-14} {"Extensions",-36} {"Symbols",-9} {"Graph",-7}");
             Console.WriteLine(new string('-', 66));
             foreach (var (lang, info) in sorted)
@@ -2257,7 +2293,15 @@ public static class QueryCommandRunner
                 var exts = string.Join(" ", info.Extensions.OrderBy(e => e));
                 var sym = info.Symbols ? "yes" : "-";
                 var graph = info.Graph ? "yes" : "-";
-                Console.WriteLine($"{lang,-14} {exts,-36} {sym,-9} {graph,-7}");
+                if (exts.Length <= ExtensionColumnWidth)
+                {
+                    Console.WriteLine($"{lang,-14} {exts,-36} {sym,-9} {graph,-7}");
+                }
+                else
+                {
+                    Console.WriteLine($"{lang,-14} {"",-36} {sym,-9} {graph,-7}");
+                    Console.WriteLine($"  Extensions: {exts}");
+                }
             }
             Console.Error.WriteLine($"\n({sorted.Count} languages)");
         }
@@ -2335,7 +2379,11 @@ public static class QueryCommandRunner
                     break;
                 case "--lang":
                     if (TryReadStringOptionValue(args, ref i, "--lang", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var langValue, out var langError))
-                        lang = langValue;
+                        // Normalize to lowercase so '--lang Python' == '--lang python' — every LangMap key and
+                        // every DB 'files.lang' row is lowercase, so the SQL filter and WriteLangHint match.
+                        // '--lang Python' と '--lang python' を同一視するため lowercase 正規化する。LangMap の key と
+                        // DB の `files.lang` はすべて lowercase なので、SQL filter と WriteLangHint が一致する。
+                        lang = langValue?.ToLowerInvariant();
                     else
                         AddParseError(langError!);
                     break;
@@ -2353,7 +2401,11 @@ public static class QueryCommandRunner
                     break;
                 case "--kind":
                     if (TryReadStringOptionValue(args, ref i, "--kind", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var kindValue, out var kindError))
-                        kind = kindValue;
+                        // Normalize to lowercase so '--kind FUNCTION' == '--kind function'. AllValidKinds entries
+                        // and every DB 'symbols.kind' row are lowercase.
+                        // '--kind FUNCTION' と '--kind function' を同一視するため lowercase 正規化する。AllValidKinds
+                        // と DB の `symbols.kind` はすべて lowercase。
+                        kind = kindValue?.ToLowerInvariant();
                     else
                         AddParseError(kindError!);
                     break;
@@ -2487,7 +2539,12 @@ public static class QueryCommandRunner
                     if (!TryReadRawOptionValue(args, ref i, "--max-line-width", inlineValue, out var maxLineWidthValue, out var missingMaxLineWidthError))
                         AddParseError(missingMaxLineWidthError!);
                     else if (TryParsePositiveInt(maxLineWidthValue!, "--max-line-width", out var parsedMaxLineWidth, out var maxLineWidthError))
-                        maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(parsedMaxLineWidth);
+                    {
+                        if (parsedMaxLineWidth > LineWidthFormatter.MaxAllowedLineWidth)
+                            AddParseError($"--max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth} (got '{maxLineWidthValue}').");
+                        else
+                            maxLineWidth = parsedMaxLineWidth;
+                    }
                     else
                         AddParseError(maxLineWidthError!);
                     break;

@@ -475,6 +475,43 @@ public class QueryCommandRunnerTests
         }
     }
 
+    // Pins `find --path=<value>` with a value that starts with `--`. ParseArgs supports
+    // this shape via inline `=`, but ValidateFindArgs previously saw only the bare token
+    // and `PrepareFindArgs` briefly tried to normalize the inline form by splitting it into
+    // two tokens — that split destroyed inline `--`-prefixed values. Locks the contract
+    // that `find` honors the CLI hint (`pass it as --path=<value>`) just like the other
+    // query commands.
+    // `find --path=<value>` で value が `--` で始まる合法な inline 値を壊さないよう固定する
+    // 回帰テスト。`PrepareFindArgs` 側で inline を分解すると `--path=--literal.txt` が
+    // `--path`/`--literal.txt` に割れ、`ParseArgs` が値を option と誤認して失敗していた。
+    [Fact]
+    public void RunFind_PathFilterAcceptsRecognizedOptionTokenViaInlineValue()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_path_inline_recognized_option");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/--json-dir/Demo.cs",
+                "csharp",
+                "class Demo { void Alpha() {} }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["Alpha", $"--db={dbPath}", "--path=--json-dir", "--count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            Assert.Equal(1, document.RootElement.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("--db", "/tmp/does-not-matter.db")]
     [InlineData("--db=")]
@@ -511,6 +548,99 @@ public class QueryCommandRunnerTests
         Assert.Contains(".mjs", javascript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
         Assert.Contains(".cts", typescript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
         Assert.Contains(".mts", typescript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+    }
+
+    [Fact]
+    public void RunLanguages_Json_SearchOnlyBucketsAdvertiseZeroSymbolAndGraphSupport()
+    {
+        // Search-only languages that intentionally live outside the Python / CSS extractors
+        // (Cython .pyx/.pxd, Sass .sass, Stylus .styl) must advertise
+        // symbol_extraction=false / graph_queries=false so AI clients can tell the difference
+        // between "indexed with symbols" and "indexed for search only".
+        // 意図的に Python / CSS 抽出器の対象外になっている search-only 言語
+        // （Cython の .pyx/.pxd、Sass の .sass、Stylus の .styl）は、
+        // symbol_extraction=false / graph_queries=false で広告しなければならない。
+        // こうしないと、AI クライアントが「シンボル付きインデックス」と「検索のみインデックス」を区別できない。
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var languages = document.RootElement.GetProperty("languages").EnumerateArray()
+            .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
+
+        foreach (var searchOnly in new[] { "cython", "sass", "stylus" })
+        {
+            Assert.True(languages.ContainsKey(searchOnly), $"expected '{searchOnly}' to be listed");
+            var entry = languages[searchOnly];
+            Assert.False(entry.GetProperty("symbol_extraction").GetBoolean(),
+                $"{searchOnly} must advertise symbol_extraction=false");
+            Assert.False(entry.GetProperty("graph_queries").GetBoolean(),
+                $"{searchOnly} must advertise graph_queries=false");
+        }
+
+        // Cython owns .pyx / .pxd exclusively; python keeps .py / .pyi / .pyw and Bazel filenames.
+        // Cython は .pyx / .pxd を専有し、python は .py / .pyi / .pyw と Bazel ファイル名を維持。
+        var cythonExts = languages["cython"].GetProperty("extensions").EnumerateArray()
+            .Select(ext => ext.GetString()).ToList();
+        Assert.Contains(".pyx", cythonExts);
+        Assert.Contains(".pxd", cythonExts);
+
+        var pythonExts = languages["python"].GetProperty("extensions").EnumerateArray()
+            .Select(ext => ext.GetString()).ToList();
+        Assert.DoesNotContain(".pyx", pythonExts);
+        Assert.DoesNotContain(".pxd", pythonExts);
+        Assert.Contains(".py", pythonExts);
+        Assert.Contains(".pyi", pythonExts);
+    }
+
+    [Fact]
+    public void RunLanguages_HumanOutput_WideExtensionListSpillsOntoContinuationLine()
+    {
+        // The human-readable table must not let long extension lists (dockerfile / makefile /
+        // python / ruby / xml) swallow the Symbols / Graph columns. Instead, spill onto a
+        // continuation line so the row is still readable.
+        // 人間向けテーブルは、長い拡張子リスト（dockerfile / makefile / python / ruby / xml）が
+        // Symbols / Graph 列を食い潰さないようにし、継続行へ退避させて可読性を保つこと。
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages([], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Contains("languages)", stderr);
+
+        var lines = stdout.Split('\n').Select(line => line.TrimEnd('\r')).ToArray();
+
+        // Sanity: short rows still fit the fixed-width layout on a single line.
+        // 短い行は従来通り 1 行の固定幅レイアウトに収まる。
+        var csharpLine = lines.Single(line => line.StartsWith("csharp ", StringComparison.Ordinal));
+        Assert.Matches(@"^csharp\s+\.cs\s+\.cshtml\s+\.razor\s+yes\s+yes\s*$", csharpLine);
+
+        // Dockerfile / Makefile / Python / Ruby / XML rows spill extensions to a continuation line.
+        // Dockerfile / Makefile / Python / Ruby / XML 行は拡張子を継続行に退避する。
+        var wideLangs = new[] { "dockerfile", "makefile", "python", "ruby", "xml" };
+        foreach (var wide in wideLangs)
+        {
+            var headerIndex = Array.FindIndex(lines, line => line.StartsWith($"{wide} ", StringComparison.Ordinal));
+            Assert.True(headerIndex >= 0, $"expected row for {wide}");
+            var header = lines[headerIndex];
+            // Header row carries only lang + sym + graph, never the extension list itself.
+            // ヘッダ行には言語名・シンボル・グラフのみが含まれ、拡張子文字列は含まれない。
+            Assert.DoesNotContain("Dockerfile", header);
+            Assert.DoesNotContain("Makefile", header);
+            Assert.DoesNotContain("WORKSPACE", header);
+            Assert.DoesNotContain("Gemfile", header);
+            Assert.DoesNotContain(".csproj", header);
+            var continuation = lines[headerIndex + 1];
+            Assert.StartsWith("  Extensions: ", continuation);
+        }
+
+        // Spot-check: the continuation line for dockerfile contains both the bare filename and the
+        // `<Prefix><suffix>` pseudo-entry added for Issue #189 follow-up.
+        // dockerfile 継続行に完全一致ファイル名と `<Prefix><suffix>` 擬似エントリが両方入る。
+        var dockerIndex = Array.FindIndex(lines, line => line.StartsWith("dockerfile ", StringComparison.Ordinal));
+        var dockerContinuation = lines[dockerIndex + 1];
+        Assert.Contains("Dockerfile ", dockerContinuation);
+        Assert.Contains("Dockerfile.<suffix>", dockerContinuation);
+        Assert.Contains("Containerfile", dockerContinuation);
     }
 
     [Theory]
@@ -704,6 +834,106 @@ public class QueryCommandRunnerTests
             Assert.Contains(expectedErrorFragment, stderr);
             Assert.Contains($"got '{value}'", stderr);
             Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+            Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    // Regression lock for #196 follow-up: CLI `--max-line-width` above the shared ceiling
+    // (LineWidthFormatter.MaxAllowedLineWidth = 4096) must fail closed with UsageError and
+    // empty stdout, matching the MCP `maxLineWidth` contract. Previously the CLI silently
+    // clamped the value via LineWidthFormatter.ClampMaxLineWidth and ran to success, while
+    // MCP rejected the same 4097. Diverging contracts break automation that wires CLI and
+    // MCP together on a fail-close assumption.
+    // #196 のフォローアップ回帰ロック: CLI の `--max-line-width` が共有上限
+    // (LineWidthFormatter.MaxAllowedLineWidth = 4096) を超えた場合、UsageError と空 stdout で
+    // fail-close しなければならず、MCP の `maxLineWidth` 契約と一致させる。以前は
+    // LineWidthFormatter.ClampMaxLineWidth で黙って丸めて成功していたため、MCP は 4097 を拒否する
+    // 一方で CLI は通るという不整合があり、fail-close 前提の自動化を壊していた。
+    [Theory]
+    [InlineData("search", "4097", false)]
+    [InlineData("search", "8192", false)]
+    [InlineData("references", "4097", false)]
+    [InlineData("inspect", "4097", false)]
+    [InlineData("find", "4097", false)]
+    [InlineData("excerpt", "4097", false)]
+    // Inline `--max-line-width=<value>` form: catches the silent-clamp regression on
+    // the `=`-attached path too. `find` historically rejected every inline `=` form at
+    // ValidateFindArgs with `unsupported option for find: --max-line-width=4097`, so
+    // this row also pins the `PrepareFindArgs` inline-`=` normalization.
+    // インライン `--max-line-width=<value>` 形式の回帰ロック。`find` は歴史的に
+    // ValidateFindArgs の段階で inline `=` を全拒否していたため、`PrepareFindArgs` の
+    // inline-`=` 正規化もここで固定する。
+    [InlineData("search", "4097", true)]
+    [InlineData("references", "4097", true)]
+    [InlineData("inspect", "4097", true)]
+    [InlineData("find", "4097", true)]
+    [InlineData("excerpt", "4097", true)]
+    public void QueryEntrypoints_MaxLineWidthAboveCeilingFailClosed_Issue196(string command, string value, bool useInlineEquals)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(
+            $"cdidx_issue196_maxlinewidth_{command}_{value}_{(useInlineEquals ? "inline" : "space")}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Issue196Target.cs",
+                "csharp",
+                """
+                namespace Issue196;
+                public class Issue196Target
+                {
+                    public void Issue196Callee() { }
+                }
+                public class Issue196Caller
+                {
+                    public void Run()
+                    {
+                        var target = new Issue196Target();
+                        target.Issue196Callee();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var excerptDir = Path.Combine(projectRoot, "src");
+            Directory.CreateDirectory(excerptDir);
+            var excerptFilePath = Path.Combine(excerptDir, "Issue196Excerpt.cs");
+            File.WriteAllText(
+                excerptFilePath,
+                "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\n");
+
+            string[] maxLineWidthArgs = useInlineEquals
+                ? [$"--max-line-width={value}"]
+                : ["--max-line-width", value];
+            string[] args = command switch
+            {
+                "search" => ["Issue196", "--db", dbPath, "--json", .. maxLineWidthArgs],
+                "references" => ["Issue196Callee", "--db", dbPath, "--json", .. maxLineWidthArgs],
+                "inspect" => ["Issue196Target", "--db", dbPath, "--json", .. maxLineWidthArgs],
+                "find" => ["Issue196", "--path", excerptFilePath, "--db", dbPath, "--json", .. maxLineWidthArgs],
+                "excerpt" => [excerptFilePath, "--db", dbPath, "--start", "1", "--end", "1", "--json", .. maxLineWidthArgs],
+                _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+            };
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => command switch
+            {
+                "search" => QueryCommandRunner.RunSearch(args, _jsonOptions),
+                "references" => QueryCommandRunner.RunReferences(args, _jsonOptions),
+                "inspect" => QueryCommandRunner.RunInspect(args, _jsonOptions),
+                "find" => QueryCommandRunner.RunFind(args, _jsonOptions),
+                "excerpt" => QueryCommandRunner.RunExcerpt(args, _jsonOptions),
+                _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+            });
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains($"--max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth}", stderr);
+            Assert.Contains($"got '{value}'", stderr);
             Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
         }
         finally
@@ -10860,6 +11090,137 @@ public class QueryCommandRunnerTests
         Assert.Contains("Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.", stderr);
     }
 
+    [Fact]
+    public void ParseArgs_NormalizesLangAndKindToLowercase()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["QueryCommandRunner", "--lang", "Python", "--kind", "FUNCTION"],
+            jsonDefault: false);
+
+        Assert.Equal("python", options.Lang);
+        Assert.Equal("function", options.Kind);
+    }
+
+    [Fact]
+    public void RunSymbols_AcceptsLangPythonCaseInsensitively()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_lang_case");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "a.py", "python", "def hello(): pass\n");
+
+            var (exitCodeUpper, stdoutUpper, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--lang", "Python"],
+                _jsonOptions));
+            var (exitCodeLower, stdoutLower, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--lang", "python"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCodeUpper);
+            Assert.Equal(CommandExitCodes.Success, exitCodeLower);
+            Assert.Contains("hello", stdoutUpper);
+            Assert.Equal(stdoutLower, stdoutUpper);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_AcceptsKindFunctionCaseInsensitively()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_kind_case");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "a.py", "python", "def hello(): pass\n");
+
+            var (exitCodeUpper, stdoutUpper, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--kind", "FUNCTION"],
+                _jsonOptions));
+            var (exitCodeLower, stdoutLower, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--kind", "function"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCodeUpper);
+            Assert.Equal(CommandExitCodes.Success, exitCodeLower);
+            Assert.Contains("hello", stdoutUpper);
+            Assert.Equal(stdoutLower, stdoutUpper);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_EmitsLangHintForUnknownLang()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_lang_hint");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "a.py", "python", "def hello(): pass\n");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--lang", "nonexistent"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Contains("'nonexistent' not found in index. Available: python", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDefinition_EmitsLangHintForUnknownLang()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_lang_hint");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "a.py", "python", "def hello(): pass\n");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["hello", "--db", dbPath, "--lang", "nonexistent"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Contains("'nonexistent' not found in index. Available: python", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDefinition_AcceptsLangPythonCaseInsensitively()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_lang_case");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "a.py", "python", "def hello(): pass\n");
+
+            var (exitCode, stdout, _) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["hello", "--db", dbPath, "--lang", "Python"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("hello", stdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     private static (T Result, string Stdout, string Stderr) CaptureConsole<T>(Func<T> action)
     {
         lock (TestConsoleLock.Gate)
@@ -12248,6 +12609,86 @@ public class QueryCommandRunnerTests
             Assert.Equal("none", json.GetProperty("impact_mode").GetString());
             Assert.Equal(1, json.GetProperty("definition_count").GetInt32());
             Assert.Equal("non_callable_symbol_kind", json.GetProperty("zero_result_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbolsAndReferences_JsTemplateLiteral_SuppressesPhantomsButKeepsInterpolationCalls()
+    {
+        // Issue #291 CLI integration: a multi-line JS template literal must not
+        // surface phantom function/class symbols for code-shaped body text, while
+        // a real call inside a ${...} interpolation hole must still produce a
+        // reference edge via the call-graph pipeline.
+        // issue #291 の CLI 統合: 複数行 JS テンプレートリテラルはコード風本文から
+        // phantom な function/class を発生させず、${...} ホール内の本物の呼び出しは
+        // 参照グラフに edge として残ること。
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_js_template_literal_masking");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.js"),
+                """
+                function caller() {
+                    const src = `
+                function fakeFromTemplate() {}
+                class FakeClassInTemplate {}
+                    ${runTask()} trailing
+                    `;
+                    realCall();
+                }
+
+                function runTask() {}
+                function realCall() {}
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+
+            var (phantomFnExit, _, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["fakeFromTemplate", "--db", dbPath, "--json", "--exact-name", "--lang", "javascript"],
+                _jsonOptions));
+            var (phantomClsExit, _, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["FakeClassInTemplate", "--db", dbPath, "--json", "--exact-name", "--lang", "javascript"],
+                _jsonOptions));
+
+            var (refsExit, refsStdout, refsStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["runTask", "--db", dbPath, "--json", "--exact-name", "--lang", "javascript"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            // Phantom symbols must not exist — both queries should return NotFound.
+            // phantom シンボルは存在してはならない — どちらのクエリも NotFound になること。
+            Assert.Equal(CommandExitCodes.NotFound, phantomFnExit);
+            Assert.Equal(CommandExitCodes.NotFound, phantomClsExit);
+
+            // The real call inside the `${...}` interpolation hole must still be visible.
+            // ${...} 補間ホール内の本物の呼び出しは参照として残っていること。
+            Assert.Equal(CommandExitCodes.Success, refsExit);
+            Assert.Equal(string.Empty, refsStderr);
+            var referenceDocuments = ParseJsonLines(refsStdout);
+            try
+            {
+                Assert.Contains(referenceDocuments, doc =>
+                    doc.RootElement.GetProperty("symbol_name").GetString() == "runTask"
+                    && doc.RootElement.GetProperty("reference_kind").GetString() == "call"
+                    && doc.RootElement.GetProperty("container_name").GetString() == "caller");
+            }
+            finally
+            {
+                foreach (var doc in referenceDocuments)
+                {
+                    doc.Dispose();
+                }
+            }
         }
         finally
         {

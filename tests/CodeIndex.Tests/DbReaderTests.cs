@@ -3948,6 +3948,31 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetExcerptAndOutline_RoundTripPathContainingBackslash()
+    {
+        // #191: POSIX filenames containing '\' must not be silently rewritten to '/'.
+        // The index should store the literal path, and excerpt/outline must find it
+        // when the user supplies the same literal path.
+        // #191: POSIX の '\' を含むファイル名は '/' に書き換えてはいけない。
+        // 保存と検索の両方でリテラルなパスをそのまま使い、excerpt/outline で見つかることを確認する。
+        InsertIndexedFile("back\\slash.py", "python", "def hu(): pass\n");
+
+        var excerpt = _reader.GetExcerpt("back\\slash.py", 1, 1);
+        Assert.NotNull(excerpt);
+        Assert.Equal("back\\slash.py", excerpt!.Path);
+        Assert.Contains("def hu(): pass", excerpt.Content);
+
+        var outline = _reader.GetOutline("back\\slash.py");
+        Assert.NotNull(outline);
+        Assert.Equal("back\\slash.py", outline!.Path);
+
+        // The mangled form must NOT match — otherwise the fix would be a no-op.
+        // 誤った書き換え形では見つからないことを確認する（no-op 化の検出）。
+        Assert.Null(_reader.GetExcerpt("back/slash.py", 1, 1));
+        Assert.Null(_reader.GetOutline("back/slash.py"));
+    }
+
+    [Fact]
     public void GetOutline_NullStartEndLine_FallsBackToLine()
     {
         // Insert a file with a symbol that has NULL start_line/end_line (#46)
@@ -5748,5 +5773,201 @@ public class DbReaderTests : IDisposable
         Assert.True(result.SnippetTruncated);
         Assert.Contains("target", result.Snippet);
         Assert.True(result.Snippet.Length <= 96);
+    }
+
+    // Issue #203 regression: --since thresholds with a time-of-day component used to silently
+    // return zero rows because `@since` was bound via ToString("O") (yyyy-MM-ddTHH:mm:ss.fffffffZ)
+    // while files.modified is stored by Microsoft.Data.Sqlite as "yyyy-MM-dd HH:mm:ss.FFFFFFF"
+    // (space separator, no T, no Z). SQLite compares TEXT lexicographically, and "T" (0x54) is
+    // greater than " " (0x20) at position 10, so `f.modified >= @since` was always false for
+    // T-formatted thresholds regardless of actual temporal ordering. These tests bind DateTimes
+    // straight through AddWithValue so both sides share the same serialization.
+    // Issue #203 回帰: --since に時刻成分を渡すと無条件に0件だったバグの再発防止。
+    // `@since` は ToString("O") で T 区切り + Z 付きに整形されていた一方、`files.modified` は
+    // Microsoft.Data.Sqlite の既定 "yyyy-MM-dd HH:mm:ss.FFFFFFF"（空白区切り、T や Z なし）で
+    // 保存されており、位置10の文字比較（スペース 0x20 vs T 0x54）で必ず保存値 < @since に
+    // なっていた。DateTime をそのままバインドすれば書き込み側と完全に同じ文字列になる。
+
+    [Fact]
+    public void ListFiles_WithTimeOfDaySince_IncludesNewerFiles()
+    {
+        InsertIndexedFile(
+            "src/since203_new.py",
+            "python",
+            "def new_func():\n    return 1\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/since203_old.py",
+            "python",
+            "def old_func():\n    return 0\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        // Threshold 1h before the newer file; the newer file must be included.
+        // より新しいファイルの1時間前を閾値にした場合、その新しいファイルが含まれるはず。
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+        var results = _reader.ListFiles(
+            pathPatterns: new[] { "src/since203_" },
+            since: since);
+
+        Assert.Contains(results, r => r.Path == "src/since203_new.py");
+        Assert.DoesNotContain(results, r => r.Path == "src/since203_old.py");
+    }
+
+    [Fact]
+    public void CountListFiles_WithTimeOfDaySince_CountsOnlyNewerFiles()
+    {
+        InsertIndexedFile(
+            "src/count203_new.py",
+            "python",
+            "def new_func():\n    return 1\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/count203_old.py",
+            "python",
+            "def old_func():\n    return 0\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+        var summary = _reader.CountListFiles(
+            pathPatterns: new[] { "src/count203_" },
+            since: since);
+
+        Assert.Equal(1, summary.Count);
+    }
+
+    [Fact]
+    public void SearchSymbols_WithTimeOfDaySince_IncludesNewerFiles()
+    {
+        InsertIndexedFile(
+            "src/sym_new.py",
+            "python",
+            "def sym_only_new():\n    return 1\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/sym_old.py",
+            "python",
+            "def sym_only_old():\n    return 0\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+
+        var newHits = _reader.SearchSymbols("sym_only_new", since: since);
+        Assert.Single(newHits, s => s.Path == "src/sym_new.py");
+
+        var oldHits = _reader.SearchSymbols("sym_only_old", since: since);
+        Assert.Empty(oldHits);
+    }
+
+    [Fact]
+    public void Search_WithTimeOfDaySince_IncludesNewerFiles()
+    {
+        InsertIndexedFile(
+            "src/search_new.py",
+            "python",
+            "def search_only_new():\n    return 'needle_203'\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/search_old.py",
+            "python",
+            "def search_only_old():\n    return 'needle_203'\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+        var results = _reader.Search("needle_203", since: since);
+
+        Assert.Contains(results, r => r.Path == "src/search_new.py");
+        Assert.DoesNotContain(results, r => r.Path == "src/search_old.py");
+    }
+
+    [Fact]
+    public void ListFiles_WithTimeOfDaySince_ExcludesFilesBeforeThreshold()
+    {
+        InsertIndexedFile(
+            "src/excl_only.py",
+            "python",
+            "def excl():\n    return 1\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+
+        // Threshold 1h after the file; must exclude everything.
+        // ファイルより1時間後を閾値にした場合は除外されるはず。
+        var since = new DateTime(2025, 6, 20, 23, 0, 0, DateTimeKind.Utc);
+        var results = _reader.ListFiles(pathPatterns: new[] { "src/excl_only.py" }, since: since);
+
+        Assert.Empty(results);
+    }
+
+    // Count-only SQL paths (search --count / symbols --count / definition --count) are compiled
+    // independently from the list paths above, so they need their own regressions against the
+    // ToString("O") vs DateTimeSqliteDefaultFormat mismatch. Without these, a future refactor that
+    // reintroduces ToString("O") on any single count binding would pass the list-path tests.
+    // `--count` 経路の SQL は一覧経路とは別に組み立てられているため、`ToString("O")` と
+    // DateTimeSqliteDefaultFormat の非対称が再発しても一覧側テストだけでは検出できない。
+    // カウント経路専用の回帰テストで各 bind を独立に守る。
+
+    [Fact]
+    public void CountSearchResults_WithTimeOfDaySince_CountsOnlyNewerChunks()
+    {
+        InsertIndexedFile(
+            "src/countsearch_new.py",
+            "python",
+            "def countsearch_only_new():\n    return 'needle_203_count'\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/countsearch_old.py",
+            "python",
+            "def countsearch_only_old():\n    return 'needle_203_count'\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+        var summary = _reader.CountSearchResults("needle_203_count", since: since);
+
+        Assert.Equal(1, summary.FileCount);
+        Assert.True(summary.Count >= 1);
+    }
+
+    [Fact]
+    public void CountSearchSymbolsTotal_WithTimeOfDaySince_CountsOnlyNewerSymbols()
+    {
+        InsertIndexedFile(
+            "src/countsym_new.py",
+            "python",
+            "def countsym_only_new():\n    return 1\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/countsym_old.py",
+            "python",
+            "def countsym_only_old():\n    return 0\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+
+        var newSummary = _reader.CountSearchSymbolsTotal("countsym_only_new", since: since);
+        Assert.Equal(1, newSummary.Count);
+
+        var oldSummary = _reader.CountSearchSymbolsTotal("countsym_only_old", since: since);
+        Assert.Equal(0, oldSummary.Count);
+    }
+
+    [Fact]
+    public void CountDefinitionsTotal_WithTimeOfDaySince_CountsOnlyNewerDefinitions()
+    {
+        InsertIndexedFile(
+            "src/countdef_new.py",
+            "python",
+            "def countdef_only_new():\n    return 1\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/countdef_old.py",
+            "python",
+            "def countdef_only_old():\n    return 0\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+
+        var newSummary = _reader.CountDefinitionsTotal("countdef_only_new", since: since);
+        Assert.Equal(1, newSummary.Count);
+
+        var oldSummary = _reader.CountDefinitionsTotal("countdef_only_old", since: since);
+        Assert.Equal(0, oldSummary.Count);
     }
 }

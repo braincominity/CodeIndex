@@ -322,7 +322,7 @@ public partial class DbReader
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         if (since != null && _fileColumns.Contains("modified"))
-            cmd.Parameters.AddWithValue("@since", since.Value.ToString("O"));
+            cmd.Parameters.AddWithValue("@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         var raw = new List<SearchResult>();
@@ -387,7 +387,7 @@ public partial class DbReader
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         if (since != null && _fileColumns.Contains("modified"))
-            cmd.Parameters.AddWithValue("@since", since.Value.ToString("O"));
+            cmd.Parameters.AddWithValue("@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         var keptIntervals = new Dictionary<string, IntervalSet>(StringComparer.Ordinal);
