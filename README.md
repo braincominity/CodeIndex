@@ -540,7 +540,7 @@ The database reflects the working tree at the time of the last index. After swit
 | YAML | `.yaml`, `.yml` | -- |
 | JSON | `.json` | -- |
 | TOML | `.toml` | -- |
-| HTML | `.html` | -- |
+| HTML | `.html`, `.htm`, `.xhtml`, `.shtml` | yes |
 | CSS | `.css`, `.scss` | yes |
 | Vue | `.vue` | -- |
 | Svelte | `.svelte` | -- |
@@ -1412,7 +1412,7 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 | YAML | `.yaml`, `.yml` | -- |
 | JSON | `.json` | -- |
 | TOML | `.toml` | -- |
-| HTML | `.html` | -- |
+| HTML | `.html`, `.htm`, `.xhtml`, `.shtml` | yes |
 | CSS | `.css`, `.scss` | yes |
 | Vue | `.vue` | -- |
 | Svelte | `.svelte` | -- |

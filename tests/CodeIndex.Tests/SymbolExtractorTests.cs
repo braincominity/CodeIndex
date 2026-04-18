@@ -7831,4 +7831,81 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetUser");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ListUsers");
     }
+
+    [Fact]
+    public void Extract_Html_CapturesIdAttributesAsProperties()
+    {
+        var content = """
+            <!DOCTYPE html>
+            <html>
+              <body>
+                <header id="main-header" class="site-header"><h1>Welcome</h1></header>
+                <main id='content'><article></article></main>
+                <section id="side-panel">legacy</section>
+              </body>
+            </html>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "main-header");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "content");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "side-panel");
+    }
+
+    [Fact]
+    public void Extract_Html_IgnoresDataIdAndAriaIdAndXmlIdAttributes()
+    {
+        // `data-id`, `aria-*id`, and `xml:id` must not be captured as plain id attributes.
+        // data-id / aria-*id / xml:id を通常の id として拾わない。
+        var content = """
+            <article data-id="1"></article>
+            <div aria-labelledby="x" aria-hiddenid="bogus"></div>
+            <span xml:id="ns"></span>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "1");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "bogus");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "ns");
+    }
+
+    [Fact]
+    public void Extract_Html_CapturesExternalScriptAndLinkAsImports()
+    {
+        var content = """
+            <link rel="stylesheet" href="style.css">
+            <link rel="icon" href='/favicon.ico'>
+            <script src="main.js"></script>
+            <script type="module" src='/static/app.mjs'></script>
+            <script>inline(); // no src — no import</script>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "style.css");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/favicon.ico");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "main.js");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/static/app.mjs");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "inline()");
+    }
+
+    [Fact]
+    public void Extract_Html_CapturesCustomWebComponentTagsAsClasses()
+    {
+        // Custom element tag names always contain a hyphen per the HTML spec.
+        // HTML 仕様上、カスタム要素名には必ずハイフンが含まれる。
+        var content = """
+            <my-button>ok</my-button>
+            <app-sidebar></app-sidebar>
+            <div>plain</div>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "my-button");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "app-sidebar");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "div");
+    }
 }

@@ -109,6 +109,9 @@ public class FileIndexer
         [".props"]  = "xml",    // MSBuild props / MSBuild プロパティ
         [".targets"]= "xml",    // MSBuild targets / MSBuild ターゲット
         [".html"]   = "html",
+        [".htm"]    = "html",    // Legacy / Windows / IIS default / 旧来の Windows / IIS 既定拡張子
+        [".xhtml"]  = "html",    // XHTML / XHTML
+        [".shtml"]  = "html",    // Server-side includes / サーバサイドインクルード
         [".css"]    = "css",
         [".scss"]   = "css",
         [".vue"]    = "vue",

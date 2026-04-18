@@ -768,6 +768,24 @@ public static class SymbolExtractor
             // SCSS placeholder selector / SCSS プレースホルダーセレクタ
             new("class",    new Regex(@"^\s*(?<name>%[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
         ],
+        ["html"] =
+        [
+            // External <script src="..."> — treat as import so the referenced JS file is navigable
+            // 外部 <script src="..."> はインポート扱いにして参照先 JS を辿れるようにする
+            new("import",   new Regex(@"<script\b[^>]*?\bsrc\s*=\s*(?<q>[""'])(?<name>[^""'<>]+)\k<q>", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // External <link href="..."> (stylesheet, icon, preload, etc.) / 外部リンクリソース
+            new("import",   new Regex(@"<link\b[^>]*?\bhref\s*=\s*(?<q>[""'])(?<name>[^""'<>]+)\k<q>", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // id="foo" attribute — DOM anchor typically navigated by getElementById / CSS #selectors.
+            // Negative lookbehind prevents `data-id=` / `aria-id=` / `xml:id=` from being matched as `id=`.
+            // id="foo" 属性 — getElementById や CSS #セレクタでたどる DOM アンカー。
+            // `data-id=` / `aria-id=` / `xml:id=` を誤って拾わないよう negative lookbehind で除外する。
+            new("property", new Regex(@"(?<![\w:-])id\s*=\s*(?<q>[""'])(?<name>[\w:.\-]+)\k<q>", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // Custom Web Components — opening tag always contains a hyphen per the HTML spec.
+            // Standard tags (<div>, <script>, <link>, etc.) never match because they have no hyphen.
+            // カスタム Web Components — HTML 仕様上、開始タグ名には必ずハイフンが入る。
+            // 標準タグ（<div> / <script> / <link> など）はハイフンを含まないのでマッチしない。
+            new("class",    new Regex(@"<(?<name>[A-Za-z][A-Za-z0-9]*-[\w-]+)\b", RegexOptions.Compiled), BodyStyle.None),
+        ],
         ["powershell"] =
         [
             // Function/filter declarations / 関数・フィルタ宣言
