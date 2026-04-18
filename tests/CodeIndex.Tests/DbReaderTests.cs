@@ -494,6 +494,62 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void Search_FindsVerticalKanaRepeatMarkInsideLongerToken()
+    {
+        // Regression guard for the vertical kana repeat mark block (U+3031..U+3035), Unicode
+        // category Lm (Letter Modifier). These codepoints are used in vertical-text Japanese
+        // as iteration marks. unicode61 keeps them as word characters, so without explicit
+        // inclusion in the CJK prefix fallback set, `search '〱'` returns 0 results against
+        // content containing `〱abc` — same shape as #198 on another Japanese block.
+        // 縦書き仮名反復記号（U+3031..U+3035、Unicode カテゴリ Lm）の回帰テスト。unicode61 では
+        // 単語文字として扱われるため、CJK prefix fallback セットに明示的に含めないと
+        // `search '〱'` が `〱abc` に対して 0 件を返す — 別ブロック版の #198 再現。
+        InsertIndexedFile("src/vertical_kana.py", "python",
+            "def 〱abc(x):\n    return x\n");
+
+        var results = _reader.Search("〱");
+
+        Assert.Contains(results, r => r.Path == "src/vertical_kana.py");
+    }
+
+    [Fact]
+    public void Search_FindsBopomofoInsideLongerToken()
+    {
+        // Regression guard for Bopomofo (U+3100..U+312F), the Mandarin Chinese phonetic
+        // system ("zhuyin"). Bopomofo letters are Unicode category Lo and survive unicode61
+        // tokenization as regular word characters, so a bare phrase query like `search 'ㄅ'`
+        // used to return 0 against content containing `ㄅabc` — same shape as the original
+        // #198 repro but on a different script. Pin that Bopomofo queries take the prefix
+        // fallback path.
+        // 注音符号（ボポモフォ、U+3100..U+312F、中国語発音）の回帰テスト。Unicode カテゴリ Lo で
+        // unicode61 は単語文字として保つため、`search 'ㄅ'` が `ㄅabc` に対して 0 件を返す
+        // 状態を防ぐ — #198 を別スクリプトで再現した形。
+        InsertIndexedFile("src/bopomofo.py", "python",
+            "def ㄅabc(x):\n    return x\n");
+
+        var results = _reader.Search("ㄅ");
+
+        Assert.Contains(results, r => r.Path == "src/bopomofo.py");
+    }
+
+    [Fact]
+    public void Search_FindsBopomofoExtendedInsideLongerToken()
+    {
+        // Regression guard for Bopomofo Extended (U+31A0..U+31BF), which extends zhuyin with
+        // additional phonetic letters used for minority Chinese dialects (e.g. Min Nan, Hakka).
+        // Same category / tokenization concern as Bopomofo above; pinned separately so a later
+        // cleanup that drops either range breaks its own dedicated test.
+        // 拡張注音符号（U+31A0..U+31BF、閩南語や客家語等の発音）の回帰テスト。Bopomofo と同じく
+        // 単語文字扱いなので、それぞれの範囲を独立に固定する。
+        InsertIndexedFile("src/bopomofo_ext.py", "python",
+            "def ㆠabc(x):\n    return x\n");
+
+        var results = _reader.Search("ㆠ");
+
+        Assert.Contains(results, r => r.Path == "src/bopomofo_ext.py");
+    }
+
+    [Fact]
     public void Search_FindsNonBmpKanaExtendedBSubstringInsideLongerToken()
     {
         // Regression guard for Kana Extended-B (U+1AFF0..U+1AFFF, Unicode 15.0). Non-BMP

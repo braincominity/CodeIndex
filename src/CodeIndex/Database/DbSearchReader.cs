@@ -88,28 +88,48 @@ public partial class DbReader
             return false;
 
         var value = rune.Value;
-        // Hiragana / Katakana (including Phonetic Extensions and Katakana Phonetic Extensions)
-        // plus Kana Extended-B (U+1AFF0..U+1AFFF, Unicode 15.0).
-        // ひらがな・カタカナ（音声拡張を含む）および Kana Extended-B。
+        // Hiragana / Katakana (including Phonetic Extensions and Katakana Phonetic Extensions),
+        // Kana Supplement + Kana Extended-A + Small Kana Extension (U+1B000..U+1B16F), and
+        // Kana Extended-B (U+1AFF0..U+1AFFF, Unicode 15.0).
+        // ひらがな・カタカナ（音声拡張を含む）、Kana Supplement / Extended-A / Small Kana Extension、
+        // および Kana Extended-B。
         if (value >= 0x3040 && value <= 0x30FF) return true;
         if (value >= 0x31F0 && value <= 0x31FF) return true;
         if (value >= 0x1AFF0 && value <= 0x1AFFF) return true;
         if (value >= 0x1B000 && value <= 0x1B16F) return true;
 
+        // Bopomofo (U+3100..U+312F) and Bopomofo Extended (U+31A0..U+31BF). These are the
+        // Mandarin Chinese phonetic system ("zhuyin"). Bopomofo letters are Unicode category
+        // Lo (Other Letter), so unicode61 keeps them as regular word characters, which means
+        // the same "short query vs longer token" failure mode as the original #198 repro
+        // applies to Chinese phonetic text like 'ㄅabc' without explicit CJK prefix promotion.
+        // 注音符号（ボポモフォ）と拡張注音符号。中国語の発音記号で Unicode カテゴリは Lo。
+        // unicode61 は通常の単語文字として扱うため、'ㄅabc' のような中国語発音テキストでも
+        // #198 の 0 件症状を起こさないよう CJK prefix 昇格の対象に含める。
+        if (value >= 0x3100 && value <= 0x312F) return true;
+        if (value >= 0x31A0 && value <= 0x31BF) return true;
+
         // Han-script codepoints that live outside the CJK Unified Ideographs / Extensions
         // blocks: ideographic iteration/closing marks (々 U+3005, 〆 U+3006), the ideographic
-        // number zero (〇 U+3007), Hangzhou numerals (U+3021..U+3029), and the Hangzhou
-        // 10/20/30 + vertical iteration marks (U+3038..U+303B). These are Unicode Han script
-        // but unicode61 keeps them as regular word-character runs, so they still need CJK
-        // prefix promotion to match against longer indexed tokens like '々ab' or '〇abc'.
+        // number zero (〇 U+3007), Hangzhou numerals (U+3021..U+3029), vertical kana repeat
+        // marks (U+3031..U+3035), and the Hangzhou 10/20/30 + vertical iteration mark block
+        // (U+3038..U+303B). U+3031..U+3035 are Unicode category Lm (Letter Modifier), while
+        // the others are Lo / Nl — all are kept as word characters by unicode61, so they need
+        // CJK prefix promotion to match against longer indexed tokens like '々abc', '〱abc', or
+        // '〇abc'. The narrow explicit list avoids the whole CJK Symbols and Punctuation block
+        // (U+3000..U+303F), which includes ideographic space / brackets / dots that unicode61
+        // either drops or already tokenizes on.
         // CJK Unified Ideographs 範囲外の Han script コードポイント: 々(U+3005)、〆(U+3006)、
-        // 〇(U+3007)、Hangzhou 数字(U+3021..U+3029)、Hangzhou 10/20/30 と縦書き反復記号
-        // (U+3038..U+303B) は unicode61 で通常の単語文字として扱われるため、'々ab' や '〇abc'
-        // のような長いトークンへ CJK prefix 昇格を届かせる必要がある。
+        // 〇(U+3007)、Hangzhou 数字(U+3021..U+3029)、縦書き仮名反復記号(U+3031..U+3035)、
+        // Hangzhou 10/20/30 と縦書き反復記号(U+3038..U+303B)。U+3031..U+3035 は Unicode カテゴリ Lm、
+        // その他は Lo / Nl。いずれも unicode61 で通常の単語文字として扱われるため、'々abc'、
+        // '〱abc'、'〇abc' のような長いトークンへ CJK prefix 昇格を届かせる必要がある。
+        // CJK Symbols and Punctuation ブロック全体（U+3000..U+303F）を拾わないよう、個別列挙にしている。
         if (value == 0x3005) return true;
         if (value == 0x3006) return true;
         if (value == 0x3007) return true;
         if (value >= 0x3021 && value <= 0x3029) return true;
+        if (value >= 0x3031 && value <= 0x3035) return true;
         if (value >= 0x3038 && value <= 0x303B) return true;
 
         // CJK Unified Ideographs + Extensions A-I, Compatibility Ideographs.
