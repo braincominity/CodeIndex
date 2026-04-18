@@ -33,8 +33,21 @@ internal static class StructuralLineMasker
     }
 
     // Frames used by the JS/TS template literal scanner only. C# uses the frames above.
+    // The frame snapshots the enclosing `JsLexState` on push so the closing backtick can
+    // restore the paren stack, class-header hint, and case-label hint that would otherwise
+    // be lost by resetting `lexState` for the template body. Without this, patterns like
+    // `if (\`${x}\`) /regex/` lose the statement-head `(` context: `)` after the template
+    // becomes `CloseParen` instead of `StatementHeadCloseParen`, so the next `/` falls to
+    // division and the regex body's backtick is misread as a phantom template opener.
     // JS/TS テンプレートリテラル scanner 専用のフレーム。C# は上のフレームを使う。
-    private sealed class JsTemplateLiteralFrame : ScannerFrame;
+    // push 時に外側の `JsLexState` を退避し、閉じ backtick で復元する。これがないと
+    // `if (\`${x}\`) /regex/` のように、テンプレート直前に積んだ statement-head `(` の
+    // コンテキストがテンプレート本体の Reset で失われ、`)` 後の `/` が division に落ちて
+    // regex 本文の backtick を phantom template と誤認してしまう。
+    private sealed class JsTemplateLiteralFrame : ScannerFrame
+    {
+        public JsLexState SavedLexState;
+    }
 
     private sealed class JsTemplateHoleFrame : ScannerFrame
     {
@@ -1243,7 +1256,7 @@ internal static class StructuralLineMasker
                         continue;
                     }
 
-                    if (active is JsTemplateLiteralFrame)
+                    if (active is JsTemplateLiteralFrame tplFrame)
                     {
                         if (line[pos] == '\\')
                         {
@@ -1257,16 +1270,24 @@ internal static class StructuralLineMasker
                             ReplaceWithSpaces(masked, pos, 2);
                             pos += 2;
                             frames.Push(new JsTemplateHoleFrame());
+                            lexState = default;
                             lexState.Reset();
                             continue;
                         }
 
                         if (line[pos] == '`')
                         {
+                            // Restore the lex state captured when this template opened so the
+                            // paren stack, class-header hint, case-label hint, etc. carry
+                            // through to the token after the closing backtick.
+                            // テンプレート開始時に退避した lex state を復元し、閉じ backtick
+                            // の後ろに paren stack や class header hint、case label hint を
+                            // 引き継ぐ。
                             masked[pos] = ' ';
                             pos++;
-                            frames.Pop();
+                            lexState = tplFrame.SavedLexState;
                             lexState.SetKind(JsPrevTokenKind.Literal);
+                            frames.Pop();
                             continue;
                         }
 
@@ -1296,8 +1317,13 @@ internal static class StructuralLineMasker
 
                         if (line[pos] == '`')
                         {
+                            // Save the hole's lex state so the closing backtick can
+                            // restore paren/state context for the token that follows.
+                            // hole 側の lex state を退避し、閉じ backtick 後に paren
+                            // などの context を元に戻せるようにする。
                             pos++;
-                            frames.Push(new JsTemplateLiteralFrame());
+                            frames.Push(new JsTemplateLiteralFrame { SavedLexState = lexState });
+                            lexState = default;
                             lexState.Reset();
                             continue;
                         }
@@ -1397,9 +1423,14 @@ internal static class StructuralLineMasker
 
                 if (line[pos] == '`')
                 {
+                    // Save the top-level lex state so the closing backtick can restore
+                    // the paren stack / statement-head hints that preceded the template.
+                    // テンプレート直前の lex state を退避し、閉じ backtick で paren
+                    // stack や statement-head hint を復元できるようにする。
                     masked[pos] = ' ';
                     pos++;
-                    frames.Push(new JsTemplateLiteralFrame());
+                    frames.Push(new JsTemplateLiteralFrame { SavedLexState = lexState });
+                    lexState = default;
                     lexState.Reset();
                     continue;
                 }

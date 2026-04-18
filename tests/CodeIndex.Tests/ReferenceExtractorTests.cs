@@ -1847,4 +1847,52 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "runTask" && r.ContainerName == "caller");
         Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
     }
+
+    [Fact]
+    public void Extract_JsTemplateLiteralArgumentInIfCondition_PreservesFollowingCall()
+    {
+        // Regression: the lex state captured just before a template literal must be
+        // restored when the closing backtick is reached, or the statement-head `(`
+        // of `if (` / `while (` / etc. is lost and the next `/` after `)` falls to
+        // division. That then reads the backtick inside `/regex/` as a phantom
+        // template opener and eats the real `realCall()` edge after the expression.
+        // 回帰: テンプレートリテラル開始時に退避した lex state を閉じ backtick で
+        // 復元しないと `if (` / `while (` などの statement-head `(` が失われ、
+        // `)` の直後の `/` が division に落ちる。結果 `/regex/` 内の backtick が
+        // phantom テンプレート開始と誤認され、後続の `realCall()` まで潰れる。
+        const string content = "function caller(value) {\n"
+            + "    if (`${value}`) /`/.test(value);\n"
+            + "    realCall();\n"
+            + "}\n"
+            + "function realCall() {}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
+    }
+
+    [Fact]
+    public void Extract_JsTemplateHoleNestedTemplateInIfCondition_PreservesFollowingCall()
+    {
+        // Same regression, but the problematic template appears inside an outer
+        // template hole. The nested template's closing backtick must restore the
+        // hole's lex state so the `)` after it is recognized as closing the `if`
+        // condition paren and the subsequent `/regex/` parses as a regex literal.
+        // 同じ回帰の入れ子版: 外側テンプレートホール内で `if (\`${x}\`) /.../` が
+        // 使われるケース。内側テンプレート閉じで hole の lex state を復元しないと
+        // `)` の後ろの `/` が division に落ち、`runTask` まで潰れる。
+        const string content = "function caller(value) {\n"
+            + "    const s = `${(() => { if (`${value}`) /`/.test(value); runTask(); return 1; })()}`;\n"
+            + "    realCall();\n"
+            + "}\n"
+            + "function runTask() {}\n"
+            + "function realCall() {}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "runTask" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
+    }
 }
