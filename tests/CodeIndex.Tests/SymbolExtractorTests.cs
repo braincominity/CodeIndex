@@ -8101,4 +8101,46 @@ public class SymbolExtractorTests
         Assert.Equal(6, linkImport.Line);
         Assert.Equal(6, linkImport.StartLine);
     }
+
+    [Fact]
+    public void Extract_Html_IgnoresIdLiteralsInDocumentText()
+    {
+        // Prose like `<p>documentation says id="fake" here</p>` must not be
+        // harvested as a DOM id — the `id=` pattern only matters inside an
+        // opening tag. Real `<section id="real">` still captures.
+        // Closes #215 codex review finding.
+        // 本文中の `id="..."` を DOM id として誤抽出してはならない。id 属性は開始タグ
+        // の内部でのみ意味を持つ。実在する `<section id="real">` は引き続き抽出する。
+        // #215 codex review 指摘への対応。
+        var content = """
+            <p>documentation says id="fake" here</p>
+            <article>inline prose id='phantom' mentioned</article>
+            <section id="real"></section>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "fake");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "phantom");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+    }
+
+    [Fact]
+    public void Extract_Html_MasksUnclosedComments()
+    {
+        // Unclosed `<!--` must also mask its suffix to EOF, matching the
+        // raw-text / RCDATA `|\z` policy. Without this, editing a comment
+        // live leaked every tag inside the unclosed comment as phantom
+        // symbols. Closes #215 codex review finding.
+        // `<!--` 未閉鎖でも EOF まで本体をマスクする必要がある。raw-text / RCDATA と
+        // 同じく編集途中の未閉鎖コメントから phantom シンボルを漏らさないためのもの。
+        // #215 codex review 指摘への対応。
+        var content = "<!--\n<script src=\"commented.js\"></script>\n<custom-tag id=\"phantom\"></custom-tag>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "commented.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "custom-tag");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "phantom");
+    }
 }

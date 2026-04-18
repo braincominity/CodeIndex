@@ -776,10 +776,14 @@ public static class SymbolExtractor
             // External <link href="..."> (stylesheet, icon, preload, etc.) / 外部リンクリソース
             new("import",   new Regex(@"<link\b[^>]*?\bhref\s*=\s*(?<q>[""'])(?<name>[^""'<>]+)\k<q>", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // id="foo" attribute — DOM anchor typically navigated by getElementById / CSS #selectors.
-            // Negative lookbehind prevents `data-id=` / `aria-id=` / `xml:id=` from being matched as `id=`.
+            // The `<tag [^<>]*?` prefix scopes the match to opening-tag context so prose like
+            // `<p>docs say id="x"</p>` does not leak a phantom `id` property, and the
+            // `(?<![\w:-])` negative lookbehind keeps `data-id=` / `aria-*id=` / `xml:id=` out.
             // id="foo" 属性 — getElementById や CSS #セレクタでたどる DOM アンカー。
-            // `data-id=` / `aria-id=` / `xml:id=` を誤って拾わないよう negative lookbehind で除外する。
-            new("property", new Regex(@"(?<![\w:-])id\s*=\s*(?<q>[""'])(?<name>[\w:.\-]+)\k<q>", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // `<タグ名 [^<>]*?` プレフィックスで開始タグ内部だけに限定し、本文中の
+            // `<p>docs say id="x"</p>` のような文字列が phantom id として漏れないようにする。
+            // negative lookbehind は引き続き `data-id=` / `aria-*id=` / `xml:id=` を除外する。
+            new("property", new Regex(@"<[A-Za-z][\w-]*\b[^<>]*?(?<![\w:-])id\s*=\s*(?<q>[""'])(?<name>[\w:.\-]+)\k<q>", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // Custom Web Components — opening tag always contains a hyphen per the HTML spec.
             // Standard tags (<div>, <script>, <link>, etc.) never match because they have no hyphen.
             // カスタム Web Components — HTML 仕様上、開始タグ名には必ずハイフンが入る。
@@ -1520,8 +1524,13 @@ public static class SymbolExtractor
     // テンプレート文字列 / フォーム初期値や文書タイトル内のプレースホルダ文字列を
     // HTML パターンが誤って拾わないようにする。行番号を保つため改行は残す。全 regex で
     // Singleline を使い、属性が折り返された開始タグでも跨ぎ行で一致させる。
+    // Closing `-->` is optional (`|\z`) for the same reason the raw-text / RCDATA
+    // bodies accept `\z`: mid-edit working-tree HTML often has an unclosed
+    // `<!--` that would otherwise leak every tag after it as phantom symbols.
+    // 未閉鎖コメントでも EOF までマスクできるよう終端を省略可 (`|\z`) にする。
+    // 編集中の未閉鎖 `<!--` から後続タグが phantom シンボルとして漏れるのを防ぐ。
     private static readonly Regex HtmlCommentRegex = new(
-        @"<!--.*?-->",
+        @"<!--.*?(?:-->|\z)",
         RegexOptions.Compiled | RegexOptions.Singleline);
     // Closing tag is optional (`|\z`) because working-tree HTML often lacks one
     // mid-edit, and an unclosed raw-text / RCDATA body must still be masked to
