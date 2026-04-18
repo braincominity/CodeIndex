@@ -513,6 +513,55 @@ public class QueryCommandRunnerTests
         Assert.Contains(".mts", typescript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
     }
 
+    [Fact]
+    public void RunLanguages_HumanOutput_WideExtensionListSpillsOntoContinuationLine()
+    {
+        // The human-readable table must not let long extension lists (dockerfile / makefile /
+        // python / ruby / xml) swallow the Symbols / Graph columns. Instead, spill onto a
+        // continuation line so the row is still readable.
+        // 人間向けテーブルは、長い拡張子リスト（dockerfile / makefile / python / ruby / xml）が
+        // Symbols / Graph 列を食い潰さないようにし、継続行へ退避させて可読性を保つこと。
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages([], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Contains("languages)", stderr);
+
+        var lines = stdout.Split('\n').Select(line => line.TrimEnd('\r')).ToArray();
+
+        // Sanity: short rows still fit the fixed-width layout on a single line.
+        // 短い行は従来通り 1 行の固定幅レイアウトに収まる。
+        var csharpLine = lines.Single(line => line.StartsWith("csharp ", StringComparison.Ordinal));
+        Assert.Matches(@"^csharp\s+\.cs\s+\.cshtml\s+\.razor\s+yes\s+yes\s*$", csharpLine);
+
+        // Dockerfile / Makefile / Python / Ruby / XML rows spill extensions to a continuation line.
+        // Dockerfile / Makefile / Python / Ruby / XML 行は拡張子を継続行に退避する。
+        var wideLangs = new[] { "dockerfile", "makefile", "python", "ruby", "xml" };
+        foreach (var wide in wideLangs)
+        {
+            var headerIndex = Array.FindIndex(lines, line => line.StartsWith($"{wide} ", StringComparison.Ordinal));
+            Assert.True(headerIndex >= 0, $"expected row for {wide}");
+            var header = lines[headerIndex];
+            // Header row carries only lang + sym + graph, never the extension list itself.
+            // ヘッダ行には言語名・シンボル・グラフのみが含まれ、拡張子文字列は含まれない。
+            Assert.DoesNotContain("Dockerfile", header);
+            Assert.DoesNotContain("Makefile", header);
+            Assert.DoesNotContain("WORKSPACE", header);
+            Assert.DoesNotContain("Gemfile", header);
+            Assert.DoesNotContain(".csproj", header);
+            var continuation = lines[headerIndex + 1];
+            Assert.StartsWith("  Extensions: ", continuation);
+        }
+
+        // Spot-check: the continuation line for dockerfile contains both the bare filename and the
+        // `<Prefix><suffix>` pseudo-entry added for Issue #189 follow-up.
+        // dockerfile 継続行に完全一致ファイル名と `<Prefix><suffix>` 擬似エントリが両方入る。
+        var dockerIndex = Array.FindIndex(lines, line => line.StartsWith("dockerfile ", StringComparison.Ordinal));
+        var dockerContinuation = lines[dockerIndex + 1];
+        Assert.Contains("Dockerfile ", dockerContinuation);
+        Assert.Contains("Dockerfile.<suffix>", dockerContinuation);
+        Assert.Contains("Containerfile", dockerContinuation);
+    }
+
     [Theory]
     [InlineData("search")]
     [InlineData("definition")]
