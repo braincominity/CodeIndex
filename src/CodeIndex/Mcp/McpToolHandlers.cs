@@ -99,7 +99,13 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "maxLineWidth must be greater than or equal to 1");
         }
 
-        maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidthValue ?? LineWidthFormatter.DefaultMaxLineWidth);
+        if (maxLineWidthValue.HasValue && maxLineWidthValue.Value > LineWidthFormatter.MaxAllowedLineWidth)
+        {
+            maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth;
+            return CreateToolErrorResponse(id, $"maxLineWidth must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth}");
+        }
+
+        maxLineWidth = maxLineWidthValue ?? LineWidthFormatter.DefaultMaxLineWidth;
         return null;
     }
 
@@ -236,6 +242,8 @@ public partial class McpServer
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var lang = args?["lang"]?.GetValue<string>();
         var snippetLines = SearchSnippetFormatter.ClampSnippetLines(args?["snippetLines"]?.GetValue<int>() ?? SearchSnippetFormatter.DefaultSnippetLines);
+        if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
+            return maxLineWidthError;
         var rawQuery = args?["rawQuery"]?.GetValue<bool>() ?? false;
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
@@ -263,6 +271,7 @@ public partial class McpServer
                     ["query"] = query,
                     ["rawQuery"] = rawQuery,
                     ["snippetLines"] = snippetLines,
+                    ["maxLineWidth"] = maxLineWidth,
                     ["path"] = PathEcho(pathPatterns),
                     ["excludeTests"] = excludeTests,
                     ["count"] = 0,
@@ -277,10 +286,11 @@ public partial class McpServer
                 ["query"] = query,
                 ["rawQuery"] = rawQuery,
                 ["snippetLines"] = snippetLines,
+                ["maxLineWidth"] = maxLineWidth,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
                 ["count"] = results.Count,
-                ["results"] = JsonSerializer.SerializeToNode(results.Select(result => SearchSnippetFormatter.ToCompactResult(result, query, snippetLines, exact)), _jsonOptions)
+                ["results"] = JsonSerializer.SerializeToNode(results.Select(result => SearchSnippetFormatter.ToCompactResult(result, query, snippetLines, exact, maxLineWidth)), _jsonOptions)
             };
             // Include top file paths in summary for quick AI orientation
             // AIが素早く位置把握できるよう、サマリにトップファイルパスを含める
