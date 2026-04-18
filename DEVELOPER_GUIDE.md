@@ -406,12 +406,13 @@ Supported symbol kinds by language (32 languages with symbol extraction):
 | Zig | fn, pub fn, test | union, error | struct | -- | enum | -- | -- | @import | -- |
 | PowerShell | function, filter | class | -- | -- | enum | -- | -- | Import-Module, using module | -- |
 | CSS/SCSS | @mixin, @keyframes, `@font-face` (`font-family`), #id | `.class`, `:root`, pseudo/attribute selectors, `%placeholder` | -- | -- | -- | `$variable`, `--custom-property` | -- | `@import`, `@use` | -- |
+| Batch | labels (`:name`), goto/call targets | -- | -- | -- | -- | -- | -- | -- | -- |
 
 For C#, the `Graph = yes` column applies to callable/reference extraction and event subscriptions. Enum members are indexed as symbols, but enum-member access edges such as `Nested.A` are not indexed yet; when the active scope includes those enum-member candidates, `inspect` keeps `graph_supported` aligned with any callable candidates while exposing `graph_degraded=true` / `unsupported_symbol_kind=enum_member`, exact `references` / `callers` / `callees` surface the same gap on zero/count payloads plus successful JSON rows, and `unused` marks the active scope as degraded because C# enum members are excluded while enum declarations may still be false positives until those edges exist.
 
 SQL also emits `namespace` symbols for `CREATE SCHEMA`, but the summary table above does not have a dedicated namespace column.
 
-Additionally, 14 languages are detected and indexed as raw text without symbol extraction: batch, cmake, dockerignore, editorconfig, gitignore, html, json, justfile, markdown, svelte, toml, vue, xml, yaml.
+Additionally, 13 languages are detected and indexed as raw text without symbol extraction: cmake, dockerignore, editorconfig, gitignore, html, json, justfile, markdown, svelte, toml, vue, xml, yaml.
 
 VB.NET container patterns use `RegexOptions.IgnoreCase` plus `VisualBasicEnd`-based range tracking, so `Partial` spelling differences and multi-file type families still receive stable definition ranges and hotspot-family metadata.
 
@@ -1427,12 +1428,13 @@ LIMIT 20;
 | Zig | fn, pub fn, test | union, error | struct | -- | enum | -- | -- | @import | -- |
 | PowerShell | function, filter | class | -- | -- | enum | -- | -- | Import-Module, using module | -- |
 | CSS/SCSS | @mixin, @keyframes, `@font-face` (`font-family`), #id | `.class`, `:root`, 疑似/属性セレクタ, `%placeholder` | -- | -- | -- | `$variable`, `--custom-property` | -- | `@import`, `@use` | -- |
+| Batch | ラベル (`:name`)、goto/call の着地点 | -- | -- | -- | -- | -- | -- | -- | -- |
 
 C# の `Graph = yes` は callable/reference extraction と event subscription を指します。enum member 自体は symbol として索引されますが、`Nested.A` のような enum-member access edge はまだ索引していません。そのため active scope にその enum member 候補が含まれる場合、`inspect` は callable 候補があれば `graph_supported` を維持したまま `graph_degraded=true` / `unsupported_symbol_kind=enum_member` を返し、exact `references` / `callers` / `callees` も zero/count payload と成功した JSON row の両方で同じ制約を示します。`unused` もその理由で active scope を degraded として扱い、C# enum member は除外しつつ enum declaration は偽陽性になりうるものとして残します。
 
 SQL は `CREATE SCHEMA` から `namespace` シンボルも出力しますが、上の要約表には namespace 専用の列がありません。
 
-他に14言語がテキスト検索用に検出されるがシンボル抽出パターンは未対応: batch, cmake, dockerignore, editorconfig, gitignore, html, json, justfile, markdown, svelte, toml, vue, xml, yaml。
+他に13言語がテキスト検索用に検出されるがシンボル抽出パターンは未対応: cmake, dockerignore, editorconfig, gitignore, html, json, justfile, markdown, svelte, toml, vue, xml, yaml。
 
 正規表現ベースの抽出は意図的にシンプルです。AST精度よりも速度とポータビリティを優先しています。
 

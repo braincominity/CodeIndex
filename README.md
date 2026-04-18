@@ -534,7 +534,7 @@ The database reflects the working tree at the time of the last index. After swit
 | MSBuild | `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets` | -- |
 | Shell | `.sh`, `.bash`, `.zsh`, `.fish` | -- |
 | PowerShell | `.ps1`, `.psm1`, `.psd1` | yes |
-| Batch | `.bat`, `.cmd` | -- |
+| Batch | `.bat`, `.cmd` | yes |
 | CMake | `.cmake`, `CMakeLists.txt` | -- |
 | SQL | `.sql`, `.pgsql`, `.tsql`, `.plsql`, `.psql` | yes |
 | Markdown | `.md` | -- |
@@ -1409,7 +1409,7 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 | MSBuild | `.csproj`, `.fsproj`, `.vbproj`, `.props`, `.targets` | -- |
 | Shell | `.sh`, `.bash`, `.zsh`, `.fish` | -- |
 | PowerShell | `.ps1`, `.psm1`, `.psd1` | yes |
-| Batch | `.bat`, `.cmd` | -- |
+| Batch | `.bat`, `.cmd` | yes |
 | CMake | `.cmake`, `CMakeLists.txt` | -- |
 | SQL | `.sql`, `.pgsql`, `.tsql`, `.plsql`, `.psql` | yes |
 | Markdown | `.md` | -- |

@@ -7941,6 +7941,33 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Batch_DetectsLabelsAndSetAssignments()
+    {
+        // Covers issue #217: batch (.bat / .cmd) labels are the only navigation anchors
+        // in a batch script (goto :X / call :X targets). Without label symbols every batch
+        // file indexed with zero symbol rows.
+        // issue #217 対応: batch (.bat / .cmd) のラベルは batch スクリプトにおける唯一の
+        // ナビゲーションアンカー (goto :X / call :X の着地点)。ラベルシンボルが無いと
+        // 全ての batch ファイルがシンボル 0 件のまま索引されてしまっていた。
+        var content = "@echo off\nREM Build script\nsetlocal\n\nset VERSION=1.0.0\nset OUTPUT_DIR=%~dp0out\nset /a COUNT=1\nset /p INPUT=Enter: \nset \"QUOTED=value with spaces\"\n\n:main\ncall :compile\nif errorlevel 1 goto :error\ncall :test\ngoto :end\n\n:compile\necho Compiling...\ndotnet build\nexit /b %ERRORLEVEL%\n\n:test\necho Testing...\nexit /b %ERRORLEVEL%\n\n:error\necho Build failed\nexit /b 1\n\n:end\nendlocal\n\n:: This is a batch comment and must not produce a symbol\n";
+        var symbols = SymbolExtractor.Extract(1, "batch", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "main");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "compile");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "test");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "error");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "end");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "VERSION");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "OUTPUT_DIR");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "COUNT");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "INPUT");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "QUOTED");
+        // `::` comment form must not produce a bogus function symbol.
+        // `::` コメント形式は偽のシンボルを生成しない。
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name.StartsWith(":"));
+    }
+
+    [Fact]
     public void Extract_Zig_DetectsSymbols()
     {
         var content = "const std = @import(\"std\");\n\npub fn main() !void {\n    std.debug.print(\"hello\", .{});\n}\n\nfn helper(x: u32) u32 {\n    return x + 1;\n}\n\npub const Config = struct {\n    name: []const u8,\n};\n\nconst Direction = enum {\n    north,\n    south,\n};\n\ntest \"basic test\" {\n    try std.testing.expect(true);\n}";

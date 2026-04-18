@@ -807,6 +807,17 @@ public static class SymbolExtractor
             // Import-Module / using module / モジュールインポート
             new("import",   new Regex(@"^\s*(?:Import-Module|using\s+module)\s+(?<name>\S+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
         ],
+        ["batch"] =
+        [
+            // Labels — goto :X / call :X targets, the only navigation anchors in a batch script.
+            // `::` comment form has no label name, so `[\w-]+` naturally rejects it.
+            // ラベル — goto :X / call :X の着地点であり、batch スクリプト内で唯一のナビゲーションアンカー。
+            // `::` コメント形式はラベル名を持たないため、`[\w-]+` が自然に弾く。
+            new("function", new Regex(@"^\s*:(?<name>[\w-]+)\b", RegexOptions.Compiled), BodyStyle.None),
+            // Variable assignment — set VAR=value, set /a VAR=expr, set /p VAR=prompt, set ""VAR=value""
+            // 変数代入 — set VAR=value、set /a VAR=expr、set /p VAR=prompt、set ""VAR=value"" に対応。
+            new("property", new Regex(@"^\s*set\s+(?:/[aApP]\s+)?""?(?<name>[A-Za-z_][\w]*)\s*=", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+        ],
         ["zig"] =
         [
             // Public and private function declarations / 公開・非公開の関数宣言
