@@ -90,6 +90,21 @@ public partial class McpServer
     /// </summary>
     private static int ClampLimit(int limit) => Math.Clamp(limit, 1, MaxLimit);
 
+    /// <summary>
+    /// Return true when the requested reference kind is a metadata kind (`attribute` /
+    /// `annotation`) — these are valid on the `references` tool but must be rejected on
+    /// `callers` / `callees`, whose data model cannot answer metadata questions correctly
+    /// (metadata rows are attributed to the enclosing body-range symbol rather than the
+    /// annotated target, so file-level targets drop entirely and method-level metadata
+    /// appears under the enclosing class).
+    /// `references` では有効だが `callers` / `callees` では構造的に誤答するため弾くべき
+    /// metadata kind (`attribute` / `annotation`) かを返す。metadata 行は注釈対象ではなく
+    /// body-range 上の外側シンボルに帰属するため、`callers` / `callees` はこの kind に
+    /// 正しく答えられない。
+    /// </summary>
+    private static bool IsMetadataReferenceKind(string? kind) =>
+        kind == "attribute" || kind == "annotation";
+
     private JsonNode? TryGetValidatedMaxLineWidth(JsonNode? id, JsonNode? args, out int maxLineWidth, string propertyName = "maxLineWidth")
     {
         var maxLineWidthValue = args?[propertyName]?.GetValue<int>();
@@ -537,6 +552,8 @@ public partial class McpServer
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
 
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
+        if (IsMetadataReferenceKind(kind))
+            return CreateToolErrorResponse(id, $"'kind: {kind}' is not supported on 'callers'. Metadata references are attributed to the enclosing body-range symbol, so `callers` cannot return accurate rows for kind '{kind}'. Use the 'references' tool with kind '{kind}' for metadata enumeration.");
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var pathPatterns = ReadPathList(args, "path");
@@ -596,6 +613,8 @@ public partial class McpServer
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
 
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
+        if (IsMetadataReferenceKind(kind))
+            return CreateToolErrorResponse(id, $"'kind: {kind}' is not supported on 'callees'. Metadata references are attributed to the enclosing body-range symbol, so `callees` cannot return accurate rows for kind '{kind}'. Use the 'references' tool with kind '{kind}' for metadata enumeration.");
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var pathPatterns = ReadPathList(args, "path");

@@ -5390,6 +5390,34 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsMultiLineIndexer()
+    {
+        // #293 follow-up: `StripMultiLineCSharpAttributeInterior` must only blank
+        // attribute-position `[`. `public int this[\n int i\n] => _items[i];` opens `[`
+        // right after the `this` keyword, which is an indexer parameter list, not
+        // an attribute. If that `[` were blanked, the indexer would silently drop
+        // out of symbol extraction.
+        // #293 追加対応: `StripMultiLineCSharpAttributeInterior` は属性位置の `[` だけを
+        // 空白化する必要がある。`public int this[\n int i\n] => _items[i];` の `[` は
+        // インデクサのパラメータリストであり属性ではない。ここを空白化するとインデクサが
+        // シンボル抽出から静かに消える。
+        var content =
+            "public class Collection\n" +
+            "{\n" +
+            "    private int[] _items = new int[10];\n" +
+            "    public int this[\n" +
+            "        int i\n" +
+            "    ] => _items[i];\n" +
+            "}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var indexer = symbols.FirstOrDefault(s => s.Name == "Item");
+        Assert.NotNull(indexer);
+        Assert.Equal("function", indexer.Kind);
+        Assert.Equal("int", indexer.ReturnType);
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsOperatorOverloads()
     {
         var content = "using System.Collections.Generic;\npublic unsafe struct Money\n{\n    public static (int whole, int cents) operator +(Money a, Money b) => (0, 0);\n    public static Dictionary<string, int> operator -(Money a, Money b) => new();\n    public static bool operator ==(Money a, Money b) => true;\n    public static checked Money operator checked +(Money a, Money b) => new();\n    public static implicit operator decimal(Money m) => 0m;\n    public static explicit operator Money(decimal d) => new();\n    public static explicit operator checked byte(Money m) => 0;\n    public static explicit operator Dictionary<string,int>(Money m) => new();\n    public static explicit operator (int whole,int cents)(Money m) => (0, 0);\n    public static explicit operator (Dictionary<string, int> map, int count)?(Money m) => null;\n    public static explicit operator (int[] items, int count)(Money m) => ([], 0);\n    public static explicit operator ((int a, int b) pair, int count)(Money m) => ((0, 0), 0);\n    public static unsafe explicit operator int*(Money m) => (int*)0;\n    public static unsafe explicit operator delegate* unmanaged[Cdecl]<int, void>(Money m) => (delegate* unmanaged[Cdecl]<int, void>)0;\n}";
