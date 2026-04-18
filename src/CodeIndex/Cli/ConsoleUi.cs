@@ -583,7 +583,7 @@ public static class ConsoleUi
             elif [ ""$cmd"" = ""hotspots"" ]; then
                 COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --count --group-by-name --help"" -- ""$cur""))
             elif [ ""$cmd"" = ""search"" ]; then
-                COMPREPLY=($(compgen -W ""--db --json --limit --lang --path --exclude-path --exclude-tests --count --fts --snippet-lines --max-line-width --since --exact --exact-substring --exact-name --help"" -- ""$cur""))
+                COMPREPLY=($(compgen -W ""--db --json --limit --top --lang --path --exclude-path --exclude-tests --count --fts --snippet-lines --max-line-width --since --no-dedup --exact --exact-substring --help"" -- ""$cur""))
             else
                 COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --body --count --since --depth --reverse --exact --exact-name --help"" -- ""$cur""))
             fi
@@ -690,6 +690,7 @@ _cdidx() {{
                     '--db[Database path]:file:_files' \
                     '--json[JSON output]' \
                     '--limit[Max results]:number' \
+                    '--top[Max results]:number' \
                     '--lang[Filter by language]:language:({GetCompletionLangs()})' \
                     '--path[Path filter]:pattern' \
                     '--exclude-path[Exclude path]:pattern' \
@@ -699,9 +700,9 @@ _cdidx() {{
                     '--snippet-lines[Snippet length]:number' \
                     '--max-line-width[Clamp long single-line snippets]:number' \
                     '--since[Filter by modified-since timestamp]:datetime' \
+                    '--no-dedup[Show duplicate chunks]' \
                     '--exact[Backward-compatible exact shorthand]' \
                     '--exact-substring[Search-only exact substring match]' \
-                    '--exact-name[Exact symbol-name equality]' \
                     '*:query'
             else
                 _arguments \

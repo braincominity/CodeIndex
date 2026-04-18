@@ -282,6 +282,9 @@ public class ConsoleUiTests
                     var searchBranch = ExtractBetween(output, "elif [ \"$cmd\" = \"search\" ]; then", "else\n");
                     var genericBranch = ExtractBetween(output, "else\n                COMPREPLY=($(compgen -W \"", "\" -- \"$cur\"))\n            fi");
                     Assert.Contains("--max-line-width", searchBranch);
+                    Assert.Contains("--top", searchBranch);
+                    Assert.Contains("--no-dedup", searchBranch);
+                    Assert.DoesNotContain("--exact-name", searchBranch);
                     Assert.DoesNotContain("--max-line-width", genericBranch);
                 }
                 else
@@ -290,6 +293,9 @@ public class ConsoleUiTests
                     var searchBranch = ExtractBetween(output, "elif [[ $subcmd == search ]]; then", "else\n");
                     var genericBranch = ExtractBetween(output, "else\n                _arguments", "fi\n            ;;");
                     Assert.Contains("--max-line-width", searchBranch);
+                    Assert.Contains("'--top", searchBranch);
+                    Assert.Contains("'--no-dedup", searchBranch);
+                    Assert.DoesNotContain("--exact-name", searchBranch);
                     Assert.DoesNotContain("--max-line-width", genericBranch);
                 }
             }
