@@ -449,7 +449,6 @@
     "allowUnsandboxedCommands": false,
     "filesystem": {
       "denyRead": [
-        "~/",
         "/private/var/db",
         "/var/db"
       ],
@@ -460,7 +459,6 @@
         "~/.nuget/packages"
       ],
       "denyWrite": [
-        "~/",
         "/Applications",
         "/Library",
         "/System",
