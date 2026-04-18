@@ -6018,6 +6018,50 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_DetectsTSqlDdlKinds()
+    {
+        var content =
+            "CREATE SCHEMA sales AUTHORIZATION dbo;\n" +
+            "CREATE TYPE sales.Money FROM DECIMAL(18, 4) NOT NULL;\n" +
+            "CREATE SEQUENCE sales.OrderSeq START WITH 1 INCREMENT BY 1;\n" +
+            "CREATE SYNONYM dbo.Customers FOR external.Customers;\n" +
+            "CREATE LOGIN [app_service] WITH PASSWORD = 'x';\n" +
+            "CREATE USER app_service FOR LOGIN app_service;\n" +
+            "CREATE ROLE sales_writer AUTHORIZATION dbo;\n" +
+            "CREATE DATABASE sales_db;\n" +
+            "CREATE CERTIFICATE svc_cert WITH SUBJECT = 'svc';\n" +
+            "CREATE PARTITION FUNCTION pf_OrdersByYear (datetime2) AS RANGE RIGHT FOR VALUES ('2024-01-01');\n" +
+            "CREATE PARTITION SCHEME ps_OrdersByYear AS PARTITION pf_OrdersByYear TO ([primary]);\n" +
+            "CREATE FULLTEXT CATALOG ftc_sales WITH ACCENT_SENSITIVITY=OFF;\n" +
+            "CREATE PROC dbo.sp_DailyReport @Date DATE AS BEGIN SELECT 1; END\n" +
+            "CREATE PROCEDURE [dbo].[sp_GetOrder] @Id INT AS SELECT 1;\n" +
+            "CREATE OR ALTER PROCEDURE dbo.sp_UpsertUser AS SELECT 1;\n" +
+            "CREATE OR ALTER VIEW dbo.v_ActiveOrders AS SELECT 1;\n" +
+            "ALTER PROCEDURE dbo.sp_DailyReport AS SELECT 2;\n";
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "sales");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.Money");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.OrderSeq");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "dbo.Customers");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "[app_service]");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "app_service");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales_writer");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales_db");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "svc_cert");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "pf_OrdersByYear");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ps_OrdersByYear");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ftc_sales");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "dbo.sp_DailyReport");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "[dbo].[sp_GetOrder]");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "dbo.sp_UpsertUser");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "dbo.v_ActiveOrders");
+        // ALTER on an object kind other than TABLE must now be captured too.
+        // TABLE 以外のオブジェクトに対する ALTER も捕捉されること。
+        Assert.Equal(2, symbols.Count(s => s.Name == "dbo.sp_DailyReport"));
+    }
+
+    [Fact]
     public void Extract_Terraform_DetectsResources()
     {
         var content = "resource \"aws_s3_bucket\" \"my_bucket\" {\n  bucket = \"my-bucket\"\n}\n\nvariable \"region\" {\n  default = \"us-east-1\"\n}\n\noutput \"bucket_arn\" {\n  value = aws_s3_bucket.my_bucket.arn\n}\n\nmodule \"vpc\" {\n  source = \"./modules/vpc\"\n}";
