@@ -8300,6 +8300,58 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Html_MultiLineQuotedAttributeValuePreservesFollowingAttributes()
+    {
+        // HTML5 allows newlines inside quoted attribute values. Formatter-wrapped
+        // tags and verbose `title` / `alt` / `data-note` copy often span multiple
+        // lines. The state machine must NOT abort tag parsing at the first
+        // newline inside a quoted value — otherwise it silently drops sibling
+        // `src=` / `href=` / `id=` attributes on the same tag. Closes #215
+        // codex review #8 blocker.
+        // HTML5 は引用符付き属性値の中に改行を許容する。フォーマッタによる折り返し
+        // タグや長文の `title` / `alt` / `data-note` 等は複数行に跨ることがある。
+        // state machine は改行で属性解析を中断してはならない — さもないと同一タグ内の
+        // `src=` / `href=` / `id=` が兄弟属性として silent に落ちる。#215 codex
+        // review #8 blocker 対応。
+        var content = "<div title=\"line1\nline2\" id=\"real\">text</div>\n<link data-note=\"line1\nline2\" href=\"/app.css\">\n<script data-note=\"line1\nline2\" src=\"/app.js\"></script>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.css");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.js");
+    }
+
+    [Fact]
+    public void Extract_Html_UnterminatedQuoteInRawTextOpenerDoesNotLeakScriptBodySymbols()
+    {
+        // Mid-edit `<script>` / `<style>` / `<textarea>` / `<title>` openers with
+        // an unterminated quoted attribute MUST still have their body masked,
+        // otherwise the state machine walks into what should be raw-text /
+        // RCDATA content and emits phantom `class` / `property` / `import`
+        // symbols from embedded template-string markup. The mask falls back to
+        // EOF when the opener cannot be closed, matching HTML's raw-text spec
+        // behavior. Closes #215 codex review #8 blocker.
+        // 編集中の `<script>` 等の開始タグで引用符が未終端の場合も、本体は必ず
+        // マスクされなければならない。さもないと state machine が raw-text / RCDATA
+        // 本体に入り込み、埋め込まれたテンプレート文字列のタグ風テキストから phantom
+        // シンボルを漏らす。未終端時は仕様どおり EOF までマスクする。#215 codex
+        // review #8 blocker 対応。
+        var content = "<script data-note=\"oops\nconst tpl = '<evil-card id=\"phantom\"></evil-card>';\n<section id=\"real\"></section>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "evil-card");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "phantom");
+        // The `<section id="real">` after the unterminated `<script>` is inside
+        // the unclosed raw-text body per spec, so it is intentionally NOT
+        // emitted — this matches how a browser would treat the content.
+        // 仕様上 `<section id="real">` も未閉鎖 raw-text の中なので、ブラウザと同じく
+        // emit しないのが正しい。
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "real");
+    }
+
+    [Fact]
     public void Extract_Html_IgnoresSymbolsNestedInsideQuotedAttributeValues()
     {
         // Tag-looking text embedded inside a quoted attribute value (commonly in

@@ -1503,57 +1503,16 @@ public static class SymbolExtractor
         @"^\s+(?<name>[A-Z]\w*)\s*(?:\([^)]*\))?\s*(?:,|\{|;)\s*$",
         RegexOptions.Compiled);
 
-    // Masks the body of `<script>` / `<style>` raw-text elements, the RCDATA body
-    // of `<textarea>` / `<title>`, and `<!-- ... -->` comments so HTML patterns
-    // cannot match inside commented-out markup, inline template string literals,
-    // or form / document-title placeholder text. Line breaks are preserved so
-    // downstream line numbers stay aligned. All regexes use Singleline so they
-    // cross physical line boundaries (opening tags with attributes on separate
-    // lines are common in formatted HTML).
-    // `<script>` / `<style>` の raw-text 本体、`<textarea>` / `<title>` の RCDATA 本体、
-    // `<!-- ... -->` コメントをマスクし、コメントアウトされた markup / インライン
-    // テンプレート文字列 / フォーム初期値や文書タイトル内のプレースホルダ文字列を
-    // HTML パターンが誤って拾わないようにする。行番号を保つため改行は残す。全 regex で
-    // Singleline を使い、属性が折り返された開始タグでも跨ぎ行で一致させる。
-    // Closing `-->` is optional (`|\z`) for the same reason the raw-text / RCDATA
-    // bodies accept `\z`: mid-edit working-tree HTML often has an unclosed
-    // `<!--` that would otherwise leak every tag after it as phantom symbols.
-    // 未閉鎖コメントでも EOF までマスクできるよう終端を省略可 (`|\z`) にする。
-    // 編集中の未閉鎖 `<!--` から後続タグが phantom シンボルとして漏れるのを防ぐ。
-    private static readonly Regex HtmlCommentRegex = new(
-        @"<!--.*?(?:-->|\z)",
-        RegexOptions.Compiled | RegexOptions.Singleline);
-    // Closing tag is optional (`|\z`) because working-tree HTML often lacks one
-    // mid-edit, and an unclosed raw-text / RCDATA body must still be masked to
-    // prevent phantom symbols from leaking on every keystroke.
-    // 編集中の HTML では終了タグが未入力のことが多いため、閉じタグは省略可
-    // (`|\z`) とし、未閉鎖でも raw-text / RCDATA 本体をマスクして phantom
-    // シンボルが途中段階で漏れないようにする。
-    // Opening-tag bodies use a quote-aware alternation `(?:"[^"]*"|'[^']*'|[^>])*`
-    // instead of a naive `[^>]*`, because a `>` character is legal inside a quoted
-    // attribute value (`<script data-note="a > b" src="/app.js">`). With the naive
-    // class, the regex terminated at the first quoted `>` and blanked the real
-    // `src="/app.js"` as body, which then swallowed every following sibling tag
-    // to EOF. The alternation consumes complete `"..."` / `'...'` spans as units
-    // before matching bare chars, so quoted `>` does not close the tag early.
-    // 開始タグ本体は素の `[^>]*` ではなく `(?:"[^"]*"|'[^']*'|[^>])*` を使い、引用符
-    // 付き属性値内の `>` を誤認して早期終了しないようにする。`<script data-note="a > b"
-    // src="/app.js">` のようなケースで、以前は先頭の引用符内 `>` でタグを終わらせて
-    // しまい、本物の `src="/app.js"` を body としてマスクし、以降の兄弟タグを EOF まで
-    // 飲み込んでいた。交替は `"..."` / `'...'` を丸ごと単位で食うため、引用符内 `>`
-    // ではタグ終端と認識しない。
-    private static readonly Regex HtmlScriptBodyRegex = new(
-        @"(?<open><script\b(?:""[^""]*""|'[^']*'|[^>])*>)(?<body>.*?)(?<close></script\s*>|\z)",
-        RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
-    private static readonly Regex HtmlStyleBodyRegex = new(
-        @"(?<open><style\b(?:""[^""]*""|'[^']*'|[^>])*>)(?<body>.*?)(?<close></style\s*>|\z)",
-        RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
-    private static readonly Regex HtmlTextareaBodyRegex = new(
-        @"(?<open><textarea\b(?:""[^""]*""|'[^']*'|[^>])*>)(?<body>.*?)(?<close></textarea\s*>|\z)",
-        RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
-    private static readonly Regex HtmlTitleBodyRegex = new(
-        @"(?<open><title\b(?:""[^""]*""|'[^']*'|[^>])*>)(?<body>.*?)(?<close></title\s*>|\z)",
-        RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
+    // Raw-text / RCDATA element names that must be masked before the symbol state
+    // machine runs. `<script>` / `<style>` are raw-text, `<textarea>` / `<title>`
+    // are RCDATA. Using a HashSet keeps the mask state machine branch-free per
+    // opening tag.
+    // state machine がシンボル抽出する前にマスクしなければならない raw-text / RCDATA
+    // 要素名。`<script>` / `<style>` は raw-text、`<textarea>` / `<title>` は RCDATA。
+    private static readonly HashSet<string> HtmlRawTextElementNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "script", "style", "textarea", "title",
+    };
 
     // Native HTML/SVG/MathML tag names that happen to contain a hyphen but are
     // reserved by the spec, so they must NOT be treated as custom-element class
@@ -1575,39 +1534,229 @@ public static class SymbolExtractor
 
     private static string MaskHtmlRawTextRegions(string text)
     {
-        // Mask raw-text / RCDATA bodies first so that literal `<!--` inside
-        // `<script>`/`<style>` (e.g. `const s = "<!--";`) does not trick the
-        // unclosed-comment regex into swallowing the rest of the document.
-        // コメントマスクより先に raw-text / RCDATA 本体をマスクする。これをしないと
-        // `<script>const s = "<!--";</script>` の様なコード中リテラルで未閉鎖コメント
-        // regex が発動し、以降の本物のタグまで `\z` まで飲み込んでしまう。
-        text = HtmlScriptBodyRegex.Replace(
-            text,
-            m => m.Groups["open"].Value + BlankNonNewline(m.Groups["body"].Value) + m.Groups["close"].Value);
-        text = HtmlStyleBodyRegex.Replace(
-            text,
-            m => m.Groups["open"].Value + BlankNonNewline(m.Groups["body"].Value) + m.Groups["close"].Value);
-        text = HtmlTextareaBodyRegex.Replace(
-            text,
-            m => m.Groups["open"].Value + BlankNonNewline(m.Groups["body"].Value) + m.Groups["close"].Value);
-        text = HtmlTitleBodyRegex.Replace(
-            text,
-            m => m.Groups["open"].Value + BlankNonNewline(m.Groups["body"].Value) + m.Groups["close"].Value);
-        text = HtmlCommentRegex.Replace(text, m => BlankNonNewline(m.Value));
-        return text;
+        // Walk `text` character by character, masking the body of raw-text /
+        // RCDATA elements (`<script>` / `<style>` / `<textarea>` / `<title>`)
+        // and `<!-- ... -->` comments. Regex-based masking could not reliably
+        // handle cases like `<script data-note="a > b" src="/app.js">` (quoted
+        // `>` inside an attribute terminated the naive `[^>]*` pattern) or
+        // `<script data-note="oops\nconst tpl = '<evil-card id="phantom">';`
+        // (unterminated quote let nested `"..."` pairs match across script
+        // body content). The state machine uses the same quote-handling logic
+        // as the symbol extractor's state machine so both agree on where a
+        // raw-text opener ends, and falls back to masking through EOF when an
+        // opener is unterminated — that matches HTML's spec behavior (an
+        // unclosed raw-text element swallows everything until EOF or
+        // `</name>`) and prevents script-body content from leaking as phantom
+        // HTML symbols.
+        // マスクを正規表現ではなく文字単位の state machine で行い、`<script>` /
+        // `<style>` / `<textarea>` / `<title>` の本体と `<!-- ... -->` コメントを
+        // マスクする。正規表現だと `<script data-note="a > b" src="/app.js">` の
+        // ように属性値内の引用符付き `>` で早期終了したり、未終端引用符を持つ
+        // `<script data-note="oops\nconst tpl = '<evil-card id="phantom">';`
+        // のような入力で引用符ペアが script 本体をまたいで誤マッチする問題が
+        // あった。state machine は symbol extractor と同じ引用符処理を共有して
+        // 開始タグの境界を一致させ、開始タグが未終端の場合は EOF までマスクする
+        // （仕様上、未閉鎖 raw-text 要素は EOF か `</name>` まで本体を飲むため）。
+        var chars = text.ToCharArray();
+        var i = 0;
+        while (i < chars.Length)
+        {
+            if (chars[i] != '<')
+            {
+                i++;
+                continue;
+            }
+
+            // `<!-- ... -->` comment. Closing `-->` is optional (masked through
+            // EOF) so mid-edit working-tree HTML with an unclosed comment does
+            // not leak following tags as phantom symbols.
+            // 未閉鎖コメントは EOF までマスクし、以降のタグが phantom にならないようにする。
+            if (i + 3 < chars.Length && chars[i + 1] == '!' && chars[i + 2] == '-' && chars[i + 3] == '-')
+            {
+                var commentClose = text.IndexOf("-->", i + 4, StringComparison.Ordinal);
+                var commentEnd = commentClose < 0 ? chars.Length : commentClose + 3;
+                BlankPreservingNewlines(chars, i, commentEnd);
+                i = commentEnd;
+                continue;
+            }
+
+            var rawName = TryMatchHtmlRawTextOpenerName(text, i);
+            if (rawName != null)
+            {
+                // Walk the opening tag to find its closing `>`. Multi-line
+                // quoted attribute values are OK, but we bail if the parser
+                // sees `\n<tagstart>` before closing a quote (signals an
+                // unterminated quote in mid-edit markup).
+                // 開始タグの `>` を探す。複数行に跨る引用符付き属性値は OK だが、
+                // `\n<tag>` を見つけた時点で未終端と判断して中止する。
+                var openerEnd = FindHtmlTagOpenerEnd(text, i);
+                if (openerEnd < 0)
+                {
+                    // Unterminated raw-text opener. Mask from `<` to EOF — this
+                    // matches HTML spec behavior and prevents script-body
+                    // content from leaking as phantom symbols.
+                    // 開始タグが未終端の場合、仕様どおり EOF までマスクする。
+                    BlankPreservingNewlines(chars, i, chars.Length);
+                    i = chars.Length;
+                    continue;
+                }
+
+                var bodyStart = openerEnd + 1;
+                var closeIdx = FindHtmlRawTextClose(text, bodyStart, rawName);
+                var bodyEnd = closeIdx < 0 ? chars.Length : closeIdx;
+                BlankPreservingNewlines(chars, bodyStart, bodyEnd);
+
+                if (closeIdx < 0)
+                {
+                    i = chars.Length;
+                    continue;
+                }
+
+                var closeGt = text.IndexOf('>', closeIdx);
+                i = closeGt < 0 ? chars.Length : closeGt + 1;
+                continue;
+            }
+
+            i++;
+        }
+        return new string(chars);
     }
 
-    private static string BlankNonNewline(string value)
+    private static string? TryMatchHtmlRawTextOpenerName(string text, int start)
     {
-        if (value.Length == 0)
-            return value;
-        var chars = value.ToCharArray();
-        for (var i = 0; i < chars.Length; i++)
+        // Check if `text[start]` (must be `<`) begins `<script` / `<style` /
+        // `<textarea` / `<title` followed by a non-tag-name-char (so `<scriptx`
+        // is NOT matched as `<script`).
+        // `start` は `<` の位置。`<script` / `<style` / `<textarea` / `<title`
+        // に続く文字がタグ名文字でないもののみ一致させる（`<scriptx` は除外）。
+        foreach (var name in HtmlRawTextElementNames)
+        {
+            var nameStart = start + 1;
+            if (nameStart + name.Length > text.Length)
+                continue;
+            var match = true;
+            for (var j = 0; j < name.Length; j++)
+            {
+                if (char.ToLowerInvariant(text[nameStart + j]) != name[j])
+                {
+                    match = false;
+                    break;
+                }
+            }
+            if (!match)
+                continue;
+            var after = nameStart + name.Length;
+            if (after >= text.Length || !IsHtmlTagNameChar(text[after]))
+                return name;
+        }
+        return null;
+    }
+
+    private static int FindHtmlTagOpenerEnd(string text, int start)
+    {
+        // Walk from `start` (position of `<`) forward to find the opening `>`,
+        // skipping over quoted attribute values. Multi-line quoted values are
+        // allowed via FindHtmlQuoteClose's `\n<` bailout heuristic.
+        // `start` は `<` の位置。引用符付き属性値を `FindHtmlQuoteClose` で飛ばしつつ
+        // 開始タグの閉じ `>` を探す。複数行値は `\n<` 安全装置で許容する。
+        var i = start + 1;
+        while (i < text.Length)
+        {
+            var c = text[i];
+            if (c == '>')
+                return i;
+            if (c == '"' || c == '\'')
+            {
+                var closeIdx = FindHtmlQuoteClose(text, i + 1, c);
+                if (closeIdx < 0)
+                    return -1;
+                i = closeIdx + 1;
+                continue;
+            }
+            i++;
+        }
+        return -1;
+    }
+
+    private static int FindHtmlQuoteClose(string text, int start, char quote)
+    {
+        // Scan forward for the matching closing quote. HTML5 allows newlines
+        // inside quoted attribute values (`<meta description="line1\nline2">`),
+        // so we cross line boundaries. However, if we hit `\n<` followed by a
+        // plausible tag-name start (`<section`, `</div`, `<!--`), treat the
+        // quote as unterminated (mid-edit source) and return -1 so the caller
+        // can bound the damage. Without this safety net, `<div title="oops\n
+        // <section id="real">...` would pair the opener's `"` with the `"`
+        // inside `id="real"` and silently swallow every sibling tag in between.
+        // 閉じ引用符を探す。HTML5 は属性値内の改行を許容するため基本は複数行
+        // 許容するが、`\n<` の直後がタグ名開始文字等の場合は編集途中の未終端
+        // 引用符とみなして -1 を返す。未終端を素通しすると、たまたま後続の
+        // `id="real"` の `"` を拾って兄弟タグを黙って飲み込む。
+        var i = start;
+        while (i < text.Length)
+        {
+            var c = text[i];
+            if (c == quote)
+                return i;
+            if (c == '\n')
+            {
+                var j = i + 1;
+                while (j < text.Length && (text[j] == ' ' || text[j] == '\t'))
+                    j++;
+                if (j + 1 < text.Length && text[j] == '<')
+                {
+                    var nextCh = text[j + 1];
+                    if (IsHtmlTagNameStart(nextCh) || nextCh == '/' || nextCh == '!')
+                        return -1;
+                }
+            }
+            i++;
+        }
+        return -1;
+    }
+
+    private static int FindHtmlRawTextClose(string text, int start, string tagName)
+    {
+        // Locate the next `</tagName` (case-insensitive) at or after `start`.
+        // Returns the position of `<`, or -1 if none.
+        // `</tagName` を大文字小文字非区別で `start` 以降から探し、`<` の位置を返す。
+        var i = start;
+        while (i < text.Length - tagName.Length - 2)
+        {
+            if (text[i] == '<' && text[i + 1] == '/')
+            {
+                var match = true;
+                for (var j = 0; j < tagName.Length; j++)
+                {
+                    if (char.ToLowerInvariant(text[i + 2 + j]) != tagName[j])
+                    {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match)
+                {
+                    var after = i + 2 + tagName.Length;
+                    if (after >= text.Length)
+                        return i;
+                    var nc = text[after];
+                    if (nc == '>' || nc == '/' || char.IsWhiteSpace(nc))
+                        return i;
+                }
+            }
+            i++;
+        }
+        return -1;
+    }
+
+    private static void BlankPreservingNewlines(char[] chars, int start, int end)
+    {
+        var limit = Math.Min(end, chars.Length);
+        for (var i = start; i < limit; i++)
         {
             if (chars[i] != '\n' && chars[i] != '\r')
                 chars[i] = ' ';
         }
-        return new string(chars);
     }
 
     private static List<SymbolRecord> ExtractHtmlSymbols(long fileId, string[] lines)
@@ -1750,26 +1899,25 @@ public static class SymbolExtractor
                         var quote = maskedText[cursor];
                         cursor++;
                         attrValueStart = cursor;
-                        // Scope the closing-quote search to the current line. HTML5
-                        // technically allows newlines inside a quoted attribute value,
-                        // but for mid-edit working-tree robustness we bound the damage:
-                        // if the user is half-typing `<div title="oops\n...`, we do NOT
-                        // want to keep scanning until we happen upon any stray `"` later
-                        // in the file (e.g. inside a sibling `<section id="real">`), since
-                        // that would silently eat every sibling tag in between. If no
-                        // closing quote exists on this line, stop walking the tag entirely.
-                        // 閉じ引用符の探索は同一行に限定する。HTML5 仕様は属性値に改行を
-                        // 含められるが、編集中の working tree ではその仕様に従うと
-                        // `<div title="oops\n...` のような未閉鎖クォートが、たまたま後続の
-                        // `<section id="real">` などに現れる `"` を拾い、兄弟タグをまとめて
-                        // 飲み込む。現在行に閉じ引用符が無ければタグ走査を打ち切る。
-                        var lineEnd = maskedText.IndexOf('\n', cursor);
-                        var searchLimit = lineEnd < 0 ? maskedText.Length : lineEnd;
-                        var valueEnd = maskedText.IndexOf(quote, cursor, searchLimit - cursor);
+                        // Use the shared FindHtmlQuoteClose helper so this and the raw-text
+                        // mask agree on where quoted attribute values end. The helper allows
+                        // multi-line quoted values (valid HTML5 like `<div title="line1\n
+                        // line2" id="real">` where `id="real"` must still be emitted), and
+                        // bails on `\n<tagstart>` (mid-edit unterminated quote, where we
+                        // must NOT keep scanning across a sibling tag and silently eat it).
+                        // 共有ヘルパー `FindHtmlQuoteClose` を使い、mask 側とも引用符終端の
+                        // 判断を一致させる。複数行 quoted 属性値 (`<div title="line1\n
+                        // line2" id="real">` など) は許容し、`\n<tag>` を検出したら未終端と
+                        // 判断して兄弟タグまで飲まないようにする。
+                        var valueEnd = FindHtmlQuoteClose(maskedText, cursor, quote);
                         if (valueEnd < 0)
                         {
+                            // Unterminated: bail to end of current line so the outer tag
+                            // loop can restart at the beginning of the next line's `<`.
+                            // 未終端: 当該行末まで進め、次行先頭の `<` から外側ループが再開できるようにする。
                             attrValue = null;
-                            cursor = searchLimit;
+                            var eol = maskedText.IndexOf('\n', cursor);
+                            cursor = eol < 0 ? maskedText.Length : eol;
                             break;
                         }
                         attrValue = maskedText[cursor..valueEnd];
