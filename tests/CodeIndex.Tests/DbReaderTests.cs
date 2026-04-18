@@ -238,9 +238,9 @@ public class DbReaderTests : IDisposable
     public void Search_FindsCjkSubstringInsideLongerToken()
     {
         // FTS5 default tokenizer (unicode61) treats an entire CJK run like "計算する" as one token.
-        // Without the non-ASCII prefix-match fallback, `search 計算` would miss `def 計算する`.
+        // Without the CJK-only prefix-match fallback, `search 計算` would miss `def 計算する`.
         // FTS5既定のunicode61トークナイザは「計算する」を単一トークンとして扱う。
-        // 非ASCIIトークンに prefix match を付与しない限り、`search 計算` は `def 計算する` を取りこぼす。
+        // CJK 限定の prefix match fallback を付与しない限り、`search 計算` は `def 計算する` を取りこぼす。
         InsertIndexedFile("src/cjk.py", "python",
             "def 計算する(値):\n    return 値 * 2\n");
 
@@ -418,6 +418,100 @@ public class DbReaderTests : IDisposable
         var results = _reader.Search(extensionHChar);
 
         Assert.Contains(results, r => r.Path == "src/ext_h.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpCjkExtensionISubstringInsideLongerToken()
+    {
+        // Regression guard for CJK Unified Ideographs Extension I (U+2EBF0..U+2EE5F,
+        // Unicode 15.1, added 2023). Same non-BMP / surrogate-pair concern as Extension H,
+        // pinned separately so that a later "cleanup" dropping either range would break
+        // its own dedicated test instead of silently regressing.
+        // CJK Extension I (U+2EBF0..U+2EE5F, Unicode 15.1) の回帰テスト。
+        // Extension H と同じく非 BMP だが、どちらかの範囲を「整理」で外すとそれぞれ固有の
+        // テストが壊れるよう、別テストとして固定する。
+        var extensionIChar = char.ConvertFromUtf32(0x2EBF0);
+        InsertIndexedFile("src/ext_i.py", "python",
+            $"def {extensionIChar}abc(x):\n    return x\n");
+
+        var results = _reader.Search(extensionIChar);
+
+        Assert.Contains(results, r => r.Path == "src/ext_i.py");
+    }
+
+    [Fact]
+    public void Search_FindsIdeographicIterationMarkInsideLongerToken()
+    {
+        // Regression guard for Han-script codepoints outside the CJK Unified Ideographs
+        // blocks. '々' (U+3005, ideographic iteration mark) is Unicode script=Han but lives
+        // in the CJK Symbols and Punctuation block. unicode61 keeps it as a word character,
+        // so without explicit inclusion in the CJK prefix fallback set, `search '々'` returns
+        // 0 results against content containing `々abc` — same shape as #198 on a different
+        // codepoint class.
+        // CJK Unified Ideographs 範囲外の Han script コードポイントの回帰テスト。'々' (U+3005) は
+        // Unicode script=Han だが CJK Symbols and Punctuation ブロックに属する。unicode61 では
+        // 単語文字扱いなので、CJK prefix fallback セットに明示的に含めないと `search '々'` が
+        // `々abc` を含むファイルに対し 0 件を返す — #198 の別コードポイント版。
+        InsertIndexedFile("src/iter_mark.py", "python",
+            "def 々abc(x):\n    return x\n");
+
+        var results = _reader.Search("々");
+
+        Assert.Contains(results, r => r.Path == "src/iter_mark.py");
+    }
+
+    [Fact]
+    public void Search_FindsIdeographicZeroInsideLongerToken()
+    {
+        // Same concern as 々 above but for '〇' (U+3007, ideographic number zero).
+        // 上の 々 と同様、'〇' (U+3007) についての回帰テスト。
+        InsertIndexedFile("src/ideograph_zero.py", "python",
+            "def 〇abc(x):\n    return x\n");
+
+        var results = _reader.Search("〇");
+
+        Assert.Contains(results, r => r.Path == "src/ideograph_zero.py");
+    }
+
+    [Fact]
+    public void Search_FindsHalfwidthHangulSubstringInsideLongerToken()
+    {
+        // Regression guard for halfwidth Hangul letters (U+FFA0..U+FFDC). unicode61 keeps
+        // them as word characters, so without including that range in the CJK prefix
+        // fallback, `search 'ﾱ'` returns 0 results against content containing 'ﾱﾲﾳabc'.
+        // This is the same 0-hit shape as #198 on the halfwidth Hangul block, which is
+        // why the halfwidth range extends past U+FF9F (halfwidth Katakana) to U+FFDC.
+        // 半角ハングル (U+FFA0..U+FFDC) の回帰テスト。unicode61 は単語文字として扱うため、
+        // CJK prefix fallback 範囲に含めないと `search 'ﾱ'` が 'ﾱﾲﾳabc' を含む内容に対して
+        // 0 件になる — 半角ハングル版の #198 再現。U+FF9F までではなく U+FFDC まで広げる
+        // 必要がある理由を固定する。
+        InsertIndexedFile("src/halfwidth_hangul.py", "python",
+            "def ﾱﾲﾳabc(x):\n    return x\n");
+
+        var results = _reader.Search("ﾱ");
+
+        Assert.Contains(results, r => r.Path == "src/halfwidth_hangul.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpKanaExtendedBSubstringInsideLongerToken()
+    {
+        // Regression guard for Kana Extended-B (U+1AFF0..U+1AFFF, Unicode 15.0). Non-BMP
+        // kana codepoints are represented as surrogate pairs in .NET strings; the predicate
+        // must walk runes rather than chars AND must include this range in the fallback
+        // set. Without it, `search '𚿰'` returns 0 results against content containing
+        // '𚿰abc' — identical 0-hit shape to #198.
+        // Kana Extended-B (U+1AFF0..U+1AFFF, Unicode 15.0) の回帰テスト。非 BMP の仮名は
+        // .NET 文字列ではサロゲートペアとして現れるため、述語は rune を走査し、さらにこの
+        // 範囲を fallback セットに含める必要がある。抜けると `search '𚿰'` が '𚿰abc' を含む
+        // 内容に対して 0 件を返す — #198 と同じ症状が Kana Extended-B で再発する。
+        var kanaExtendedBChar = char.ConvertFromUtf32(0x1AFF0);
+        InsertIndexedFile("src/kana_ext_b.py", "python",
+            $"def {kanaExtendedBChar}abc(x):\n    return x\n");
+
+        var results = _reader.Search(kanaExtendedBChar);
+
+        Assert.Contains(results, r => r.Path == "src/kana_ext_b.py");
     }
 
     [Fact]

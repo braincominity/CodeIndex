@@ -89,10 +89,28 @@ public partial class DbReader
 
         var value = rune.Value;
         // Hiragana / Katakana (including Phonetic Extensions and Katakana Phonetic Extensions)
-        // ひらがな・カタカナ（音声拡張を含む）
+        // plus Kana Extended-B (U+1AFF0..U+1AFFF, Unicode 15.0).
+        // ひらがな・カタカナ（音声拡張を含む）および Kana Extended-B。
         if (value >= 0x3040 && value <= 0x30FF) return true;
         if (value >= 0x31F0 && value <= 0x31FF) return true;
+        if (value >= 0x1AFF0 && value <= 0x1AFFF) return true;
         if (value >= 0x1B000 && value <= 0x1B16F) return true;
+
+        // Han-script codepoints that live outside the CJK Unified Ideographs / Extensions
+        // blocks: ideographic iteration/closing marks (々 U+3005, 〆 U+3006), the ideographic
+        // number zero (〇 U+3007), Hangzhou numerals (U+3021..U+3029), and the Hangzhou
+        // 10/20/30 + vertical iteration marks (U+3038..U+303B). These are Unicode Han script
+        // but unicode61 keeps them as regular word-character runs, so they still need CJK
+        // prefix promotion to match against longer indexed tokens like '々ab' or '〇abc'.
+        // CJK Unified Ideographs 範囲外の Han script コードポイント: 々(U+3005)、〆(U+3006)、
+        // 〇(U+3007)、Hangzhou 数字(U+3021..U+3029)、Hangzhou 10/20/30 と縦書き反復記号
+        // (U+3038..U+303B) は unicode61 で通常の単語文字として扱われるため、'々ab' や '〇abc'
+        // のような長いトークンへ CJK prefix 昇格を届かせる必要がある。
+        if (value == 0x3005) return true;
+        if (value == 0x3006) return true;
+        if (value == 0x3007) return true;
+        if (value >= 0x3021 && value <= 0x3029) return true;
+        if (value >= 0x3038 && value <= 0x303B) return true;
 
         // CJK Unified Ideographs + Extensions A-I, Compatibility Ideographs.
         // CJK Radicals Supplement (U+2E80..U+2EFF) and Kangxi Radicals (U+2F00..U+2FDF)
@@ -120,12 +138,13 @@ public partial class DbReader
         if (value >= 0xA960 && value <= 0xA97F) return true;
         if (value >= 0xD7B0 && value <= 0xD7FF) return true;
 
-        // Halfwidth and Fullwidth Forms include halfwidth Katakana and fullwidth CJK punctuation,
-        // but also fullwidth Latin/digits that we do NOT want to prefix-fallback. Narrow to the
-        // halfwidth-katakana sub-range so ascii-like fullwidth forms keep exact-phrase semantics.
-        // Halfwidth/Fullwidthブロックは半角カナや全角CJK記号を含むが、全角Latin/数字まではprefix化したくない。
-        // 半角カナ部分のみ許容し、ASCII相当の全角形は完全一致のまま残す。
-        if (value >= 0xFF65 && value <= 0xFF9F) return true;
+        // Halfwidth and Fullwidth Forms: halfwidth Katakana (U+FF65..U+FF9F) plus
+        // halfwidth Hangul Letters (U+FFA0..U+FFDC). The range intentionally stops
+        // at U+FFDC: U+FFE0..U+FFEE are fullwidth currency / arrow symbols that
+        // unicode61 drops anyway, and U+FFDD..U+FFDF are unassigned.
+        // Halfwidth/Fullwidth ブロックの半角カナ (U+FF65..U+FF9F) と半角ハングル
+        // (U+FFA0..U+FFDC)。U+FFDD 以降は未割当や unicode61 が drop する記号なので含めない。
+        if (value >= 0xFF65 && value <= 0xFFDC) return true;
 
         return false;
     }
