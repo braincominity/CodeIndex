@@ -711,6 +711,7 @@ public sealed class InstallScriptTests : IDisposable
             download_and_install() { echo "DOWNLOAD_SHOULD_NOT_RUN"; }
             check_path() { :; }
             curl() {
+                printf 'curl: (7) Failed to connect to api.github.com port 443 after 0 ms: Connection refused\n' >&2
                 return 7
             }
 
@@ -726,6 +727,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("Fetching latest release version", stdout);
         Assert.DoesNotContain("Done!", stdout);
         Assert.DoesNotContain("DOWNLOAD_SHOULD_NOT_RUN", stdout);
+        Assert.Contains("curl: (7) Failed to connect to api.github.com port 443 after 0 ms: Connection refused", stderr);
         Assert.Contains("Network error reaching GitHub API while fetching", stderr);
         Assert.Contains("curl exit 7", stderr);
     }
@@ -1827,6 +1829,7 @@ public sealed class InstallScriptTests : IDisposable
             RID="linux-x64"
 
             curl() {
+                printf 'curl: (6) Could not resolve host: mirror.example\n' >&2
                 return 7
             }
 
@@ -1839,6 +1842,7 @@ public sealed class InstallScriptTests : IDisposable
             });
 
         Assert.Equal(1, exitCode);
+        Assert.Contains("curl: (6) Could not resolve host: mirror.example", stderr);
         Assert.Contains("Network error reaching configured release host (https://mirror.example/releases)", stderr);
         Assert.Contains("https://mirror.example/releases/Widthdom/CodeIndex/releases/download/v1.2.3/CodeIndex-linux-x64.tar.gz", stderr);
         Assert.DoesNotContain("Network error reaching GitHub", stderr);

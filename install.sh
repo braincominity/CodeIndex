@@ -232,6 +232,10 @@ curl_http_get() {
             return 1
         fi
 
+        if [ -n "$stderr_text" ]; then
+            printf '%s\n' "$stderr_text" >&2
+        fi
+
         case "$curl_status" in
             6|7|28|35|52|56)
                 report_error "Network error reaching ${source_label} while fetching $url (curl exit $curl_status). Check your connection, proxy, or configured mirror."
