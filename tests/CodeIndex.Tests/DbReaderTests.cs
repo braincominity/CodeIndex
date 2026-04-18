@@ -3272,6 +3272,59 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetFileDependencies_CSharp_IndirectAttributeInheritance_ResolvesAsMetadataTarget()
+    {
+        // issue #293 round-17: the metadata-eligibility filter must not require
+        // the immediate base class to end in `Attribute`. Indirect inheritance
+        // like `class MyAuditAttribute : BaseAudit` where `BaseAudit : Attribute`
+        // is a valid `[MyAudit]` target at compile time. The previous strict
+        // pattern (`signature LIKE '%: %Attribute%'`) wrongly excluded the
+        // indirectly-derived class and dropped the deps edge. The loosened
+        // pattern (`signature LIKE '%: %'`) accepts any class with an
+        // inheritance clause, which is the best portable approximation since
+        // SQL cannot resolve base types transitively.
+        // issue #293 round-17: metadata 適格性フィルタは直接基底が
+        // `Attribute` で終わることを要求してはならない。
+        // `class MyAuditAttribute : BaseAudit` で `BaseAudit : Attribute` の
+        // ような間接継承も `[MyAudit]` の有効な target である。以前の
+        // 厳格パターンは間接継承を弾いて deps エッジを落としていた。
+        // 緩和パターンは「継承節を持つ class」を近似として採用する。
+        InsertIndexedFile("src/BaseAudit.cs", "csharp",
+            """
+            namespace App;
+
+            public abstract class BaseAudit : System.Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            namespace App;
+
+            public sealed class MyAuditAttribute : BaseAudit
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            namespace App;
+
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var deps = _reader.GetFileDependencies(
+            limit: 50,
+            lang: "csharp");
+
+        Assert.Contains(deps, d =>
+            d.SourcePath == "src/Svc.cs" &&
+            d.TargetPath == "src/MyAuditAttribute.cs");
+    }
+
+    [Fact]
     public void GetFileDependencyHints_MetadataBypassAmbiguityGuard_RespectsExcludeTests()
     {
         // issue #293 round-11 follow-up: ambiguity guard must honor

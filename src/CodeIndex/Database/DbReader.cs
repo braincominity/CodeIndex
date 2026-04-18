@@ -1945,22 +1945,31 @@ public partial class DbReader
         // (例: `namespace A { class MyAuditAttribute { } } namespace B { class
         // MyAuditAttribute { } }`) でも ambiguity を 2 として検出できる。DISTINCT
         // f.path のままだと 1 に潰れ、metadata bypass が誤って有効化される。
-        // For C# specifically, only count class-like definitions that are actually
-        // eligible as attribute metadata targets — i.e. signatures that contain
-        // `: ...Attribute` inheritance (e.g. `: Attribute`, `: System.Attribute`,
-        // `: BaseLogAttribute`). A plain `class MyAuditAttribute { }` without the
-        // Attribute-suffixed base class is not a valid target for `[MyAudit]` at
-        // compile time, so counting it as an ambiguity candidate would falsely
-        // suppress the metadata bypass and under-report `impact`. Other languages
-        // (Java `@interface`, Kotlin `annotation class`, etc.) still count every
-        // class-like definition because their metadata-target markers are not as
-        // easily captured by a single signature pattern.
-        // C# に限り、曖昧性候補は「Attribute を継承している」class-like 定義だけに絞る。
-        // シグネチャに `: ...Attribute` を含むもの (`: Attribute`, `: System.Attribute`,
-        // `: BaseLogAttribute` 等) のみが `[MyAudit]` の実 target になり得るため、
-        // `class MyAuditAttribute { }` のように継承を書いていない plain クラスを数える
-        // と `impact` が過少報告になる。他言語 (Java `@interface`, Kotlin `annotation
-        // class` 等) は単一 LIKE でマーカーを書きにくいので従来どおり class-like 全体を候補にする。
+        // For C# specifically, only count class-like definitions that are
+        // plausible attribute metadata targets. We don't resolve base types
+        // transitively at SQL time, so the best portable approximation is
+        // "has an inheritance clause": any class declared with `: ...` is a
+        // potential attribute type (direct `: Attribute`, indirect
+        // `: BaseAudit` where BaseAudit itself derives from Attribute, or
+        // any other `: Base` chain). A plain `class MyAuditAttribute { }`
+        // with no `:` clause is not a valid `[MyAudit]` target at compile
+        // time, so excluding it prevents the metadata bypass from being
+        // falsely suppressed. We deliberately over-accept non-attribute
+        // derived classes rather than under-accept indirectly-derived
+        // attribute classes, because an invalid `[MyFoo]` against a
+        // non-attribute class would fail to compile and therefore not
+        // appear as a real reference. Other languages keep the broad
+        // class-like candidate set because their metadata-target markers
+        // don't match this signature shape.
+        // C# は SQL 時点で基底型を遡れないため、「何かを継承している
+        // class-like」を attribute 候補の近似として扱う。`: Attribute` の
+        // 直接継承も、`: BaseAudit` のような中間基底経由の間接継承も、
+        // 何らかの `: Base` があれば候補に含める。継承節の無い plain
+        // `class MyAuditAttribute { }` だけを除外することで metadata
+        // bypass の誤抑止を防ぐ。非 attribute を過剰に含めるが、無効な
+        // `[MyFoo]` はコンパイルできないので実参照にはならず実害が無い。
+        // 署名列が無い legacy DB では degrade して class-like 全体を候補にする。
+        var csharpMetadataFilterForF = BuildCSharpMetadataTargetFilter("f");
         var sql = $@"
             SELECT COUNT(*) FROM (
                 SELECT DISTINCT f.path, s.line, s.name
@@ -1968,7 +1977,7 @@ public partial class DbReader
                 JOIN files f ON s.file_id = f.id
                 WHERE s.name = @metadataAmbigName COLLATE NOCASE
                   AND s.kind IN ('class','struct','interface')
-                  AND (f.lang != 'csharp' OR (s.signature IS NOT NULL AND s.signature LIKE '%: %Attribute%'))
+                  AND ({csharpMetadataFilterForF})
                   AND {supportedLangFilter}";
         if (lang != null)
         {
@@ -2565,6 +2574,35 @@ public partial class DbReader
         return fallbackSql ?? "NULL";
     }
 
+    // Build the C# metadata-target eligibility predicate used by `deps`
+    // (target_files / target_ambiguity) and `impact` (IsMetadataTargetUnambiguous).
+    // Returns a SQL fragment that evaluates to TRUE when a symbol row under the
+    // given files-table alias should be counted as a plausible `[Attribute]`
+    // target. Transitive base-type resolution isn't available at SQL time, so
+    // we approximate with "has an inheritance clause" — any C# class declared
+    // with a `: ...` base list qualifies (direct `: Attribute`, indirect
+    // `: BaseAudit` where BaseAudit derives from Attribute, or any other
+    // base). Non-inheriting plain classes are excluded. Legacy DBs without a
+    // `symbols.signature` column degrade to the broad class-like set so
+    // read-only / pre-migration indexes do not crash with `no such column`.
+    // `deps` と `impact` で共有する C# metadata-target 適格性判定。基底型を
+    // SQL 時点で遡れないため、「継承節を持つ」を近似とする(直接・間接の
+    // Attribute 継承を両方拾う)。継承のない plain class だけを除外する。
+    // signature 列が無い legacy/read-only DB では判定を無効化し、従来の
+    // class-like 全体を候補集合にするので読み取り失敗しない。
+    private string BuildCSharpMetadataTargetFilter(string fileAlias)
+    {
+        if (!_symbolColumns.Contains("signature"))
+        {
+            // Legacy schema — no signature column available. Fall back to the
+            // pre-metadata-eligibility behavior so `deps`/`impact` still return
+            // results rather than crashing.
+            // signature 列が無い legacy schema — filter を無効化して従来挙動に戻す。
+            return "1 = 1";
+        }
+        return $"{fileAlias}.lang != 'csharp' OR (s.signature IS NOT NULL AND s.signature LIKE '%: %')";
+    }
+
     /// <summary>
     /// Compute file-level dependency edges: which files reference symbols defined in which other files.
     /// ファイル間の依存関係エッジを算出: どのファイルがどのファイルで定義されたシンボルを参照しているか。
@@ -2685,23 +2723,24 @@ public partial class DbReader
                 -- が別行として残り、deps の参照カウントが膨らんでしまう。
                 -- has_metadata_target_kind further narrows the class-like set to targets
                 -- that can legitimately be referenced as [Attribute] metadata. For C#
-                -- that additionally requires the class to inherit from something ending
-                -- in `Attribute` (signature LIKE '%: %Attribute%'); a plain
-                -- `class FooAttribute { }` without that inheritance is not a valid
-                -- [Foo] target at compile time and should not count as an ambiguity
-                -- candidate. Other languages keep the original class-like breadth.
-                -- has_metadata_target_kind は `[Attribute]` metadata target として
-                -- 有効な class-like のみを数える。C# に限り signature に
-                -- `: ...Attribute` を含むクラスだけを対象にする (`class FooAttribute { }`
-                -- のように Attribute 継承を書いていない plain クラスは `[Foo]` の target
-                -- にならないため)。Java/Kotlin 等は従来どおり class-like 全体を候補に残す。
+                -- we cannot resolve base types transitively at SQL time, so the best
+                -- portable approximation is an inheritance-clause check: any class
+                -- declared with a base list is a potential attribute type (direct or
+                -- indirect Attribute derivation). A plain class FooAttribute with no
+                -- base clause is not a valid [Foo] target at compile time.
+                -- Other languages keep the original class-like breadth. Legacy DBs
+                -- without a signature column degrade to the broad class-like set.
+                -- has_metadata_target_kind は [Attribute] metadata target として妥当な
+                -- class-like のみに絞る。C# は SQL 時点で基底型を遡れないため、継承節を
+                -- 持つクラスを候補とする近似を採る(直接・間接の Attribute 継承を
+                -- 取りこぼさない)。他言語は class-like 全体を残す。signature 列が無い
+                -- legacy DB では filter を無効化し class-like 全体に戻る。
                 SELECT dst.path AS target_path,
                        dst.lang AS target_lang,
                        s.name AS symbol_name,
                        MAX(CASE WHEN s.kind IN ('class','struct','interface') THEN 1 ELSE 0 END) AS has_class_like_kind,
                        MAX(CASE WHEN s.kind IN ('class','struct','interface')
-                                 AND (dst.lang != 'csharp'
-                                      OR (s.signature IS NOT NULL AND s.signature LIKE '%: %Attribute%'))
+                                 AND (" + BuildCSharpMetadataTargetFilter("dst") + @")
                                 THEN 1 ELSE 0 END) AS has_metadata_target_kind
                 FROM symbols s
                 JOIN files dst ON s.file_id = dst.id
@@ -2776,15 +2815,15 @@ public partial class DbReader
                   ON s.file_id = dst.id
                  AND s.name = tf.symbol_name
                  AND s.kind IN ('class','struct','interface')
-                 -- Same C# metadata-eligibility filter as target_files: only count
-                 -- attribute-derived classes for C#. Otherwise two same-named plain
-                 -- classes (only one of which inherits from Attribute) would still
-                 -- look ambiguous and suppress the metadata bypass.
-                 -- target_files と同じ metadata 適格性フィルタ。C# では Attribute を
-                 -- 継承している class のみを数え、plain 同名クラスが混在していても
-                 -- ambiguity と誤判定しない。
-                 AND (dst.lang != 'csharp'
-                      OR (s.signature IS NOT NULL AND s.signature LIKE '%: %Attribute%'))
+                 -- Same C# metadata-eligibility filter as target_files: a C# class
+                 -- must have an inheritance clause to qualify as an attribute-target
+                 -- candidate (covers direct : Attribute and indirect : BaseAudit
+                 -- inheritance). Non-inheriting plain classes are not valid targets
+                 -- and should not contribute to the ambiguity count.
+                 -- target_files と同じ適格性フィルタ。C# クラスは継承節を持つときだけ
+                 -- 候補になる(直接 : Attribute も、間接 : BaseAudit も救う)。
+                 -- 継承のない plain class は候補から外し ambiguity を誤判定しない。
+                 AND (" + BuildCSharpMetadataTargetFilter("dst") + @")
                 WHERE tf.has_metadata_target_kind = 1
                 GROUP BY tf.target_lang, tf.symbol_name
             ),
