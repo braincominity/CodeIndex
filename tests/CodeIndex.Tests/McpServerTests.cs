@@ -330,6 +330,30 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsList_CallersCalleesKindDescription_ExcludesMetadataKinds()
+    {
+        // Keep the `kind` schema description honest: the callers/callees handlers reject
+        // metadata kinds (`attribute`, `annotation`) as a usage error, so the schema must
+        // not advertise them as valid filter values.
+        // callers/callees の handler は metadata kinds (`attribute` / `annotation`) を拒否するため、
+        // schema の `kind` description も有効値として列挙しないこと。
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        foreach (var name in new[] { "callers", "callees" })
+        {
+            var tool = tools.First(t => t!["name"]!.GetValue<string>() == name)!;
+            var kindDescription = tool["inputSchema"]!["properties"]!["kind"]!["description"]!.GetValue<string>();
+
+            Assert.Contains("call-graph", kindDescription);
+            Assert.Contains("call, instantiate, subscribe", kindDescription);
+            Assert.Contains("rejected", kindDescription);
+            Assert.Contains("references", kindDescription);
+        }
+    }
+
+    [Fact]
     public void ToolsList_ImpactAnalysisDescribesHeuristicFallback()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
@@ -483,6 +507,26 @@ public class McpServerTests : IDisposable
         Assert.Equal(3, response["result"]!["structuredContent"]!["snippetLines"]!.GetValue<int>());
         var snippet = response["result"]!["structuredContent"]!["results"]![0]!["snippet"]!.GetValue<string>();
         Assert.True(snippet.Split('\n').Length <= 3);
+    }
+
+    [Fact]
+    public void ToolsCall_Search_MaxLineWidthZeroReturnsError()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"App","maxLineWidth":0}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("maxLineWidth must be greater than or equal to 1", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Search_MaxLineWidthAboveCeilingReturnsError()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"App","maxLineWidth":4097}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("maxLineWidth must be less than or equal to 4096", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
     [Fact]
@@ -1102,6 +1146,36 @@ public class McpServerTests : IDisposable
         Assert.Equal("markdown", response["result"]!["structuredContent"]!["graphLanguage"]!.GetValue<string>());
         Assert.False(response["result"]!["structuredContent"]!["graphSupported"]!.GetValue<bool>());
         Assert.Contains("not indexed", response["result"]!["structuredContent"]!["graphSupportReason"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("callers", "attribute")]
+    [InlineData("callers", "annotation")]
+    [InlineData("callees", "attribute")]
+    [InlineData("callees", "annotation")]
+    public void ToolsCall_CallersOrCallees_MetadataKindReturnsToolError(string tool, string kind)
+    {
+        // issue #293 follow-up: the MCP `callers` / `callees` tools must reject `kind:
+        // attribute` / `kind: annotation` because metadata rows are attributed to the
+        // enclosing body-range symbol (so `callers Obsolete kind=attribute` reports the
+        // enclosing class instead of the annotated method, and file-level targets drop
+        // entirely). AI clients should be redirected to the `references` tool for metadata
+        // enumeration.
+        // issue #293 補足: MCP の `callers` / `callees` ツールは `kind: attribute` /
+        // `kind: annotation` を必ず弾くこと。metadata 行は body-range の外側シンボルに帰属する
+        // ため、`callers Obsolete kind=attribute` は注釈対象のメソッドではなく外側クラスを返し、
+        // file-level target は完全に脱落する。AI クライアントは metadata 列挙のために
+        // `references` ツールに誘導する。
+        var requestJson = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\","
+            + "\"params\":{\"name\":\"" + tool + "\","
+            + "\"arguments\":{\"query\":\"SomeSymbol\",\"kind\":\"" + kind + "\"}}}";
+        var request = JsonNode.Parse(requestJson)!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains($"'kind: {kind}' is not supported on '{tool}'", text);
+        Assert.Contains("'references' tool", text);
     }
 
     [Fact]
@@ -5047,6 +5121,96 @@ public class McpServerTests : IDisposable
         var results = response["result"]!["structuredContent"]!["results"]!.AsArray();
         Assert.Single(results);
         Assert.Contains("not allowed in batch_query", results[0]!["error"]!.GetValue<string>());
+    }
+
+    // Regression pins for issue #199: MCP tool handlers must normalize mixed-case lang/kind.
+    // #199 回帰テスト: MCP ハンドラも --lang / --kind を大文字小文字なく扱うことを固定する。
+    [Fact]
+    public void ToolsCall_Symbols_AcceptsLangCsharpCaseInsensitively_Issue199()
+    {
+        var requestUpper = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"App","lang":"CSharp"}}}""")!;
+        var responseUpper = _server.HandleMessage(requestUpper)!;
+
+        var structuredUpper = responseUpper["result"]!["structuredContent"]!;
+        Assert.Equal("csharp", structuredUpper["lang"]!.GetValue<string>());
+        Assert.True(structuredUpper["count"]!.GetValue<int>() >= 1);
+
+        var requestLower = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"App","lang":"csharp"}}}""")!;
+        var responseLower = _server.HandleMessage(requestLower)!;
+        var structuredLower = responseLower["result"]!["structuredContent"]!;
+
+        Assert.Equal(structuredLower["count"]!.GetValue<int>(), structuredUpper["count"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_Symbols_AcceptsKindClassCaseInsensitively_Issue199()
+    {
+        var requestUpper = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"App","kind":"CLASS"}}}""")!;
+        var responseUpper = _server.HandleMessage(requestUpper)!;
+
+        var structuredUpper = responseUpper["result"]!["structuredContent"]!;
+        Assert.Equal("class", structuredUpper["kind"]!.GetValue<string>());
+        Assert.True(structuredUpper["count"]!.GetValue<int>() >= 1);
+
+        var requestLower = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"App","kind":"class"}}}""")!;
+        var responseLower = _server.HandleMessage(requestLower)!;
+        var structuredLower = responseLower["result"]!["structuredContent"]!;
+
+        Assert.Equal(structuredLower["count"]!.GetValue<int>(), structuredUpper["count"]!.GetValue<int>());
+
+        // Prove the kind filter is actually applied, not silently dropped: the seeded "App" symbol
+        // is a class, so querying it with kind=FUNCTION must return 0 regardless of casing.
+        // kind フィルタが実際に適用されていることを確認: seed した App は class なので、
+        // kind=FUNCTION での検索は大文字小文字に関わらず 0 件になるべき。
+        var requestWrongKind = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"App","kind":"FUNCTION"}}}""")!;
+        var responseWrongKind = _server.HandleMessage(requestWrongKind)!;
+        var structuredWrongKind = responseWrongKind["result"]!["structuredContent"]!;
+        Assert.Equal("function", structuredWrongKind["kind"]!.GetValue<string>());
+        Assert.Equal(0, structuredWrongKind["count"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_Definition_AcceptsLangCsharpCaseInsensitively_Issue199()
+    {
+        var requestUpper = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"App","lang":"CSharp"}}}""")!;
+        var responseUpper = _server.HandleMessage(requestUpper)!;
+
+        var structuredUpper = responseUpper["result"]!["structuredContent"]!;
+        Assert.Equal("csharp", structuredUpper["lang"]!.GetValue<string>());
+        Assert.True(structuredUpper["count"]!.GetValue<int>() >= 1);
+
+        var requestLower = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"App","lang":"csharp"}}}""")!;
+        var responseLower = _server.HandleMessage(requestLower)!;
+        var structuredLower = responseLower["result"]!["structuredContent"]!;
+
+        Assert.Equal(structuredLower["count"]!.GetValue<int>(), structuredUpper["count"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_Definition_AcceptsKindClassCaseInsensitively_Issue199()
+    {
+        var requestUpper = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"App","kind":"CLASS"}}}""")!;
+        var responseUpper = _server.HandleMessage(requestUpper)!;
+
+        var structuredUpper = responseUpper["result"]!["structuredContent"]!;
+        Assert.Equal("class", structuredUpper["kind"]!.GetValue<string>());
+        Assert.True(structuredUpper["count"]!.GetValue<int>() >= 1);
+
+        var requestLower = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"App","kind":"class"}}}""")!;
+        var responseLower = _server.HandleMessage(requestLower)!;
+        var structuredLower = responseLower["result"]!["structuredContent"]!;
+
+        Assert.Equal(structuredLower["count"]!.GetValue<int>(), structuredUpper["count"]!.GetValue<int>());
+
+        // Prove the kind filter is actually applied, not silently echoed.
+        // The shared fixture only seeds `App` as a class, so querying with kind:"FUNCTION"
+        // must return 0 if the normalized kind is threaded through to GetDefinitions().
+        // kind フィルタが捨てられずに実際に適用されていることを確認する。
+        var requestWrongKind = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"App","kind":"FUNCTION"}}}""")!;
+        var responseWrongKind = _server.HandleMessage(requestWrongKind)!;
+        var structuredWrongKind = responseWrongKind["result"]!["structuredContent"]!;
+        Assert.Equal("function", structuredWrongKind["kind"]!.GetValue<string>());
+        Assert.Equal(0, structuredWrongKind["count"]!.GetValue<int>());
     }
 
     private static string CreateLegacyDbWithoutIndexedAt()

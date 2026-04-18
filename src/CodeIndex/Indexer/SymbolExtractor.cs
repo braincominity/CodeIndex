@@ -13,22 +13,42 @@ public static class SymbolExtractor
     private const string CSharpVisibilityPattern = @"protected\s+internal|private\s+protected|public|protected|internal|private";
     // Return-type character class includes `*` so pointer and function-pointer returns
     // (`int*`, `void**`, `delegate*<int, int>`, `int*[]`) are not silently dropped.
-    // The trailing `(?:\?|\[[\],\s]*\])*` loop lets a tuple group carry suffixes
-    // (`(int, int)[]`, `(int, int)?`, `(int, int)[][]`, `(int, int)[,]`) so tuple-array and
-    // nullable-tuple return types are captured on methods, properties, indexers, and
-    // explicit interface implementations. Delegate and event declarations with tuple-array
-    // returns remain blocked by pre-existing pattern-order / generic-over-tuple issues
-    // (#340, #241) and are out of scope for this loop. The identifier branch already absorbs
-    // these characters via its char class, but keeping the suffix loop outside both branches
-    // is harmless and makes the tuple branch's responsibilities explicit.
+    // The trailing CSharpTupleSuffixPattern lets a tuple group carry suffixes
+    // (`(int, int)[]`, `(int, int)?`, `(int, int)[][]`, `(int, int)[,]`, and whitespaced
+    // variants like `(int, int) []` / `(int, int) ?`) so tuple-array and nullable-tuple
+    // return types are captured on methods, properties, indexers, and explicit interface
+    // implementations. Delegate and event declarations with tuple-array returns remain
+    // blocked by pre-existing pattern-order / generic-over-tuple issues (#340, #241) and are
+    // out of scope for this loop. The identifier branch already absorbs these characters via
+    // its char class, but keeping the suffix loop outside both branches is harmless and
+    // makes the tuple branch's responsibilities explicit.
     // 戻り値型のクラスに `*` を含め、ポインタ / 関数ポインタ戻り値型（`int*` / `void**` / `delegate*<int, int>` / `int*[]`）を取りこぼさない。
-    // 末尾の `(?:\?|\[[\],\s]*\])*` ループで tuple 分岐にも `[]` / `?` / `[][]` / `[,]` の
-    // サフィックスを許容し、`(int, int)[]` / `(int, int)?` のような tuple-array / nullable-tuple
-    // 戻り値をメソッド・プロパティ・インデクサ・明示的インターフェース実装で捕捉できるようにする。
-    // delegate / event 宣言で tuple-array 戻り値を扱う件はパターン評価順や generic-over-tuple
-    // 側の既存バグ（#340、#241）が残っており、このループの範囲外。識別子側の分岐は
-    // 文字クラスに `[`/`]`/`?` を既に含むため無害な冗長だが、tuple 分岐側の責務が明確になる。
-    private const string CSharpTypePattern = @"(?:(?:\([^)]+\)|(?:global::)?[\w?.<>\[\],:*]+(?:\s+[\w?.<>\[\],:*]+)*)(?:\?|\[[\],\s]*\])*)";
+    // 末尾の CSharpTupleSuffixPattern で tuple 分岐にも `[]` / `?` / `[][]` / `[,]` と、
+    // `(int, int) []` / `(int, int) ?` のような空白を挟んだ整形バリエーションまで許容し、
+    // tuple-array / nullable-tuple 戻り値をメソッド・プロパティ・インデクサ・明示的
+    // インターフェース実装で捕捉できるようにする。delegate / event 宣言で tuple-array 戻り値を
+    // 扱う件はパターン評価順や generic-over-tuple 側の既存バグ（#340、#241）が残っており、この
+    // ループの範囲外。識別子側の分岐は文字クラスに `[`/`]`/`?` を既に含むため無害な冗長だが、
+    // tuple 分岐側の責務が明確になる。
+    // Tuple / array / nullable suffix tokens that may trail a C# return type. Each iteration
+    // matches a single `?` or a bracketed `[]` / `[,]` / `[,,]` group and allows whitespace
+    // between the preceding `)` / identifier and the suffix token (the `\s*` sits inside the
+    // group so a type with no suffix still matches zero iterations and consumes no
+    // whitespace). Shared by CSharpTypePattern and the C# constructor regex negative
+    // lookahead so legal formatting variants like `public required (int, int) [] R4 { ... }`
+    // and `public readonly (int, int) ? M3() => default;` are both rejected as ctor shapes
+    // (via the lookahead) and accepted as property / method shapes (via the upstream rows).
+    // Closes #349 follow-up.
+    // C# の戻り値型末尾に付きうる tuple / 配列 / nullable サフィックストークン列。各繰り返しは
+    // `?` 1 個または `[]` / `[,]` / `[,,]` の bracket ブロック 1 個を受理し、先行する `)` や
+    // 識別子とサフィックストークンの間に空白を許容する（`\s*` を繰り返しの内側に入れているため、
+    // サフィックスを持たない型は 0 回繰り返しで一致し、空白を消費しない）。CSharpTypePattern と
+    // C# コンストラクタ regex の否定先読みで共有し、`public required (int, int) [] R4 { ... }`
+    // や `public readonly (int, int) ? M3() => default;` のような合法な整形を、
+    // 否定先読みで ctor 形状として弾きつつ、上流の property / method 行で本来のシンボルとして
+    // 拾えるようにする。#349 のフォローアップ。
+    private const string CSharpTupleSuffixPattern = @"(?:\s*(?:\?|\[[\],\s]*\]))*";
+    private const string CSharpTypePattern = @"(?:(?:\([^)]+\)|(?:global::)?[\w?.<>\[\],:*]+(?:\s+[\w?.<>\[\],:*]+)*)" + CSharpTupleSuffixPattern + @")";
     // `delegate` is a non-type keyword only when it is NOT followed by `*` — `delegate*<...>` is a valid return type.
     // `delegate` は `*` を伴わないときだけ非型キーワード扱い。`delegate*<...>` は戻り値型として有効。
     private const string CSharpNonTypeKeywordPattern = @"(?:(?:public|private|protected|internal|static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|required|ref)\b|delegate\b(?!\s*\*))";
@@ -410,11 +430,41 @@ public static class SymbolExtractor
             // `unsafe` / `extern` can appear before or after visibility so declarations like
             // `unsafe public S(int* p) {}` and `extern public S(int x);` are still captured
             // with visibility populated. Closes #355.
+            // The negative lookahead after the opening paren rejects lines where the matching
+            // `)` is followed by an identifier + `{` / `(` / `=>` (with optional tuple-type
+            // suffixes `?` / `[]` / `[,]` / `[,,]` and whitespaced variants like `) []` / `) ?`
+            // in between via CSharpTupleSuffixPattern), which is the shape of a property with a
+            // modifier + tuple return type (`public required (int, int) R1 { get; init; }`,
+            // `public required (int, int) [] R4 { get; init; }`) or an expression-bodied method
+            // with a modifier (`public readonly (int, int)? M() => null;`,
+            // `public readonly (int, int) ? M3() => default;`). A plain ctor signature cannot
+            // match because there is no identifier between the closing `)` and the body opener.
+            // Using a positional check (not a keyword deny-list) preserves support for legal
+            // (though unusual) type names that collide with contextual keywords. Multi-line ctor
+            // signatures where the closing `)` is on a later line are unaffected because the
+            // lookahead only triggers when a `)` is visible on the current line. Sharing
+            // CSharpTupleSuffixPattern with CSharpTypePattern keeps the ctor lookahead and the
+            // upstream property / method rows in sync on which formatting variants count as a
+            // tuple-suffix return type. Closes #349.
             // コンストラクタ（戻り値なし、名前の後に括弧）— visibility 必須。
             // `unsafe` / `extern` は visibility の前後どちらにも置けるため、
             // `unsafe public S(int* p) {}` や `extern public S(int x);` でも visibility を
             // 拾える。Closes #355.
-            new("function",  new Regex($@"^\s*(?:(?:unsafe|extern)\s+)*(?<visibility>{CSharpVisibilityPattern})\s+(?:(?:unsafe|extern)\s+)*(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // 開き括弧の直後に置いた否定先読みは、「対応する `)` のあとに識別子 + `{` / `(` / `=>`
+            // が続く（間に `?` / `[]` / `[,]` / `[,,]` の tuple サフィックス、および
+            // CSharpTupleSuffixPattern によって `) []` / `) ?` のような空白を挟んだ整形バリエーションも
+            // 許す）」形の行を弾く。これは `public required (int, int) R1 { get; init; }` や
+            // `public required (int, int) [] R4 { get; init; }` のような modifier 付き property、
+            // `public readonly (int, int)? M() => null;` や `public readonly (int, int) ? M3() => default;`
+            // のような modifier 付き式形式メソッドの形であり、従来はどちらも `required` / `readonly` を
+            // ctor 名として greedy に喰っていた。通常の ctor シグネチャでは閉じ括弧と本体開始の間に
+            // 識別子が入らないためマッチし続ける。キーワード deny-list ではなく位置検査なので、
+            // contextual keyword と綴りが衝突する合法な型名のコンストラクタも弾かない。
+            // 複数行にまたがる ctor シグネチャ（閉じ括弧が次行以降にある場合）は、現在行に
+            // `)` が出ないため lookahead が発動せずそのままマッチする。CSharpTupleSuffixPattern を
+            // CSharpTypePattern と共有することで、ctor 否定先読みと上流の property / method 行が
+            // tuple サフィックス戻り値の受理形について常に一致する。Closes #349.
+            new("function",  new Regex($@"^\s*(?:(?:unsafe|extern)\s+)*(?<visibility>{CSharpVisibilityPattern})\s+(?:(?:unsafe|extern)\s+)*(?<name>\w+)\s*\((?!.*\){CSharpTupleSuffixPattern}\s*\w+\s*(?:[{{(]|=>))", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Property with get/set/init — visibility optional
             // Reject statement keywords (return/throw/switch/...) as the return type so that
             // multi-line statement fragments merged by BuildCSharpPropertyMatchLine — e.g.
@@ -719,16 +769,44 @@ public static class SymbolExtractor
         ],
         ["sql"] =
         [
-            // CREATE TABLE/VIEW/PROCEDURE/FUNCTION / テーブル・ビュー・プロシージャ・関数の定義
-            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:(?:GLOBAL|LOCAL)\s+)?(?:TEMP|TEMPORARY)\s+|UNLOGGED\s+)?(?:TABLE|(?:MATERIALIZED\s+)?VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:""[^""]+""|[\w]+)(?:\.(?:""[^""]+""|[\w]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("function", new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:PROCEDURE|FUNCTION|TRIGGER)\s+(?<name>[\w.]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("enum",     new Regex(@"^\s*CREATE\s+TYPE\s+(?<name>(?:""[^""]+""|[\w]+)(?:\.(?:""[^""]+""|[\w]+))*)\s+AS\s+ENUM\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*CREATE\s+TYPE\s+(?<name>(?:""[^""]+""|[\w]+)(?:\.(?:""[^""]+""|[\w]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("namespace", new Regex(@"^\s*CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:(?<name>(?!AUTHORIZATION\b)(?:""[^""]+""|[\w]+)(?:\.(?:""[^""]+""|[\w]+))*)|AUTHORIZATION\s+(?<name>(?:""[^""]+""|[\w]+)(?:\.(?:""[^""]+""|[\w]+))*))", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*CREATE\s+(?:SEQUENCE|DOMAIN)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:""[^""]+""|[\w]+)(?:\.(?:""[^""]+""|[\w]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("import",   new Regex(@"^\s*CREATE\s+EXTENSION\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:""[^""]+""|[\w]+)(?:\.(?:""[^""]+""|[\w]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(?!ON\b)(?<name>(?:""[^""]+""|[\w]+)(?:\.(?:""[^""]+""|[\w]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*ALTER\s+TABLE\s+(?<name>[\w.]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // Identifier shape accepts PG double-quoted ("name"), T-SQL bracketed ([name]), or bare (\w+),
+            // optionally qualified with dots (schema.name, [dbo].[sp_X], "s"."n").
+            // 識別子形式は PG の "name"、T-SQL の [name]、裸 (\w+) を受け入れ、ドットで修飾可能
+            //（schema.name、[dbo].[sp_X]、"s"."n"）。
+            // CREATE TABLE / VIEW — Postgres TEMP/UNLOGGED + MATERIALIZED VIEW, T-SQL `CREATE OR ALTER` (2016+)
+            // CREATE TABLE / VIEW — Postgres の TEMP/UNLOGGED や MATERIALIZED VIEW、T-SQL の `CREATE OR ALTER`（2016+）に対応
+            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:(?:(?:GLOBAL|LOCAL)\s+)?(?:TEMP|TEMPORARY)\s+|UNLOGGED\s+)?(?:TABLE|(?:MATERIALIZED\s+)?VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // CREATE PROCEDURE / PROC / FUNCTION / TRIGGER — Postgres `OR REPLACE` and T-SQL `OR ALTER` / `PROC` short form
+            // CREATE PROCEDURE / PROC / FUNCTION / TRIGGER — Postgres の `OR REPLACE` と T-SQL の `OR ALTER` / 短縮形 `PROC` に対応
+            new("function", new Regex(@"^\s*CREATE\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:PROCEDURE|PROC|FUNCTION|TRIGGER)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("enum",     new Regex(@"^\s*CREATE\s+TYPE\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)\s+AS\s+ENUM\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*CREATE\s+TYPE\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("namespace", new Regex(@"^\s*CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:(?<name>(?!AUTHORIZATION\b)(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)|AUTHORIZATION\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*))", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*CREATE\s+(?:SEQUENCE|DOMAIN)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("import",   new Regex(@"^\s*CREATE\s+EXTENSION\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // T-SQL SYNONYM
+            new("class",    new Regex(@"^\s*CREATE\s+SYNONYM\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // T-SQL server-level / database-level principals and objects
+            // T-SQL のサーバ/データベースレベルのプリンシパル・オブジェクト
+            new("class",    new Regex(@"^\s*CREATE\s+(?:DATABASE|LOGIN|USER|ROLE|CERTIFICATE)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // T-SQL partitioning and full-text catalogs
+            // T-SQL のパーティション関連と全文検索カタログ
+            new("function", new Regex(@"^\s*CREATE\s+PARTITION\s+FUNCTION\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*CREATE\s+PARTITION\s+SCHEME\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*CREATE\s+FULLTEXT\s+CATALOG\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(?!ON\b)(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // ALTER covers the same object kinds we create above, so migration scripts remain visible.
+            // Kinds are split to match the CREATE side (procedure-like → function, schema → namespace,
+            // extension → import, everything else → class) so `symbols --kind` / `definition` / `inspect`
+            // stay consistent across a CREATE + ALTER pair on the same object.
+            // ALTER も上記の CREATE と同じ種類をカバーし、マイグレーションスクリプトが可視になるようにする。
+            // CREATE 側に合わせて kind を分割し（プロシージャ類 → function、SCHEMA → namespace、
+            // EXTENSION → import、その他 → class）、同じオブジェクトに対する CREATE と ALTER で
+            // `symbols --kind` / `definition` / `inspect` の種別が揃うようにする。
+            new("function", new Regex(@"^\s*ALTER\s+(?:PROCEDURE|PROC|FUNCTION|TRIGGER|PARTITION\s+FUNCTION)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("namespace", new Regex(@"^\s*ALTER\s+SCHEMA\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("import",   new Regex(@"^\s*ALTER\s+EXTENSION\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*ALTER\s+(?:TABLE|(?:MATERIALIZED\s+)?VIEW|SEQUENCE|SYNONYM|LOGIN|USER|ROLE|DATABASE|CERTIFICATE|INDEX|TYPE|DOMAIN|PARTITION\s+SCHEME|FULLTEXT\s+CATALOG)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
         ],
         ["terraform"] =
         [
@@ -3092,8 +3170,9 @@ public static class SymbolExtractor
         if (start.LineIndex == endExclusive.LineIndex)
         {
             var line = lines[start.LineIndex];
-            var startColumn = Math.Min(start.Column, line.Length);
-            var endColumn = Math.Min(Math.Max(endExclusive.Column, startColumn), line.Length);
+            var effectiveLength = GetLineLengthExcludingTrailingCr(line);
+            var startColumn = Math.Min(start.Column, effectiveLength);
+            var endColumn = Math.Min(Math.Max(endExclusive.Column, startColumn), effectiveLength);
             return line[startColumn..endColumn];
         }
 
@@ -3101,12 +3180,19 @@ public static class SymbolExtractor
         for (int lineIndex = start.LineIndex; lineIndex <= endExclusive.LineIndex; lineIndex++)
         {
             var line = lines[lineIndex];
+            // Content was split on '\n', so CRLF lines carry a trailing '\r'. Exclude it from
+            // the effective length so the multi-line separator stays '\n' regardless of source
+            // line endings and signatures stay OS-independent (see #382 / #405).
+            // content は '\n' で分割しているため、CRLF 行は末尾に '\r' が残る。multi-line の
+            // 区切りを OS に依存せず '\n' に揃え signature の一致判定を保つため、effective
+            // length からは '\r' を除外する（#382 / #405 参照）。
+            var effectiveLength = GetLineLengthExcludingTrailingCr(line);
             var startColumn = lineIndex == start.LineIndex
-                ? Math.Min(start.Column, line.Length)
+                ? Math.Min(start.Column, effectiveLength)
                 : 0;
             var endColumn = lineIndex == endExclusive.LineIndex
-                ? Math.Min(Math.Max(endExclusive.Column, startColumn), line.Length)
-                : line.Length;
+                ? Math.Min(Math.Max(endExclusive.Column, startColumn), effectiveLength)
+                : effectiveLength;
 
             builder.Append(line[startColumn..endColumn]);
             if (lineIndex < endExclusive.LineIndex)
@@ -3114,6 +3200,21 @@ public static class SymbolExtractor
         }
 
         return builder.ToString();
+    }
+
+    private static int GetLineLengthExcludingTrailingCr(string line)
+    {
+        var length = line.Length;
+        if (length > 0 && line[length - 1] == '\r')
+            length--;
+        return length;
+    }
+
+    private static string StripTrailingCr(string line)
+    {
+        if (line.Length > 0 && line[^1] == '\r')
+            return line[..^1];
+        return line;
     }
 
     private static void ExtractJavaScriptTypeScriptBareMethods(long fileId, string lang, string[] lines, List<SymbolRecord> symbols, JavaScriptScopePrivacyFlags[][] privateScopeColumns)
@@ -6812,12 +6913,21 @@ public static class SymbolExtractor
         var sourceBuilder = new System.Text.StringBuilder();
         var sanitizedBuilder = new System.Text.StringBuilder();
 
-        var firstSourceSegment = startColumn < lines[startIndex].Length
+        // Content was split on '\n', so CRLF lines carry a trailing '\r'. Strip it from both
+        // builders in lockstep so inter-line separators stay '\n' regardless of source line
+        // endings; the sanitized lex output preserves '\r' at the same column as the source,
+        // so dropping it from both keeps column mapping aligned (see #382 / #405).
+        // content は '\n' で分割しているため、CRLF 行は末尾に '\r' が残る。sanitized 側も
+        // source と同じ列に '\r' を保持するため、両方から一律に '\r' を落とせば column
+        // mapping はズレず、行間セパレータも OS に依存せず '\n' に揃う（#382 / #405 参照）。
+        var firstSourceSegmentRaw = startColumn < lines[startIndex].Length
             ? lines[startIndex][startColumn..]
             : string.Empty;
-        var firstSanitizedSegment = startColumn < firstSanitizedLine.Length
+        var firstSanitizedSegmentRaw = startColumn < firstSanitizedLine.Length
             ? firstSanitizedLine[startColumn..]
             : string.Empty;
+        var firstSourceSegment = StripTrailingCr(firstSourceSegmentRaw);
+        var firstSanitizedSegment = StripTrailingCr(firstSanitizedSegmentRaw);
         sourceBuilder.Append(firstSourceSegment);
         sanitizedBuilder.Append(lang == "typescript"
             ? NormalizeTypeScriptBareMethodMatchInput(firstSanitizedSegment)
@@ -6840,12 +6950,14 @@ public static class SymbolExtractor
             var lexedLine = LexJavaScriptLine(lines[lineIndex], lexState);
             lexState = lexedLine.EndState;
 
+            var sourceLine = StripTrailingCr(lines[lineIndex]);
+            var sanitizedLine = StripTrailingCr(lexedLine.SanitizedLine);
             sourceBuilder.Append('\n');
-            sourceBuilder.Append(lines[lineIndex]);
+            sourceBuilder.Append(sourceLine);
             sanitizedBuilder.Append('\n');
             sanitizedBuilder.Append(lang == "typescript"
-                ? NormalizeTypeScriptBareMethodMatchInput(lexedLine.SanitizedLine)
-                : lexedLine.SanitizedLine);
+                ? NormalizeTypeScriptBareMethodMatchInput(sanitizedLine)
+                : sanitizedLine);
 
             if (TryFinalizeJavaScriptTypeScriptMethodHeaderCapture(
                 sourceBuilder.ToString(),
@@ -7897,6 +8009,107 @@ public static class SymbolExtractor
         }
 
         return -1;
+    }
+
+    /// <summary>
+    /// Track multi-line C# `[...]` bracket sections across lines and blank out any text that
+    /// sits inside those sections, so downstream symbol regexes do not treat interior identifiers
+    /// as declarations. Activates whenever a `[` opens without a matching `]` on the same line,
+    /// regardless of whether the `[` sits at the start of the line (leading attribute) or deeper
+    /// inside the line (parameter attribute like `void M([\n Attr\n] T x)`, type-parameter
+    /// attribute like `class C<[\n Attr\n] T>`, delegate/lambda parameter attributes, etc.).
+    /// Single-line attribute lists continue to be handled by `StripLeadingCSharpAttributeLists`.
+    /// 複数行にまたがる C# `[...]` セクションを跨行で追跡し、内部の文字列を空白化することで
+    /// 下流のシンボル regex が内部の識別子を宣言として誤解釈しないようにする。`[` が行頭
+    /// （空白の後）にある場合だけでなく、`void M([\n Attr\n] T x)` のようなパラメータ属性、
+    /// `class C<[\n Attr\n] T>` のような型パラメータ属性、delegate / lambda のパラメータ属性など、
+    /// 行の途中で開いて同一行で閉じない `[` でも作動する。同一行で完結する属性リストは
+    /// `StripLeadingCSharpAttributeLists` が引き続き担当する。
+    /// </summary>
+    private static string StripMultiLineCSharpAttributeInterior(string line, ref int depth)
+    {
+        if (depth == 0)
+        {
+            // Scan the line for a `[` that is NOT closed on the same line. Everything before
+            // that `[` is real code (method header text like `void M(`, generic opener like
+            // `class C<`, etc.) and must be preserved so downstream declaration regexes can
+            // still recognize the surrounding construct. Everything from the unclosed `[`
+            // onward is blanked, and subsequent lines are blanked until the matching `]`.
+            // Only attribute-position `[` should trigger blanking — a multi-line indexer
+            // declaration such as `public int this[\n    int i\n] => _items[i];` opens `[`
+            // immediately after the identifier `this`, which is NOT an attribute and must
+            // not be stripped (otherwise the indexer regex sees only `public int this` and
+            // the indexer silently disappears from symbols / definition / outline). Treat
+            // `[` as an attribute opener only when the immediately preceding non-whitespace
+            // character is not a word character (`[_A-Za-z0-9]`) and not `)` / `]` (which
+            // indicate indexer / array access on an expression result or chained indexer).
+            // 行内を走査し、同一行で閉じない `[` を探す。その `[` より前は通常のコード
+            // （`void M(` のようなメソッドヘッダ、`class C<` のようなジェネリック開口など）
+            // であり、下流の宣言 regex が外側の構文を認識できるように残す必要がある。
+            // 閉じない `[` 以降は空白化し、対応する `]` が現れるまで後続行も空白化する。
+            // `[` が属性位置にあるときだけ空白化する — `public int this[\n    int i\n]`
+            // のような複数行インデクサ宣言では `this` 直後の `[` が属性でないため、
+            // ここを削ってしまうとインデクサがシンボルから消える。直前の非空白文字が
+            // 語文字（`[_A-Za-z0-9]`）でも `)` / `]` でもない場合にのみ属性開口と判定する。
+            int openIndex = -1;
+            int localDepth = 0;
+            for (int i = 0; i < line.Length; i++)
+            {
+                if (line[i] == '[')
+                {
+                    if (localDepth == 0)
+                    {
+                        // Look back past whitespace for the character that introduces the `[`.
+                        // 先行する非空白文字を探して `[` の導入子を判定する。
+                        int p = i - 1;
+                        while (p >= 0 && (line[p] == ' ' || line[p] == '\t'))
+                            p--;
+                        if (p >= 0)
+                        {
+                            char prev = line[p];
+                            if (prev == '_' || (prev >= 'A' && prev <= 'Z') || (prev >= 'a' && prev <= 'z') || (prev >= '0' && prev <= '9') || prev == ')' || prev == ']')
+                            {
+                                // Not an attribute opener (e.g. `this[`, `arr[`, `(expr)[`, `arr[i][`).
+                                // Treat this `[` as opaque — do not track depth, do not blank.
+                                // 属性開口ではない（`this[`・`arr[`・`(expr)[`・`arr[i][` など）。
+                                // この `[` は追跡も空白化もしない。
+                                continue;
+                            }
+                        }
+                        openIndex = i;
+                    }
+                    localDepth++;
+                }
+                else if (line[i] == ']')
+                {
+                    if (localDepth > 0)
+                    {
+                        localDepth--;
+                        if (localDepth == 0)
+                            openIndex = -1;
+                    }
+                }
+            }
+
+            if (openIndex < 0 || localDepth <= 0)
+                return line;
+
+            depth = localDepth;
+            return line.Substring(0, openIndex);
+        }
+
+        // We are inside a multi-line attribute section. Walk the line, closing brackets when we
+        // see `]`. Once depth returns to zero, the remainder of the line is real code.
+        int index = 0;
+        while (index < line.Length && depth > 0)
+        {
+            if (line[index] == '[') depth++;
+            else if (line[index] == ']') depth--;
+            index++;
+        }
+        if (depth > 0)
+            return string.Empty;
+        return line[index..];
     }
 
     private static CSharpPropertyMatchCandidate BuildCSharpPropertyMatchLine(string[] lines, string[] csharpMatchLines, int startLineIndex)
@@ -9810,9 +10023,17 @@ public static class SymbolExtractor
             if (builder.Length > 0)
                 builder.Append('\n');
 
-            builder.Append(i == declarationLineIndex
-                ? lines[i][Math.Min(declarationStartColumn, lines[i].Length)..]
-                : lines[i]);
+            // Content was split on '\n', so CRLF lines carry a trailing '\r'. Strip it before
+            // appending so intermediate separators stay '\n' and the collected declaration
+            // text is stable across OS line endings (#405 follow-up to #382).
+            // content は '\n' で分割しているため、CRLF 行は末尾に '\r' が残る。行間の区切りを
+            // '\n' に揃え、OS 差分で collected text が変わらないよう '\r' を落として追加する
+            // （#382 に続く #405 対応）。
+            var line = lines[i];
+            var lineText = i == declarationLineIndex
+                ? line[Math.Min(declarationStartColumn, line.Length)..]
+                : line;
+            builder.Append(StripTrailingCr(lineText));
 
             var declaration = builder.ToString();
             if (parameterOpenIndex < 0)
@@ -11082,10 +11303,26 @@ public static class SymbolExtractor
         };
     }
 
-    private static bool IsFileScopedNamespace(SymbolRecord symbol) =>
-        symbol.Kind == "namespace" &&
-        symbol.BodyStartLine == null &&
-        symbol.BodyEndLine == null;
+    // C# file-scoped namespace: `namespace X;` with no braces. Matches only declarations whose
+    // signature starts with the `namespace` keyword, so body-less namespace rows from other
+    // languages (e.g. SQL `CREATE SCHEMA ...;` / `ALTER SCHEMA ...;`) are not treated as
+    // file-scoped and therefore do not wrap every subsequent top-level symbol as their container.
+    // C# の file-scoped namespace（`namespace X;` 形）だけを対象とする。`namespace` キーワードで
+    // 始まるシグネチャに限定することで、SQL の `CREATE SCHEMA ...;` / `ALTER SCHEMA ...;` のような
+    // 他言語の body 無し namespace 行が file-scoped namespace 扱いになり、以降のトップレベル
+    // シンボル全てを自分の配下にぶら下げてしまう事故を防ぐ。
+    private static bool IsFileScopedNamespace(SymbolRecord symbol)
+    {
+        if (symbol.Kind != "namespace")
+            return false;
+        if (symbol.BodyStartLine != null || symbol.BodyEndLine != null)
+            return false;
+        if (symbol.Signature == null)
+            return false;
+        var trimmed = symbol.Signature.AsSpan().TrimStart();
+        return trimmed.StartsWith("namespace ", StringComparison.Ordinal)
+            || trimmed.StartsWith("namespace\t", StringComparison.Ordinal);
+    }
 
     private static int CountIndent(string line)
     {

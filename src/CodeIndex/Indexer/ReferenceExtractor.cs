@@ -79,15 +79,29 @@ public static class ReferenceExtractor
             "require", "require_once", "include", "include_once",
             "echo", "print", "exit", "die", "eval", "unset", "isset", "empty",
         },
-        // SQL keywords (uppercase only to avoid collisions with other languages)
-        // SQL キーワード（他言語との衝突を避けるため大文字のみ）
-        ["sql"] = new HashSet<string>(StringComparer.Ordinal)
+        // SQL keywords. Case-insensitive because SQL is written both upper- and lowercase in real code,
+        // and the `EXEC|EXECUTE|CALL` extractor preserves the original casing of the captured name.
+        // The entries themselves stay uppercase for readability.
+        // SQL のキーワード。実コードでは大文字・小文字が混在するうえ、`EXEC|EXECUTE|CALL` 抽出が
+        // 元のケースをそのまま保持するため、比較は大文字小文字非依存にする（リストは読みやすさのため大文字表記）。
+        ["sql"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "SELECT", "FROM", "WHERE", "INSERT", "UPDATE", "DELETE", "JOIN", "INTO",
             "VALUES", "ORDER", "GROUP", "HAVING", "LIMIT", "OFFSET", "UNION",
             "EXISTS", "BETWEEN", "LIKE", "CASE", "WHEN", "THEN", "ELSE",
             "AS", "ON", "AND", "OR", "NOT", "NULL", "IN", "IS",
             "CREATE", "ALTER", "DROP", "TABLE", "INDEX", "VIEW", "IF",
+            // `EXECUTE IMMEDIATE 'dynamic SQL'` (Oracle / PL/pgSQL) — `IMMEDIATE` is not a call target.
+            // `EXECUTE IMMEDIATE '動的SQL'` (Oracle / PL/pgSQL) — `IMMEDIATE` は呼び出し対象ではない。
+            "IMMEDIATE",
+            // The keywords that introduce a stored-procedure call themselves. The no-parens form is
+            // captured by SqlProcCallRegex; the rare `EXEC(@sql)` / `EXEC('...')` dynamic-SQL form has
+            // no identifier argument, so the generic CallRegex would otherwise emit a phantom
+            // `call EXEC` / `call EXECUTE` / `call CALL` edge pointing at the keyword itself.
+            // ストアドプロシージャ呼び出しを導入するキーワード自身。括弧なし形は SqlProcCallRegex で捕捉し、
+            // 動的 SQL 形の `EXEC(@sql)` / `EXEC('...')` は識別子を持たないため、汎用 CallRegex に任せると
+            // キーワード自体を指す `call EXEC` / `call EXECUTE` / `call CALL` の幽霊エッジが生まれる。
+            "EXEC", "EXECUTE", "CALL",
         },
         // R keywords / R キーワード
         ["r"] = new HashSet<string>(StringComparer.Ordinal)
@@ -129,8 +143,51 @@ public static class ReferenceExtractor
     private static readonly Regex StringLiteralRegex = new(
         "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`",
         RegexOptions.Compiled);
+    // SQL-specific string-literal stripper: preserve backticks because MySQL / MariaDB use them
+    // for identifier quoting (`` CALL `proc-name`; ``) rather than string literals. Strip only
+    // ANSI single-quoted and double-quoted literals plus comments. ANSI / SQL-PSM delimited
+    // identifiers (`"..."`) are intentionally treated as string literals here because the dominant
+    // real-world SQL codebase uses `"..."` for string content when double-quoted identifiers are
+    // not in effect, and #232 focuses on T-SQL brackets + MySQL backticks — not ANSI delimited
+    // identifiers.
+    // SQL 専用の文字列リテラル除去: MySQL / MariaDB はバッククォートを識別子引用に使うため保持し、
+    // `'...'` / `"..."` のみを除去する。ANSI / SQL-PSM の `"..."` delimited identifier は
+    // 実運用で文字列として使われる頻度が高く、今回の #232 の対象から外れるため意図的に文字列扱いとする。
+    private static readonly Regex SqlStringLiteralRegex = new(
+        "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'",
+        RegexOptions.Compiled);
     private static readonly Regex InlineBlockCommentRegex = new(@"/\*.*?\*/", RegexOptions.Compiled);
     private static readonly Regex CallRegex = new(@"(?<![\w$])(?<name>[A-Za-z_]\w*)(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
+    // SQL stored-procedure call without parentheses: T-SQL `EXEC` / `EXECUTE` and MySQL / MariaDB `CALL`.
+    // The shared CallRegex requires a trailing `(`, which misses the dominant real-world form such as
+    // `EXEC dbo.sp_Target;`, `EXEC dbo.sp_Target @x = 1, @y = 2;`, `CALL sp_Helper;`, and the bracketed
+    // form `EXEC [dbo].[sp_Target]`. The regex captures only the final identifier (schema prefixes are
+    // consumed as a prefix) and tolerates the optional T-SQL return-value assignment
+    // `EXEC @retval = dbo.sp_Target ...`. Bracket handling is done at emission time so `[sp_Target]`
+    // is normalized back to `sp_Target`. See issue #232.
+    // SQL のストアドプロシージャを `(` なしで呼び出す T-SQL `EXEC` / `EXECUTE` と MySQL / MariaDB `CALL`。
+    // 共通 CallRegex は末尾 `(` を要求するため、`EXEC dbo.sp_Target;` など実運用で圧倒的に多い形を取りこぼす。
+    // 先頭側の schema prefix は吸収し、末端の識別子だけを `name` として捕捉する。T-SQL 固有の
+    // `EXEC @retval = dbo.sp_Target ...` 形にも対応し、`[sp_Target]` のような角括弧識別子は発行時に除去する。
+    // Bracketed identifiers inside the qualifier and name groups accept any character except `[`,
+    // `]`, or a line terminator. T-SQL allows `#` (temp procedure), `-` (hyphenated names),
+    // spaces, Unicode symbols, and punctuation inside bracket quoting, and the narrower `[\w ]+`
+    // would silently drop `EXEC [#tempProc]`, `EXEC [dbo].[proc-name]`, and similar legitimate
+    // forms while falsely misattributing the qualifier `[dbo]` as the proc name.
+    // Qualifier segments are optional (the inner `?`) so SQL Server's linked-server form with
+    // an omitted database or schema part — `EXEC AdventureWorks..sp_GetCustomer;` /
+    // `EXEC [AdventureWorks]..[proc-name];` — terminates on the real procedure name instead of
+    // falling back to the first segment. Identifier alternatives also accept backtick-quoted
+    // names (`` `proc-name` ``) to cover MySQL / MariaDB identifier quoting.
+    // 角括弧識別子は `[` / `]` / 改行以外の任意文字を許可する。T-SQL では `#`（一時プロシージャ）、
+    // `-`（ハイフン名）、空白、Unicode 記号などが正当に現れるため、`[\w ]+` ではそれらの合法な
+    // 形を取りこぼし、修飾子 `[dbo]` を proc 名として誤発行してしまう。
+    // 修飾子の各セグメントを optional にすることで、`EXEC AdventureWorks..sp_GetCustomer;` のように
+    // SQL Server が許す省略形（`..`）でも末尾の proc 名まで到達できる。識別子候補にはバッククォート引用も含め、
+    // MySQL / MariaDB の `` `proc-name` `` 形にも対応する。
+    private static readonly Regex SqlProcCallRegex = new(
+        @"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?(?:(?:\[[^\[\]\r\n]+\]|`[^`\r\n]+`|\w+)?\.)*(?<name>\[[^\[\]\r\n]+\]|`[^`\r\n]+`|\w+)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // C# event subscription/unsubscription: Click += OnClick — both LHS and RHS must be PascalCase identifiers
     // C# イベント購読・解除: Click += OnClick — LHS と RHS の両方が PascalCase 識別子のみ
     private static readonly Regex EventSubscriptionRegex = new(@"(?<name>[A-Z]\w*)\s*[+-]=\s*(?:new\s+)?[A-Z]\w*", RegexOptions.Compiled);
@@ -174,6 +231,105 @@ public static class ReferenceExtractor
     private static readonly Regex CSharpPrimaryCtorHeaderRegex = new(
         @"\b(?:record\s+(?:class\s+|struct\s+)?|class\s+|struct\s+)\w+(?:\s*<[^>]+>)?\s*\(",
         RegexOptions.Compiled);
+    // C# compile-time type/member references: `nameof(X.Y)`, `typeof(T)`, `sizeof(T)`, `default(T)`.
+    // Keywords are in SharedIgnoredCallNames so CallRegex skips them, but their arguments have no
+    // trailing `(` and therefore slip through. Captured here as a dedicated "type_reference" kind
+    // so callers/callees (which exclude type_reference by default) stay unaffected while
+    // references and impact see the edge. See issue #253.
+    // The regex only locates the keyword and opening `(`; the argument itself is walked by
+    // ExtractCSharpTypeKeywordSegments so generic `<...>`, array `[...]`, and `global::` qualifiers
+    // are handled without truncating the real type path.
+    // C# の nameof/typeof/sizeof/default は、キーワード自体が SharedIgnoredCallNames にあるため
+    // CallRegex では読み飛ばされ、引数の識別子も末尾に `(` が無いため通常経路では捕捉できない。
+    // ここで type_reference として拾い、callers/callees（既定で type_reference を除外）に影響せず
+    // references と impact だけに edge を届ける。issue #253 参照。
+    // 正規表現はキーワードと `(` の位置だけを捕捉し、引数本体の走査は ExtractCSharpTypeKeywordSegments
+    // に任せる。これにより generic `<...>`、配列 `[...]`、`global::` 等を途中で切らない。
+    private static readonly Regex CSharpTypeKeywordIntroRegex = new(
+        @"(?<![\w$])(?<keyword>nameof|typeof|sizeof|default)\s*\(",
+        RegexOptions.Compiled);
+    // Java compile-time type literal: `T.class`, `T[].class`, `outer.Inner.class` etc.
+    // `.class` itself is a language keyword, but the type chain in front of it is a genuine
+    // reference. Emit each dot-segment as `type_reference`. See issue #253.
+    // Java の `T.class` は型リテラル。`.class` 自体はキーワードだが、前置の型チェーンは
+    // 正当な参照。各 dot-segment を type_reference として拾う。issue #253 参照。
+    private static readonly Regex JavaDotClassArgRegex = new(
+        @"(?<![\w$.])(?<arg>[A-Za-z_][\w.]*)\s*(?:\[\s*\])*\s*\.class\b",
+        RegexOptions.Compiled);
+
+    // Java primitive type names that can precede `.class` (e.g. `int.class`, `void.class`).
+    // Skipped from reference rows because they are language-level keywords, not indexed types.
+    // `int.class` 等に現れる Java のプリミティブ型。インデックス対象の型ではないため除外する。
+    private static readonly HashSet<string> JavaPrimitiveTypeNames = new(StringComparer.Ordinal)
+    {
+        "int", "long", "short", "boolean", "byte", "char", "float", "double", "void",
+    };
+
+    // C# predefined type aliases / void / dynamic / var. They resolve to BCL primitives that are
+    // not indexed as user-defined symbols, so emitting them as `type_reference` just pollutes
+    // references/inspect output without ever linking to a real definition.
+    // C# の built-in 型 alias / void / dynamic / var。ユーザー定義シンボルに解決しないため
+    // type_reference として残すとノイズにしかならない。issue #253 のレビュー指摘により除外。
+    private static readonly HashSet<string> CSharpBuiltInTypeNames = new(StringComparer.Ordinal)
+    {
+        "bool", "byte", "sbyte", "short", "ushort", "int", "uint", "long", "ulong",
+        "nint", "nuint", "char", "float", "double", "decimal",
+        "string", "object", "void", "dynamic", "var",
+    };
+
+    // No-arg C# attribute name (`[Serializable]`, `[assembly: CLSCompliant]`, `[System.Obsolete]`,
+    // `[global::System.Obsolete]`, `[Alias::MyAttr]`, `[Required, Key]`, and their multi-line
+    // variants where `[` / `]` sit on separate lines). CallRegex only matches identifiers followed
+    // by `(`, so no-arg attributes would otherwise never be indexed. The pattern refuses to match
+    // when the identifier is followed by `(` (handled by CallRegex + TryClassifyMetadataReference)
+    // or a qualifier continuation (`.` / `::`). The match is gated downstream by
+    // `IsInsideCSharpAttributeRange`, so it is safe to relax the `[` / `,` left-anchor in favor of
+    // a word-boundary lookbehind — that lets a bare identifier on a line like `    Serializable`
+    // inside a multi-line attribute section still be recognized.
+    // 引数なしの C# attribute 名用 regex。`[Serializable]` などは CallRegex では拾えないため専用の
+    // 入口で捕捉する。`global::System.Obsolete` や `Alias::MyAttr` のように `::` 修飾子の付く形も
+    // 許容する。`[` / `,` / `]` が別行にある複数行形（例: `[\n Serializable\n]`）も取り込むため、
+    // 左側は `[` / `,` ではなく単語境界だけでアンカーする。属性以外の位置で誤検出しないよう、
+    // マッチ後は `IsInsideCSharpAttributeRange` で属性レンジ内かどうかを確認する。後続が `(`
+    // （CallRegex 経路）や `.` / `::`（qualifier 継続）なら名前を確定させず、行末（`$`）・`]`・`,`
+    // のいずれかで初めて採用する。
+    private static readonly Regex CSharpNoArgAttributeRegex = new(
+        @"(?<!\w)(?:[A-Za-z_]\w*\s*:\s*)?(?:[A-Za-z_]\w*\s*(?:\.|::)\s*)*(?<name>[A-Za-z_]\w*)(?:\s*<[^\n]+?>)?\s*(?=[\],]|$)",
+        RegexOptions.Compiled);
+
+    // No-arg Java-family annotation (`@Deprecated`, `@Override`, `@org.junit.Test`, `@field:Deprecated`).
+    // CallRegex only catches `@Name(` forms; this pattern fills the bare `@Name` gap. The leading
+    // lookbehind `(?<![\w)])` prevents Kotlin label references like `return@foo` from matching.
+    // 引数なしの Java 系 annotation 名用 regex。`@Deprecated` のような形は CallRegex では拾えないため
+    // 専用経路で捕捉する。先頭の lookbehind `(?<![\w)])` で Kotlin の `return@foo` のようなラベル参照を
+    // 除外する。
+    private static readonly Regex NoArgAnnotationRegex = new(
+        @"(?<![\w)])@(?:[A-Za-z_]\w*\s*:\s*)?(?:[A-Za-z_]\w*\s*\.\s*)*(?<name>[A-Za-z_]\w*)\b(?!\s*[.(])",
+        RegexOptions.Compiled);
+
+    // Languages whose `@Decorator(args)` / `@Annotation(args)` / `@Attribute(args)` syntax
+    // should produce `annotation` reference rows rather than `call` rows (issue #293).
+    // Swift uses `@available(...)`, `@objc`, `@MainActor`, etc. as compile-time metadata;
+    // Gradle/Groovy uses `@CompileStatic`, `@TaskAction`, etc. the same way. Without this
+    // reclassification, `callers` / `callees` / `hotspots` / `impact` on those languages
+    // get polluted with metadata edges.
+    // `@Decorator(args)` / `@Annotation(args)` / `@Attribute(args)` を `call` ではなく
+    // `annotation` として記録すべき言語 (issue #293)。Swift の `@available(...)` / `@objc` /
+    // `@MainActor` や、Gradle/Groovy の `@CompileStatic` / `@TaskAction` も compile-time
+    // metadata なので同じ扱いにする。再分類しないと `callers` / `callees` / `hotspots` /
+    // `impact` に metadata edge が混入する。
+    private static readonly HashSet<string> AnnotationLanguages = new(StringComparer.Ordinal)
+    {
+        "java", "kotlin", "scala", "typescript", "javascript", "swift", "gradle",
+    };
+
+    // Kotlin use-site target prefixes for annotations (e.g. `@field:Deprecated("msg")`,
+    // `@file:JvmName("Foo")`). Keep aligned with the Kotlin language spec use-site targets.
+    // Kotlin の use-site target 付き注釈用の接頭辞。
+    private static readonly HashSet<string> KotlinAnnotationTargets = new(StringComparer.Ordinal)
+    {
+        "field", "get", "set", "param", "setparam", "property", "receiver", "file", "delegate", "all",
+    };
 
     public static IReadOnlyCollection<string> GetSupportedLanguages() => SupportedLanguages;
 
@@ -260,6 +416,25 @@ public static class ReferenceExtractor
 
         var lines = content.Split('\n');
         var structuralLines = StructuralLineMasker.MaskLines(language, lines);
+        var preparedLines = new string[lines.Length];
+        for (var pi = 0; pi < lines.Length; pi++)
+            preparedLines[pi] = PrepareLine(language, structuralLines[pi]);
+        // Pre-pass C# attribute analysis so cross-line `[\n Foo("x")\n]` and parameter
+        // attributes `void M([Attr] T x)` are classified consistently with same-line `[Foo]`.
+        // 行を跨いだ `[\n Foo("x")\n]` やパラメータ属性 `void M([Attr] T x)` も、同一行の `[Foo]` と
+        // 同じ判定で属性として扱えるように、事前パスで C# 属性セクションの範囲を構築する。
+        var csharpAttrTables = language == "csharp"
+            ? BuildCSharpAttributeRanges(preparedLines)
+            : (null, null);
+        var csharpAttrRanges = csharpAttrTables.Item1;
+        // Top-level (paren-depth 0) zones inside attribute sections. Used by the no-arg
+        // attribute regex so that enum / qualified-constant identifiers appearing inside
+        // attribute argument lists (e.g. `AllowNumbers` in `[JsonConverter(ConverterStrategy.AllowNumbers)]`)
+        // are not misclassified as no-arg attribute references.
+        // 属性セクション内で paren 深さ 0 の top-level ゾーンだけを別テーブルで持つ。複数行
+        // `[...]` の引数中に現れる enum / 修飾定数（`ConverterStrategy.AllowNumbers` など）が
+        // no-arg attribute として誤分類されないよう、no-arg 属性用ゲートに使う。
+        var csharpAttrTopLevelRanges = csharpAttrTables.Item2;
         var definitionNamesByLine = symbols
             .GroupBy(symbol => symbol.Line)
             .ToDictionary(group => group.Key, group => group.Select(symbol => symbol.Name).ToHashSet(StringComparer.Ordinal));
@@ -302,9 +477,11 @@ public static class ReferenceExtractor
         {
             var lineNumber = i + 1;
             var originalLine = lines[i];
-            var preparedLine = PrepareLine(language, structuralLines[i]);
+            var preparedLine = preparedLines[i];
             if (string.IsNullOrWhiteSpace(preparedLine))
                 continue;
+            var csharpAttrRangesOnLine = csharpAttrRanges?[i];
+            var csharpAttrTopLevelOnLine = csharpAttrTopLevelRanges?[i];
 
             var context = originalLine.Trim();
             if (context.Length == 0)
@@ -397,6 +574,92 @@ public static class ReferenceExtractor
                     references, seen, fileId, context, lineNumber, container);
             }
 
+            // Compile-time type/member references that CallRegex cannot see because the
+            // argument has no trailing `(` of its own. See issue #253.
+            // 末尾の `(` を持たず CallRegex では取れないコンパイル時の型/メンバ参照。issue #253 参照。
+            if (language is "csharp")
+            {
+                foreach (Match match in CSharpTypeKeywordIntroRegex.Matches(preparedLine))
+                {
+                    int parenIndex = match.Index + match.Length - 1; // position of '(' / '(' の位置
+                    ExtractCSharpTypeKeywordSegments(
+                        references, seen, fileId, preparedLine, parenIndex + 1,
+                        context, lineNumber, container, language);
+                }
+            }
+            else if (language is "java")
+            {
+                foreach (Match match in JavaDotClassArgRegex.Matches(preparedLine))
+                {
+                    var argGroup = match.Groups["arg"];
+                    AddTypeReferenceSegments(references, seen, fileId, argGroup.Value, argGroup.Index, context, lineNumber, container, language);
+                }
+            }
+
+            // SQL stored-procedure calls without parentheses: `EXEC`, `EXECUTE`, and `CALL` forms that
+            // the shared CallRegex cannot see because there is no trailing `(`. Emits the same
+            // reference kind ("call") so the edge merges with the rare parenthesized form via dedupe.
+            // See issue #232.
+            // 末尾 `(` が無いため汎用 CallRegex で取れない SQL の `EXEC` / `EXECUTE` / `CALL` 形。
+            // 参照 kind は "call" で揃え、稀な `(...)` 付き形式との重複は dedupe で吸収する。issue #232 参照。
+            if (language is "sql")
+            {
+                // The shared PrepareLine strips backtick-quoted content because several other
+                // languages use backticks for string literals (shell command substitution,
+                // JavaScript template literals, Go raw strings). In SQL, backticks quote
+                // identifiers (MySQL / MariaDB), so we re-prepare the raw line with
+                // a SQL-aware stripper that only drops `'...'` / `"..."` literals and comments.
+                // 共有 PrepareLine はバッククォート内容を文字列として除去する（他言語のテンプレート
+                // リテラル等に対応するため）。SQL ではバッククォートは識別子引用なので、SQL 向けに
+                // `'...'` / `"..."` とコメントだけを除去する sanitization を別途適用する。
+                var sqlScanLine = PrepareSqlLineForIdentifierScan(structuralLines[i]);
+                if (!string.IsNullOrWhiteSpace(sqlScanLine))
+                {
+                    foreach (Match match in SqlProcCallRegex.Matches(sqlScanLine))
+                    {
+                        var nameGroup = match.Groups["name"];
+                        var rawName = nameGroup.Value;
+                        int nameIndex = nameGroup.Index;
+                        string resolvedName;
+                        bool wasQuoted;
+                        if (rawName.Length >= 2
+                            && ((rawName[0] == '[' && rawName[^1] == ']')
+                                || (rawName[0] == '`' && rawName[^1] == '`')))
+                        {
+                            // Normalize `[sp_Target]` / `` `sp_Target` `` to `sp_Target` so it matches the
+                            // indexed symbol name, and point the column at the inner identifier instead
+                            // of the opening quote.
+                            // `[sp_Target]` / `` `sp_Target` `` は識別子名と一致させるため引用を除去し、
+                            // 列位置は中身の先頭に寄せる。
+                            resolvedName = rawName.Substring(1, rawName.Length - 2);
+                            nameIndex += 1;
+                            wasQuoted = true;
+                        }
+                        else
+                        {
+                            resolvedName = rawName;
+                            wasQuoted = false;
+                        }
+
+                        // Bracketed / backtick-quoted identifiers are explicitly quoted to allow reserved
+                        // words (`[ORDER]`, `[USER]`, `[AS]`, `[IMMEDIATE]`, `` `order` ``) as real object
+                        // names. Skip the keyword ignore list so a legitimate `EXEC [ORDER]` or
+                        // `` CALL `order` `` is not silently dropped.
+                        // 角括弧 / バッククォート付き識別子は予約語を識別子として使うための引用形。
+                        // `[ORDER]` / `` `order` `` のような正当な名前を落とさないため keyword ignore list をスキップする。
+                        if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                            continue;
+                        if (definitionNames != null && definitionNames.Contains(resolvedName))
+                            continue;
+
+                        var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
+                        AddChainReference(
+                            references, seen, fileId, resolvedName, nameIndex + 1,
+                            "call", context, lineNumber, sqlCallContainer);
+                    }
+                }
+            }
+
             foreach (Match match in CallRegex.Matches(preparedLine))
             {
                 var name = match.Groups["name"].Value;
@@ -426,7 +689,54 @@ public static class ReferenceExtractor
                 if (definitionNames != null && definitionNames.Contains(name))
                     continue;
 
-                AddReference(references, seen, fileId, match, "call", context, lineNumber, callContainer);
+                // issue #293: reclassify C# attribute / Java/Kotlin/Scala/TypeScript annotation
+                // usages with arguments so they do not pollute the call-graph as phantom `call` rows.
+                // issue #293: 引数付きの C# attribute と Java/Kotlin/Scala/TypeScript annotation 使用を
+                // `call` ではなく専用の種別に分類し、call-graph の phantom エッジを防ぐ。
+                var insideCSharpAttributeRange = csharpAttrRangesOnLine != null
+                    && IsInsideCSharpAttributeRange(csharpAttrRangesOnLine, callIndex);
+                var metadataKind = TryClassifyMetadataReference(language, preparedLine, callIndex, insideCSharpAttributeRange);
+                AddReference(references, seen, fileId, match, metadataKind ?? "call", context, lineNumber, callContainer);
+            }
+
+            // issue #293: bare no-arg attributes / annotations are invisible to CallRegex because
+            // it requires `(`. Emit them from dedicated regexes so `[Serializable]` / `@Deprecated`
+            // and their siblings still populate the reference table.
+            // issue #293: 引数なしの属性・アノテーションは `(` が必須な CallRegex では拾えないため、
+            // 専用 regex から `[Serializable]` / `@Deprecated` などの素形を reference テーブルへ反映する。
+            if (language == "csharp" && csharpAttrTopLevelOnLine != null && csharpAttrTopLevelOnLine.Count > 0)
+            {
+                foreach (Match match in CSharpNoArgAttributeRegex.Matches(preparedLine))
+                {
+                    var name = match.Groups["name"].Value;
+                    var nameIndex = match.Groups["name"].Index;
+                    // Gate on the attribute-section top-level (paren-depth 0) zones only, so
+                    // identifiers that sit inside an attribute's argument list (e.g.
+                    // `ConverterStrategy.AllowNumbers` in `[JsonConverter(...)]`) are not
+                    // misclassified as no-arg attributes.
+                    // 属性セクションの top-level（paren 深さ 0）ゾーンでのみ採用する。属性の
+                    // 引数リスト内にある識別子（`[JsonConverter(ConverterStrategy.AllowNumbers)]`
+                    // の `AllowNumbers` など）を no-arg 属性として誤分類しないため。
+                    if (!IsInsideCSharpAttributeRange(csharpAttrTopLevelOnLine, nameIndex))
+                        continue;
+                    if (IsIgnoredCallName(language, name))
+                        continue;
+                    if (definitionNames != null && definitionNames.Contains(name))
+                        continue;
+                    AddReference(references, seen, fileId, match, "attribute", context, lineNumber, container);
+                }
+            }
+            else if (AnnotationLanguages.Contains(language))
+            {
+                foreach (Match match in NoArgAnnotationRegex.Matches(preparedLine))
+                {
+                    var name = match.Groups["name"].Value;
+                    if (IsIgnoredCallName(language, name))
+                        continue;
+                    if (definitionNames != null && definitionNames.Contains(name))
+                        continue;
+                    AddReference(references, seen, fileId, match, "annotation", context, lineNumber, container);
+                }
             }
         }
 
@@ -454,6 +764,236 @@ public static class ReferenceExtractor
             FileId = fileId,
             SymbolName = name,
             ReferenceKind = referenceKind,
+            Line = lineNumber,
+            Column = column,
+            Context = context,
+            ContainerKind = container?.Kind,
+            ContainerName = container?.Name,
+        });
+    }
+
+    /// <summary>
+    /// Emit one `type_reference` row per dot-segment of a captured argument. Columns are
+    /// computed relative to the original line so tooling can jump to the exact identifier.
+    /// 捕捉した引数の dot-segment ごとに `type_reference` 行を発行する。列位置は元の行基準で計算する。
+    /// </summary>
+    private static void AddTypeReferenceSegments(
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string arg,
+        int argStartInLine,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        string language)
+    {
+        int offset = 0;
+        foreach (var segment in arg.Split('.'))
+        {
+            if (segment.Length == 0)
+            {
+                offset += 1; // '.' separator / ドット区切り分
+                continue;
+            }
+
+            if (!IsIgnoredTypeReferenceSegment(language, segment))
+            {
+                int column = argStartInLine + offset + 1; // 1-based / 1始まり
+                var dedupeKey = $"{lineNumber}:{column}:type_reference:{segment}";
+                if (seen.Add(dedupeKey))
+                {
+                    references.Add(new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = segment,
+                        ReferenceKind = "type_reference",
+                        Line = lineNumber,
+                        Column = column,
+                        Context = context,
+                        ContainerKind = container?.Kind,
+                        ContainerName = container?.Name,
+                    });
+                }
+            }
+
+            offset += segment.Length + 1; // segment + '.'
+        }
+    }
+
+    private static bool IsIgnoredTypeReferenceSegment(string language, string segment)
+    {
+        if (IsIgnoredCallName(language, segment))
+            return true;
+        if (language == "java" && JavaPrimitiveTypeNames.Contains(segment))
+            return true;
+        if (language == "csharp" && CSharpBuiltInTypeNames.Contains(segment))
+            return true;
+        return false;
+    }
+
+    /// <summary>
+    /// Walk the argument list of a C# nameof/typeof/sizeof/default starting at
+    /// <paramref name="startIndex"/> (the char right after `(`). Emits one `type_reference` row
+    /// per identifier segment while handling generic `&lt;...&gt;`, array `[...]`,
+    /// parenthesized/tuple groups `(...)`, and `global::` / `Alias::` qualifier skipping so nested
+    /// paths like `nameof(List&lt;int&gt;.Count)`, `nameof(global::System.String)`,
+    /// and `typeof((Foo, Bar))` are indexed correctly.
+    /// C# の nameof/typeof/sizeof/default の引数を `(` 直後から lexer で走査し、
+    /// generic `&lt;...&gt;`・配列 `[...]`・タプル `(...)` 群・`global::` / `Alias::` 修飾子を
+    /// 跨ぎながら識別子セグメントごとに type_reference を発行する。
+    /// </summary>
+    private static void ExtractCSharpTypeKeywordSegments(
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string line,
+        int startIndex,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        string language)
+    {
+        int i = startIndex;
+        int parenDepth = 0;
+        bool expectSegment = true;
+        while (i < line.Length)
+        {
+            char c = line[i];
+            if (c == ')')
+            {
+                if (parenDepth == 0)
+                    return;
+                parenDepth--;
+                i++;
+                expectSegment = false;
+                continue;
+            }
+
+            if (c == ',')
+            {
+                if (parenDepth == 0)
+                    return;
+                // Tuple element separator inside `typeof((Foo, Bar))` — keep scanning.
+                // `typeof((Foo, Bar))` のタプル要素区切りは続けて走査する。
+                i++;
+                expectSegment = true;
+                continue;
+            }
+
+            if (char.IsWhiteSpace(c))
+            {
+                i++;
+                continue;
+            }
+
+            if (expectSegment && IsCSharpIdentifierStart(c))
+            {
+                int segStart = i;
+                while (i < line.Length && IsCSharpIdentifierPart(line[i]))
+                    i++;
+                var segment = line.Substring(segStart, i - segStart);
+                // `Alias::Member` — the left-hand side is a namespace alias, not an indexed
+                // type. Drop it instead of emitting it, and treat what follows the `::` as a
+                // fresh segment head.
+                // `Alias::Member` の左辺はエイリアスであり型シンボルではないため発行せず、
+                // `::` の右側を新しいセグメント先頭として読み直す。
+                if (i + 1 < line.Length && line[i] == ':' && line[i + 1] == ':')
+                {
+                    i += 2;
+                    expectSegment = true;
+                    continue;
+                }
+
+                AddTypeReferenceSegment(references, seen, fileId, segment, segStart, context, lineNumber, container, language);
+                expectSegment = false;
+                continue;
+            }
+
+            if (c == '.')
+            {
+                i++;
+                expectSegment = true;
+                continue;
+            }
+
+            if (c == '<')
+            {
+                i = SkipBalanced(line, i, '<', '>');
+                continue;
+            }
+
+            if (c == '[')
+            {
+                i = SkipBalanced(line, i, '[', ']');
+                continue;
+            }
+
+            if (c == '(')
+            {
+                // Track paren depth instead of skipping the body so tuple/parenthesized
+                // type groups like `typeof((Foo, Bar))` still yield inner segments.
+                // タプル型 `typeof((Foo, Bar))` の中身も拾えるよう、括弧はスキップせず
+                // 深さだけ追跡する。
+                parenDepth++;
+                i++;
+                expectSegment = true;
+                continue;
+            }
+
+            // Unknown token (operator, string start, etc.) — stop scanning this argument.
+            // 解釈できないトークンが来たら、このキーワード引数の走査を打ち切る。
+            return;
+        }
+    }
+
+    private static int SkipBalanced(string line, int start, char open, char close)
+    {
+        int depth = 0;
+        int i = start;
+        while (i < line.Length)
+        {
+            char c = line[i];
+            if (c == open)
+                depth++;
+            else if (c == close)
+            {
+                depth--;
+                if (depth <= 0)
+                    return i + 1;
+            }
+            i++;
+        }
+        return i;
+    }
+
+    private static bool IsCSharpIdentifierStart(char c) =>
+        c == '_' || c == '@' || char.IsLetter(c);
+
+    private static void AddTypeReferenceSegment(
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string segment,
+        int startInLine,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        string language)
+    {
+        if (segment.Length == 0 || IsIgnoredTypeReferenceSegment(language, segment))
+            return;
+
+        int column = startInLine + 1; // 1-based / 1始まり
+        var dedupeKey = $"{lineNumber}:{column}:type_reference:{segment}";
+        if (!seen.Add(dedupeKey))
+            return;
+
+        references.Add(new ReferenceRecord
+        {
+            FileId = fileId,
+            SymbolName = segment,
+            ReferenceKind = "type_reference",
             Line = lineNumber,
             Column = column,
             Context = context,
@@ -1960,6 +2500,59 @@ public static class ReferenceExtractor
         return segment.Length > 0 ? segment : null;
     }
 
+    // SQL-aware line sanitizer used only for the `EXEC` / `EXECUTE` / `CALL` no-parens scan.
+    // Preserves backtick-quoted identifiers (MySQL / MariaDB) so `` CALL `proc-name`; `` can be
+    // matched, while still stripping `'...'` / `"..."` string literals and SQL line / block
+    // comments so text inside comments does not emit a phantom reference. Line-comment tokens
+    // `--` (ANSI / T-SQL / MySQL) and `#` (MySQL / MariaDB) are scanned with awareness of
+    // backtick and bracket identifier quoting, so a legitimate name containing `#` or `-` such
+    // as `` CALL `proc#1`; `` or `EXEC [proc-name]` is not truncated mid-identifier.
+    // `EXEC` / `EXECUTE` / `CALL` の括弧なし抽出向けの SQL 特化サニタイザ。バッククォート引用
+    // （MySQL / MariaDB の識別子引用）は保持したまま、`'...'` / `"..."` と `--` / `#` / `/* ... */`
+    // の SQL コメントを除去する。`--` と `#` の走査は backtick / bracket 引用を尊重するため、
+    // `` CALL `proc#1`; `` や `EXEC [proc-name]` のような識別子が途中で切られない。
+    private static string PrepareSqlLineForIdentifierScan(string line)
+    {
+        var result = SqlStringLiteralRegex.Replace(line, "\"\"");
+        result = InlineBlockCommentRegex.Replace(result, " ");
+
+        int commentStart = -1;
+        for (int i = 0; i < result.Length; i++)
+        {
+            char c = result[i];
+            if (c == '`')
+            {
+                var closing = result.IndexOf('`', i + 1);
+                if (closing < 0)
+                    break;
+                i = closing;
+                continue;
+            }
+            if (c == '[')
+            {
+                var closing = result.IndexOf(']', i + 1);
+                if (closing < 0)
+                    break;
+                i = closing;
+                continue;
+            }
+            if (c == '-' && i + 1 < result.Length && result[i + 1] == '-')
+            {
+                commentStart = i;
+                break;
+            }
+            if (c == '#')
+            {
+                commentStart = i;
+                break;
+            }
+        }
+        if (commentStart >= 0)
+            result = result[..commentStart];
+
+        return result;
+    }
+
     private static string PrepareLine(string lang, string line)
     {
         var result = StringLiteralRegex.Replace(line, "\"\"");
@@ -2071,6 +2664,434 @@ public static class ReferenceExtractor
 
     private static bool IsIdentifierChar(char ch) =>
         char.IsLetterOrDigit(ch) || ch == '_';
+
+    /// <summary>
+    /// Classify a call-looking identifier as an attribute/annotation when it appears inside
+    /// a C# `[...]` attribute list or is preceded by a Java-family `@` marker. Returns null
+    /// for ordinary method calls so the caller emits the default `call` reference kind.
+    /// 呼び出しに見える識別子を、C# の `[...]` 属性リスト内や Java 系 `@` 付き注釈に該当する
+    /// 場合に専用の reference kind へ分類する。通常の呼び出しは null を返して既定の `call` を維持する。
+    /// </summary>
+    private static string? TryClassifyMetadataReference(
+        string language,
+        string preparedLine,
+        int nameIndex,
+        bool insideCSharpAttributeRange)
+    {
+        if (language == "csharp")
+            return insideCSharpAttributeRange ? "attribute" : null;
+
+        var probe = nameIndex - 1;
+        while (probe >= 0 && char.IsWhiteSpace(preparedLine[probe]))
+            probe--;
+        if (probe < 0)
+            return null;
+
+        if (AnnotationLanguages.Contains(language))
+            return IsAnnotationContext(preparedLine, probe) ? "annotation" : null;
+
+        return null;
+    }
+
+    /// <summary>
+    /// Build per-line column ranges that identify C# `[...]` attribute sections. Handles
+    /// declaration-position detection (including parameter attributes preceded by `(` / `,`
+    /// via forward look-ahead) and multi-line `[\n ... \n]` sections. Each inner list holds
+    /// ordered `(startColumn, endColumnExclusive)` ranges that are inside an attribute section
+    /// on that line. Call sites whose name column falls inside one of these ranges are
+    /// reclassified as `attribute` instead of `call`.
+    /// C# の `[...]` 属性セクションを行ごとの列範囲で表すテーブルを構築する。
+    /// `(` / `,` の直後に置かれるパラメータ属性を forward lookahead で、複数行にわたる
+    /// `[\n ... \n]` 属性を跨行トラッキングで検出する。各行のリストは属性セクションに含まれる
+    /// `(開始列, 終端列 (exclusive))` のレンジを保持し、呼び出し名の列がどれかのレンジに含まれる場合に
+    /// `call` ではなく `attribute` へ再分類する。
+    /// </summary>
+    private static (List<List<(int start, int end)>>, List<List<(int start, int end)>>) BuildCSharpAttributeRanges(string[] preparedLines)
+    {
+        var perLine = new List<List<(int, int)>>(preparedLines.Length);
+        var perLineTopLevel = new List<List<(int, int)>>(preparedLines.Length);
+        for (var i = 0; i < preparedLines.Length; i++)
+        {
+            perLine.Add(new List<(int, int)>());
+            perLineTopLevel.Add(new List<(int, int)>());
+        }
+
+        // Stack entries capture the opening `[` position, whether that bracket was at
+        // a C# declaration (attribute) position, and a snapshot of the global paren depth
+        // at that moment. The snapshot lets us compute an attribute-section-local paren
+        // depth (`parenDepth - parenDepthAtOpen`), which is what the top-level zone tracking
+        // uses so that parameter attributes like `void M([Attr] int x)` still have their
+        // attribute-list top level at section-local depth 0 even though the global depth
+        // is inside the method's parameter list.
+        // スタックは `[` の位置、その bracket が属性位置だったか、および開いた瞬間の
+        // グローバル paren 深さのスナップショットを保持する。スナップショットを使うと
+        // 属性セクション内ローカルの paren 深さ (`parenDepth - parenDepthAtOpen`) が
+        // 得られるので、`void M([Attr] int x)` のように外側の method 引数リストの中で
+        // 開く属性セクションでも、セクション内では top-level (local depth 0) として扱える。
+        var bracketStack = new Stack<(int li, int ci, bool isAttr, int parenDepthAtOpen)>();
+        char lastMeaningful = '\0';
+        int parenDepth = 0;
+        bool lastClosedBracketWasAttribute = false;
+
+        // Top-level zone tracking: while we are inside an attribute section and the paren
+        // depth is at the section's open snapshot (section-local depth 0), the current zone
+        // span is open. When parens open inside the section we close it; when they fully
+        // close again we reopen. When the attribute section itself closes, we emit the span.
+        // top-level ゾーン追跡: 属性セクション内かつセクションローカルの paren 深さが 0 の
+        // あいだだけゾーンを開いておき、セクション内の `(` で閉じ、`)` で再び開く。
+        // セクションが閉じる `]` で確定させる。
+        int topZoneStartLi = -1;
+        int topZoneStartCi = 0;
+
+        void EmitTopZone(int endLi, int endCi)
+        {
+            if (topZoneStartLi < 0)
+                return;
+            for (var l = topZoneStartLi; l <= endLi; l++)
+            {
+                int s = (l == topZoneStartLi) ? topZoneStartCi : 0;
+                int e = (l == endLi) ? endCi : preparedLines[l].Length;
+                if (e > s)
+                    perLineTopLevel[l].Add((s, e));
+            }
+            topZoneStartLi = -1;
+        }
+
+        for (var li = 0; li < preparedLines.Length; li++)
+        {
+            var line = preparedLines[li];
+            for (var ci = 0; ci < line.Length; ci++)
+            {
+                var c = line[ci];
+                if (char.IsWhiteSpace(c))
+                    continue;
+
+                if (c == '(')
+                {
+                    // If the innermost enclosing bracket is an attribute section and we are
+                    // currently at that section's local top level, close the top-level zone
+                    // just before the `(`. Use the stack top's `parenDepthAtOpen` snapshot so
+                    // parameter attributes inside an outer `(...)` still get their top level
+                    // tracked correctly.
+                    // 直近の `[` が属性セクションで、かつその section-local 深さで top-level のとき、
+                    // `(` 直前でゾーンを閉じる。外側の `(...)` の中で開く属性セクションにも対応するため、
+                    // グローバル depth ではなくスタック top の開いたときの snapshot と比較する。
+                    if (bracketStack.Count > 0)
+                    {
+                        var top = bracketStack.Peek();
+                        if (top.isAttr && parenDepth == top.parenDepthAtOpen && topZoneStartLi >= 0)
+                            EmitTopZone(li, ci);
+                    }
+                    parenDepth++;
+                    lastMeaningful = c;
+                    continue;
+                }
+                if (c == ')')
+                {
+                    if (parenDepth > 0)
+                    {
+                        parenDepth--;
+                        // If the innermost `[` is an attribute section and we just returned
+                        // to that section's local top level, reopen the top-level zone.
+                        // 直近の `[` が属性セクションで、section-local top-level に戻ってきたら
+                        // top-level ゾーンを再開する。
+                        if (bracketStack.Count > 0)
+                        {
+                            var top = bracketStack.Peek();
+                            if (top.isAttr && parenDepth == top.parenDepthAtOpen && topZoneStartLi < 0)
+                            {
+                                topZoneStartLi = li;
+                                topZoneStartCi = ci + 1;
+                            }
+                        }
+                    }
+                    lastMeaningful = c;
+                    continue;
+                }
+
+                if (c == '[')
+                {
+                    bool isAttr = EvaluateCSharpAttributePosition(
+                        lastMeaningful, lastClosedBracketWasAttribute, preparedLines, li, ci);
+                    bracketStack.Push((li, ci, isAttr, parenDepth));
+                    if (isAttr && topZoneStartLi < 0)
+                    {
+                        // Start top-level zone just after the `[` so the `[` itself is not
+                        // inside the zone. Section-local depth is 0 by construction at the
+                        // open bracket.
+                        // `[` 直後から top-level ゾーンを開始する。開いた瞬間は section-local 深さ 0。
+                        topZoneStartLi = li;
+                        topZoneStartCi = ci + 1;
+                    }
+                    lastMeaningful = c;
+                    continue;
+                }
+
+                if (c == ']')
+                {
+                    if (bracketStack.Count > 0)
+                    {
+                        var opened = bracketStack.Pop();
+                        lastClosedBracketWasAttribute = opened.isAttr;
+                        if (opened.isAttr)
+                        {
+                            // Record the attribute section span for every line it covers so
+                            // cross-line `[\n Foo("x")\n]` also classifies `Foo` as attribute.
+                            // 属性セクションがまたぐ全ての行に対して範囲を記録し、
+                            // `[\n Foo("x")\n]` のような跨行ケースでも `Foo` が属性として分類されるようにする。
+                            for (var l = opened.li; l <= li; l++)
+                            {
+                                int s = (l == opened.li) ? opened.ci : 0;
+                                int e = (l == li) ? ci + 1 : preparedLines[l].Length;
+                                perLine[l].Add((s, e));
+                            }
+                            // Close the top-level zone at the `]`. Section-local depth should
+                            // be 0 here (we are at the closing bracket of this section) — if
+                            // it is not, we drop the open zone because paren balancing was
+                            // malformed.
+                            // `]` で top-level ゾーンを確定する。section-local 深さが 0 のはず。
+                            // 不整合入力ならゾーンを捨てる。
+                            if (parenDepth == opened.parenDepthAtOpen)
+                            {
+                                EmitTopZone(li, ci + 1);
+                            }
+                            else
+                            {
+                                topZoneStartLi = -1;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        lastClosedBracketWasAttribute = false;
+                    }
+                    lastMeaningful = c;
+                    continue;
+                }
+
+                lastMeaningful = c;
+            }
+        }
+
+        return (perLine, perLineTopLevel);
+    }
+
+    /// <summary>
+    /// Decide whether a `[` token sits at a C# attribute position based on the immediately
+    /// preceding meaningful character. `(` / `,` (parameter attributes) are disambiguated via
+    /// forward look-ahead because both attributes and C# 12 collection expressions can follow.
+    /// `[` が C# の属性位置にあるかを、直前の非空白文字から判定する。`(` / `,` の直後は
+    /// パラメータ属性にも collection expression にもなりうるため、forward lookahead で区別する。
+    /// </summary>
+    private static bool EvaluateCSharpAttributePosition(
+        char lastMeaningful,
+        bool lastClosedBracketWasAttribute,
+        string[] preparedLines,
+        int startLi,
+        int startCi)
+    {
+        // Start of file or after a scope/statement boundary — attribute position.
+        // ファイル先頭、あるいはスコープ・文境界の直後は属性位置。
+        if (lastMeaningful is '\0' or '{' or '}' or ';')
+            return true;
+
+        // Chained attribute list `[A][B]`: the prior `]` must have closed an attribute section.
+        // `arr[i][Compute()]` → the prior `]` closed an indexer, so stays `call`.
+        // 連続した属性リスト `[A][B]` は、直前の `]` が属性セクションを閉じていたときのみ属性扱い。
+        // `arr[i][Compute()]` の `]` は indexer を閉じているため `call` のまま。
+        if (lastMeaningful == ']')
+            return lastClosedBracketWasAttribute;
+
+        // Parameter / type-parameter / lambda attribute candidates (`(`, `,`, `<`, `=`):
+        // `void M([Attr] T x)`, `class C<[Attr] T>`, `var f = [Attr] () => body`, or
+        // `Consume([Make()])`. Disambiguate by scanning forward to the matching `]` and
+        // checking whether the next meaningful token begins a declaration (identifier /
+        // `@` / `(` for tuple types or lambda parameter lists / `[` chained).
+        // パラメータ / 型パラメータ / ラムダ属性候補 (`(`, `,`, `<`, `=`) は
+        // `void M([Attr] T x)`・`class C<[Attr] T>`・`var f = [Attr] () => body`・
+        // `Consume([Make()])` いずれにもなりうる。対応する `]` まで進んで次トークンが
+        // 宣言やラムダを開始するか（識別子 / `@` / tuple・ラムダ仮引数の `(` / chained `[`）で区別する。
+        if (lastMeaningful is '(' or ',' or '<' or '=')
+            return IsCSharpAttributeFollowedByDeclaration(preparedLines, startLi, startCi);
+
+        return false;
+    }
+
+    /// <summary>
+    /// Keywords that indicate the preceding `[...]` is an expression (collection / pattern /
+    /// switch target) rather than an attribute section when they appear after `]`.
+    /// `]` の直後に現れると、直前の `[...]` が属性ではなく式（collection / pattern / switch 対象）
+    /// であることを示す C# のキーワード集合。
+    /// </summary>
+    private static readonly HashSet<string> CSharpExpressionContinuationKeywords = new(StringComparer.Ordinal)
+    {
+        "is", "as", "switch", "with", "when",
+    };
+
+    /// <summary>
+    /// Scan forward from a `[` to its matching `]` (skipping balanced parens) and return true
+    /// when the next meaningful character begins an identifier-like token. Works across lines so
+    /// `void M(\n    [Attr]\n    T x\n)` is recognized as a parameter attribute.
+    /// `[` から対応する `]` まで進んで、`]` の次の非空白文字が識別子を始める場合に true を返す。
+    /// 行を跨ぐ走査にも対応しているため `void M(\n    [Attr]\n    T x\n)` も属性として認識される。
+    /// </summary>
+    private static bool IsCSharpAttributeFollowedByDeclaration(string[] preparedLines, int startLi, int startCi)
+    {
+        var bracketDepth = 1;
+        var parenDepth = 0;
+        var li = startLi;
+        var ci = startCi + 1;
+        while (li < preparedLines.Length)
+        {
+            var line = preparedLines[li];
+            while (ci < line.Length)
+            {
+                var c = line[ci];
+                if (c == '(')
+                {
+                    parenDepth++;
+                    ci++;
+                    continue;
+                }
+                if (c == ')')
+                {
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    ci++;
+                    continue;
+                }
+                if (parenDepth > 0)
+                {
+                    ci++;
+                    continue;
+                }
+                if (c == '[')
+                {
+                    bracketDepth++;
+                    ci++;
+                    continue;
+                }
+                if (c == ']')
+                {
+                    bracketDepth--;
+                    if (bracketDepth == 0)
+                    {
+                        ci++;
+                        return NextTokenStartsDeclaration(preparedLines, li, ci);
+                    }
+                    ci++;
+                    continue;
+                }
+                ci++;
+            }
+            li++;
+            ci = 0;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// After the closing `]` of a candidate `[...]`, inspect the next meaningful token to decide
+    /// whether it begins a declaration. Accepts identifiers (except expression-continuation
+    /// keywords like `is` / `as` / `switch` / `with` / `when`), leading `@` (verbatim identifier),
+    /// `(` (tuple-typed parameter), and chained `[` (recurse for `[A][B]`).
+    /// 閉じ `]` の直後のトークンで宣言が始まるかを判定する。識別子（式継続の `is` / `as` /
+    /// `switch` / `with` / `when` は除外）、`@`（verbatim 識別子）、`(`（tuple パラメータ型）、
+    /// `[`（`[A][B]` の連結）を受け入れる。
+    /// </summary>
+    private static bool NextTokenStartsDeclaration(string[] preparedLines, int li, int ci)
+    {
+        while (li < preparedLines.Length)
+        {
+            var line = preparedLines[li];
+            while (ci < line.Length && char.IsWhiteSpace(line[ci]))
+                ci++;
+            if (ci < line.Length)
+            {
+                var first = line[ci];
+                if (first == '@' || first == '(')
+                    return true;
+                if (first == '[')
+                    return IsCSharpAttributeFollowedByDeclaration(preparedLines, li, ci);
+                if (!IsIdentifierChar(first))
+                    return false;
+                var start = ci;
+                while (ci < line.Length && IsIdentifierChar(line[ci]))
+                    ci++;
+                var token = line.Substring(start, ci - start);
+                return !CSharpExpressionContinuationKeywords.Contains(token);
+            }
+            li++;
+            ci = 0;
+        }
+        return false;
+    }
+
+    private static bool IsInsideCSharpAttributeRange(List<(int start, int end)> ranges, int index)
+    {
+        foreach (var (start, end) in ranges)
+        {
+            if (index >= start && index < end)
+                return true;
+        }
+        return false;
+    }
+
+    private static bool IsAnnotationContext(string line, int probe)
+    {
+        // `@Annotation(args)` — direct marker. 直接 `@Annotation(args)` の場合。
+        if (line[probe] == '@')
+            return true;
+
+        // `@module.Annotation(args)` — walk past the dotted qualifier chain first so that
+        // both `@module.Annotation` and `@field:com.example.Annotation` land the probe on
+        // either `@` or the Kotlin use-site target `:`.
+        // `@module.Annotation(args)` や `@field:com.example.Annotation(args)` のように修飾子が
+        // 付く場合も対応するため、先にドット区切り修飾子チェーンを剥がしてから `@` または
+        // Kotlin の use-site target `:` を判定する。
+        while (probe >= 0 && line[probe] == '.')
+        {
+            probe--;
+            while (probe >= 0 && IsIdentifierChar(line[probe]))
+                probe--;
+            while (probe >= 0 && char.IsWhiteSpace(line[probe]))
+                probe--;
+        }
+
+        if (probe < 0)
+            return false;
+
+        if (line[probe] == '@')
+            return true;
+
+        // Kotlin use-site target: `@field:Deprecated("msg")` or
+        // `@field:com.example.Deprecated("msg")`. After unwinding the dotted qualifier, the
+        // probe lands on `:`; walk past the target identifier and confirm `@`.
+        // Kotlin の use-site target `@field:Deprecated("msg")` や
+        // `@field:com.example.Deprecated("msg")` では、ドット修飾子を剥がしたあと probe が `:`
+        // に着地するため、target 識別子を読み飛ばして `@` を確認する。
+        if (line[probe] == ':')
+        {
+            var j = probe - 1;
+            var idEnd = j;
+            while (j >= 0 && IsIdentifierChar(line[j]))
+                j--;
+            if (j + 1 <= idEnd)
+            {
+                var target = line[(j + 1)..(idEnd + 1)];
+                if (KotlinAnnotationTargets.Contains(target))
+                {
+                    var k = j;
+                    while (k >= 0 && char.IsWhiteSpace(line[k]))
+                        k--;
+                    if (k >= 0 && line[k] == '@')
+                        return true;
+                }
+            }
+        }
+
+        return false;
+    }
 
     private static bool UsesHashComments(string lang) =>
         lang is "python" or "ruby" or "php" or "elixir" or "r" or "powershell"
