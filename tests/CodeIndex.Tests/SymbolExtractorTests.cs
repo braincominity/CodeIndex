@@ -7957,13 +7957,20 @@ public class SymbolExtractorTests
         //   - `::` / `:::` コメント行は偽シンボルを生成しない。
         //   - `SET` / `Set` / `SET /A` / `SET /P` の大小文字混在・オプション違いも拾う。
         //   - CRLF 行末でも LF と同じ結果になる。
-        var content = "@echo off\r\nREM Build script\r\nsetlocal\r\n\r\nset VERSION=1.0.0\r\nSET OUTPUT_DIR=%~dp0out\r\nSet /A COUNT=1\r\nSET /P INPUT=Enter: \r\nset \"QUOTED=value with spaces\"\r\n\r\n:main\r\ncall :compile\r\nif errorlevel 1 goto :error\r\ncall :test\r\ngoto :end\r\n\r\n:compile\r\necho Compiling...\r\ndotnet build\r\nexit /b %ERRORLEVEL%\r\n\r\n:test\r\necho Testing...\r\nexit /b %ERRORLEVEL%\r\n\r\n:error\r\necho Build failed\r\ngoto :EOF\r\n\r\n:end\r\ncall :eOf\r\nendlocal\r\n\r\n:: This is a batch comment and must not produce a symbol\r\n::: triple-colon comment must not produce a symbol either\r\n";
+        // Fixture also includes `:eof2` / `:eofish` / `:end-of-file` so the `(?!eof\b)`
+        // boundary is explicitly pinned — only the reserved `:EOF` token is rejected, not
+        // labels that merely start with `eof`.
+        // `:eof2` / `:eofish` / `:end-of-file` も fixture に含め、`(?!eof\b)` の境界条件を固定する
+        // (予約トークン `:EOF` だけが除外され、`eof` で始まる別名は通る)。
+        var content = "@echo off\r\nREM Build script\r\nsetlocal\r\n\r\nset VERSION=1.0.0\r\nSET OUTPUT_DIR=%~dp0out\r\nSet /A COUNT=1\r\nSET /P INPUT=Enter: \r\nset \"QUOTED=value with spaces\"\r\n\r\n:main\r\ncall :compile\r\nif errorlevel 1 goto :error\r\ncall :test\r\ngoto :end\r\n\r\n:compile\r\necho Compiling...\r\ndotnet build\r\nexit /b %ERRORLEVEL%\r\n\r\n:test\r\necho Testing...\r\nexit /b %ERRORLEVEL%\r\n\r\n:error\r\necho Build failed\r\ngoto :EOF\r\n\r\n:end\r\ncall :eOf\r\ncall :eof2\r\ncall :eofish\r\ncall :end-of-file\r\nendlocal\r\n\r\n:eof2\r\nexit /b 0\r\n\r\n:eofish\r\nexit /b 0\r\n\r\n:end-of-file\r\nexit /b 0\r\n\r\n:: This is a batch comment and must not produce a symbol\r\n::: triple-colon comment must not produce a symbol either\r\n";
         var symbols = SymbolExtractor.Extract(1, "batch", content);
 
-        // Exact function label set — nothing extra (no `:EOF`, no comment-derived names).
-        // function ラベル集合は厳密一致 — `:EOF` / コメント由来の偽名は混ざらない。
+        // Exact function label set — nothing extra (no `:EOF`, no comment-derived names),
+        // but the `eof`-prefixed user labels (`eof2`, `eofish`, `end-of-file`) must pass.
+        // function ラベル集合は厳密一致 — `:EOF` / コメント由来の偽名は混ざらないが、
+        // `eof` で始まるユーザーラベル (`eof2` / `eofish` / `end-of-file`) は通る。
         var functionNames = symbols.Where(s => s.Kind == "function").Select(s => s.Name).ToHashSet();
-        Assert.Equal(new HashSet<string> { "main", "compile", "test", "error", "end" }, functionNames);
+        Assert.Equal(new HashSet<string> { "main", "compile", "test", "error", "end", "eof2", "eofish", "end-of-file" }, functionNames);
 
         // Exact property name set — nothing extra from comments / echo lines.
         // property 名集合は厳密一致 — コメントや echo 行由来の偽名は混ざらない。
