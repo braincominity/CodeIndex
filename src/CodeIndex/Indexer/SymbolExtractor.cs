@@ -1529,18 +1529,49 @@ public static class SymbolExtractor
     // 編集中の HTML では終了タグが未入力のことが多いため、閉じタグは省略可
     // (`|\z`) とし、未閉鎖でも raw-text / RCDATA 本体をマスクして phantom
     // シンボルが途中段階で漏れないようにする。
+    // Opening-tag bodies use a quote-aware alternation `(?:"[^"]*"|'[^']*'|[^>])*`
+    // instead of a naive `[^>]*`, because a `>` character is legal inside a quoted
+    // attribute value (`<script data-note="a > b" src="/app.js">`). With the naive
+    // class, the regex terminated at the first quoted `>` and blanked the real
+    // `src="/app.js"` as body, which then swallowed every following sibling tag
+    // to EOF. The alternation consumes complete `"..."` / `'...'` spans as units
+    // before matching bare chars, so quoted `>` does not close the tag early.
+    // 開始タグ本体は素の `[^>]*` ではなく `(?:"[^"]*"|'[^']*'|[^>])*` を使い、引用符
+    // 付き属性値内の `>` を誤認して早期終了しないようにする。`<script data-note="a > b"
+    // src="/app.js">` のようなケースで、以前は先頭の引用符内 `>` でタグを終わらせて
+    // しまい、本物の `src="/app.js"` を body としてマスクし、以降の兄弟タグを EOF まで
+    // 飲み込んでいた。交替は `"..."` / `'...'` を丸ごと単位で食うため、引用符内 `>`
+    // ではタグ終端と認識しない。
     private static readonly Regex HtmlScriptBodyRegex = new(
-        @"(?<open><script\b[^>]*>)(?<body>.*?)(?<close></script\s*>|\z)",
+        @"(?<open><script\b(?:""[^""]*""|'[^']*'|[^>])*>)(?<body>.*?)(?<close></script\s*>|\z)",
         RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
     private static readonly Regex HtmlStyleBodyRegex = new(
-        @"(?<open><style\b[^>]*>)(?<body>.*?)(?<close></style\s*>|\z)",
+        @"(?<open><style\b(?:""[^""]*""|'[^']*'|[^>])*>)(?<body>.*?)(?<close></style\s*>|\z)",
         RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
     private static readonly Regex HtmlTextareaBodyRegex = new(
-        @"(?<open><textarea\b[^>]*>)(?<body>.*?)(?<close></textarea\s*>|\z)",
+        @"(?<open><textarea\b(?:""[^""]*""|'[^']*'|[^>])*>)(?<body>.*?)(?<close></textarea\s*>|\z)",
         RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
     private static readonly Regex HtmlTitleBodyRegex = new(
-        @"(?<open><title\b[^>]*>)(?<body>.*?)(?<close></title\s*>|\z)",
+        @"(?<open><title\b(?:""[^""]*""|'[^']*'|[^>])*>)(?<body>.*?)(?<close></title\s*>|\z)",
         RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
+
+    // Native HTML/SVG/MathML tag names that happen to contain a hyphen but are
+    // reserved by the spec, so they must NOT be treated as custom-element class
+    // symbols. See https://html.spec.whatwg.org/multipage/custom-elements.html#valid-custom-element-name
+    // for the PotentialCustomElementName / reserved names production.
+    // ハイフンを含むが仕様で予約されている標準 HTML / SVG / MathML タグ名。custom
+    // element の class シンボルとして扱ってはいけない。
+    private static readonly HashSet<string> HtmlReservedHyphenatedTags = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "annotation-xml",
+        "color-profile",
+        "font-face",
+        "font-face-src",
+        "font-face-uri",
+        "font-face-format",
+        "font-face-name",
+        "missing-glyph",
+    };
 
     private static string MaskHtmlRawTextRegions(string text)
     {
@@ -1646,9 +1677,17 @@ public static class SymbolExtractor
             var tagName = maskedText[tagNameStart..tagNameEnd];
             var tagNameLower = tagName.ToLowerInvariant();
 
-            // Emit custom Web Components (hyphenated opening tag) at the `<` position.
+            // Emit custom Web Components (hyphenated opening tag) at the `<` position,
+            // but skip the standard HTML/SVG/MathML tags that happen to contain a hyphen
+            // (`<font-face>`, `<color-profile>`, `<annotation-xml>`, etc.). Those are
+            // native elements, not user components, so labeling them as `class` symbols
+            // would pollute `symbols` / `definition` / `outline` on any project with
+            // inline SVG / MathML content.
             // 開始タグ名にハイフンを含むカスタム Web Components を `<` の位置で emit する。
-            if (tagName.Contains('-'))
+            // ただしハイフン付きでも仕様で予約されている `<font-face>` / `<color-profile>`
+            // / `<annotation-xml>` などの標準タグは除外する。SVG / MathML を埋め込んだ
+            // ファイルで `symbols` / `definition` / `outline` が汚染されるのを防ぐ。
+            if (tagName.Contains('-') && !HtmlReservedHyphenatedTags.Contains(tagNameLower))
             {
                 var startLine = FindHtmlLineNumber(lineStarts, pos);
                 var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
@@ -1711,19 +1750,30 @@ public static class SymbolExtractor
                         var quote = maskedText[cursor];
                         cursor++;
                         attrValueStart = cursor;
-                        var valueEnd = maskedText.IndexOf(quote, cursor);
+                        // Scope the closing-quote search to the current line. HTML5
+                        // technically allows newlines inside a quoted attribute value,
+                        // but for mid-edit working-tree robustness we bound the damage:
+                        // if the user is half-typing `<div title="oops\n...`, we do NOT
+                        // want to keep scanning until we happen upon any stray `"` later
+                        // in the file (e.g. inside a sibling `<section id="real">`), since
+                        // that would silently eat every sibling tag in between. If no
+                        // closing quote exists on this line, stop walking the tag entirely.
+                        // 閉じ引用符の探索は同一行に限定する。HTML5 仕様は属性値に改行を
+                        // 含められるが、編集中の working tree ではその仕様に従うと
+                        // `<div title="oops\n...` のような未閉鎖クォートが、たまたま後続の
+                        // `<section id="real">` などに現れる `"` を拾い、兄弟タグをまとめて
+                        // 飲み込む。現在行に閉じ引用符が無ければタグ走査を打ち切る。
+                        var lineEnd = maskedText.IndexOf('\n', cursor);
+                        var searchLimit = lineEnd < 0 ? maskedText.Length : lineEnd;
+                        var valueEnd = maskedText.IndexOf(quote, cursor, searchLimit - cursor);
                         if (valueEnd < 0)
                         {
-                            // Unterminated quoted value: consume to EOF to avoid looping forever.
-                            // 引用符が閉じないままの属性値は EOF まで飲む（無限ループ回避）。
-                            attrValue = maskedText[cursor..];
-                            cursor = maskedText.Length;
+                            attrValue = null;
+                            cursor = searchLimit;
+                            break;
                         }
-                        else
-                        {
-                            attrValue = maskedText[cursor..valueEnd];
-                            cursor = valueEnd + 1;
-                        }
+                        attrValue = maskedText[cursor..valueEnd];
+                        cursor = valueEnd + 1;
                     }
                     else if (cursor < maskedText.Length && maskedText[cursor] != '>')
                     {

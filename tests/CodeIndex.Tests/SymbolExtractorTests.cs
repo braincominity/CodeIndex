@@ -8230,6 +8230,76 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Html_QuotedGtInsideScriptOpenTagPreservesSiblingSymbols()
+    {
+        // A `>` character is legal inside a quoted attribute value, so the raw-text
+        // body masker must parse the `<script>` opening tag with quote awareness.
+        // The earlier `[^>]*>` class terminated at the first quoted `>` and blanked
+        // every following real attribute and sibling tag as masked body content,
+        // which dropped both the intended `src="/app.js"` import and the sibling
+        // `<section id="real">`. Closes #215 codex review blocker.
+        // 引用符付き属性値内の `>` でも raw-text 本体マスクの開始タグ解析が終端しない
+        // ことを固定する。以前の `[^>]*>` は先頭の引用符内 `>` でタグを切ってしまい、
+        // 後続の実属性と兄弟タグを body としてマスクしていたため、本来 emit すべき
+        // `src="/app.js"` の import と `<section id="real">` の両方を落としていた。
+        // #215 codex review blocker 対応。
+        var content = "<script data-note=\"a > b\" src=\"/app.js\"></script>\n<section id=\"real\"></section>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.js");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+    }
+
+    [Fact]
+    public void Extract_Html_UnterminatedQuotedAttributeDoesNotSwallowRestOfFile()
+    {
+        // Mid-edit working-tree content commonly leaves a quoted attribute unterminated
+        // (e.g. user is still typing `title="...`). The parser must bound the damage
+        // rather than consume to EOF looking for the closing quote; otherwise every
+        // `<section id="real">` / `<my-widget>` / `<link href="...">` after the broken
+        // tag drops out of `symbols` / `definition` / `outline` until the user types
+        // the matching quote. Closes #215 codex review finding.
+        // 編集中の working tree では `title="...` のような未閉鎖引用符が頻発する。
+        // 閉じ引用符を探して EOF まで走り切ると、壊れたタグ以降の
+        // `<section id="real">` / `<my-widget>` / `<link href="...">` が `symbols`
+        // / `definition` / `outline` から一気に消える。現在行までで被害を止めることを固定。
+        // #215 codex review 指摘対応。
+        var content = "<div title=\"oops\n<section id=\"real\"></section>\n<my-widget></my-widget>\n<link href=\"/app.css\">";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "my-widget");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.css");
+    }
+
+    [Fact]
+    public void Extract_Html_IgnoresNativeHyphenatedSvgAndMathmlTags()
+    {
+        // HTML/SVG/MathML have a small set of native hyphenated tag names
+        // (`<font-face>`, `<color-profile>`, `<missing-glyph>`, `<annotation-xml>`).
+        // Per the HTML spec these are reserved and must NOT be treated as custom
+        // elements; otherwise any project with inline SVG / MathML gets phantom
+        // `class` symbols. Pin that genuine custom elements next to reserved tags
+        // are still captured. Closes #215 codex review finding.
+        // HTML / SVG / MathML にはハイフン付きだが仕様で予約された標準タグ（`<font-face>`
+        // / `<color-profile>` / `<missing-glyph>` / `<annotation-xml>`）が存在する。
+        // これらを custom element 扱いしないこと、および同居する本物のカスタム要素は
+        // 引き続き class として拾うことを固定する。#215 codex review 指摘対応。
+        var content = "<svg><font-face></font-face><color-profile></color-profile><missing-glyph></missing-glyph><my-widget></my-widget></svg>\n<math><annotation-xml></annotation-xml></math>\n<app-sidebar></app-sidebar>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "font-face");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "color-profile");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "missing-glyph");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "annotation-xml");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "my-widget");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "app-sidebar");
+    }
+
+    [Fact]
     public void Extract_Html_IgnoresSymbolsNestedInsideQuotedAttributeValues()
     {
         // Tag-looking text embedded inside a quoted attribute value (commonly in
