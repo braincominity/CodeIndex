@@ -3563,10 +3563,10 @@ public class ReferenceExtractorTests
     [Fact]
     public void Extract_SqlCallWithArguments_CapturesProcedureName()
     {
-        // MySQL / SQL-PSM stored procedures are invoked as `CALL proc(arg1, arg2)`. The generic
+        // MySQL / MariaDB stored procedures are invoked as `CALL proc(arg1, arg2)`. The generic
         // CallRegex already captures this because of the trailing `(`, but the SqlProcCallRegex path
         // should also stay out of the way (no duplicates, no misattribution to keywords).
-        // MySQL / SQL-PSM の `CALL proc(args)` は既存 CallRegex で捕捉される。SQL 新経路と重複しない
+        // MySQL / MariaDB の `CALL proc(args)` は既存 CallRegex で捕捉される。SQL 新経路と重複しない
         // ことと、`CALL` キーワード自体を call として拾わないことを固定する。
         const string content = """
             CALL db.my_proc(1, 2);
@@ -3693,13 +3693,13 @@ public class ReferenceExtractorTests
     [Fact]
     public void Extract_SqlCallBacktickQuotedIdentifier_IsCapturedAndDoesNotMisattributeQualifier()
     {
-        // MySQL / MariaDB / SQL-PSM use backticks to quote identifiers. The shared PrepareLine
+        // MySQL / MariaDB use backticks to quote identifiers. The shared PrepareLine
         // would strip backtick content as a string literal, so the SQL path uses a SQL-aware
         // sanitizer that preserves backticks. Bare backticks (`` CALL `proc-name` ``), qualified
         // backticks (`` CALL db.`proc-name` ``), and fully-quoted qualifier chains
         // (`` CALL `mydb`.`do_stuff` ``) should surface the terminal identifier without emitting
         // the qualifier as a phantom call edge.
-        // MySQL / MariaDB / SQL-PSM はバッククォートで識別子を引用する。共有 PrepareLine は
+        // MySQL / MariaDB はバッククォートで識別子を引用する。共有 PrepareLine は
         // バッククォート内容を文字列として除去するため、SQL 経路では専用サニタイザで保持する。
         // 単独のバッククォート、修飾子付き、完全引用 (`` `mydb`.`do_stuff` ``) のいずれも末端
         // 識別子だけを拾い、修飾子の幽霊エッジが出ないことを固定する。
@@ -3740,5 +3740,52 @@ public class ReferenceExtractorTests
 
         Assert.Contains(references, r => r.SymbolName == "order" && r.ReferenceKind == "call" && r.Line == 1);
         Assert.Contains(references, r => r.SymbolName == "select" && r.ReferenceKind == "call" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SqlHashCommentedCall_DoesNotEmitReference()
+    {
+        // MySQL / MariaDB accept `#` as a line comment in addition to ANSI `--`. The SQL-aware
+        // sanitizer must strip content after `#` so commented-out EXEC / CALL statements do not
+        // surface as phantom call edges. This mirrors the `--` comment behavior already pinned by
+        // other SQL tests.
+        // MySQL / MariaDB は ANSI の `--` に加えて `#` も行コメントとして扱う。SQL 用サニタイザは
+        // `#` 以降を除去し、コメントアウトされた EXEC / CALL が幽霊エッジとして浮き上がらないように
+        // する。`--` コメントの扱いと対にして固定する。
+        const string content = """
+            # CALL commented_out;
+            CALL real_proc;
+            -- EXEC dashed_out;
+            EXEC real_exec;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "commented_out" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "dashed_out" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "real_proc" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "real_exec" && r.ReferenceKind == "call" && r.Line == 4);
+    }
+
+    [Fact]
+    public void Extract_SqlCallBacktickIdentifierContainingHash_IsCaptured()
+    {
+        // A `#` inside a backtick-quoted identifier is part of the identifier, not a comment marker.
+        // The SQL-aware sanitizer must respect backtick boundaries before treating `#` as a comment,
+        // otherwise `` CALL `proc#1`; `` would be truncated to `` CALL `proc `` and lost.
+        // バッククォート内の `#` は識別子の一部であり、コメント開始記号ではない。SQL 用サニタイザは
+        // `#` をコメントとして扱う前にバッククォート境界を考慮する必要があり、さもなくば
+        // `` CALL `proc#1`; `` が `` CALL `proc `` に切れて call エッジが失われる。
+        const string content = """
+            CALL `proc#1`;
+            EXEC [proc#sqlserver];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "proc#1" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "proc#sqlserver" && r.ReferenceKind == "call" && r.Line == 2);
     }
 }

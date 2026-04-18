@@ -143,24 +143,29 @@ public static class ReferenceExtractor
     private static readonly Regex StringLiteralRegex = new(
         "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`",
         RegexOptions.Compiled);
-    // SQL-specific string-literal stripper: preserve backticks because MySQL uses them for
-    // identifier quoting (`` CALL `proc-name`; ``) rather than string literals. Strip only
-    // ANSI single-quoted and double-quoted literals plus comments.
-    // SQL 専用の文字列リテラル除去: MySQL はバッククォートを識別子引用に使うため保持し、
-    // `'...'` / `"..."` のみを除去する。
+    // SQL-specific string-literal stripper: preserve backticks because MySQL / MariaDB use them
+    // for identifier quoting (`` CALL `proc-name`; ``) rather than string literals. Strip only
+    // ANSI single-quoted and double-quoted literals plus comments. ANSI / SQL-PSM delimited
+    // identifiers (`"..."`) are intentionally treated as string literals here because the dominant
+    // real-world SQL codebase uses `"..."` for string content when double-quoted identifiers are
+    // not in effect, and #232 focuses on T-SQL brackets + MySQL backticks — not ANSI delimited
+    // identifiers.
+    // SQL 専用の文字列リテラル除去: MySQL / MariaDB はバッククォートを識別子引用に使うため保持し、
+    // `'...'` / `"..."` のみを除去する。ANSI / SQL-PSM の `"..."` delimited identifier は
+    // 実運用で文字列として使われる頻度が高く、今回の #232 の対象から外れるため意図的に文字列扱いとする。
     private static readonly Regex SqlStringLiteralRegex = new(
         "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'",
         RegexOptions.Compiled);
     private static readonly Regex InlineBlockCommentRegex = new(@"/\*.*?\*/", RegexOptions.Compiled);
     private static readonly Regex CallRegex = new(@"(?<![\w$])(?<name>[A-Za-z_]\w*)(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
-    // SQL stored-procedure call without parentheses: T-SQL `EXEC` / `EXECUTE` and MySQL / SQL-PSM `CALL`.
+    // SQL stored-procedure call without parentheses: T-SQL `EXEC` / `EXECUTE` and MySQL / MariaDB `CALL`.
     // The shared CallRegex requires a trailing `(`, which misses the dominant real-world form such as
     // `EXEC dbo.sp_Target;`, `EXEC dbo.sp_Target @x = 1, @y = 2;`, `CALL sp_Helper;`, and the bracketed
     // form `EXEC [dbo].[sp_Target]`. The regex captures only the final identifier (schema prefixes are
     // consumed as a prefix) and tolerates the optional T-SQL return-value assignment
     // `EXEC @retval = dbo.sp_Target ...`. Bracket handling is done at emission time so `[sp_Target]`
     // is normalized back to `sp_Target`. See issue #232.
-    // SQL のストアドプロシージャを `(` なしで呼び出す T-SQL `EXEC` / `EXECUTE` と MySQL / SQL-PSM `CALL`。
+    // SQL のストアドプロシージャを `(` なしで呼び出す T-SQL `EXEC` / `EXECUTE` と MySQL / MariaDB `CALL`。
     // 共通 CallRegex は末尾 `(` を要求するため、`EXEC dbo.sp_Target;` など実運用で圧倒的に多い形を取りこぼす。
     // 先頭側の schema prefix は吸収し、末端の識別子だけを `name` として捕捉する。T-SQL 固有の
     // `EXEC @retval = dbo.sp_Target ...` 形にも対応し、`[sp_Target]` のような角括弧識別子は発行時に除去する。
@@ -173,13 +178,13 @@ public static class ReferenceExtractor
     // an omitted database or schema part — `EXEC AdventureWorks..sp_GetCustomer;` /
     // `EXEC [AdventureWorks]..[proc-name];` — terminates on the real procedure name instead of
     // falling back to the first segment. Identifier alternatives also accept backtick-quoted
-    // names (`` `proc-name` ``) to cover MySQL / MariaDB / SQL-PSM identifier quoting.
+    // names (`` `proc-name` ``) to cover MySQL / MariaDB identifier quoting.
     // 角括弧識別子は `[` / `]` / 改行以外の任意文字を許可する。T-SQL では `#`（一時プロシージャ）、
     // `-`（ハイフン名）、空白、Unicode 記号などが正当に現れるため、`[\w ]+` ではそれらの合法な
     // 形を取りこぼし、修飾子 `[dbo]` を proc 名として誤発行してしまう。
     // 修飾子の各セグメントを optional にすることで、`EXEC AdventureWorks..sp_GetCustomer;` のように
     // SQL Server が許す省略形（`..`）でも末尾の proc 名まで到達できる。識別子候補にはバッククォート引用も含め、
-    // MySQL / MariaDB / SQL-PSM の `` `proc-name` `` 形にも対応する。
+    // MySQL / MariaDB の `` `proc-name` `` 形にも対応する。
     private static readonly Regex SqlProcCallRegex = new(
         @"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?(?:(?:\[[^\[\]\r\n]+\]|`[^`\r\n]+`|\w+)?\.)*(?<name>\[[^\[\]\r\n]+\]|`[^`\r\n]+`|\w+)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -527,7 +532,7 @@ public static class ReferenceExtractor
                 // The shared PrepareLine strips backtick-quoted content because several other
                 // languages use backticks for string literals (shell command substitution,
                 // JavaScript template literals, Go raw strings). In SQL, backticks quote
-                // identifiers (MySQL / MariaDB / SQL-PSM), so we re-prepare the raw line with
+                // identifiers (MySQL / MariaDB), so we re-prepare the raw line with
                 // a SQL-aware stripper that only drops `'...'` / `"..."` literals and comments.
                 // 共有 PrepareLine はバッククォート内容を文字列として除去する（他言語のテンプレート
                 // リテラル等に対応するため）。SQL ではバッククォートは識別子引用なので、SQL 向けに
@@ -2374,19 +2379,54 @@ public static class ReferenceExtractor
     }
 
     // SQL-aware line sanitizer used only for the `EXEC` / `EXECUTE` / `CALL` no-parens scan.
-    // Preserves backtick-quoted identifiers (MySQL / MariaDB / SQL-PSM) so `` CALL `proc-name`; ``
-    // can be matched, while still stripping `'...'` / `"..."` string literals and SQL comments
-    // so a literal containing `EXEC` / `CALL` does not emit a phantom reference.
+    // Preserves backtick-quoted identifiers (MySQL / MariaDB) so `` CALL `proc-name`; `` can be
+    // matched, while still stripping `'...'` / `"..."` string literals and SQL line / block
+    // comments so text inside comments does not emit a phantom reference. Line-comment tokens
+    // `--` (ANSI / T-SQL / MySQL) and `#` (MySQL / MariaDB) are scanned with awareness of
+    // backtick and bracket identifier quoting, so a legitimate name containing `#` or `-` such
+    // as `` CALL `proc#1`; `` or `EXEC [proc-name]` is not truncated mid-identifier.
     // `EXEC` / `EXECUTE` / `CALL` の括弧なし抽出向けの SQL 特化サニタイザ。バッククォート引用
-    // （MySQL / MariaDB / SQL-PSM の識別子引用）は保持したまま、`'...'` / `"..."` とコメントを除去する。
+    // （MySQL / MariaDB の識別子引用）は保持したまま、`'...'` / `"..."` と `--` / `#` / `/* ... */`
+    // の SQL コメントを除去する。`--` と `#` の走査は backtick / bracket 引用を尊重するため、
+    // `` CALL `proc#1`; `` や `EXEC [proc-name]` のような識別子が途中で切られない。
     private static string PrepareSqlLineForIdentifierScan(string line)
     {
         var result = SqlStringLiteralRegex.Replace(line, "\"\"");
         result = InlineBlockCommentRegex.Replace(result, " ");
 
-        var dashCommentIndex = result.IndexOf("--", StringComparison.Ordinal);
-        if (dashCommentIndex >= 0)
-            result = result[..dashCommentIndex];
+        int commentStart = -1;
+        for (int i = 0; i < result.Length; i++)
+        {
+            char c = result[i];
+            if (c == '`')
+            {
+                var closing = result.IndexOf('`', i + 1);
+                if (closing < 0)
+                    break;
+                i = closing;
+                continue;
+            }
+            if (c == '[')
+            {
+                var closing = result.IndexOf(']', i + 1);
+                if (closing < 0)
+                    break;
+                i = closing;
+                continue;
+            }
+            if (c == '-' && i + 1 < result.Length && result[i + 1] == '-')
+            {
+                commentStart = i;
+                break;
+            }
+            if (c == '#')
+            {
+                commentStart = i;
+                break;
+            }
+        }
+        if (commentStart >= 0)
+            result = result[..commentStart];
 
         return result;
     }
