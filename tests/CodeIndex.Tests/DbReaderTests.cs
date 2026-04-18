@@ -2528,6 +2528,143 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetFileDependencies_CSharpAttributeAliasOnlyMatchesClassLikeTargets()
+    {
+        // issue #293 review: the C# attribute suffix alias UNION synthesizes a
+        // `FooAttribute` lookup key for `[Foo]` references. Without a kind guard the
+        // subsequent name-only join would spuriously attribute the consumer to any
+        // file that merely defines a function / property / variable also named
+        // `FooAttribute`. Only class-like target symbols should match synthetic alias
+        // rows.
+        // issue #293 レビュー指摘: `[Foo]` 用の alias UNION は `FooAttribute` という
+        // lookup key を合成するが、kind によるガードが無いと、偶然 `FooAttribute`
+        // という名前を持つ関数 / プロパティ / 変数を含むファイルにまで依存が張られて
+        // しまう。合成 alias 行は class 系の target にのみ一致すべき。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            using System;
+
+            [AttributeUsage(AttributeTargets.Class)]
+            public sealed class MyAuditAttribute : Attribute
+            {
+            }
+            """);
+        // Unrelated file containing a function named `MyAuditAttribute` — not an
+        // attribute class, so `[MyAudit]` must not produce a dependency edge to it.
+        // 無関係なファイルに関数として `MyAuditAttribute` が居るケース。
+        // `[MyAudit]` はこのファイルへの依存を作ってはいけない。
+        InsertIndexedFile("src/Util.cs", "csharp",
+            """
+            public static class Util
+            {
+                public static void MyAuditAttribute()
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var dependencies = _reader.GetFileDependencies(limit: 20, lang: "csharp");
+
+        Assert.Contains(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/MyAuditAttribute.cs");
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/Util.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencyHints_SuppressesCSharpAttributeMetadataBypassOnAmbiguousTarget()
+    {
+        // issue #293 review: when two classes share the `MyAuditAttribute` name across
+        // namespaces, a `[MyAudit]` reference row only carries the short name and
+        // cannot be uniquely attributed to either target. In that ambiguous case the
+        // `impact` metadata evidence bypass must be skipped so rename / removal blast
+        // radius is not over-reported.
+        // issue #293 レビュー指摘: namespace を跨いで同名の `MyAuditAttribute` クラスが
+        // 存在するとき、`[MyAudit]` 参照行は短縮名しか持たず、どちらの target にも
+        // 一意に紐付けられない。この曖昧なケースでは `impact` の metadata evidence
+        // bypass を行わず、rename / 削除の影響範囲を過大報告しないようにする。
+        InsertIndexedFile("src/A/MyAuditAttribute.cs", "csharp",
+            """
+            namespace A;
+
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/B/MyAuditAttribute.cs", "csharp",
+            """
+            namespace B;
+
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+        // Pure attribute consumer in src/A/ — no structured type evidence exists for
+        // `MyAuditAttribute` other than the `[MyAudit]` use site itself.
+        // src/A/ に純粋な attribute consumer — `MyAuditAttribute` に対する構造化された
+        // 型証拠は `[MyAudit]` use site 以外には無い。
+        InsertIndexedFile("src/A/Svc.cs", "csharp",
+            """
+            namespace A;
+
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        // Narrow `impact` to src/A/ so ResolveImpactDefinitions returns exactly one
+        // definition. Without the ambiguity guard, the metadata bypass would fabricate
+        // a heuristic edge even though the `[MyAudit]` target is qualifier-ambiguous.
+        // src/A/ に絞ることで ResolveImpactDefinitions が 1 件だけ返す状態を作る。
+        // ambiguity guard が無ければ、`[MyAudit]` の target が qualifier 曖昧でも
+        // metadata bypass が heuristic エッジを作ってしまう。
+        var result = _reader.AnalyzeImpact(
+            "MyAuditAttribute",
+            maxDepth: 3,
+            limit: 20,
+            lang: "csharp",
+            pathPatterns: new[] { "src/A/" });
+
+        Assert.DoesNotContain(result.FileImpacts, f => f.SourcePath == "src/A/Svc.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencyHints_CSharpAttributeMetadataBypassAppliesWhenTargetUnambiguous()
+    {
+        // issue #293 review: the ambiguity guard must only fire when genuinely
+        // ambiguous. With a single class-like `MyAuditAttribute` definition the
+        // metadata bypass should still surface the `[MyAudit]` consumer as a
+        // file-level hint, preserving the legitimate pure-attribute consumer case.
+        // issue #293 レビュー指摘: ambiguity guard は本当に曖昧なときだけ発動すべき。
+        // `MyAuditAttribute` の class 定義が 1 件しかない場合は従来通り metadata
+        // bypass で `[MyAudit]` consumer を file-level hint として出し、純粋な
+        // attribute consumer の正当な検出を保つ。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var result = _reader.AnalyzeImpact("MyAuditAttribute", maxDepth: 3, limit: 20, lang: "csharp");
+
+        Assert.Contains(result.FileImpacts, f => f.SourcePath == "src/Svc.cs" && f.TargetPath == "src/MyAuditAttribute.cs");
+    }
+
+    [Fact]
     public void GetGroupedSymbolHotspots_CollapsesDuplicateNamesWithoutBareJoinInflation()
     {
         InsertIndexedFile("src/Alpha.cs", "csharp",

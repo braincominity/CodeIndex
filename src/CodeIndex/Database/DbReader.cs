@@ -1865,19 +1865,33 @@ public partial class DbReader
                 }));
         }
 
+        // Metadata references only carry the short use-site name (`Foo` for `[Foo]`,
+        // `@Foo`). If multiple class-like definitions share the same unqualified name
+        // across namespaces / packages (e.g. `A.MyAuditAttribute` and
+        // `B.MyAuditAttribute`), we cannot uniquely attribute a `[MyAudit]` site to
+        // either target. Skip the metadata evidence bypass in that ambiguous case so
+        // `impact` does not over-report the blast radius of a rename / removal.
+        // metadata 参照は use-site 側の短縮名 (`[Foo]` / `@Foo` の `Foo`) しか持た
+        // ないため、namespace / package を跨いで同名の class-like 定義が複数存在
+        // する場合、`[MyAudit]` 参照をどちらの target にも一意に紐付けられない。
+        // そのような曖昧なケースでは metadata の evidence bypass を行わず、
+        // `impact` が rename / 削除の影響範囲を過大報告しないようにする。
+        var metadataBypassSafe = IsMetadataTargetUnambiguous(definition);
         var evidenceCache = new Dictionary<long, bool>();
         var filtered = new List<FileDependencyResult>();
         foreach (var candidate in candidates)
         {
             // Metadata-only consumers (attribute / annotation sites like `[MyAudit]` or
             // `@Inject(User.class)`) legitimately lack structured type evidence in the
-            // source file. Bypass the evidence guard for those edges so deps/impact can
-            // still surface pure-attribute consumers.
+            // source file. Bypass the evidence guard for those edges only when the
+            // class-like target is unambiguous so deps/impact can surface pure-attribute
+            // consumers without over-attributing same-named targets.
             // metadata 専用の参照 (`[MyAudit]` や `@Inject(User.class)` のような attribute /
             // annotation 利用) は、source 側のファイルに structured な型利用が無くても
-            // 正当な依存となる。そのため、metadata 参照を含むエッジでは evidence guard を
-            // スキップし、純粋な attribute 消費側ファイルも deps/impact に出せるようにする。
-            if (candidate.HasMetadataRef)
+            // 正当な依存となるが、class-like target が一意に決まるときだけ evidence guard
+            // をスキップする。曖昧なときは下の evidence 要求へフォールスルーさせ、
+            // 同名 target への誤帰属を防ぐ。
+            if (candidate.HasMetadataRef && metadataBypassSafe)
             {
                 filtered.Add(candidate.Edge);
                 continue;
@@ -1896,6 +1910,35 @@ public partial class DbReader
             filtered.RemoveRange(limit, filtered.Count - limit);
 
         return (filtered, truncated);
+    }
+
+    // Returns true when the metadata target name resolves to at most one class-like
+    // symbol across the graph-supported languages. Ambiguous names (same unqualified
+    // name under different namespaces / packages) must not trigger the metadata
+    // evidence bypass because attribute / annotation reference rows only keep the
+    // short name and cannot disambiguate between them.
+    // graph 対応言語の中で class-like シンボルが高々 1 件しか存在しないときに true。
+    // namespace / package を跨いで同名の class-like 定義が複数ある曖昧なケースでは
+    // attribute / annotation 参照行が短縮名しか持たず区別できないため、metadata の
+    // evidence bypass を許可しない。
+    private bool IsMetadataTargetUnambiguous(SymbolResult definition)
+    {
+        if (string.IsNullOrWhiteSpace(definition.Name))
+            return false;
+        using var cmd = _conn.CreateCommand();
+        var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "metadataAmbigLang");
+        cmd.CommandText = $@"
+            SELECT COUNT(*) FROM (
+                SELECT DISTINCT f.path
+                FROM symbols s
+                JOIN files f ON s.file_id = f.id
+                WHERE s.name = @metadataAmbigName COLLATE NOCASE
+                  AND s.kind IN ('class','struct','interface')
+                  AND {supportedLangFilter}
+            )";
+        cmd.Parameters.AddWithValue("@metadataAmbigName", definition.Name);
+        var count = Convert.ToInt32(cmd.ExecuteScalar() ?? 0);
+        return count <= 1;
     }
 
     private bool SourceFileHasStructuredTypeEvidence(long fileId, string typeName)
@@ -2512,18 +2555,24 @@ public partial class DbReader
                 GROUP BY src.id, src.path, src.lang, r.symbol_name, r.line, r.column_number, logical_reference_kind
             ),
             logical_references AS (
-                SELECT source_file_id, source_path, source_lang, symbol_name, line, column_number, logical_reference_kind
+                SELECT source_file_id, source_path, source_lang, symbol_name, line, column_number, logical_reference_kind,
+                       0 AS is_attribute_alias
                 FROM logical_references_primary
                 UNION ALL
                 -- C# attribute suffix alias: [Foo] in source is stored with symbol_name='Foo',
                 -- but the defining class is named 'FooAttribute'. Emit the canonical 'Foo' + 'Attribute'
-                -- form so deps can match the class file as a target.
+                -- form so deps can match the class file as a target. The alias rows are flagged
+                -- so the edges CTE can restrict them to class-like targets and avoid spurious
+                -- edges to unrelated functions / properties that happen to be named 'FooAttribute'.
                 -- C# 属性のサフィックス別名: ソース上の [Foo] は symbol_name='Foo' で保存されるが、
                 -- 定義クラスは 'FooAttribute' 命名になるため、正規形 'Foo' + 'Attribute' を補って
-                -- deps がクラス側のファイルを target として join できるようにする。
+                -- deps がクラス側のファイルを target として join できるようにする。alias 行には
+                -- フラグを付け、edges CTE 側で class-like target だけに限定する。これにより、
+                -- 偶然 'FooAttribute' という名前を持つ関数やプロパティへの誤ったエッジを防ぐ。
                 SELECT source_file_id, source_path, source_lang,
                        symbol_name || 'Attribute' AS symbol_name,
-                       line, column_number, logical_reference_kind
+                       line, column_number, logical_reference_kind,
+                       1 AS is_attribute_alias
                 FROM logical_references_primary
                 WHERE source_lang = 'csharp'
                   AND logical_reference_kind = 'attribute'
@@ -2534,14 +2583,31 @@ public partial class DbReader
                        source_path,
                        source_lang,
                        symbol_name,
+                       -- MIN: if any real (non-alias) ref shares the same symbol_name group,
+                       -- treat the group as non-alias so the class-kind restriction only
+                       -- applies to purely synthetic alias rows.
+                       -- MIN: 同じ symbol_name のグループに real (非 alias) 行が 1 件でも
+                       -- あれば、そのグループは非 alias 扱いとし、class 種別の制限を
+                       -- 純粋に合成された alias 行にのみ適用する。
+                       MIN(is_attribute_alias) AS is_attribute_alias,
                        COUNT(*) AS ref_count
                 FROM logical_references
                 GROUP BY source_file_id, source_path, source_lang, symbol_name
             ),
             target_files AS (
-                SELECT DISTINCT dst.path AS target_path,
+                -- Collapse per-symbol rows to one per (target_path, target_lang, symbol_name)
+                -- and remember whether any of the same-name symbols is a class-like kind
+                -- via MAX. Keeping kind in DISTINCT would split identical (path, lang, name)
+                -- rows when one file defines both a class and a same-name function (e.g. a
+                -- C# constructor), inflating the deps reference count.
+                -- (target_path, target_lang, symbol_name) 単位に集約し、同名のシンボルの
+                -- いずれかが class 系であるかを MAX で覚える。kind を DISTINCT に含めると、
+                -- 同じ (path, lang, name) でも class と同名 function (C# のコンストラクタ等)
+                -- が別行として残り、deps の参照カウントが膨らんでしまう。
+                SELECT dst.path AS target_path,
                        dst.lang AS target_lang,
-                       s.name AS symbol_name
+                       s.name AS symbol_name,
+                       MAX(CASE WHEN s.kind IN ('class','struct','interface') THEN 1 ELSE 0 END) AS has_class_like_kind
                 FROM symbols s
                 JOIN files dst ON s.file_id = dst.id
                 WHERE 1 = 1";
@@ -2563,6 +2629,7 @@ public partial class DbReader
         if (reverse && excludeTests)
             sql += $" AND NOT {TestPathCondition.Replace("f.path", $"{targetFilterAlias}.path")}";
         sql += @"
+                GROUP BY dst.path, dst.lang, s.name
             ),
             edges AS (
                 SELECT snc.source_path,
@@ -2574,6 +2641,14 @@ public partial class DbReader
                   ON tf.symbol_name = snc.symbol_name
                  AND tf.target_lang = snc.source_lang
                 WHERE snc.source_path != tf.target_path
+                  -- Purely synthetic C# attribute alias rows must only match class-like
+                  -- target kinds; otherwise '[Foo]' would spuriously depend on any file
+                  -- that merely defines a function / property / variable named
+                  -- 'FooAttribute'. Real attribute references continue to match any kind.
+                  -- 純粋な合成 alias 行は class 系の target 種別にのみ一致させる。
+                  -- これを許すと '[Foo]' が単に 'FooAttribute' という名前の関数や
+                  -- プロパティを持つファイルにまで誤って依存してしまう。
+                  AND (snc.is_attribute_alias = 0 OR tf.has_class_like_kind = 1)
             )
             SELECT source_path,
                    target_path,
