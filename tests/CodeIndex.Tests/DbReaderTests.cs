@@ -6123,6 +6123,413 @@ public class DbReaderTests : IDisposable
         Assert.Equal("public_or_exported_no_refs", plain.UnusedBucket);
     }
 
+    [Theory]
+    [InlineData("verbatim_standalone", "[JsonPropertyName(@\"a[\n]\")]\n    public string A { get; set; } = \"\";", 7, 9)]
+    [InlineData("raw_standalone", "[JsonPropertyName(\"\"\"a[\n]\"\"\")]\n    public string A { get; set; } = \"\";", 7, 9)]
+    [InlineData("raw_interp_standalone", "[JsonPropertyName($\"\"\"a[\n]\"\"\")]\n    public string A { get; set; } = \"\";", 7, 9)]
+    [InlineData("raw_interp_double_dollar_standalone", "[JsonPropertyName($$\"\"\"a[\n]\"\"\")]\n    public string A { get; set; } = \"\";", 7, 9)]
+    [InlineData("verbatim_inline_close", "[JsonPropertyName(@\"a[\n]\")] public string A { get; set; } = \"\";", 6, 8)]
+    [InlineData("raw_inline_close", "[JsonPropertyName(\"\"\"a[\n]\"\"\")] public string A { get; set; } = \"\";", 6, 8)]
+    [InlineData("raw_interp_inline_close", "[JsonPropertyName($\"\"\"a[\n]\"\"\")] public string A { get; set; } = \"\";", 6, 8)]
+    // Interpolation-hole cases (#409 follow-up, iteration 4): the sanitizer must
+    // not let quotes / triple-quote runs inside an interpolation hole prematurely
+    // close the outer interpolated string, which would leak the hole's inner
+    // string content as phantom attribute text (e.g. a fake `[JsonIgnore]`).
+    // 補間ホール内の `"` / `"""` 連続が外側の補間文字列を早期終了させて、
+    // ホール内の文字列内容が擬似 attribute（例: 擬似 `[JsonIgnore]`）として
+    // 漏れないことを検証する (#409 iteration 4 回帰)。
+    [InlineData("verbatim_interp_hole_with_dollar_at", "[JsonPropertyName($@\"{\n\"[JsonIgnore]\"}\")]\n    public string A { get; set; } = \"\";", 7, 9)]
+    [InlineData("verbatim_interp_hole_with_at_dollar", "[JsonPropertyName(@$\"{\n\"[JsonIgnore]\"}\")]\n    public string A { get; set; } = \"\";", 7, 9)]
+    [InlineData("raw_interp_hole_with_triple_quote_run", "[JsonPropertyName($\"\"\"{\n\"\"\"[JsonIgnore]\"\"\"}\"\"\")]\n    public string A { get; set; } = \"\";", 7, 9)]
+    public void GetUnusedSymbols_MultilineAttributeLiteralWithBracketInString_KeepsReflectionContext(string label, string attributeAndDeclaration, int aLine, int bLine)
+    {
+        // Regression for #409 — multi-line verbatim / raw / raw-interpolated string
+        // literals in C# attributes with `[` or `]` inside must not cause the property
+        // carrying the reflection attribute to fall out of the
+        // `reflection_or_config_suspect` bucket. At the same time, the adjacent plain
+        // property must not inherit reflection context.
+        // #409 回帰: C# 属性内の複数行 verbatim / raw / raw 補間文字列リテラルに `[` / `]` が
+        // 含まれても、その属性を持つプロパティが `reflection_or_config_suspect` から
+        // 外れてはならない。同時に、直下の属性なしプロパティに reflection コンテキストが
+        // 漏れてはならない。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = $"src/reflection_multiline_attr_fixture_{label}.cs",
+            Lang = "csharp",
+            Size = 400,
+            Lines = 12,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var content = "using System.Text.Json.Serialization;\n\npublic class Target\n{\n    " + attributeAndDeclaration + "\n\n    public string B { get; set; } = \"\";\n}\n";
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = bLine + 2,
+                Content = content,
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "Target",
+                Line = 3,
+                StartLine = 3,
+                EndLine = bLine + 1,
+                Signature = "public class Target",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "A",
+                Line = aLine,
+                StartLine = aLine,
+                EndLine = aLine,
+                Signature = "public string A { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "B",
+                Line = bLine,
+                StartLine = bLine,
+                EndLine = bLine,
+                Signature = "public string B { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: [$"reflection_multiline_attr_fixture_{label}.cs"], excludePathPatterns: null, excludeTests: false);
+
+        var a = Assert.Single(unused, symbol => symbol.Name == "A");
+        Assert.Equal("reflection_or_config_suspect", a.UnusedBucket);
+
+        var b = Assert.Single(unused, symbol => symbol.Name == "B");
+        Assert.Equal("public_or_exported_no_refs", b.UnusedBucket);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_CommentPrefixedInlineAttribute_KeepsReflectionContext()
+    {
+        // Regression for #409 follow-up (iteration 5) — a line-leading `/* ... */`
+        // block comment followed by an inline attribute + declaration — e.g.
+        // `/* note */ [JsonPropertyName("ok")] public string A ...` — must keep
+        // the reflection context. The anchor's inline-decl check must run against
+        // the sanitized line so the leading block comment (blanked by the
+        // cross-line sanitizer) does not break the leading-`[` anchor.
+        // #409 追加回帰 (iteration 5): 行頭の `/* ... */` ブロックコメント直後に
+        // 続くインライン属性 + 宣言（例: `/* note */ [JsonPropertyName("ok")] public string A ...`）は、
+        // 対象プロパティが reflection コンテキストを保たなければならない。
+        // anchor のインライン宣言判定は sanitize 済み行に対して行い、
+        // 行頭ブロックコメントが先頭 `[` アンカーを阻害しないようにする。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_comment_prefixed_inline_fixture.cs",
+            Lang = "csharp",
+            Size = 260,
+            Lines = 7,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 6,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class Target
+                {
+                    /* note */ [JsonPropertyName("ok")] public string A { get; set; } = "";
+                }
+
+                """,
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "Target",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 6,
+                Signature = "public class Target",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "A",
+                Line = 5,
+                StartLine = 5,
+                EndLine = 5,
+                Signature = "public string A { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["reflection_comment_prefixed_inline_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        var a = Assert.Single(unused, symbol => symbol.Name == "A");
+        Assert.Equal("reflection_or_config_suspect", a.UnusedBucket);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_AttributeLineWithTrailingLineComment_KeepsReflectionContext()
+    {
+        // Regression for #409 follow-up — a trailing `// comment` after the closing
+        // `]` of an attribute must not flip the following property out of
+        // `reflection_or_config_suspect`. The guard that detects inline `[attr] decl`
+        // rows must run against sanitized lines so blanked comments do not pose as
+        // declaration bodies.
+        // #409 追加回帰: 属性行末尾の `// コメント` が、下のプロパティを
+        // `reflection_or_config_suspect` から外してはならない。インライン `[attr] decl`
+        // 判定は sanitize 済み行に対して行い、消されたコメントが宣言本体と誤認されないこと。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_trailing_comment_fixture.cs",
+            Lang = "csharp",
+            Size = 280,
+            Lines = 10,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 9,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class Target
+                {
+                    [JsonPropertyName("ok")] // trailing comment
+                    public string C { get; set; } = "";
+                }
+
+                """,
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "Target",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 7,
+                Signature = "public class Target",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "C",
+                Line = 6,
+                StartLine = 6,
+                EndLine = 6,
+                Signature = "public string C { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["reflection_trailing_comment_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        var c = Assert.Single(unused, symbol => symbol.Name == "C");
+        Assert.Equal("reflection_or_config_suspect", c.UnusedBucket);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_AttributeLineWithTrailingBlockComment_KeepsReflectionContext()
+    {
+        // Regression for #409 follow-up — a trailing `/* ... */` block comment
+        // after the closing `]` of an attribute must not flip the following
+        // property out of `reflection_or_config_suspect`. The previous
+        // BuildTriviaMask heuristic flagged any line containing `*/` as trivia,
+        // so the `[JsonPropertyName(...)] /* note */` row was skipped by
+        // FindPreviousNonTriviaLine and the real attribute block was lost.
+        // #409 追加回帰: 属性行末尾の `/* ... */` ブロックコメントが、下のプロパティを
+        // `reflection_or_config_suspect` から外してはならない。以前の BuildTriviaMask は
+        // `*/` を含むだけで trivia 判定していたため、`[JsonPropertyName(...)] /* note */`
+        // の行が FindPreviousNonTriviaLine に飛ばされ、本来の属性ブロックが失われていた。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_trailing_block_comment_fixture.cs",
+            Lang = "csharp",
+            Size = 300,
+            Lines = 10,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 9,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class Target
+                {
+                    [JsonPropertyName("ok")] /* trailing block comment */
+                    public string D { get; set; } = "";
+                }
+
+                """,
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "Target",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 7,
+                Signature = "public class Target",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "D",
+                Line = 6,
+                StartLine = 6,
+                EndLine = 6,
+                Signature = "public string D { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["reflection_trailing_block_comment_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        var d = Assert.Single(unused, symbol => symbol.Name == "D");
+        Assert.Equal("reflection_or_config_suspect", d.UnusedBucket);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_MultilineAttributeWithEmbeddedBlockCommentMentioningIgnoreAttribute_KeepsReflectionContext()
+    {
+        // Regression for #409 follow-up — a multi-line block comment embedded
+        // inside an attribute list must not leak phantom attribute names from
+        // its body. The closing comment line `[JsonIgnore] */` would otherwise
+        // survive BuildSingleLineTrivia as real text, and the phantom
+        // `JsonIgnore` would cancel the real `JsonPropertyName`, flipping the
+        // property out of `reflection_or_config_suspect`.
+        // #409 追加回帰: 属性リスト内に埋め込まれた複数行ブロックコメントの本体が
+        // 擬似的な属性名を ExtractNormalizedAttributeNames に漏らしてはならない。
+        // コメント閉じ行 `[JsonIgnore] */` がそのまま BuildSingleLineTrivia を通過すると、
+        // 幻の `JsonIgnore` が本物の `JsonPropertyName` を打ち消し、プロパティが
+        // `reflection_or_config_suspect` から外れてしまう。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_embedded_block_comment_fixture.cs",
+            Lang = "csharp",
+            Size = 360,
+            Lines = 12,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 11,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class Target
+                {
+                    [
+                        /* explanation
+                           [JsonIgnore] */
+                        JsonPropertyName("ok")
+                    ]
+                    public string E { get; set; } = "";
+                }
+
+                """,
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "Target",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 11,
+                Signature = "public class Target",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "E",
+                Line = 10,
+                StartLine = 10,
+                EndLine = 10,
+                Signature = "public string E { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["reflection_embedded_block_comment_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        var e = Assert.Single(unused, symbol => symbol.Name == "E");
+        Assert.Equal("reflection_or_config_suspect", e.UnusedBucket);
+    }
+
     [Fact]
     public void GetUnusedSymbols_CommentBetweenAttributeAndProperty_IsClassifiedAsSuspect()
     {
