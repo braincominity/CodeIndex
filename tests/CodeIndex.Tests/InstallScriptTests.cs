@@ -379,6 +379,46 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void ResolveVersion_ForbiddenLatestLookup_PrintsProxyAndVersionPinHints()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            curl() {
+                local output_path=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o)
+                            output_path="$2"
+                            shift 2
+                            ;;
+                        -w)
+                            shift 2
+                            ;;
+                        *)
+                            shift
+                            ;;
+                    esac
+                done
+
+                printf '{"message":"Forbidden"}' > "$output_path"
+                printf '403'
+                return 0
+            }
+
+            resolve_version ""
+            """);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Fetching latest release version", stdout);
+        Assert.Contains("GitHub API returned HTTP 403 while fetching the latest release", stderr);
+        Assert.Contains("bash ./install.sh vX.Y.Z", stderr);
+        Assert.Contains("CONNECT tunnel failed, response 403", stderr);
+    }
+
+    [Fact]
     public void Main_RateLimitedLatestLookup_StopsBeforeSuccessPath()
     {
         if (OperatingSystem.IsWindows())

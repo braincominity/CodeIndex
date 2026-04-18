@@ -63,6 +63,15 @@ curl -I https://github.com/Widthdom/CodeIndex/releases/download/vX.Y.Z/CodeIndex
 If one environment gets `200/302` and another gets `403` (or `CONNECT tunnel
 failed`), treat it as a network-policy difference first, not an installer bug.
 
+If **all** candidate hosts (`raw.githubusercontent.com`, `github.com`, and
+your mirror/proxy host) fail at CONNECT tunnel stage with `403`, the deny is
+happening in upstream proxy/egress policy before TLS. In that case:
+
+1. Route substitution alone will not unblock the install.
+2. Ask the network team to allow-list at least one artifact path.
+3. Use `bash ./install.sh --self-test-local-mirror` only to validate installer
+   logic offline (it does not prove external release reachability).
+
 ### Optional: zero-external-network install-path self-test
 
 If outbound traffic is blocked but you still want to verify installer logic
@@ -277,6 +286,16 @@ curl -I https://github.com/Widthdom/CodeIndex/releases/download/vX.Y.Z/CodeIndex
 
 片方が `200/302`、もう片方が `403`（または `CONNECT tunnel failed`）なら、
 まず installer 不具合よりネットワークポリシー差分を疑うべきです。
+
+`raw.githubusercontent.com` / `github.com` / mirror・proxy 候補の**すべて**が
+CONNECT トンネル段階で `403` になる場合、拒否は TLS 前の
+upstream proxy / egress policy 側で発生しています。このケースでは:
+
+1. 経路差し替えだけでは解決しません。
+2. 少なくとも 1 つの artifact 配信経路を network 管理者に allow-list して
+   もらってください。
+3. `bash ./install.sh --self-test-local-mirror` は installer ロジックの
+   オフライン検証用途に限って使ってください（外部 release 到達性の証明にはなりません）。
 
 ### 任意: 外向きネットワーク不要のインストール経路 self-test
 
