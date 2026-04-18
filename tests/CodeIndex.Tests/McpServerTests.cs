@@ -5057,6 +5057,59 @@ public class McpServerTests : IDisposable
         Assert.Contains("not allowed in batch_query", results[0]!["error"]!.GetValue<string>());
     }
 
+    // Regression pins for issue #199: MCP tool handlers must normalize mixed-case lang/kind.
+    // #199 回帰テスト: MCP ハンドラも --lang / --kind を大文字小文字なく扱うことを固定する。
+    [Fact]
+    public void ToolsCall_Symbols_AcceptsLangCsharpCaseInsensitively_Issue199()
+    {
+        var requestUpper = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"App","lang":"CSharp"}}}""")!;
+        var responseUpper = _server.HandleMessage(requestUpper)!;
+
+        var structuredUpper = responseUpper["result"]!["structuredContent"]!;
+        Assert.Equal("csharp", structuredUpper["lang"]!.GetValue<string>());
+        Assert.True(structuredUpper["count"]!.GetValue<int>() >= 1);
+
+        var requestLower = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"App","lang":"csharp"}}}""")!;
+        var responseLower = _server.HandleMessage(requestLower)!;
+        var structuredLower = responseLower["result"]!["structuredContent"]!;
+
+        Assert.Equal(structuredLower["count"]!.GetValue<int>(), structuredUpper["count"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_Symbols_AcceptsKindClassCaseInsensitively_Issue199()
+    {
+        var requestUpper = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"App","kind":"CLASS"}}}""")!;
+        var responseUpper = _server.HandleMessage(requestUpper)!;
+
+        var structuredUpper = responseUpper["result"]!["structuredContent"]!;
+        Assert.Equal("class", structuredUpper["kind"]!.GetValue<string>());
+        Assert.True(structuredUpper["count"]!.GetValue<int>() >= 1);
+
+        var requestLower = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"App","kind":"class"}}}""")!;
+        var responseLower = _server.HandleMessage(requestLower)!;
+        var structuredLower = responseLower["result"]!["structuredContent"]!;
+
+        Assert.Equal(structuredLower["count"]!.GetValue<int>(), structuredUpper["count"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_Definition_AcceptsLangCsharpCaseInsensitively_Issue199()
+    {
+        var requestUpper = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"App","lang":"CSharp"}}}""")!;
+        var responseUpper = _server.HandleMessage(requestUpper)!;
+
+        var structuredUpper = responseUpper["result"]!["structuredContent"]!;
+        Assert.Equal("csharp", structuredUpper["lang"]!.GetValue<string>());
+        Assert.True(structuredUpper["count"]!.GetValue<int>() >= 1);
+
+        var requestLower = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"App","lang":"csharp"}}}""")!;
+        var responseLower = _server.HandleMessage(requestLower)!;
+        var structuredLower = responseLower["result"]!["structuredContent"]!;
+
+        Assert.Equal(structuredLower["count"]!.GetValue<int>(), structuredUpper["count"]!.GetValue<int>());
+    }
+
     private static string CreateLegacyDbWithoutIndexedAt()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_legacy_{Guid.NewGuid():N}.db");
