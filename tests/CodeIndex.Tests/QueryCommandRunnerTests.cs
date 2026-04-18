@@ -475,6 +475,43 @@ public class QueryCommandRunnerTests
         }
     }
 
+    // Pins `find --path=<value>` with a value that starts with `--`. ParseArgs supports
+    // this shape via inline `=`, but ValidateFindArgs previously saw only the bare token
+    // and `PrepareFindArgs` briefly tried to normalize the inline form by splitting it into
+    // two tokens — that split destroyed inline `--`-prefixed values. Locks the contract
+    // that `find` honors the CLI hint (`pass it as --path=<value>`) just like the other
+    // query commands.
+    // `find --path=<value>` で value が `--` で始まる合法な inline 値を壊さないよう固定する
+    // 回帰テスト。`PrepareFindArgs` 側で inline を分解すると `--path=--literal.txt` が
+    // `--path`/`--literal.txt` に割れ、`ParseArgs` が値を option と誤認して失敗していた。
+    [Fact]
+    public void RunFind_PathFilterAcceptsRecognizedOptionTokenViaInlineValue()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_path_inline_recognized_option");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/--json-dir/Demo.cs",
+                "csharp",
+                "class Demo { void Alpha() {} }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["Alpha", $"--db={dbPath}", "--path=--json-dir", "--count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            Assert.Equal(1, document.RootElement.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("--db", "/tmp/does-not-matter.db")]
     [InlineData("--db=")]

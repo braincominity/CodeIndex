@@ -1036,12 +1036,40 @@ public static class QueryCommandRunner
         var queryCount = 0;
         for (int i = 0; i < args.Length; i++)
         {
-            var arg = args[i];
+            var rawArg = args[i];
+            // Accept both `--opt value` and `--opt=value` so ValidateFindArgs and ParseArgs
+            // agree on inline-`=` shape; splitting the token in PrepareFindArgs would
+            // destroy legitimate inline values that start with `--` (e.g. `--path=--literal.txt`).
+            // ParseArgs と同じく `--opt value` と `--opt=value` の両形を受け入れる。
+            // PrepareFindArgs でトークンを分解すると `--path=--literal.txt` のような `--` 始まりの合法な
+            // inline 値が壊れるため、validation 側で inline 値を解決する。
+            string arg;
+            string? inlineValue;
+            if (TrySplitInlineOptionValue(rawArg, out var inlineOptionName))
+            {
+                arg = inlineOptionName!;
+                inlineValue = rawArg[(inlineOptionName!.Length + 1)..];
+            }
+            else
+            {
+                arg = rawArg;
+                inlineValue = null;
+            }
+
             if (allowedWithValues.Contains(arg))
             {
-                if (i + 1 >= args.Length)
-                    return $"Error: {arg} requires a value";
-                var value = args[i + 1];
+                string value;
+                if (inlineValue != null)
+                {
+                    value = inlineValue;
+                }
+                else
+                {
+                    if (i + 1 >= args.Length)
+                        return $"Error: {arg} requires a value";
+                    value = args[i + 1];
+                    i++;
+                }
                 if ((arg == "--limit" || arg == "--top" || arg == "--max-line-width") && (!int.TryParse(value, out var limit) || limit <= 0))
                     return $"Error: {arg} requires a positive integer, got '{value}'";
                 if (arg == "--max-line-width" && int.TryParse(value, out var widthCeil) && widthCeil > LineWidthFormatter.MaxAllowedLineWidth)
@@ -1054,15 +1082,14 @@ public static class QueryCommandRunner
                     if (queryCount > 1)
                         return "Error: find accepts exactly one query argument";
                 }
-                i++;
                 continue;
             }
 
             if (allowedFlags.Contains(arg))
                 continue;
 
-            if (arg.StartsWith('-'))
-                return $"Error: unsupported option for find: {arg}";
+            if (rawArg.StartsWith('-'))
+                return $"Error: unsupported option for find: {rawArg}";
 
             queryCount++;
             if (queryCount > 1)
@@ -1095,16 +1122,6 @@ public static class QueryCommandRunner
                 normalized.Add("--query");
                 normalized.Add(args[i + 1]);
                 return [.. normalized];
-            }
-
-            // Normalize `--opt=value` into `--opt` `value` so ValidateFindArgs and ParseArgs
-            // see the same shape regardless of whether the caller wrote the inline `=` form.
-            // インライン `--opt=value` を `--opt` `value` に展開し、ValidateFindArgs と ParseArgs の挙動を揃える。
-            if (TrySplitInlineOptionValue(args[i], out var inlineOptionName))
-            {
-                normalized.Add(inlineOptionName!);
-                normalized.Add(args[i][(inlineOptionName!.Length + 1)..]);
-                continue;
             }
 
             normalized.Add(args[i]);
