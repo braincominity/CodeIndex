@@ -2580,7 +2580,7 @@ public sealed class InstallScriptTests : IDisposable
             #!/usr/bin/env bash
             case "$1" in
                 --version) echo "cdidx v1.2.3" ;;
-                search)    echo '{"path":"sample.py"}' ;;
+                search)    echo 'sample.py:1: def greet(name):' ;;
                 *)
                     if [ "$2" = "--db" ] && [ -n "$3" ]; then
                         mkdir -p "$(dirname "$3")"
@@ -2625,7 +2625,7 @@ public sealed class InstallScriptTests : IDisposable
             #!/usr/bin/env bash
             case "$1" in
                 --version) echo "cdidx v1.2.3" ;;
-                search)    echo '{"path":"sample.py"}' ;;
+                search)    echo 'sample.py:1: def greet(name):' ;;
                 *)
                     if [ "$2" = "--db" ] && [ -n "$3" ]; then
                         mkdir -p "$(dirname "$3")"
@@ -2681,7 +2681,7 @@ public sealed class InstallScriptTests : IDisposable
                     ;;
                 search)
                     printf 'invoked' > "{{searchSentinel}}"
-                    echo '{"path":"sample.py"}'
+                    echo 'sample.py:1: def greet(name):'
                     ;;
                 *)
                     echo "INVOKED_INDEX"
@@ -2764,6 +2764,84 @@ public sealed class InstallScriptTests : IDisposable
 
         Assert.NotEqual(0, exitCode);
         Assert.Contains("search returned a non-zero exit code", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_VersionMismatch_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v9.9.9" ;;
+                *)        : ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("expected version 1.2.3", stderr);
+        Assert.Contains("9.9.9", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_DoesNotRequestJsonFromSearch()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)
+                    # Simulate a trimmed release build: reject --json with exit 4.
+                    # trimmed release では --json を exit 4 で拒否する。
+                    for arg in "$@"; do
+                        if [ "$arg" = "--json" ]; then
+                            echo "--json not available on this trimmed build" >&2
+                            exit 4
+                        fi
+                    done
+                    echo "sample.py:1: def greet(name):"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("--json not available", stderr);
+        Assert.DoesNotContain("search returned a non-zero exit code", stderr);
     }
 
     [UnsupportedOSPlatform("windows")]

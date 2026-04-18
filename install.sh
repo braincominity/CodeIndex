@@ -1048,9 +1048,23 @@ run_reinstall_real() {
     fi
 
     info "Verifying ${BINARY_NAME} --version"
-    if ! "$reinstall_cdidx" --version; then
+    local reinstall_version_output
+    if ! reinstall_version_output="$("$reinstall_cdidx" --version 2>&1)"; then
         error "Real reinstall validation: ${BINARY_NAME} --version failed."
     fi
+    printf '%s\n' "$reinstall_version_output"
+    local reinstall_expected_version="${version#v}"
+    # The reported version must contain the requested tag as a whole token
+    # (e.g. "v1.2.3" must not silently satisfy a request for v1.2.30, nor
+    # must "v1.2.34" silently satisfy a request for v1.2.3). Otherwise a
+    # mirror mixup or version.json skew would silently pass.
+    # ミラー取り違えや version.json ずれを silent pass させないため、
+    # 要求タグを境界付きで含むかどうかで検証する。
+    case "$reinstall_version_output" in
+        *"v${reinstall_expected_version}")           ;;
+        *"v${reinstall_expected_version}"[!0-9.]*)   ;;
+        *) error "Real reinstall validation: expected version ${reinstall_expected_version} in output, got: ${reinstall_version_output:-<empty>}." ;;
+    esac
 
     # Build a tiny scratch project and exercise `cdidx . --db <tmp>` so that
     # the validation covers the real indexing path (symbol extraction, SQLite
@@ -1086,10 +1100,19 @@ PY
         error "Real reinstall validation: ${BINARY_NAME} did not produce a populated index DB at ${scratch_db}."
     fi
 
-    info "Running ${BINARY_NAME} search greet --db ${scratch_db} --json to verify FTS"
-    if ! "$reinstall_cdidx" search greet --db "$scratch_db" --json > /dev/null; then
+    # Human-readable output only. Trimmed release builds fail fast on --json
+    # (exit code 4), so a validation mode that asked for --json would never
+    # succeed on real releases.
+    # trimmed release では --json が exit 4 になるため人間向け出力で検証する。
+    info "Running ${BINARY_NAME} search greet --db ${scratch_db} to verify FTS"
+    local reinstall_search_output
+    if ! reinstall_search_output="$("$reinstall_cdidx" search greet --db "$scratch_db" 2>&1)"; then
         error "Real reinstall validation: ${BINARY_NAME} search returned a non-zero exit code."
     fi
+    case "$reinstall_search_output" in
+        *greet*) ;;
+        *) error "Real reinstall validation: ${BINARY_NAME} search did not surface the 'greet' symbol from the scratch project." ;;
+    esac
 
     info "Real reinstall validation passed for ${version}."
 }
