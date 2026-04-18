@@ -450,6 +450,18 @@ internal static class StructuralLineMasker
         // `}` を漏らさないようにする。
         char innerHoleTripleChar = '\0';
         bool innerHoleTripleRaw = false;
+        // Nested single-line f-string inside the outer hole. Persists across lines so
+        // the body, its `{expr}` inner hole, and any triple-quoted string opened
+        // inside that inner hole can straddle multiple source lines without losing
+        // the inner hole's `}` back into the outer hole's brace depth.
+        // 外側ホール内にあるネスト単行 f-string の状態。行をまたいで保持し、本体・
+        // 内側 `{expr}` ホール・内側ホールで開かれた三重引用符文字列が複数行に
+        // わたっても、内側ホールの `}` が外側ホールの brace 深度に漏れないようにする。
+        char nestedSingleFStringQuote = '\0';
+        bool nestedSingleFStringRaw = false;
+        int nestedSingleFStringInnerHoleDepth = -1;
+        char nestedSingleFStringInnerTripleChar = '\0';
+        bool nestedSingleFStringInnerTripleRaw = false;
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -637,6 +649,133 @@ internal static class StructuralLineMasker
                             continue;
                         }
 
+                        if (nestedSingleFStringQuote != '\0')
+                        {
+                            // Inside the body of a nested single-line f-string that was
+                            // opened earlier in the outer hole. This branch persists
+                            // across lines so a multi-line triple-quoted string opened
+                            // inside the inner `{expr}` hole does not leak its `}` back
+                            // into the outer hole's brace depth and truncate the outer
+                            // f-string early.
+                            // 外側ホール内で開かれたネスト単行 f-string の本体を走査。
+                            // 内側 `{expr}` ホールに複数行の三重引用符文字列が現れても、
+                            // その `}` が外側ホールの brace 深度に漏れて外側 f-string を
+                            // 早閉じしないよう、状態を行をまたいで保持する。
+                            if (nestedSingleFStringInnerHoleDepth >= 0)
+                            {
+                                if (nestedSingleFStringInnerTripleChar != '\0')
+                                {
+                                    if (!nestedSingleFStringInnerTripleRaw && line[pos] == '\\' && pos + 1 < line.Length)
+                                    {
+                                        ReplaceWithSpaces(masked, pos, 2);
+                                        pos += 2;
+                                        continue;
+                                    }
+
+                                    if (pos + 2 < line.Length
+                                        && line[pos] == nestedSingleFStringInnerTripleChar
+                                        && line[pos + 1] == nestedSingleFStringInnerTripleChar
+                                        && line[pos + 2] == nestedSingleFStringInnerTripleChar)
+                                    {
+                                        ReplaceWithSpaces(masked, pos, 3);
+                                        pos += 3;
+                                        nestedSingleFStringInnerTripleChar = '\0';
+                                        nestedSingleFStringInnerTripleRaw = false;
+                                        continue;
+                                    }
+
+                                    masked[pos] = ' ';
+                                    pos++;
+                                    continue;
+                                }
+
+                                if (TryOpenPythonTripleString(line, pos, out var nestedSingleInnerPrefixLen, out var nestedSingleInnerQuote, out var nestedSingleInnerRawFlag, out _))
+                                {
+                                    ReplaceWithSpaces(masked, pos, nestedSingleInnerPrefixLen + 3);
+                                    pos += nestedSingleInnerPrefixLen + 3;
+                                    nestedSingleFStringInnerTripleChar = nestedSingleInnerQuote;
+                                    nestedSingleFStringInnerTripleRaw = nestedSingleInnerRawFlag;
+                                    continue;
+                                }
+
+                                if (line[pos] == '\'' || line[pos] == '"')
+                                {
+                                    pos = SkipPythonSingleLineString(line, pos);
+                                    continue;
+                                }
+
+                                if (line[pos] == '#')
+                                    break;
+
+                                if (line[pos] == '{')
+                                {
+                                    nestedSingleFStringInnerHoleDepth++;
+                                    pos++;
+                                    continue;
+                                }
+
+                                if (line[pos] == '}')
+                                {
+                                    if (nestedSingleFStringInnerHoleDepth == 0)
+                                    {
+                                        masked[pos] = ' ';
+                                        nestedSingleFStringInnerHoleDepth = -1;
+                                        pos++;
+                                        continue;
+                                    }
+
+                                    nestedSingleFStringInnerHoleDepth--;
+                                    pos++;
+                                    continue;
+                                }
+
+                                pos++;
+                                continue;
+                            }
+
+                            if (!nestedSingleFStringRaw && line[pos] == '\\' && pos + 1 < line.Length)
+                            {
+                                ReplaceWithSpaces(masked, pos, 2);
+                                pos += 2;
+                                continue;
+                            }
+
+                            if (line[pos] == nestedSingleFStringQuote)
+                            {
+                                masked[pos] = ' ';
+                                nestedSingleFStringQuote = '\0';
+                                nestedSingleFStringRaw = false;
+                                pos++;
+                                continue;
+                            }
+
+                            if (pos + 1 < line.Length && line[pos] == '{' && line[pos + 1] == '{')
+                            {
+                                ReplaceWithSpaces(masked, pos, 2);
+                                pos += 2;
+                                continue;
+                            }
+
+                            if (pos + 1 < line.Length && line[pos] == '}' && line[pos + 1] == '}')
+                            {
+                                ReplaceWithSpaces(masked, pos, 2);
+                                pos += 2;
+                                continue;
+                            }
+
+                            if (line[pos] == '{')
+                            {
+                                masked[pos] = ' ';
+                                nestedSingleFStringInnerHoleDepth = 0;
+                                pos++;
+                                continue;
+                            }
+
+                            masked[pos] = ' ';
+                            pos++;
+                            continue;
+                        }
+
                         if (TryOpenPythonTripleString(line, pos, out var nestedPrefixLen, out var nestedQuote, out var nestedRawFlag, out var nestedFFlag))
                         {
                             ReplaceWithSpaces(masked, pos, nestedPrefixLen + 3);
@@ -652,13 +791,22 @@ internal static class StructuralLineMasker
                             && nestedSingleFString)
                         {
                             // Nested single-line f-string inside the outer hole. Mask the
-                            // quote characters (and prefix) so ReferenceExtractor's
-                            // StringLiteralRegex does not swallow the hole expression, but
-                            // preserve the inner `{expr}` contents so references survive.
+                            // quote characters (and prefix) and stash the per-string state
+                            // so ReferenceExtractor's StringLiteralRegex does not swallow
+                            // the hole expression while still letting the inner `{expr}`
+                            // (and any triple-quoted string opened inside it) straddle
+                            // multiple source lines.
                             // 外側ホール内のネストした単行 f-string。PrepareLine の
                             // StringLiteralRegex に式本体ごと消されないよう quote と prefix を
-                            // マスクし、内側の `{expr}` の内容だけを残す。
-                            pos = MaskNestedPythonFString(line, masked, pos, nestedSinglePrefixLen, nestedSingleQuote, nestedSingleRaw);
+                            // マスクし、内側 `{expr}`（および内側ホールで開いた三重引用符
+                            // 文字列）が複数行にまたがっても追跡できるよう状態を保持する。
+                            ReplaceWithSpaces(masked, pos, nestedSinglePrefixLen + 1);
+                            pos += nestedSinglePrefixLen + 1;
+                            nestedSingleFStringQuote = nestedSingleQuote;
+                            nestedSingleFStringRaw = nestedSingleRaw;
+                            nestedSingleFStringInnerHoleDepth = -1;
+                            nestedSingleFStringInnerTripleChar = '\0';
+                            nestedSingleFStringInnerTripleRaw = false;
                             continue;
                         }
 
@@ -883,94 +1031,6 @@ internal static class StructuralLineMasker
         isRaw = seenRaw;
         isFString = seenF;
         return true;
-    }
-
-    // Mask a nested single-line Python f-string inside an outer f-string hole so
-    // ReferenceExtractor.PrepareLine does not treat the whole span as a string
-    // literal. Prefix chars and both quote characters become spaces; literal body
-    // chars become spaces; inner `{expr}` bodies stay intact; `{{` / `}}` escape
-    // pairs become spaces. Returns the position just past the closing quote.
-    // 外側 f-string ホール内にあるネスト単行 f-string をマスクするヘルパー。
-    // 参照抽出の PrepareLine が文字列全体を消し去らないよう、prefix と quote、
-    // literal 本体は空白化し、内側の `{expr}` 本体だけを残す。`{{`/`}}` は
-    // escape として空白化する。閉じ quote の直後の位置を返す。
-    private static int MaskNestedPythonFString(string line, char[] masked, int startIndex, int prefixLength, char quoteChar, bool isRaw)
-    {
-        ReplaceWithSpaces(masked, startIndex, prefixLength + 1);
-        var p = startIndex + prefixLength + 1;
-        var innerHoleDepth = 0;
-
-        while (p < line.Length)
-        {
-            if (!isRaw && line[p] == '\\' && p + 1 < line.Length)
-            {
-                ReplaceWithSpaces(masked, p, 2);
-                p += 2;
-                continue;
-            }
-
-            if (line[p] == quoteChar && innerHoleDepth == 0)
-            {
-                masked[p] = ' ';
-                return p + 1;
-            }
-
-            if (p + 1 < line.Length && line[p] == '{' && line[p + 1] == '{')
-            {
-                ReplaceWithSpaces(masked, p, 2);
-                p += 2;
-                continue;
-            }
-
-            if (p + 1 < line.Length && line[p] == '}' && line[p + 1] == '}')
-            {
-                ReplaceWithSpaces(masked, p, 2);
-                p += 2;
-                continue;
-            }
-
-            // Inside the inner `{expr}` hole, skip single-line Python string
-            // literals so a `{` or `}` inside them does not affect brace tracking
-            // (e.g. `f"{prefix('}') + real_call()}"` must keep the inner hole
-            // open through `'}'`). The contents are preserved by default; the
-            // downstream `StringLiteralRegex` will remove them harmlessly.
-            // 内側ホール内で単行 Python 文字列リテラルはスキップし、
-            // `'}'` のようなものが inner hole を早閉じしないようにする。
-            if (innerHoleDepth > 0 && (line[p] == '\'' || line[p] == '"'))
-            {
-                p = SkipPythonSingleLineString(line, p);
-                continue;
-            }
-
-            if (line[p] == '{')
-            {
-                innerHoleDepth++;
-                masked[p] = ' ';
-                p++;
-                continue;
-            }
-
-            if (line[p] == '}')
-            {
-                if (innerHoleDepth > 0)
-                {
-                    innerHoleDepth--;
-                    masked[p] = ' ';
-                }
-                p++;
-                continue;
-            }
-
-            if (innerHoleDepth == 0)
-            {
-                // Literal body outside any inner hole; mask to space.
-                // 内側ホール外の literal 本体は空白化。
-                masked[p] = ' ';
-            }
-            p++;
-        }
-
-        return p;
     }
 
     // Rust raw string literals: r"...", r#"..."#, r##"..."##, ... (also with b/c byte/C-string prefix).

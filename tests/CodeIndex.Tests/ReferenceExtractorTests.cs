@@ -1725,6 +1725,47 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonOuterFStringHole_NestedSingleLineFStringInnerHoleMultilineTriple_PreservesInnerCall()
+    {
+        // Regression for issue #291 follow-up: the inner `{expr}` hole of a nested
+        // *single-line* f-string (outer f""" → its hole → nested single-line f"")
+        // can contain a multi-line triple-quoted string `'''...'''`. Previously the
+        // nested-single-line helper was line-local and returned end-of-line without
+        // tracking that the inner hole (and the triple inside it) was still open,
+        // so the `}` on the next line closed the outer hole and the `real_call()`
+        // that followed the triple's close was swallowed as outer f-string body.
+        // issue #291 続編: ネスト単行 f-string（外側 f""" → hole → ネスト単行 f""）の
+        // 内側 `{expr}` ホールに複数行の `'''...'''` が来るケース。以前は単行 helper が
+        // 行ローカル実装だったため、内側ホールや内側三重が閉じないうちに行末へ到達すると
+        // 状態が失われ、次行の `}` が外側ホールを早閉じしてしまい、三重閉じ直後の実呼び出しが
+        // 外側 f-string 本体として消えていた。
+        const string content = "def caller():\n"
+            + "    msg = f\"\"\"\n"
+            + "    {format(f\"{len('''\n"
+            + "}\n"
+            + "''') + real_call()}\")}\n"
+            + "    \"\"\"\n"
+            + "    tail()\n"
+            + "\n"
+            + "def format(_):\n"
+            + "    return \"\"\n"
+            + "\n"
+            + "def real_call():\n"
+            + "    pass\n"
+            + "\n"
+            + "def tail():\n"
+            + "    pass\n";
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "real_call" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "format" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "len" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "tail" && r.ContainerName == "caller");
+    }
+
+    [Fact]
     public void Extract_PythonFStringHole_NestedSingleLineFStringPreservesInnerCall()
     {
         // Regression for issue #291 follow-up: a nested single-line f-string inside an
