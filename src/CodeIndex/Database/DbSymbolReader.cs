@@ -1726,7 +1726,7 @@ public partial class DbReader
         // 隣接シンボルへ reflection 属性コンテキストを漏らさないよう、
         // 抜粋を行をまたいで sanitize する。#409 を修正。
         var sanitizedLines = SymbolExtractor.SanitizeCSharpLinesForCrossLineScan(lines);
-        var triviaMask = BuildTriviaMask(lines);
+        var triviaMask = BuildTriviaMask(sanitizedLines);
         var attributeBlock = GetAdjacentAttributeBlock(lines, sanitizedLines, triviaMask, currentIndex);
         if (attributeBlock.Count == 0)
             return false;
@@ -1940,49 +1940,28 @@ public partial class DbReader
         return -1;
     }
 
-    private static bool[] BuildTriviaMask(string[] lines)
+    // A line is trivia iff its cross-line-sanitized form is entirely whitespace.
+    // `SanitizeCSharpLinesForCrossLineScan` already blanks strings, chars, `//`
+    // line comments, and `/* ... */` block comments (with state carried across
+    // physical lines), so any non-whitespace left over is real code. The previous
+    // heuristic flagged any line that merely *contained* `*/` as trivia, which
+    // wrongly skipped attribute rows with a trailing block comment such as
+    // `[JsonPropertyName("ok")] /* note */` and made FindPreviousNonTriviaLine
+    // overshoot past the real attribute block, dropping reflection context off
+    // the following property. Closes #409 follow-up.
+    // 行の trivia 判定は、横断 sanitize 済み形がすべて空白かどうかで決める。
+    // `SanitizeCSharpLinesForCrossLineScan` は文字列 / 文字 / `//` 行コメント /
+    // `/* ... */` ブロックコメント（物理行を跨ぐ状態保持付き）をすべて空白化するため、
+    // 残った非空白は必ず本物のコード。以前のヒューリスティックは `*/` を含むだけで
+    // trivia 判定していたため、`[JsonPropertyName("ok")] /* note */` のような末尾
+    // ブロックコメント付き属性行を飛ばしてしまい、FindPreviousNonTriviaLine が
+    // 本来の属性ブロックを越えて遡り、直下プロパティの reflection コンテキストを
+    // 落としていた。#409 追加修正。
+    private static bool[] BuildTriviaMask(string[] sanitizedLines)
     {
-        var triviaMask = new bool[lines.Length];
-        var inBlockComment = false;
-
-        for (int i = 0; i < lines.Length; i++)
-        {
-            var trimmed = lines[i].Trim();
-            if (trimmed.Length == 0)
-            {
-                triviaMask[i] = true;
-                continue;
-            }
-
-            if (inBlockComment)
-            {
-                triviaMask[i] = true;
-                if (trimmed.Contains("*/", StringComparison.Ordinal))
-                    inBlockComment = false;
-                continue;
-            }
-
-            if (trimmed.StartsWith("//", StringComparison.Ordinal))
-            {
-                triviaMask[i] = true;
-                continue;
-            }
-
-            if (trimmed.StartsWith("/*", StringComparison.Ordinal))
-            {
-                triviaMask[i] = true;
-                if (!trimmed.Contains("*/", StringComparison.Ordinal))
-                    inBlockComment = true;
-                continue;
-            }
-
-            if (trimmed.StartsWith('*') || trimmed.Contains("*/", StringComparison.Ordinal))
-            {
-                triviaMask[i] = true;
-                continue;
-            }
-        }
-
+        var triviaMask = new bool[sanitizedLines.Length];
+        for (int i = 0; i < sanitizedLines.Length; i++)
+            triviaMask[i] = string.IsNullOrWhiteSpace(sanitizedLines[i]);
         return triviaMask;
     }
 
@@ -2451,13 +2430,26 @@ public partial class DbReader
         return simpleName.Length == 0 ? null : simpleName.ToLowerInvariant();
     }
 
+    // Pure-trivia classifier used by ExtractNormalizedAttributeNames to skip
+    // comment-only rows picked up by the block walker (pure line/block comments
+    // and javadoc-style continuation rows). The lone `*/` closing row is
+    // already covered by the `StartsWith('*')` check, so we deliberately do
+    // NOT flag any line that merely contains `*/` mid-line — that used to
+    // discard attribute rows with a trailing block comment
+    // (`[JsonPropertyName("ok")] /* note */`) and strip reflection context
+    // off the next property. Closes #409 follow-up.
+    // ExtractNormalizedAttributeNames がブロック walker に拾われたコメント専用行
+    // （純粋な行 / ブロックコメント、javadoc スタイルの継続行）を除外するための
+    // 純 trivia 判定。`*/` だけの閉じ行は `StartsWith('*')` で既に拾えるので、
+    // 途中に `*/` を含むだけの行はここでは trivia 扱いしない。以前はそれを trivia 扱いして
+    // 末尾ブロックコメント付き属性行 `[JsonPropertyName("ok")] /* note */` を落とし、
+    // 直下のプロパティから reflection コンテキストを失わせていた。#409 追加修正。
     private static bool BuildSingleLineTrivia(string trimmed)
     {
         return trimmed.Length == 0
             || trimmed.StartsWith("//", StringComparison.Ordinal)
             || trimmed.StartsWith("/*", StringComparison.Ordinal)
-            || trimmed.StartsWith('*')
-            || trimmed.Contains("*/", StringComparison.Ordinal);
+            || trimmed.StartsWith('*');
     }
 
     private static bool LooksLikeAttributeBoundaryLine(string line)

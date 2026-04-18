@@ -4352,6 +4352,82 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetUnusedSymbols_AttributeLineWithTrailingBlockComment_KeepsReflectionContext()
+    {
+        // Regression for #409 follow-up — a trailing `/* ... */` block comment
+        // after the closing `]` of an attribute must not flip the following
+        // property out of `reflection_or_config_suspect`. The previous
+        // BuildTriviaMask heuristic flagged any line containing `*/` as trivia,
+        // so the `[JsonPropertyName(...)] /* note */` row was skipped by
+        // FindPreviousNonTriviaLine and the real attribute block was lost.
+        // #409 追加回帰: 属性行末尾の `/* ... */` ブロックコメントが、下のプロパティを
+        // `reflection_or_config_suspect` から外してはならない。以前の BuildTriviaMask は
+        // `*/` を含むだけで trivia 判定していたため、`[JsonPropertyName(...)] /* note */`
+        // の行が FindPreviousNonTriviaLine に飛ばされ、本来の属性ブロックが失われていた。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_trailing_block_comment_fixture.cs",
+            Lang = "csharp",
+            Size = 300,
+            Lines = 10,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 9,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class Target
+                {
+                    [JsonPropertyName("ok")] /* trailing block comment */
+                    public string D { get; set; } = "";
+                }
+
+                """,
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "Target",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 7,
+                Signature = "public class Target",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "D",
+                Line = 6,
+                StartLine = 6,
+                EndLine = 6,
+                Signature = "public string D { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["reflection_trailing_block_comment_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        var d = Assert.Single(unused, symbol => symbol.Name == "D");
+        Assert.Equal("reflection_or_config_suspect", d.UnusedBucket);
+    }
+
+    [Fact]
     public void GetUnusedSymbols_CommentBetweenAttributeAndProperty_IsClassifiedAsSuspect()
     {
         var fileId = _writer.UpsertFile(new FileRecord
