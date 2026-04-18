@@ -6076,6 +6076,41 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "hstore");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "svc_cert" && s.Signature != null && s.Signature.StartsWith("ALTER CERTIFICATE", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "us_postal_code");
+
+        // SQL `CREATE SCHEMA sales;` and `ALTER SCHEMA sales TRANSFER ...;` are body-less
+        // namespace-kind symbols. They must NOT be treated as C# file-scoped namespaces and
+        // must not wrap every subsequent top-level SQL symbol as their container — SQL
+        // schema is expressed through qualified names (`sales.Money`) rather than containment.
+        // SQL の `CREATE SCHEMA sales;` と `ALTER SCHEMA sales TRANSFER ...;` は body 無しの
+        // namespace kind だが、C# の file-scoped namespace 扱いにしてはならない。SQL の schema
+        // は包含ではなく `sales.Money` のような修飾名で表すので、後続の top-level シンボルを
+        // schema 配下に吸い込んではいけない。
+        var containerPollutionVictims = new[]
+        {
+            "dbo.fn_Total",
+            "pf_OrdersByYear",
+            "hstore",
+            "us_postal_code",
+            "[app_service]",
+            "app_service",
+            "sales_writer",
+            "sales_db",
+            "svc_cert",
+            "ps_OrdersByYear",
+            "ftc_sales",
+            "dbo.sp_DailyReport",
+            "[dbo].[sp_GetOrder]",
+            "dbo.sp_UpsertUser",
+            "dbo.v_ActiveOrders",
+        };
+        foreach (var name in containerPollutionVictims)
+        {
+            Assert.All(
+                symbols.Where(s => s.Name == name),
+                s => Assert.True(
+                    s.ContainerKind != "namespace" || s.ContainerName != "sales",
+                    $"{s.Kind} {s.Name} was wrapped under namespace=sales — ALTER/CREATE SCHEMA must not act as a C# file-scoped namespace container."));
+        }
     }
 
     [Fact]

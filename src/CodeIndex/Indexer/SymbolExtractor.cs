@@ -10382,10 +10382,26 @@ public static class SymbolExtractor
         };
     }
 
-    private static bool IsFileScopedNamespace(SymbolRecord symbol) =>
-        symbol.Kind == "namespace" &&
-        symbol.BodyStartLine == null &&
-        symbol.BodyEndLine == null;
+    // C# file-scoped namespace: `namespace X;` with no braces. Matches only declarations whose
+    // signature starts with the `namespace` keyword, so body-less namespace rows from other
+    // languages (e.g. SQL `CREATE SCHEMA ...;` / `ALTER SCHEMA ...;`) are not treated as
+    // file-scoped and therefore do not wrap every subsequent top-level symbol as their container.
+    // C# の file-scoped namespace（`namespace X;` 形）だけを対象とする。`namespace` キーワードで
+    // 始まるシグネチャに限定することで、SQL の `CREATE SCHEMA ...;` / `ALTER SCHEMA ...;` のような
+    // 他言語の body 無し namespace 行が file-scoped namespace 扱いになり、以降のトップレベル
+    // シンボル全てを自分の配下にぶら下げてしまう事故を防ぐ。
+    private static bool IsFileScopedNamespace(SymbolRecord symbol)
+    {
+        if (symbol.Kind != "namespace")
+            return false;
+        if (symbol.BodyStartLine != null || symbol.BodyEndLine != null)
+            return false;
+        if (symbol.Signature == null)
+            return false;
+        var trimmed = symbol.Signature.AsSpan().TrimStart();
+        return trimmed.StartsWith("namespace ", StringComparison.Ordinal)
+            || trimmed.StartsWith("namespace\t", StringComparison.Ordinal);
+    }
 
     private static int CountIndent(string line)
     {
