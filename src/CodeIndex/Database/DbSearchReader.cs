@@ -150,6 +150,21 @@ public partial class DbReader
         if (value >= 0xF900 && value <= 0xFAFF) return true;
         if (value >= 0x2F800 && value <= 0x2FA1F) return true;
 
+        // Historical East Asian scripts that unicode61 keeps as word characters and which
+        // Unicode groups with / adjacent to CJK: Yi Syllables (U+A000..U+A48F, Lo), Nüshu
+        // (U+1B170..U+1B2FF, Lo — women's script from Jiangyong China), and the contiguous
+        // Tangut / Tangut Components / Khitan Small Script / Tangut Supplement non-BMP block
+        // (U+17000..U+18D8F). Yi Radicals (U+A490..U+A4CF) are intentionally excluded because
+        // they are Unicode category So and are dropped by unicode61 during tokenization.
+        // 東アジアの歴史的文字で unicode61 が単語文字として扱い、Unicode 上も CJK 隣接に
+        // 配置されているブロック: 彝文字 (Yi Syllables, U+A000..U+A48F, Lo)、女書 (Nüshu,
+        // U+1B170..U+1B2FF, Lo)、西夏文字 / 西夏文字部品 / 契丹小字 / 西夏文字補助の連続する
+        // 非 BMP ブロック (U+17000..U+18D8F)。Yi Radicals (U+A490..U+A4CF) は Unicode カテゴリ
+        // So で unicode61 が drop するため意図的に除外する。
+        if (value >= 0xA000 && value <= 0xA48F) return true;
+        if (value >= 0x17000 && value <= 0x18D8F) return true;
+        if (value >= 0x1B170 && value <= 0x1B2FF) return true;
+
         // Hangul Syllables, Jamo, Jamo Extended-A/B, Compatibility Jamo
         // ハングル音節およびJamo
         if (value >= 0xAC00 && value <= 0xD7AF) return true;

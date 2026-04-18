@@ -550,6 +550,91 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void Search_FindsYiSyllableInsideLongerToken()
+    {
+        // Regression guard for Yi Syllables (U+A000..U+A48F), the syllabary used by the Nuosu
+        // (Yi) people in southwestern China. Yi syllables are Unicode category Lo, so unicode61
+        // keeps them as word characters; without CJK prefix promotion, `search 'ꀀ'` returns 0
+        // results against content containing 'ꀀabc' — same 0-hit shape as #198 on another
+        // Unicode-15-adjacent historical East Asian script. Yi Radicals (U+A490..U+A4CF) are
+        // intentionally excluded upstream because they are category So and dropped by unicode61.
+        // 彝文字音節（Yi Syllables、U+A000..U+A48F、中国南西部のノス族の文字体系）の回帰テスト。
+        // Unicode カテゴリ Lo で unicode61 は単語文字として扱うため、CJK prefix 昇格なしでは
+        // `search 'ꀀ'` が 'ꀀabc' を含む内容に対して 0 件を返す — #198 の別スクリプト版。
+        // 彝文字部首（Yi Radicals、U+A490..U+A4CF）は Unicode カテゴリ So のため上流で意図的に除外。
+        InsertIndexedFile("src/yi_syllables.py", "python",
+            "def ꀀabc(x):\n    return x\n");
+
+        var results = _reader.Search("ꀀ");
+
+        Assert.Contains(results, r => r.Path == "src/yi_syllables.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpTangutSubstringInsideLongerToken()
+    {
+        // Regression guard for Tangut (U+17000..U+187FF), a non-BMP historical East Asian
+        // logographic script used by the Western Xia empire (11th–13th century). Tangut is
+        // Unicode category Lo and unicode61 keeps it as word characters, so the surrogate-pair
+        // aware rune walk AND the contiguous U+17000..U+18D8F CJK-prefix range are both required
+        // for `search '𗀀'` to match '𗀀abc'. Pinned as the lower bound of the merged
+        // Tangut / Tangut Components / Khitan / Tangut Supplement range.
+        // 西夏文字（Tangut、U+17000..U+187FF、西夏帝国の非 BMP 表意文字）の回帰テスト。
+        // Unicode カテゴリ Lo で unicode61 が単語文字として扱うため、rune 走査と U+17000..U+18D8F
+        // 連続範囲の CJK prefix 包含の両方がないと `search '𗀀'` が '𗀀abc' を拾えない。
+        // 統合範囲（Tangut / Tangut Components / Khitan / Tangut Supplement）の下端を固定。
+        var tangutChar = char.ConvertFromUtf32(0x17000);
+        InsertIndexedFile("src/tangut.py", "python",
+            $"def {tangutChar}abc(x):\n    return x\n");
+
+        var results = _reader.Search(tangutChar);
+
+        Assert.Contains(results, r => r.Path == "src/tangut.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpTangutSupplementSubstringInsideLongerToken()
+    {
+        // Regression guard for the upper bound of the merged Tangut / Tangut Components / Khitan
+        // Small Script / Tangut Supplement block. U+18D00..U+18D8F is Tangut Supplement, added in
+        // Unicode 13.0 alongside Khitan Small Script (U+18B00..U+18CFF). Pinning both ends of the
+        // U+17000..U+18D8F range ensures a future narrowing of the CJK prefix fallback breaks
+        // here instead of silently regressing for Khitan / Tangut Supplement queries.
+        // 統合ブロック（Tangut / Tangut Components / 契丹小字 / 西夏文字補助）の上端の回帰テスト。
+        // U+18D00..U+18D8F が西夏文字補助（Unicode 13.0 で契丹小字と同時追加）。範囲の両端を
+        // 固定することで、将来 prefix fallback を狭めた場合に契丹小字 / 西夏文字補助で
+        // 黙って 0 件回帰するのを防ぐ。
+        var tangutSupplementChar = char.ConvertFromUtf32(0x18D00);
+        InsertIndexedFile("src/tangut_supplement.py", "python",
+            $"def {tangutSupplementChar}abc(x):\n    return x\n");
+
+        var results = _reader.Search(tangutSupplementChar);
+
+        Assert.Contains(results, r => r.Path == "src/tangut_supplement.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpNushuSubstringInsideLongerToken()
+    {
+        // Regression guard for Nüshu (U+1B170..U+1B2FF), a non-BMP syllabic script historically
+        // used by women in Jiangyong County, Hunan, China. Unicode category Lo; unicode61 keeps
+        // it as word characters. Non-BMP, so the same surrogate-pair-aware rune walk and explicit
+        // range inclusion required for Tangut also apply here. Without them, `search '𛅰'` returns
+        // 0 against '𛅰abc' — #198 repeated on another non-BMP historical East Asian script.
+        // 女書（Nüshu、U+1B170..U+1B2FF、中国湖南省江永県で女性たちが使った非 BMP 音節文字）の
+        // 回帰テスト。Unicode カテゴリ Lo で unicode61 は単語文字として扱う。非 BMP のため、
+        // Tangut と同じく rune 走査と範囲追加の両方が必要。抜けると `search '𛅰'` が '𛅰abc' に
+        // 対して 0 件を返す — #198 の非 BMP 歴史的東アジア文字版。
+        var nushuChar = char.ConvertFromUtf32(0x1B170);
+        InsertIndexedFile("src/nushu.py", "python",
+            $"def {nushuChar}abc(x):\n    return x\n");
+
+        var results = _reader.Search(nushuChar);
+
+        Assert.Contains(results, r => r.Path == "src/nushu.py");
+    }
+
+    [Fact]
     public void Search_FindsNonBmpKanaExtendedBSubstringInsideLongerToken()
     {
         // Regression guard for Kana Extended-B (U+1AFF0..U+1AFFF, Unicode 15.0). Non-BMP
