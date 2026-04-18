@@ -510,7 +510,7 @@ The database reflects the working tree at the time of the last index. After swit
 | Rust | `.rs` | yes |
 | Java | `.java` | yes |
 | Kotlin | `.kt` | yes |
-| Ruby | `.rb`, `.rake`, `.gemspec`, `.podspec`, `Gemfile`, `Rakefile`, `Podfile`, `Guardfile`, `Capfile` | yes |
+| Ruby | `.rb`, `.rake`, `.gemspec`, `.podspec`, `Gemfile`, `Rakefile`, `Podfile`, `Guardfile`, `Capfile`, `Vagrantfile` | yes |
 | C | `.c`, `.h` | yes |
 | C++ | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx` | yes |
 | PHP | `.php` | yes |
@@ -1385,7 +1385,7 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 | Rust | `.rs` | yes |
 | Java | `.java` | yes |
 | Kotlin | `.kt` | yes |
-| Ruby | `.rb`, `.rake`, `.gemspec`, `.podspec`, `Gemfile`, `Rakefile`, `Podfile`, `Guardfile`, `Capfile` | yes |
+| Ruby | `.rb`, `.rake`, `.gemspec`, `.podspec`, `Gemfile`, `Rakefile`, `Podfile`, `Guardfile`, `Capfile`, `Vagrantfile` | yes |
 | C | `.c`, `.h` | yes |
 | C++ | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx` | yes |
 | PHP | `.php` | yes |
