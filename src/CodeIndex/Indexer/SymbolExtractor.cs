@@ -5388,10 +5388,22 @@ public static class SymbolExtractor
             // `class C<`, etc.) and must be preserved so downstream declaration regexes can
             // still recognize the surrounding construct. Everything from the unclosed `[`
             // onward is blanked, and subsequent lines are blanked until the matching `]`.
+            // Only attribute-position `[` should trigger blanking — a multi-line indexer
+            // declaration such as `public int this[\n    int i\n] => _items[i];` opens `[`
+            // immediately after the identifier `this`, which is NOT an attribute and must
+            // not be stripped (otherwise the indexer regex sees only `public int this` and
+            // the indexer silently disappears from symbols / definition / outline). Treat
+            // `[` as an attribute opener only when the immediately preceding non-whitespace
+            // character is not a word character (`[_A-Za-z0-9]`) and not `)` / `]` (which
+            // indicate indexer / array access on an expression result or chained indexer).
             // 行内を走査し、同一行で閉じない `[` を探す。その `[` より前は通常のコード
             // （`void M(` のようなメソッドヘッダ、`class C<` のようなジェネリック開口など）
             // であり、下流の宣言 regex が外側の構文を認識できるように残す必要がある。
             // 閉じない `[` 以降は空白化し、対応する `]` が現れるまで後続行も空白化する。
+            // `[` が属性位置にあるときだけ空白化する — `public int this[\n    int i\n]`
+            // のような複数行インデクサ宣言では `this` 直後の `[` が属性でないため、
+            // ここを削ってしまうとインデクサがシンボルから消える。直前の非空白文字が
+            // 語文字（`[_A-Za-z0-9]`）でも `)` / `]` でもない場合にのみ属性開口と判定する。
             int openIndex = -1;
             int localDepth = 0;
             for (int i = 0; i < line.Length; i++)
@@ -5399,7 +5411,26 @@ public static class SymbolExtractor
                 if (line[i] == '[')
                 {
                     if (localDepth == 0)
+                    {
+                        // Look back past whitespace for the character that introduces the `[`.
+                        // 先行する非空白文字を探して `[` の導入子を判定する。
+                        int p = i - 1;
+                        while (p >= 0 && (line[p] == ' ' || line[p] == '\t'))
+                            p--;
+                        if (p >= 0)
+                        {
+                            char prev = line[p];
+                            if (prev == '_' || (prev >= 'A' && prev <= 'Z') || (prev >= 'a' && prev <= 'z') || (prev >= '0' && prev <= '9') || prev == ')' || prev == ']')
+                            {
+                                // Not an attribute opener (e.g. `this[`, `arr[`, `(expr)[`, `arr[i][`).
+                                // Treat this `[` as opaque — do not track depth, do not blank.
+                                // 属性開口ではない（`this[`・`arr[`・`(expr)[`・`arr[i][` など）。
+                                // この `[` は追跡も空白化もしない。
+                                continue;
+                            }
+                        }
                         openIndex = i;
+                    }
                     localDepth++;
                 }
                 else if (line[i] == ']')
