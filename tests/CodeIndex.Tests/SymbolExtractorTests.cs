@@ -4478,6 +4478,60 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_ContextualKeywordWithWhitespacedTupleSuffix_DoesNotLeakCtorRegexPhantom()
+    {
+        // Follow-up to #349: the initial positional-lookahead fix only rejected tuple suffixes
+        // directly abutting `)` (e.g. `(int, int)[]`), so legal C# that puts whitespace between
+        // `)` and the suffix token (`(int, int) []`, `(int, int) ?`, `(int, int)  ?`) fell
+        // through to the ctor regex and reintroduced phantom `function required` / `function
+        // readonly` / `function static` rows while dropping the real property / method. Both the
+        // ctor lookahead and CSharpTypePattern now share CSharpTupleSuffixPattern, which allows
+        // whitespace between `)` / identifier and each suffix token, so these formatting
+        // variants are rejected as ctor shapes via the lookahead and accepted as property /
+        // method shapes via the upstream rows.
+        // #349 のフォローアップ。初回の位置検査修正では `)` とサフィックストークンが密着した形
+        // （`(int, int)[]`）しか弾けず、`)` と `[]` / `?` の間に空白を置いた合法な書式
+        // （`(int, int) []` / `(int, int) ?` / `(int, int)  ?`）は ctor regex に落ち、
+        // phantom `function required` / `function readonly` / `function static` が再発し
+        // 本来の property / method が silent drop していた。CSharpTupleSuffixPattern を
+        // ctor 否定先読みと CSharpTypePattern で共有し、`)` や識別子と各サフィックストークンの
+        // 間に空白を許容することで、これらの整形バリエーションも ctor 形状として弾きつつ
+        // 上流の property / method 行で本物のシンボルとして拾えるようになる。
+        var content = """
+            namespace ModifierPhantomSpaced;
+
+            public partial class SpacedHost
+            {
+                public required (int, int) [] R4 { get; init; }
+                public readonly (int, int) ? F4 = null;
+                public static (int, int) ? M3() => default;
+                public partial (int, int)  ? P5 { get; init; }
+            }
+
+            public readonly struct SpacedStruct
+            {
+                public readonly (int, int) ? M4() => null;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        // No phantom rows whose name is a modifier keyword even when whitespace sits between
+        // `)` and the tuple suffix. / `)` とサフィックスの間に空白があっても、修飾子キーワードを
+        // name にした phantom 行は出ない。
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "required");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "readonly");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "static");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "partial");
+
+        // Real members are still captured with the correct kinds. / 本物のメンバーが正しい kind で拾えていること。
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "R4");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "F4");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M3");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P5");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M4");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsRecordVariants()
     {
         // record, record class, record struct with various modifiers
