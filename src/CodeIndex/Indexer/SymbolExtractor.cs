@@ -2392,8 +2392,9 @@ public static class SymbolExtractor
         if (start.LineIndex == endExclusive.LineIndex)
         {
             var line = lines[start.LineIndex];
-            var startColumn = Math.Min(start.Column, line.Length);
-            var endColumn = Math.Min(Math.Max(endExclusive.Column, startColumn), line.Length);
+            var effectiveLength = GetLineLengthExcludingTrailingCr(line);
+            var startColumn = Math.Min(start.Column, effectiveLength);
+            var endColumn = Math.Min(Math.Max(endExclusive.Column, startColumn), effectiveLength);
             return line[startColumn..endColumn];
         }
 
@@ -2401,12 +2402,19 @@ public static class SymbolExtractor
         for (int lineIndex = start.LineIndex; lineIndex <= endExclusive.LineIndex; lineIndex++)
         {
             var line = lines[lineIndex];
+            // Content was split on '\n', so CRLF lines carry a trailing '\r'. Exclude it from
+            // the effective length so the multi-line separator stays '\n' regardless of source
+            // line endings and signatures stay OS-independent (see #382 / #405).
+            // content は '\n' で分割しているため、CRLF 行は末尾に '\r' が残る。multi-line の
+            // 区切りを OS に依存せず '\n' に揃え signature の一致判定を保つため、effective
+            // length からは '\r' を除外する（#382 / #405 参照）。
+            var effectiveLength = GetLineLengthExcludingTrailingCr(line);
             var startColumn = lineIndex == start.LineIndex
-                ? Math.Min(start.Column, line.Length)
+                ? Math.Min(start.Column, effectiveLength)
                 : 0;
             var endColumn = lineIndex == endExclusive.LineIndex
-                ? Math.Min(Math.Max(endExclusive.Column, startColumn), line.Length)
-                : line.Length;
+                ? Math.Min(Math.Max(endExclusive.Column, startColumn), effectiveLength)
+                : effectiveLength;
 
             builder.Append(line[startColumn..endColumn]);
             if (lineIndex < endExclusive.LineIndex)
@@ -2414,6 +2422,21 @@ public static class SymbolExtractor
         }
 
         return builder.ToString();
+    }
+
+    private static int GetLineLengthExcludingTrailingCr(string line)
+    {
+        var length = line.Length;
+        if (length > 0 && line[length - 1] == '\r')
+            length--;
+        return length;
+    }
+
+    private static string StripTrailingCr(string line)
+    {
+        if (line.Length > 0 && line[^1] == '\r')
+            return line[..^1];
+        return line;
     }
 
     private static void ExtractJavaScriptTypeScriptBareMethods(long fileId, string lang, string[] lines, List<SymbolRecord> symbols, JavaScriptScopePrivacyFlags[][] privateScopeColumns)
@@ -6112,12 +6135,21 @@ public static class SymbolExtractor
         var sourceBuilder = new System.Text.StringBuilder();
         var sanitizedBuilder = new System.Text.StringBuilder();
 
-        var firstSourceSegment = startColumn < lines[startIndex].Length
+        // Content was split on '\n', so CRLF lines carry a trailing '\r'. Strip it from both
+        // builders in lockstep so inter-line separators stay '\n' regardless of source line
+        // endings; the sanitized lex output preserves '\r' at the same column as the source,
+        // so dropping it from both keeps column mapping aligned (see #382 / #405).
+        // content は '\n' で分割しているため、CRLF 行は末尾に '\r' が残る。sanitized 側も
+        // source と同じ列に '\r' を保持するため、両方から一律に '\r' を落とせば column
+        // mapping はズレず、行間セパレータも OS に依存せず '\n' に揃う（#382 / #405 参照）。
+        var firstSourceSegmentRaw = startColumn < lines[startIndex].Length
             ? lines[startIndex][startColumn..]
             : string.Empty;
-        var firstSanitizedSegment = startColumn < firstSanitizedLine.Length
+        var firstSanitizedSegmentRaw = startColumn < firstSanitizedLine.Length
             ? firstSanitizedLine[startColumn..]
             : string.Empty;
+        var firstSourceSegment = StripTrailingCr(firstSourceSegmentRaw);
+        var firstSanitizedSegment = StripTrailingCr(firstSanitizedSegmentRaw);
         sourceBuilder.Append(firstSourceSegment);
         sanitizedBuilder.Append(lang == "typescript"
             ? NormalizeTypeScriptBareMethodMatchInput(firstSanitizedSegment)
@@ -6140,12 +6172,14 @@ public static class SymbolExtractor
             var lexedLine = LexJavaScriptLine(lines[lineIndex], lexState);
             lexState = lexedLine.EndState;
 
+            var sourceLine = StripTrailingCr(lines[lineIndex]);
+            var sanitizedLine = StripTrailingCr(lexedLine.SanitizedLine);
             sourceBuilder.Append('\n');
-            sourceBuilder.Append(lines[lineIndex]);
+            sourceBuilder.Append(sourceLine);
             sanitizedBuilder.Append('\n');
             sanitizedBuilder.Append(lang == "typescript"
-                ? NormalizeTypeScriptBareMethodMatchInput(lexedLine.SanitizedLine)
-                : lexedLine.SanitizedLine);
+                ? NormalizeTypeScriptBareMethodMatchInput(sanitizedLine)
+                : sanitizedLine);
 
             if (TryFinalizeJavaScriptTypeScriptMethodHeaderCapture(
                 sourceBuilder.ToString(),
@@ -9110,9 +9144,17 @@ public static class SymbolExtractor
             if (builder.Length > 0)
                 builder.Append('\n');
 
-            builder.Append(i == declarationLineIndex
-                ? lines[i][Math.Min(declarationStartColumn, lines[i].Length)..]
-                : lines[i]);
+            // Content was split on '\n', so CRLF lines carry a trailing '\r'. Strip it before
+            // appending so intermediate separators stay '\n' and the collected declaration
+            // text is stable across OS line endings (#405 follow-up to #382).
+            // content は '\n' で分割しているため、CRLF 行は末尾に '\r' が残る。行間の区切りを
+            // '\n' に揃え、OS 差分で collected text が変わらないよう '\r' を落として追加する
+            // （#382 に続く #405 対応）。
+            var line = lines[i];
+            var lineText = i == declarationLineIndex
+                ? line[Math.Min(declarationStartColumn, line.Length)..]
+                : line;
+            builder.Append(StripTrailingCr(lineText));
 
             var declaration = builder.ToString();
             if (parameterOpenIndex < 0)
