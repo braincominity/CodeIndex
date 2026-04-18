@@ -69,6 +69,18 @@ public class FileIndexer
     private static readonly Dictionary<string, string> LangMap = new(StringComparer.OrdinalIgnoreCase)
     {
         [".py"]     = "python",
+        [".pyi"]    = "python",  // Python type stub (PEP 561) / Python 型スタブ
+        [".pyw"]    = "python",  // Windowed Python script / Windows 用 Python スクリプト
+        // Cython's `.pyx` / `.pxd` live in their own search-only bucket: they extend Python syntax
+        // with `cdef class` / `cpdef` / `cdef` forms that the Python regex extractor cannot parse,
+        // so mapping them to `python` would advertise `symbol_extraction=true` while emitting zero
+        // symbols — the same "advertised contract vs. actual behavior" gap that sunk the earlier
+        // `.sass` / `.styl` → `css` mapping.
+        // Cython の `.pyx` / `.pxd` は `cdef class` / `cpdef` / `cdef` を含み Python 用正規表現では
+        // 拾えない。python にマップすると `symbol_extraction=true` と広告しつつ 0 件しか出ない
+        // 齟齬になるため、`.sass` / `.styl` と同じく独立の search-only バケットに分ける。
+        [".pyx"]    = "cython",  // Cython source / Cython ソース
+        [".pxd"]    = "cython",  // Cython declaration / Cython 宣言
         [".js"]     = "javascript",
         [".cjs"]    = "javascript",
         [".mjs"]    = "javascript",
@@ -78,6 +90,9 @@ public class FileIndexer
         [".jsx"]    = "javascript",
         [".tsx"]    = "typescript",
         [".rb"]     = "ruby",
+        [".rake"]   = "ruby",    // Rake tasks / Rake タスク
+        [".gemspec"]= "ruby",    // RubyGems spec / RubyGems スペック
+        [".podspec"]= "ruby",    // CocoaPods spec (Ruby DSL) / CocoaPods スペック
         [".go"]     = "go",
         [".rs"]     = "rust",
         [".java"]   = "java",
@@ -96,6 +111,10 @@ public class FileIndexer
         [".php"]    = "php",
         [".sh"]     = "shell",
         [".sql"]    = "sql",
+        [".pgsql"]  = "sql",     // PostgreSQL dialect / PostgreSQL 方言
+        [".tsql"]   = "sql",     // T-SQL (SQL Server) / T-SQL (SQL Server)
+        [".plsql"]  = "sql",     // PL/SQL (Oracle) / PL/SQL (Oracle)
+        [".psql"]   = "sql",     // psql scripts / psql スクリプト
         [".md"]     = "markdown",
         [".yaml"]   = "yaml",
         [".yml"]    = "yaml",
@@ -109,8 +128,18 @@ public class FileIndexer
         [".props"]  = "xml",    // MSBuild props / MSBuild プロパティ
         [".targets"]= "xml",    // MSBuild targets / MSBuild ターゲット
         [".html"]   = "html",
+        [".htm"]    = "html",   // Legacy HTML extension / 旧来の HTML 拡張子
         [".css"]    = "css",
         [".scss"]   = "css",
+        [".less"]   = "css",    // Less preprocessor / Less プリプロセッサ
+        [".pcss"]   = "css",    // PostCSS / PostCSS
+        // Sass indented syntax / Stylus use indentation instead of braces, so they live in
+        // separate search-only buckets — the CSS symbol extractor's brace-based patterns do
+        // not apply, but exact-name search still works.
+        // Sass インデント構文と Stylus は波括弧ではなくインデントで構造化するため、
+        // CSS のシンボル抽出（波括弧ベース）は使わず、検索用の別バケットに分ける。
+        [".sass"]   = "sass",
+        [".styl"]   = "stylus",
         [".vue"]    = "vue",
         [".svelte"] = "svelte",
         [".tf"]     = "terraform",
@@ -135,6 +164,7 @@ public class FileIndexer
         [".gql"]    = "graphql",
         [".gradle"] = "gradle",    // Gradle build scripts / Gradle ビルドスクリプト
         [".cmake"]  = "cmake",     // CMake scripts / CMake スクリプト
+        [".mk"]     = "makefile",  // Makefile fragment / Makefile フラグメント
         [".ps1"]    = "powershell",// PowerShell scripts / PowerShell スクリプト
         [".psm1"]   = "powershell",// PowerShell modules / PowerShell モジュール
         [".psd1"]   = "powershell",// PowerShell data files / PowerShell データファイル
@@ -149,14 +179,37 @@ public class FileIndexer
     private static readonly Dictionary<string, string> FileNameMap = new(StringComparer.OrdinalIgnoreCase)
     {
         ["Dockerfile"]    = "dockerfile",
+        ["Containerfile"] = "dockerfile",   // Podman's Dockerfile alternative / Podman の Dockerfile 代替
         ["Makefile"]      = "makefile",
+        ["GNUmakefile"]   = "makefile",     // GNU Make explicit filename / GNU Make 明示ファイル名
         ["Justfile"]      = "justfile",     // Just command runner / Just コマンドランナー
         ["CMakeLists.txt"]= "cmake",
         ["Vagrantfile"]   = "ruby",         // Vagrant uses Ruby DSL / Vagrant は Ruby DSL
+        ["Gemfile"]       = "ruby",         // Bundler dependency manifest / Bundler 依存マニフェスト
+        ["Rakefile"]      = "ruby",         // Rake task runner / Rake タスクランナー
+        ["Podfile"]       = "ruby",         // CocoaPods dependency manifest / CocoaPods 依存マニフェスト
+        ["Guardfile"]     = "ruby",         // Guard file-watcher / Guard ファイルウォッチャー
+        ["Capfile"]       = "ruby",         // Capistrano deployment / Capistrano デプロイ
+        ["BUILD"]         = "python",       // Bazel Starlark build file / Bazel Starlark ビルドファイル
+        ["BUILD.bazel"]   = "python",
+        ["WORKSPACE"]     = "python",       // Bazel workspace / Bazel ワークスペース
+        ["WORKSPACE.bazel"]= "python",
         [".editorconfig"] = "editorconfig",
         [".gitignore"]    = "gitignore",
         [".dockerignore"] = "dockerignore",
     };
+
+    // Filename prefixes (with trailing dot) mapped to language for suffixed variants like
+    // Dockerfile.dev / Makefile.common / GNUmakefile.am. The suffix must be non-empty.
+    // Dockerfile.dev / Makefile.common / GNUmakefile.am のようにサフィックス付きで使われる
+    // ファイル名のプレフィックス→言語マッピング。サフィックスは1文字以上必須。
+    private static readonly (string Prefix, string Language)[] FileNamePrefixMap =
+    [
+        ("Dockerfile.",  "dockerfile"),
+        ("Containerfile.", "dockerfile"),
+        ("Makefile.",    "makefile"),
+        ("GNUmakefile.", "makefile"),
+    ];
 
     // Directories to skip (case-insensitive for cross-platform) / スキップするディレクトリ（クロスプラットフォーム対応で大文字小文字を区別しない）
     private static readonly HashSet<string> SkipDirs = new(StringComparer.OrdinalIgnoreCase)
@@ -744,6 +797,12 @@ public class FileIndexer
         var merged = new Dictionary<string, string>(LangMap, StringComparer.OrdinalIgnoreCase);
         foreach (var (name, lang) in FileNameMap)
             merged.TryAdd(name, lang);
+        // Surface suffixed variants like Dockerfile.dev / Makefile.am as `<Prefix><suffix>` entries
+        // so `cdidx languages` and the MCP listing reflect what TryDetectLanguage actually handles.
+        // Dockerfile.dev / Makefile.am のようなサフィックス付き変種も `<Prefix><suffix>` 形で
+        // 露出させ、`cdidx languages` や MCP の一覧が TryDetectLanguage の実挙動と一致するようにする。
+        foreach (var (prefix, lang) in FileNamePrefixMap)
+            merged.TryAdd($"{prefix}<suffix>", lang);
         return merged;
     }
 
@@ -763,6 +822,19 @@ public class FileIndexer
         var fileName = Path.GetFileName(filePath);
         if (FileNameMap.TryGetValue(fileName, out var nameLang))
             return new LanguageDetectionResult(FileProbeStatus.Supported, nameLang);
+
+        // Then try known filename prefixes for suffixed variants like Dockerfile.dev / Makefile.am.
+        // The suffix must be non-empty so a bare `Dockerfile.` with trailing dot does not match.
+        // Dockerfile.dev や Makefile.am のようなサフィックス付き変種を検出する。
+        // `Dockerfile.` のような末尾ドットだけの形には一致させないため、サフィックスは1文字以上必須。
+        foreach (var (prefix, prefixLang) in FileNamePrefixMap)
+        {
+            if (fileName.Length > prefix.Length &&
+                fileName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return new LanguageDetectionResult(FileProbeStatus.Supported, prefixLang);
+            }
+        }
 
         if (!string.IsNullOrEmpty(ext))
             return new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
