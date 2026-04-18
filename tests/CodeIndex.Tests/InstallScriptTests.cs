@@ -415,7 +415,9 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("Fetching latest release version", stdout);
         Assert.Contains("GitHub API returned HTTP 403 while fetching", stderr);
         Assert.Contains("/releases/latest", stderr);
+        Assert.Contains("curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/vX.Y.Z/install.sh | bash -s -- vX.Y.Z", stderr);
         Assert.Contains("bash ./install.sh vX.Y.Z", stderr);
+        Assert.Contains("from a checkout", stderr);
         Assert.Contains("CDIDX_GITHUB_API_BASE_URL", stderr);
         Assert.Contains("CONNECT tunnel failed, response 403", stderr);
     }
@@ -461,7 +463,9 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("Fetching latest release version", stdout);
         Assert.Contains("configured latest-release API (https://mirror.example.test/api) returned HTTP 403", stderr);
         Assert.Contains("Check the configured API endpoint, credentials, path ACL, or proxy policy.", stderr);
+        Assert.Contains("curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/vX.Y.Z/install.sh | bash -s -- vX.Y.Z", stderr);
         Assert.Contains("bash ./install.sh vX.Y.Z", stderr);
+        Assert.Contains("from a checkout", stderr);
         Assert.DoesNotContain("set CDIDX_GITHUB_API_BASE_URL to a reachable internal mirror API", stderr);
         Assert.Contains("CONNECT tunnel failed, response 403", stderr);
     }
@@ -528,30 +532,19 @@ public sealed class InstallScriptTests : IDisposable
                 return 0
             }
 
-            download_status=0
-            if ( download_and_install ); then
-                echo "UNEXPECTED_SUCCESS"
-            else
-                download_status=$?
-            fi
-
-            echo "DOWNLOAD_STATUS:$download_status"
-            [ -e "$INSTALL_DIR/cdidx" ] && echo "CDIDX_PRESENT" || echo "CDIDX_MISSING"
-            [ -e "$INSTALL_DIR/version.json" ] && echo "VERSION_PRESENT" || echo "VERSION_MISSING"
-            [ -e "$INSTALL_DIR/libe_sqlite3.so" ] && echo "LIB_PRESENT" || echo "LIB_MISSING"
+            download_and_install
+            echo "UNREACHABLE"
             """,
             new Dictionary<string, string?>
             {
                 ["CDIDX_INSTALL_DIR"] = installDir,
-            },
-            enforceStrictMode: false);
+            });
 
-        Assert.Equal(0, exitCode);
-        Assert.DoesNotContain("UNEXPECTED_SUCCESS", stdout);
-        Assert.Contains("DOWNLOAD_STATUS:1", stdout);
-        Assert.Contains("CDIDX_MISSING", stdout);
-        Assert.Contains("VERSION_MISSING", stdout);
-        Assert.Contains("LIB_MISSING", stdout);
+        Assert.Equal(1, exitCode);
+        Assert.DoesNotContain("UNREACHABLE", stdout);
+        Assert.False(File.Exists(Path.Combine(installDir, "cdidx")));
+        Assert.False(File.Exists(Path.Combine(installDir, "version.json")));
+        Assert.False(File.Exists(Path.Combine(installDir, "libe_sqlite3.so")));
         Assert.Contains("HTTP 403", stderr);
         Assert.Contains("GitHub release host", stderr);
         Assert.Contains("GitHub may be blocking or rate-limiting this route.", stderr);
@@ -630,31 +623,20 @@ public sealed class InstallScriptTests : IDisposable
                 return 0
             }
 
-            download_status=0
-            if ( download_and_install ); then
-                echo "UNEXPECTED_SUCCESS"
-            else
-                download_status=$?
-            fi
-
-            echo "DOWNLOAD_STATUS:$download_status"
-            [ -e "$INSTALL_DIR/cdidx" ] && echo "CDIDX_PRESENT" || echo "CDIDX_MISSING"
-            [ -e "$INSTALL_DIR/version.json" ] && echo "VERSION_PRESENT" || echo "VERSION_MISSING"
-            [ -e "$INSTALL_DIR/libe_sqlite3.so" ] && echo "LIB_PRESENT" || echo "LIB_MISSING"
+            download_and_install
+            echo "UNREACHABLE"
             """,
             new Dictionary<string, string?>
             {
                 ["CDIDX_INSTALL_DIR"] = installDir,
                 ["CDIDX_GITHUB_BASE_URL"] = "https://mirror.example.test/releases",
-            },
-            enforceStrictMode: false);
+            });
 
-        Assert.Equal(0, exitCode);
-        Assert.DoesNotContain("UNEXPECTED_SUCCESS", stdout);
-        Assert.Contains("DOWNLOAD_STATUS:1", stdout);
-        Assert.Contains("CDIDX_MISSING", stdout);
-        Assert.Contains("VERSION_MISSING", stdout);
-        Assert.Contains("LIB_MISSING", stdout);
+        Assert.Equal(1, exitCode);
+        Assert.DoesNotContain("UNREACHABLE", stdout);
+        Assert.False(File.Exists(Path.Combine(installDir, "cdidx")));
+        Assert.False(File.Exists(Path.Combine(installDir, "version.json")));
+        Assert.False(File.Exists(Path.Combine(installDir, "libe_sqlite3.so")));
         Assert.Contains("configured release host (https://mirror.example.test/releases)", stderr);
         Assert.Contains("Check the configured mirror/proxy path, credentials, or access policy.", stderr);
         Assert.DoesNotContain("GitHub may be blocking or rate-limiting this route.", stderr);

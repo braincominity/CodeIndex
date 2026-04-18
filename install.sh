@@ -263,6 +263,8 @@ fetch_latest_release_version() {
     local api_response
     api_response="$(cat "$response_file")"
     rm -f "$response_file"
+    local explicit_version_examples
+    explicit_version_examples="rerun the installer with an explicit version (for example: 'curl -fsSL https://raw.githubusercontent.com/${REPO}/vX.Y.Z/install.sh | bash -s -- vX.Y.Z', or 'bash ./install.sh vX.Y.Z' from a checkout)"
 
     case "$http_code" in
         200) ;;
@@ -272,9 +274,9 @@ fetch_latest_release_version() {
                 return 1
             fi
             if [ "$GITHUB_API_BASE_URL" = "https://api.github.com" ]; then
-                report_error "${api_label} returned HTTP 403 while fetching ${api_url}. Pass an explicit version (for example: 'bash ./install.sh vX.Y.Z') to skip the latest-release API call, or set CDIDX_GITHUB_API_BASE_URL to a reachable internal mirror API."
+                report_error "${api_label} returned HTTP 403 while fetching ${api_url}. ${explicit_version_examples} to skip the latest-release API call, or set CDIDX_GITHUB_API_BASE_URL to a reachable internal mirror API."
             else
-                report_error "${api_label} returned HTTP 403 while fetching ${api_url}. Check the configured API endpoint, credentials, path ACL, or proxy policy. You can also pass an explicit version (for example: 'bash ./install.sh vX.Y.Z') to skip the latest-release API call."
+                report_error "${api_label} returned HTTP 403 while fetching ${api_url}. Check the configured API endpoint, credentials, path ACL, or proxy policy. You can also ${explicit_version_examples} to skip the latest-release API call."
             fi
             report_error "If every HTTPS endpoint fails with 'CONNECT tunnel failed, response 403', this is an upstream proxy/egress policy deny before TLS; route substitution alone will not fix it."
             return 1
