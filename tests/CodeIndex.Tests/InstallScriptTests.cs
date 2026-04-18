@@ -3034,7 +3034,7 @@ public sealed class InstallScriptTests : IDisposable
             enforceStrictMode: false);
 
         Assert.NotEqual(0, exitCode);
-        Assert.Contains("first non-empty line of cdidx --version must start with", stderr);
+        Assert.Contains("first non-empty line of cdidx --version must be exactly", stderr);
     }
 
     [Fact]
@@ -3064,6 +3064,151 @@ public sealed class InstallScriptTests : IDisposable
                     # しか存在しない split-evidence ケース。awk の state machine で
                     # ヘッダブロック内の 2 スペースインデント行の `greet` のみを拾う。
                     printf '%s\n%s\n' "sample.py:1-6" "warning: greet query returned 0 matches"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("did not return a structured match", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_VersionFirstLineTrailingDiagnostic_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version)
+                    # Trailing-diagnostic shape: first non-empty line starts with
+                    # `cdidx v1.2.3` (so token enumeration sees one distinct token
+                    # equal to the requested tag) but adds diagnostic text after
+                    # the version. Real cdidx --version output is literally
+                    # `cdidx v<ver>` with nothing trailing, so the exact-match
+                    # check must reject this.
+                    # 先頭行が `cdidx v1.2.3` で始まるが末尾に診断文が続くケース。
+                    # 実バイナリの --version 出力は `cdidx v<ver>` 単独なので完全
+                    # 一致を要求して弾く。
+                    echo "cdidx v1.2.3 warning: expected package missing"
+                    ;;
+                search) echo "sample.py:1: def greet(name):" ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("first non-empty line of cdidx --version must be exactly", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_SearchHeaderInlineDiagnostic_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)
+                    # Header-inline diagnostic: the structured path prefix and
+                    # a greet-mentioning diagnostic share a single line. The
+                    # previous awk used `^sample\.py:[0-9]` and then accepted
+                    # any `greet` substring on the same header line, so this
+                    # shape false-passed. The tightened awk requires either a
+                    # strict grep form (`^sample\.py:[0-9]+:` with `def greet`
+                    # on the same line) or a strict range-form header with
+                    # nothing trailing (`^sample\.py:[0-9]+-[0-9]+$`). This
+                    # adversarial line matches neither, so it must abort.
+                    # ヘッダ行自体に診断文 `greet` が続くケース。厳密な grep 形
+                    # （`:<line>:` 直後に `def greet`）でも、厳密な range 形ヘッダ
+                    # （末尾アンカー）でもないため弾かれる必要がある。
+                    printf '%s\n' "sample.py:1-6 warning: greet query returned 0 matches"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("did not return a structured match", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_SearchIndentedDiagnosticWithoutDef_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)
+                    # Indented-diagnostic shape: strict range-form header
+                    # followed by a two-space-indented line that mentions
+                    # greet only as part of a diagnostic, not as real Python
+                    # source. The previous awk accepted any indented line
+                    # containing `greet`, so this false-passed. The tightened
+                    # awk requires the indented line to contain the real code
+                    # signature `def greet`.
+                    # ヘッダは正しい range 形だが、インデント行の `greet` が
+                    # 実コードの `def greet` ではなく診断文にしか現れないケース。
+                    # スニペット行には `def greet` を要求して弾く。
+                    printf '%s\n%s\n' "sample.py:1-6" "  warning: greet query returned 0 matches"
                     ;;
                 *)
                     if [ "$2" = "--db" ] && [ -n "$3" ]; then

@@ -1092,24 +1092,23 @@ run_reinstall_real() {
     # whose single extracted token happens to equal the requested tag but
     # does not represent the binary's own reported version, e.g.
     # "warning: expected package v1.2.3" or "see /releases/v1.2.3/notes".
-    # Real `cdidx --version` output is literally `cdidx v<ver>` on the
-    # first line (verified against the current build), so require that the
-    # first non-empty line starts with `${BINARY_NAME} v<requested>` with
-    # either end-of-line or whitespace after the version — that pins the
-    # requested tag to the actual version line rather than free-form text
-    # that merely mentions it.
+    # Real `cdidx --version` output is literally `cdidx v<ver>` on one
+    # line — no prefix, no trailing diagnostic text (verified against the
+    # current build). Require an EXACT match of the first non-empty line
+    # to `${BINARY_NAME} v<requested>` so that a trailing-diagnostic
+    # shape like `cdidx v1.2.3 warning: expected package missing` (whose
+    # single extracted token still equals the requested tag, so token
+    # enumeration would pass) is also rejected.
     # single-token の診断文だけで silent pass しないよう、`cdidx --version` の
-    # 先頭非空行が `${BINARY_NAME} v<要求版>` 形式で始まることも要求する
-    # （実バイナリの `--version` 出力は `cdidx v<ver>` の 1 行）。
+    # 先頭非空行が `${BINARY_NAME} v<要求版>` と完全一致することを要求する
+    # （実バイナリの `--version` 出力は `cdidx v<ver>` の 1 行だけで、末尾に
+    # 追加トークンは無い）。末尾に診断文が続く `cdidx v1.2.3 warning: ...`
+    # のような shape もこれで弾く。
     local reinstall_first_version_line
     reinstall_first_version_line="$(printf '%s\n' "$reinstall_version_output" | awk 'NF { print; exit }')"
-    case "$reinstall_first_version_line" in
-        "${BINARY_NAME} v${reinstall_expected_version}"|"${BINARY_NAME} v${reinstall_expected_version} "*)
-            ;;
-        *)
-            error "Real reinstall validation: first non-empty line of ${BINARY_NAME} --version must start with '${BINARY_NAME} v${reinstall_expected_version}' but got: ${reinstall_first_version_line:-<empty>}."
-            ;;
-    esac
+    if [ "$reinstall_first_version_line" != "${BINARY_NAME} v${reinstall_expected_version}" ]; then
+        error "Real reinstall validation: first non-empty line of ${BINARY_NAME} --version must be exactly '${BINARY_NAME} v${reinstall_expected_version}' but got: ${reinstall_first_version_line:-<empty>}."
+    fi
 
     # Build a tiny scratch project and exercise `cdidx . --db <tmp>` so that
     # the validation covers the real indexing path (symbol extraction, SQLite
@@ -1155,45 +1154,63 @@ PY
         error "Real reinstall validation: ${BINARY_NAME} search returned a non-zero exit code."
     fi
     # Require a structured match block anchored at the scratch file path AND
-    # containing the matched token on an indented snippet line that belongs
-    # to the SAME match block. A successful human-readable search prints:
+    # containing the real source-code signature `def greet` on a line that
+    # belongs to the SAME match block. A successful human-readable search
+    # prints:
     #     sample.py:1-2
     #       def greet(name):
-    #           return "hello"
-    # where the path header is at column 0 and the snippet lines are indented
-    # with two spaces. A split-evidence false pass like
-    #     sample.py:1-6
-    #     warning: greet query returned 0 matches
-    # would satisfy two independent checks (`^sample\.py:` + `*greet*`) but
-    # does not represent a real FTS hit. The awk state machine below enters
-    # "match block" mode only when it sees `^sample\.py:<digit>`, looks for
-    # `greet` in a subsequent indented line (`^  `), and exits the block on
-    # any non-indented / non-empty line such as the summary `(N results ...)`
-    # footer. This couples both predicates to the same structured output
-    # region without requiring the header line itself to contain the token.
+    #           return f"hello {name}"
+    # with a strict path-range header (no trailing text) at column 0 and
+    # snippet lines indented with two or more spaces. The optional
+    # single-line "grep-like" form is `path:line:code` with a colon
+    # immediately after the line number. An earlier check matched any
+    # header starting with `^sample\.py:[0-9]` and accepted any `greet`
+    # substring on the same line or on any indented line, so adversarial
+    # shapes such as
+    #     sample.py:1-6 warning: greet query returned 0 matches        (header-inline diagnostic)
+    #     sample.py:1-2\n  warning: greet query returned 0 matches    (indented diagnostic)
+    # could false-pass even though no real FTS hit had occurred. The
+    # state machine below now:
+    #   1. Accepts the single-line grep form only when the header matches
+    #      `^sample\.py:[0-9]+:` (strict colon after the line number)
+    #      AND the line contains the real code signature `def greet`.
+    #   2. Enters block mode only on a strict range-form header
+    #      `^sample\.py:[0-9]+-[0-9]+$` (no trailing text).
+    #   3. Inside a block, accepts only indented lines that contain the
+    #      real code signature `def greet`, rejecting indented diagnostic
+    #      lines that happen to mention `greet`.
+    #   4. Exits the block on any non-indented or blank line (e.g. the
+    #      `(N results in M files)` summary footer).
     # 構造化ヘッダ `^sample\.py:<digit>` と、そのブロック内のインデント済み
-    # スニペット行に現れる 'greet' を 1 つの状態機械でまとめて検証することで、
-    # `sample.py:...` と `greet` 診断文を別行に置いた split-evidence の
-    # false pass も弾く。ブロックの終端は空行またはインデント無しの次行。
+    # スニペット行に現れる実コード署名 `def greet` を 1 つの状態機械で
+    # まとめて検証する。ヘッダ行に診断文が続く single-line 形や、
+    # インデント行の `greet` が診断文にしか出ない split-evidence も、
+    # ヘッダ正規表現を range 形（`N-M`）で厳密に末尾アンカーし、スニペット側で
+    # `def greet` を要求することで弾く。
     if ! printf '%s\n' "$reinstall_search_output" | awk '
-        /^sample\.py:[0-9]/ {
-            # Single-line "grep-like" form "sample.py:1: def greet(name):"
-            # where the header line itself carries the snippet.
-            # ヘッダ行自体に snippet が載る単一行フォーマット。
-            if ($0 ~ /greet/) { found = 1; exit 0 }
-            # Multi-line human-readable form where the header is followed by
-            # indented snippet lines; enter block mode and look for greet
-            # on a two-space-indented line before the block terminates on
-            # any non-indented or blank line (e.g. summary footer).
-            # ヘッダ行と 2 スペースインデントされた snippet の複数行フォーマット。
+        /^sample\.py:[0-9]+:/ {
+            # Single-line grep form: path:line:code — require `def greet`
+            # on the same line so a header-line diagnostic like
+            # `sample.py:1: warning: greet missing` is rejected.
+            # ヘッダ行自体に snippet が載る形式。`def greet` の出現を要求し、
+            # ヘッダ行に診断文が続くだけのケースを弾く。
+            if ($0 ~ /def greet/) { found = 1; exit 0 }
+            next
+        }
+        /^sample\.py:[0-9]+-[0-9]+$/ {
+            # Strict range-form header — no trailing text, no trailing
+            # spaces. Enter block mode and look for `def greet` on a
+            # following indented line.
+            # 厳密な range 形ヘッダ。末尾の余計なテキストを許さず、block
+            # モードに入って後続のインデント snippet 行で `def greet` を探す。
             in_block = 1
             next
         }
-        /^  .*greet/ { if (in_block) { found = 1; exit 0 } }
+        /^  .*def greet/ { if (in_block) { found = 1; exit 0 } }
         /^[^ ]/ || /^$/ { in_block = 0 }
         END { exit (found ? 0 : 1) }
     '; then
-        error "Real reinstall validation: ${BINARY_NAME} search did not return a structured match block at sample.py containing a snippet line for 'greet'. Output: ${reinstall_search_output:-<empty>}."
+        error "Real reinstall validation: ${BINARY_NAME} search did not return a structured match block at sample.py containing a snippet line matching the code signature 'def greet'. Output: ${reinstall_search_output:-<empty>}."
     fi
 
     info "Real reinstall validation passed for ${version}."
