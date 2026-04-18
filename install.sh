@@ -1165,77 +1165,109 @@ PY
         error "Real reinstall validation: ${BINARY_NAME} search returned a non-zero exit code."
     fi
     # Require a structured match block anchored at the scratch file path AND
-    # containing the verbatim source-code signature `def greet(name):` from
-    # the scratch sample.py on a line that belongs to the SAME match block.
+    # the verbatim source-code signature `def greet(name):` from the scratch
+    # sample.py appearing as an EXACT full-line match inside that block.
     # A successful human-readable search prints:
-    #     sample.py:1-2
+    #     sample.py:1-6
     #       def greet(name):
     #           return f"hello {name}"
-    # with a strict path-range header (no trailing text) at column 0 and
-    # snippet lines indented with two or more spaces. The optional
-    # single-line "grep-like" form is `path:line:code` with a colon
-    # immediately after the line number. Earlier iterations matched
-    # any header starting with `^sample\.py:[0-9]` and accepted any
-    # `greet` or `def greet` substring, so adversarial shapes such as
-    #     sample.py:1: warning: expected code signature def greet missing   (header-line def-greet diagnostic)
-    #     sample.py:1-6\n  warning: expected code signature def greet missing  (indented def-greet diagnostic)
+    # with a strict path-range header (no trailing text) at column 0 and the
+    # first snippet line indented with exactly two spaces followed by the
+    # real Python source line. The optional single-line "grep-like" form is
+    # `path:line:code` with a colon immediately after the line number and
+    # nothing between the colon and the source. Earlier iterations matched
+    # any header starting with `^sample\.py:[0-9]` and accepted any `greet`
+    # / `def greet` / `def greet(name):` substring inside the line, so
+    # adversarial shapes such as
+    #     sample.py:1: warning: expected code signature def greet(name): missing    (grep-header diagnostic carrying the verbatim signature as a substring)
+    #     sample.py:1-6\n  warning: expected code signature def greet(name): missing (indented diagnostic carrying the verbatim signature as a substring)
+    #     sample.py:1-6\n  warning: no matches\n  def greet(name):                  (non-adjacent indented signature after a decoy diagnostic)
     # could false-pass even though no real FTS hit had occurred. The
-    # state machine below requires the EXACT scratch-file source line
-    # `def greet(name):` (anchored via literal parenthesis-and-colon
-    # argument list) inside the match block, so any diagnostic that
-    # happens to mention `def greet` without the real argument list is
-    # rejected. The state machine:
-    #   1. Accepts the single-line grep form only when the header matches
-    #      `^sample\.py:[0-9]+:` (strict colon after the line number)
-    #      AND the line contains the verbatim source signature
-    #      `def greet(name):`.
+    # state machine below enforces exact-line semantics so any line that
+    # only embeds the verbatim signature as a substring of a longer
+    # diagnostic, or that appears in the block after a non-matching
+    # indented line, is rejected. The state machine:
+    #   1. Accepts the single-line grep form only when the entire line is
+    #      exactly `sample.py:<N>:def greet(name):` (end anchored — no
+    #      trailing diagnostic prose, no space between the colon and the
+    #      source signature).
     #   2. Enters block mode only on a strict range-form header
-    #      `^sample\.py:[0-9]+-[0-9]+$` (no trailing text).
-    #   3. Inside a block, accepts only indented lines that contain the
-    #      verbatim source signature `def greet(name):`, rejecting
-    #      indented diagnostic lines that only mention `def greet`.
-    #   4. Exits the block on any non-indented or blank line (e.g. the
-    #      `(N results in M files)` summary footer).
+    #      `^sample\.py:[0-9]+-[0-9]+$` (no trailing text) and arms a
+    #      one-shot "expect the first indented snippet line" flag.
+    #   3. Inside an armed block, accepts only a line that is exactly
+    #      `  def greet(name):` (two-space indent + the verbatim source
+    #      signature + nothing else). The flag is consumed on the first
+    #      two-space-indented line, so a later indented line that happens
+    #      to carry the signature is rejected.
+    #   4. Any other line (blank line, one-space line, non-indented
+    #      diagnostic, `(N results in M files)` summary footer, an
+    #      unrelated header) clears the flag, so the block is abandoned
+    #      the moment the expected adjacency is broken.
     # 構造化ヘッダ（厳密な grep 形 `^sample\.py:[0-9]+:` または末尾アンカー付き
     # 範囲形 `^sample\.py:[0-9]+-[0-9]+$`）と、同じ match block 内で scratch の
-    # sample.py の実ソース行 `def greet(name):` を verbatim で要求する 1 つの
-    # awk 状態機械。grep 形ではヘッダ行そのものに `def greet(name):` を要求し、
-    # 範囲形ではヘッダ直後の 2 スペースインデント行に `def greet(name):` を
-    # 要求し、非インデント行または空行で block を終了する。`def greet missing`
-    # のような「def greet を含むが引数リストを伴わない」診断文も、`greet` だけの
-    # 診断文も、引数リストの括弧とコロンを verbatim でアンカーすることで弾く。
+    # sample.py の実ソース行 `def greet(name):` を full-line で要求する 1 つの
+    # awk 状態機械。grep 形ではヘッダ行自体を `sample.py:<N>:def greet(name):`
+    # に完全一致させ（コロン直後に診断文も空白も許さない）、範囲形ではヘッダ
+    # 直後の 1 行目が exactly `  def greet(name):` であることを要求する
+    # one-shot フラグを立てる。block 内で最初の 2 スペースインデント行が完全
+    # 一致しなければフラグを消費して block を諦めるため、途中に decoy の
+    # 診断行を挟んで signature 行を後置するシェイプも弾ける。`def greet
+    # missing` のような「def greet を含むが引数リストを伴わない」診断文も、
+    # `def greet(name): missing` のように verbatim な署名を substring として
+    # 埋め込んだ診断文も、両方とも完全一致を外すため false-pass しない。
     if ! printf '%s\n' "$reinstall_search_output" | awk '
-        /^sample\.py:[0-9]+:/ {
-            # Single-line grep form: path:line:code — require the
-            # verbatim scratch source signature `def greet(name):` on
-            # the same line so a header-line diagnostic like
-            # `sample.py:1: warning: def greet missing` is rejected.
-            # ヘッダ行自体に snippet が載る形式。scratch の実ソース行
-            # `def greet(name):` を verbatim で要求し、診断文だけの行を弾く。
-            if (index($0, "def greet(name):") > 0) { found = 1; exit 0 }
-            next
+        /^sample\.py:[0-9]+:def greet\(name\):$/ {
+            # Strict grep form: entire line must be exactly
+            # `sample.py:<N>:def greet(name):`. Anchors both ends so a
+            # diagnostic like `sample.py:1: warning: ... def greet(name):
+            # missing` is rejected even though it contains the verbatim
+            # signature as a substring.
+            # 厳密な grep 形。行全体を `sample.py:<N>:def greet(name):` に
+            # 完全一致させ、末尾に診断文が付くシェイプや、コロンと署名の間に
+            # 空白が入るシェイプを弾く。
+            found = 1
+            exit 0
         }
         /^sample\.py:[0-9]+-[0-9]+$/ {
-            # Strict range-form header — no trailing text, no trailing
-            # spaces. Enter block mode and look for the verbatim source
-            # signature `def greet(name):` on a following indented line.
+            # Strict range-form header — no trailing text. Arm the
+            # one-shot "expect first indented line to be the verbatim
+            # signature" flag; the first `^  /` line we see under this
+            # header will either match exactly or consume the flag and
+            # cause the block to be abandoned.
             # 厳密な range 形ヘッダ。末尾の余計なテキストを許さず、block
-            # モードに入って後続のインデント snippet 行で
-            # `def greet(name):` を verbatim で探す。
-            in_block = 1
+            # モードに入って「直後の 1 行目が exactly `  def greet(name):`
+            # であるべき」という one-shot フラグを立てる。最初の
+            # 2 スペースインデント行で flag を消費して完全一致を判定する。
+            expect_first_indent = 1
             next
         }
         /^  / {
-            if (in_block && index($0, "def greet(name):") > 0) {
-                found = 1
-                exit 0
+            # First two-space-indented line under an armed range header
+            # must equal exactly `  def greet(name):`. Any other indent
+            # (even one that later happens to carry the verbatim
+            # signature) consumes the flag and kills the block.
+            # 範囲形ヘッダ直後の最初の 2 スペースインデント行は exactly
+            # `  def greet(name):` でなければならない。それ以外（途中に
+            # 署名を後置するシェイプも含む）は flag を消費して block を
+            # 放棄する。
+            if (expect_first_indent) {
+                expect_first_indent = 0
+                if ($0 == "  def greet(name):") {
+                    found = 1
+                    exit 0
+                }
             }
             next
         }
-        /^[^ ]/ || /^$/ { in_block = 0 }
+        # Any other line (blank, one-space, non-indented diagnostic,
+        # unrelated header, footer) clears the adjacency flag so the
+        # block is abandoned the moment adjacency is broken.
+        # その他の行（空行・1 スペース行・非インデント診断行・無関係な
+        # ヘッダ・フッタ）は隣接フラグを落として block を放棄する。
+        { expect_first_indent = 0 }
         END { exit (found ? 0 : 1) }
     '; then
-        error "Real reinstall validation: ${BINARY_NAME} search did not return a structured match block at sample.py containing the verbatim scratch-source signature 'def greet(name):'. Output: ${reinstall_search_output:-<empty>}."
+        error "Real reinstall validation: ${BINARY_NAME} search did not return a structured match block at sample.py whose first snippet line is the exact verbatim scratch-source signature 'def greet(name):'. Output: ${reinstall_search_output:-<empty>}."
     fi
 
     info "Real reinstall validation passed for ${version}."

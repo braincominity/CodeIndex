@@ -2580,7 +2580,13 @@ public sealed class InstallScriptTests : IDisposable
             #!/usr/bin/env bash
             case "$1" in
                 --version) echo "cdidx v1.2.3" ;;
-                search)    echo 'sample.py:1: def greet(name):' ;;
+                search)
+                    # Real cdidx search emits range-form with the first
+                    # snippet line equal to `  def greet(name):` — the
+                    # tightened awk requires this exact shape.
+                    # 実 cdidx 準拠の範囲形 + 直後 1 行目完全一致の snippet。
+                    printf '%s\n%s\n' "sample.py:1-6" "  def greet(name):"
+                    ;;
                 *)
                     if [ "$2" = "--db" ] && [ -n "$3" ]; then
                         mkdir -p "$(dirname "$3")"
@@ -2625,7 +2631,13 @@ public sealed class InstallScriptTests : IDisposable
             #!/usr/bin/env bash
             case "$1" in
                 --version) echo "cdidx v1.2.3" ;;
-                search)    echo 'sample.py:1: def greet(name):' ;;
+                search)
+                    # Real cdidx search emits range-form with the first
+                    # snippet line equal to `  def greet(name):` — the
+                    # tightened awk requires this exact shape.
+                    # 実 cdidx 準拠の範囲形 + 直後 1 行目完全一致の snippet。
+                    printf '%s\n%s\n' "sample.py:1-6" "  def greet(name):"
+                    ;;
                 *)
                     if [ "$2" = "--db" ] && [ -n "$3" ]; then
                         mkdir -p "$(dirname "$3")"
@@ -2690,8 +2702,20 @@ public sealed class InstallScriptTests : IDisposable
                     echo "cdidx v1.2.3"
                     ;;
                 search)
+                    # Real cdidx search output is the strict range form
+                    # `sample.py:<start>-<end>` with the first snippet line
+                    # indented by exactly two spaces and equal to the real
+                    # Python source line. The tightened awk state machine
+                    # requires that first indented line to be exactly
+                    # `  def greet(name):`, so the stub must mirror that
+                    # exact shape rather than emit a grep-like single line.
+                    # 実 cdidx search 出力は範囲形 `sample.py:<start>-<end>` と
+                    # 直後の 2 スペースインデント行が `  def greet(name):` に
+                    # 完全一致する形。新しい awk 状態機械は「ヘッダ直後 1 行目が
+                    # exactly `  def greet(name):`」を要求するため stub も
+                    # 同形で返す。
                     printf 'invoked' > "{{searchSentinel}}"
-                    echo 'sample.py:1: def greet(name):'
+                    printf '%s\n%s\n' "sample.py:1-6" "  def greet(name):"
                     ;;
                 *)
                     echo "INVOKED_INDEX"
@@ -3155,16 +3179,16 @@ public sealed class InstallScriptTests : IDisposable
                 search)
                     # Header-inline diagnostic: the structured path prefix and
                     # a greet-mentioning diagnostic share a single line. The
-                    # previous awk used `^sample\.py:[0-9]` and then accepted
-                    # any `greet` substring on the same header line, so this
-                    # shape false-passed. The tightened awk requires either a
-                    # strict grep form (`^sample\.py:[0-9]+:` with `def greet`
-                    # on the same line) or a strict range-form header with
-                    # nothing trailing (`^sample\.py:[0-9]+-[0-9]+$`). This
-                    # adversarial line matches neither, so it must abort.
-                    # ヘッダ行自体に診断文 `greet` が続くケース。厳密な grep 形
-                    # （`:<line>:` 直後に `def greet`）でも、厳密な range 形ヘッダ
-                    # （末尾アンカー）でもないため弾かれる必要がある。
+                    # tightened awk requires either a strict grep form whose
+                    # entire line is exactly `sample.py:<N>:def greet(name):`
+                    # (no trailing diagnostic text, no space between the colon
+                    # and the signature) or a strict range-form header with
+                    # nothing trailing (`^sample\.py:[0-9]+-[0-9]+$`) followed
+                    # by an exact `  def greet(name):` first-indent snippet.
+                    # This adversarial line matches neither, so it must abort.
+                    # ヘッダ行自体に診断文 `greet` が続くケース。行全体を
+                    # `sample.py:<N>:def greet(name):` に完全一致させる grep 形
+                    # でも、末尾アンカー付き range 形でもないため弾かれる必要がある。
                     printf '%s\n' "sample.py:1-6 warning: greet query returned 0 matches"
                     ;;
                 *)
@@ -3206,13 +3230,13 @@ public sealed class InstallScriptTests : IDisposable
                     # Indented-diagnostic shape: strict range-form header
                     # followed by a two-space-indented line that mentions
                     # greet only as part of a diagnostic, not as real Python
-                    # source. The previous awk accepted any indented line
-                    # containing `greet`, so this false-passed. The tightened
-                    # awk requires the indented line to contain the real code
-                    # signature `def greet`.
-                    # ヘッダは正しい range 形だが、インデント行の `greet` が
-                    # 実コードの `def greet` ではなく診断文にしか現れないケース。
-                    # スニペット行には `def greet` を要求して弾く。
+                    # source. The tightened awk requires the first indented
+                    # line under a range header to be exactly
+                    # `  def greet(name):`, so this false-passes neither the
+                    # substring check nor the adjacency check.
+                    # ヘッダは正しい range 形だが、直後の 2 スペースインデント行が
+                    # 診断文で `  def greet(name):` と完全一致しないケース。
+                    # ヘッダ直後 1 行目の完全一致を要求して弾く。
                     printf '%s\n%s\n' "sample.py:1-6" "  warning: greet query returned 0 matches"
                     ;;
                 *)
@@ -3379,6 +3403,156 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void ReinstallReal_SearchHeaderLineContainsVerbatimSignatureDiagnostic_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)
+                    # Grep-form-style header whose diagnostic prose embeds the
+                    # FULL verbatim signature `def greet(name):` as a substring.
+                    # A substring check that accepted `def greet(name):`
+                    # anywhere on the line would false-pass; the tightened
+                    # check requires the whole line to be exactly
+                    # `sample.py:<N>:def greet(name):` with nothing before
+                    # or after the signature, so this adversarial shape is
+                    # rejected even though it carries the verbatim argument
+                    # list.
+                    # grep 形ヘッダの診断文内に verbatim な `def greet(name):`
+                    # を substring として埋め込んだケース。行全体の完全一致を
+                    # 要求するため弾かれる。
+                    printf '%s\n' "sample.py:1: warning: expected code signature def greet(name): missing"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("did not return a structured match", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_SearchIndentedLineContainsVerbatimSignatureDiagnostic_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)
+                    # Strict range-form header followed by a two-space-indented
+                    # diagnostic whose prose embeds the FULL verbatim signature
+                    # `def greet(name):` as a substring. A substring check would
+                    # false-pass; the tightened check requires the first indented
+                    # line under the range header to be exactly
+                    # `  def greet(name):` (no prefix / suffix prose), so this
+                    # adversarial shape is rejected even though it carries the
+                    # verbatim argument list inside the indented block.
+                    # 範囲形ヘッダ直後の 2 スペースインデント診断行に verbatim な
+                    # `def greet(name):` を substring として埋め込んだケース。
+                    # ヘッダ直後 1 行目の完全一致を要求するため弾かれる。
+                    printf '%s\n%s\n' "sample.py:1-6" "  warning: expected code signature def greet(name): missing"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("did not return a structured match", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_SearchRangeBlockNonFirstIndentMatchesSignature_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)
+                    # Strict range-form header + a non-matching decoy
+                    # indented line + a LATER indented line that is exactly
+                    # `  def greet(name):`. A permissive check that scanned
+                    # the whole range block for the signature anywhere in
+                    # block-adjacent indented output would false-pass; the
+                    # tightened check arms a one-shot `expect_first_indent`
+                    # flag that is consumed by the decoy line, so the
+                    # later-adjacent verbatim signature never counts as the
+                    # block's first snippet line and the match is rejected.
+                    # 範囲形ヘッダの後、1 行目が非一致の decoy インデント行で、
+                    # 2 行目以降に exactly `  def greet(name):` を置いたケース。
+                    # ヘッダ直後 1 行目の完全一致のみを許可する one-shot フラグで
+                    # 弾かれる（後置の verbatim 署名は隣接条件を満たさない）。
+                    printf '%s\n%s\n%s\n' "sample.py:1-6" "  warning: no matches" "  def greet(name):"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("did not return a structured match", stderr);
+    }
+
+    [Fact]
     public void ReinstallReal_DoesNotRequestJsonFromSearch()
     {
         if (OperatingSystem.IsWindows())
@@ -3403,7 +3577,11 @@ public sealed class InstallScriptTests : IDisposable
                             exit 4
                         fi
                     done
-                    echo "sample.py:1: def greet(name):"
+                    # Real cdidx search emits range-form with the first
+                    # snippet line equal to `  def greet(name):` — the
+                    # tightened awk requires this exact shape.
+                    # 実 cdidx 準拠の範囲形 + 直後 1 行目完全一致の snippet。
+                    printf '%s\n%s\n' "sample.py:1-6" "  def greet(name):"
                     ;;
                 *)
                     if [ "$2" = "--db" ] && [ -n "$3" ]; then
