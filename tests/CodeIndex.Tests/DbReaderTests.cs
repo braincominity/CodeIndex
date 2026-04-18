@@ -2666,6 +2666,47 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetFileDependencyHints_CSharpAttributeSuffixAlias_DoesNotLeakToSameFileSiblings()
+    {
+        // issue #293 round-12 follow-up: the C# `Attribute` suffix alias used by
+        // ResolveImpactFallbackNames must only be applied to the resolved
+        // definition's own name. If it were applied to every same-file fallback
+        // name (e.g. a nested `BarAttribute` inside the file that defines
+        // `FooAttribute`), `impact FooAttribute` would falsely claim `[Bar]` use
+        // sites as its own blast radius.
+        // issue #293 round-12 追加: ResolveImpactFallbackNames の C# `Attribute`
+        // suffix 別名は、解決済み定義自身の名前にだけ適用すべき。same-file
+        // fallback 名全体（例: `FooAttribute` と同一ファイルに nested で存在する
+        // `BarAttribute`）にまで strip を適用すると、`impact FooAttribute` が
+        // `[Bar]` 利用を自身の影響範囲として誤報告してしまう。
+        InsertIndexedFile("src/FooAttribute.cs", "csharp",
+            """
+            public sealed class FooAttribute : System.Attribute
+            {
+                public sealed class BarAttribute : System.Attribute
+                {
+                }
+            }
+            """);
+        // A separate file uses `[Bar]` — that must NOT show up in
+        // `impact FooAttribute` because it references `BarAttribute`, not
+        // `FooAttribute`.
+        // 別ファイルで `[Bar]` を使う — これは `BarAttribute` の参照であり、
+        // `FooAttribute` の `impact` には出てはならない。
+        InsertIndexedFile("src/UseBar.cs", "csharp",
+            """
+            [Bar]
+            public class UseBar
+            {
+            }
+            """);
+
+        var result = _reader.AnalyzeImpact("FooAttribute", maxDepth: 3, limit: 20, lang: "csharp");
+
+        Assert.DoesNotContain(result.FileImpacts, f => f.SourcePath == "src/UseBar.cs");
+    }
+
+    [Fact]
     public void GetFileDependencyHints_MetadataBypassAmbiguityGuard_RespectsLangScope()
     {
         // issue #293 round-11 follow-up: the ambiguity guard must honor the active

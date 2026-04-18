@@ -1760,23 +1760,25 @@ public partial class DbReader
 
         // C# attribute naming convention: a class `FooAttribute` is used as `[Foo]` in source,
         // so reference sites are stored with symbol_name `Foo`. Add the suffix-stripped alias
-        // so impact on `FooAttribute` can find metadata-only usage sites.
+        // for the resolved definition itself so impact on `FooAttribute` can find metadata-only
+        // usage sites. Only the resolved definition's own name gets the alias — applying the
+        // strip to every same-file fallback name (e.g. a nested `BarAttribute` inside the file
+        // that defines `FooAttribute`) would let `impact FooAttribute` falsely report `[Bar]`
+        // usages as part of `FooAttribute`'s blast radius.
         // C# の属性命名規約: クラス `FooAttribute` はソースで `[Foo]` として使われ、参照サイトは
         // symbol_name `Foo` で保存される。`FooAttribute` への impact でも metadata 参照サイトを
-        // 見つけられるよう、サフィックスを外した別名を追加する。
-        if (string.Equals(definition.Lang, "csharp", StringComparison.OrdinalIgnoreCase))
+        // 見つけられるよう、*解決済み定義自身* にのみサフィックスを外した別名を追加する。
+        // same-file fallback 名全体（例: `FooAttribute` と同一ファイルに nested で存在する
+        // `BarAttribute`）にまで strip を適用すると、`impact FooAttribute` が `[Bar]` 利用を
+        // 誤って `FooAttribute` の影響範囲として報告してしまうため、定義自身だけに限定する。
+        if (string.Equals(definition.Lang, "csharp", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrEmpty(definition.Name) &&
+            definition.Name.Length > "Attribute".Length &&
+            definition.Name.EndsWith("Attribute", StringComparison.Ordinal))
         {
-            var aliases = new List<string>();
-            foreach (var name in results)
-            {
-                if (name.Length > "Attribute".Length && name.EndsWith("Attribute", StringComparison.Ordinal))
-                {
-                    var stripped = name.Substring(0, name.Length - "Attribute".Length);
-                    if (stripped.Length > 0 && !results.Contains(stripped) && !aliases.Contains(stripped))
-                        aliases.Add(stripped);
-                }
-            }
-            results.AddRange(aliases);
+            var stripped = definition.Name.Substring(0, definition.Name.Length - "Attribute".Length);
+            if (stripped.Length > 0 && !results.Contains(stripped))
+                results.Add(stripped);
         }
 
         return results;
