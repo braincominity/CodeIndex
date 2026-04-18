@@ -4348,6 +4348,190 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_ContextualKeywordWithTupleSuffixReturn_DoesNotLeakCtorRegexPhantom()
+    {
+        // Before #349, `public required (int, int) R1 { get; init; }` / `public partial (int, int)? P1();`
+        // / `public readonly (int, int)? M() => null;` could be claimed by the ctor regex
+        // (`^\s*visibility\s+\w+\s*\(`) with the modifier keyword captured as the ctor name, emitting
+        // phantom `function required` / `function partial` / `function readonly` rows and silently
+        // dropping the real property/method. The ctor regex now adds a negative lookahead at the
+        // opening paren that rejects lines where the matching `)` is followed by an identifier +
+        // `{` / `(` / `=>` (with optional `?` / `[]` tuple suffixes in between), so the more specific
+        // method/property regexes get a chance to match and no phantom is emitted. Closes #349.
+        // 修飾子キーワード + tuple-suffix 戻り値の行を ctor regex が greedy に喰い、
+        // modifier キーワード自体を ctor 名として拾ってしまう現象に対するガード。
+        // ctor regex の開き括弧の直後に否定先読みを入れ、「対応する `)` のあとに
+        // 識別子 + `{` / `(` / `=>`（間に `?` / `[]` の tuple サフィックスを許す）が続く行」を
+        // 弾くようにしたので、method / property 側の regex に先を譲り phantom
+        // `function required` / `function partial` / `function readonly` が出ない
+        // ことを担保する。Closes #349.
+        var content = """
+            namespace ModifierPhantom;
+
+            public partial class A
+            {
+                public partial (int, int)? P1();
+                public partial (int, int)[] P2();
+            }
+
+            public class B
+            {
+                public required (int, int) R1 { get; init; }
+                public required (int, int)? R2 { get; init; }
+            }
+
+            public class D
+            {
+                public readonly struct E
+                {
+                    public readonly (int, int)? M() => null;
+                }
+            }
+
+            public class F
+            {
+                public F() { }
+                public F(int x) { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        // No phantom rows whose name is a modifier keyword / 修飾子キーワードを name にした phantom は出ない。
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "partial");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "required");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "readonly");
+
+        // Real members are captured / 本物のメンバーが拾えていること。
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "P1");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "P2");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "R1");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "R2");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M");
+
+        // Baseline constructors must still be captured / 通常のコンストラクタは引き続き拾えること。
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "F"));
+    }
+
+    [Fact]
+    public void Extract_CSharp_CtorRegex_StillCapturesAllValidCtorForms()
+    {
+        // The #349 fix tightens the ctor regex with a negative lookahead that rejects lines where
+        // the matching `)` is followed by `IDENT { / IDENT ( / IDENT =>`. Any realistic ctor form
+        // must still be captured after the fix — otherwise we would silently drop real ctors to
+        // block phantom ones. This test locks in every major ctor form: brace body, expression
+        // body, `: base(...)` / `: this(...)` initializers, `extern` declaration ending in `;`,
+        // multi-line signature split across lines, and tuple parameter. A regression here means
+        // the lookahead is too aggressive.
+        // #349 の修正で ctor regex に否定先読み（閉じ括弧の後に `IDENT { / IDENT ( / IDENT =>`
+        // が続く行を弾く）を足した。phantom を止めるために本物の ctor を落とすと本末転倒なので、
+        // 主要な ctor 記法（brace 本体 / 式本体 / `: base(...)` / `: this(...)` 初期化子 /
+        // `;` で終わる extern 宣言 / 複数行に分かれたシグネチャ / tuple パラメータ）が全て
+        // 引き続き拾えることをここで担保する。これが壊れたら lookahead が強すぎるサイン。
+        var content = """
+            namespace CtorForms;
+
+            public class Brace
+            {
+                public Brace() { }
+                public Brace(int x) { }
+            }
+
+            public class ExpressionBody
+            {
+                public ExpressionBody() => System.Console.WriteLine();
+            }
+
+            public class WithInitializer
+            {
+                public WithInitializer() : this(0) { }
+                public WithInitializer(int x) : base() { }
+            }
+
+            public class Extern
+            {
+                public extern Extern();
+                public extern Extern(int x);
+            }
+
+            public class MultiLine
+            {
+                public MultiLine(
+                    int x,
+                    int y)
+                {
+                }
+            }
+
+            public class TupleParam
+            {
+                public TupleParam((int, int) t) { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "Brace"));
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ExpressionBody");
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "WithInitializer"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "Extern"));
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MultiLine");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "TupleParam");
+    }
+
+    [Fact]
+    public void Extract_CSharp_ContextualKeywordWithWhitespacedTupleSuffix_DoesNotLeakCtorRegexPhantom()
+    {
+        // Follow-up to #349: the initial positional-lookahead fix only rejected tuple suffixes
+        // directly abutting `)` (e.g. `(int, int)[]`), so legal C# that puts whitespace between
+        // `)` and the suffix token (`(int, int) []`, `(int, int) ?`, `(int, int)  ?`) fell
+        // through to the ctor regex and reintroduced phantom `function required` / `function
+        // readonly` / `function static` rows while dropping the real property / method. Both the
+        // ctor lookahead and CSharpTypePattern now share CSharpTupleSuffixPattern, which allows
+        // whitespace between `)` / identifier and each suffix token, so these formatting
+        // variants are rejected as ctor shapes via the lookahead and accepted as property /
+        // method shapes via the upstream rows.
+        // #349 のフォローアップ。初回の位置検査修正では `)` とサフィックストークンが密着した形
+        // （`(int, int)[]`）しか弾けず、`)` と `[]` / `?` の間に空白を置いた合法な書式
+        // （`(int, int) []` / `(int, int) ?` / `(int, int)  ?`）は ctor regex に落ち、
+        // phantom `function required` / `function readonly` / `function static` が再発し
+        // 本来の property / method が silent drop していた。CSharpTupleSuffixPattern を
+        // ctor 否定先読みと CSharpTypePattern で共有し、`)` や識別子と各サフィックストークンの
+        // 間に空白を許容することで、これらの整形バリエーションも ctor 形状として弾きつつ
+        // 上流の property / method 行で本物のシンボルとして拾えるようになる。
+        var content = """
+            namespace ModifierPhantomSpaced;
+
+            public partial class SpacedHost
+            {
+                public required (int, int) [] R4 { get; init; }
+                public readonly (int, int) ? F4 = null;
+                public static (int, int) ? M3() => default;
+                public partial (int, int)  ? P5 { get; init; }
+            }
+
+            public readonly struct SpacedStruct
+            {
+                public readonly (int, int) ? M4() => null;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        // No phantom rows whose name is a modifier keyword even when whitespace sits between
+        // `)` and the tuple suffix. / `)` とサフィックスの間に空白があっても、修飾子キーワードを
+        // name にした phantom 行は出ない。
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "required");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "readonly");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "static");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "partial");
+
+        // Real members are still captured with the correct kinds. / 本物のメンバーが正しい kind で拾えていること。
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "R4");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "F4");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M3");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P5");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M4");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsRecordVariants()
     {
         // record, record class, record struct with various modifiers
@@ -4975,6 +5159,35 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_NewNestedInterface_MemberHiding()
+    {
+        // Closes #376: a nested `new interface` that hides a base-class nested interface must
+        // still be extracted as its own symbol. Previously the interface regex modifier list
+        // did not include `new`, so `public new interface INested` was silently dropped.
+        // Closes #376: ベースクラスのネストしたインタフェースを `new interface` で隠蔽する
+        // 派生側のネスト interface も独立したシンボルとして抽出されること。以前は
+        // interface 正規表現の修飾子リストに `new` が無く、`public new interface INested`
+        // が無言で落ちていた。
+        var content = """
+            namespace NewIfaceTest;
+            public class Base
+            {
+                public interface INested { void M(); }
+            }
+            public class Derived : Base
+            {
+                public new interface INested { void M(); }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var nested = symbols.Where(s => s.Kind == "interface" && s.Name == "INested").ToList();
+        Assert.Equal(2, nested.Count);
+        Assert.Contains(nested, s => s.ContainerName == "Base");
+        Assert.Contains(nested, s => s.ContainerName == "Derived");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsExpressionBodiedMembers()
     {
         var content = "public class Calc\n{\n    public int X => 42;\n    public string Name => \"calc\";\n    public static double Pi => 3.14;\n}";
@@ -5358,6 +5571,34 @@ public class SymbolExtractorTests
         Assert.NotNull(indexer);
         Assert.Equal("function", indexer.Kind);
         Assert.Equal("string", indexer.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsMultiLineIndexer()
+    {
+        // #293 follow-up: `StripMultiLineCSharpAttributeInterior` must only blank
+        // attribute-position `[`. `public int this[\n int i\n] => _items[i];` opens `[`
+        // right after the `this` keyword, which is an indexer parameter list, not
+        // an attribute. If that `[` were blanked, the indexer would silently drop
+        // out of symbol extraction.
+        // #293 追加対応: `StripMultiLineCSharpAttributeInterior` は属性位置の `[` だけを
+        // 空白化する必要がある。`public int this[\n int i\n] => _items[i];` の `[` は
+        // インデクサのパラメータリストであり属性ではない。ここを空白化するとインデクサが
+        // シンボル抽出から静かに消える。
+        var content =
+            "public class Collection\n" +
+            "{\n" +
+            "    private int[] _items = new int[10];\n" +
+            "    public int this[\n" +
+            "        int i\n" +
+            "    ] => _items[i];\n" +
+            "}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var indexer = symbols.FirstOrDefault(s => s.Name == "Item");
+        Assert.NotNull(indexer);
+        Assert.Equal("function", indexer.Kind);
+        Assert.Equal("int", indexer.ReturnType);
     }
 
     [Fact]
@@ -7302,6 +7543,278 @@ public class SymbolExtractorTests
         // not leak into the index. 単一シンボル発行で紛れ込む `int _x,` 等の returnType は
         // インデックスに漏らさない。
         Assert.DoesNotContain(symbols, s => s.ReturnType != null && s.ReturnType.Contains(','));
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineClassBodyFieldIsCapturedAndLocalIsRejected()
+    {
+        // Column-aware scope tracking: `public class C { public int X; }` must capture
+        // both the outer class C and the inner field X. Before #400, the type-body gate
+        // only looked at the scope at line start, so a same-line class body looked like
+        // "not inside a type body" and X was silently dropped. Conversely,
+        // `public void M() { int local = 1; }` inside a class must NOT emit a phantom
+        // `property local`: column-wise, col where `int local` starts sits inside a
+        // method body (not a class body), and the column-aware gate correctly rejects it.
+        // Closes #400.
+        // 列単位のスコープ追跡: `public class C { public int X; }` では外側の class C と
+        // 同一行のフィールド X をどちらも拾う必要がある。#400 以前は line-start のみを
+        // 見ていたため、同一行の class body は「型本体の中ではない」と誤判定され X が
+        // 取りこぼされた。逆に class 内の `public void M() { int local = 1; }` では、
+        // `int local` の列が method body の中（class body ではない）であることを列意識
+        // ゲートが認識するため、擬似的な `property local` を生成してはならない。
+        // Closes #400.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public class C { public int X; }",
+            "",
+            "public class D",
+            "{",
+            "    public void M() { int local = 1; }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "C");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "X"
+            && s.ContainerKind == "class" && s.ContainerName == "C"
+            && s.Signature == "public int X;");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "D");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M"
+            && s.ContainerKind == "class" && s.ContainerName == "D");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "local");
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineMultipleFieldsAreAllCaptured()
+    {
+        // `public class Multi { public int A; public int B; public int C; }` must
+        // produce three `property` symbols (A, B, C) plus the outer `Multi` class, with
+        // clean signatures that stop at the field terminator rather than trailing into
+        // the enclosing `} }`. Closes #400.
+        // `public class Multi { public int A; public int B; public int C; }` は外側 class
+        // Multi と A / B / C の 3 つの property を生成し、signature は末尾の `} }` を
+        // 含まずにフィールド終端（`;`）で切り詰められていなければならない。Closes #400.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public class Multi { public int A; public int B; public int C; }");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Multi");
+        foreach (var name in new[] { "A", "B", "C" })
+        {
+            var field = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == name));
+            Assert.Equal("class", field.ContainerKind);
+            Assert.Equal("Multi", field.ContainerName);
+            Assert.Equal($"public int {name};", field.Signature);
+            Assert.DoesNotContain("}", field.Signature);
+        }
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineNestedClassAttachesFieldToInnerType()
+    {
+        // `public class Outer { public class Inner { public int X; } }` must capture
+        // both Outer and Inner, and the field X must attach to Inner (not Outer).
+        // The container resolution uses a same-line `Signature.Contains` check, so the
+        // plain-field signature clamp from #400 is required for Inner to correctly
+        // "contain" X's signature. Closes #400.
+        // `public class Outer { public class Inner { public int X; } }` では Outer と
+        // Inner の双方を取得し、X は Outer ではなく Inner に紐づけること。同一行の
+        // コンテナ解決は `Signature.Contains` を使うため、#400 で追加した plain-field
+        // signature のクランプが無いと Inner が X の signature を「含む」と判定されず
+        // X が Outer に吸収されてしまう。Closes #400.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public class Outer { public class Inner { public int X; } }");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Outer");
+        var inner = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Inner"));
+        Assert.Equal("class", inner.ContainerKind);
+        Assert.Equal("Outer", inner.ContainerName);
+        var x = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "X"));
+        Assert.Equal("class", x.ContainerKind);
+        Assert.Equal("Inner", x.ContainerName);
+        Assert.Equal("public int X;", x.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineCompactEnumMembersDoNotLeakAsFields()
+    {
+        // `public enum Mode { [Obsolete] A = (int)B, ... }` must produce enum-member
+        // symbols only and must NOT emit phantom `property` symbols for `[Obsolete] A =`.
+        // The column-aware scope gate distinguishes class-like bodies (where fields are
+        // legal) from enum bodies (where members are not fields), so the plain-field
+        // regex is rejected inside enum bodies. Closes #400.
+        // `public enum Mode { [Obsolete] A = (int)B, ... }` は enum member のみを生成し、
+        // `[Obsolete] A =` を property として拾ってはならない。列意識スコープゲートが
+        // class-like body（field が正当）と enum body（member は field ではない）を
+        // 区別するため、enum body 内では plain-field regex がリジェクトされる。
+        // Closes #400.
+        var content = string.Join(
+            "\n",
+            "using System;",
+            "",
+            "public enum Mode { [Obsolete] A = 1, B = 2, C = 3 }");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Mode");
+        foreach (var name in new[] { "A", "B", "C" })
+        {
+            Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == name);
+        }
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineFieldWithInitializerFollowedByAnotherField()
+    {
+        // `public class Holder { public int A = 1; public int B; }` must capture
+        // both `A` and `B`. The prior fix broke out of the same-line scan as soon
+        // as the plain-field pattern matched a `=`-terminated declaration, which
+        // dropped any following same-line field statement. Closes #400.
+        // `public class Holder { public int A = 1; public int B; }` では `A` と
+        // `B` の両方が抽出される必要がある。旧修正は `=` 終端フィールドを拾った
+        // 時点で同一行スキャンを break してしまい、直後の同一行フィールドを
+        // 取り落としていた。Closes #400.
+        var content = "public class Holder { public int A = 1; public int B; }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Holder");
+        var a = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "A");
+        var b = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "B");
+        Assert.Equal("public int A = 1;", a.Signature);
+        Assert.Equal("public int B;", b.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineDeclaratorListFollowedByAnotherField()
+    {
+        // `public class Holder { public int A, B; public int C; }` must capture
+        // three property rows (A, B via declarator list, plus C from the second
+        // same-line field statement). The prior fix broke out of the same-line
+        // scan after declarator expansion and silently dropped `C`. Closes #400.
+        // `public class Holder { public int A, B; public int C; }` では declarator
+        // list 展開で A と B、続く同一行 field 文から C、合わせて 3 シンボルを
+        // 抽出する必要がある。旧修正は declarator 展開後に同一行スキャンを break
+        // して C を取り落としていた。Closes #400.
+        var content = "public class Holder { public int A, B; public int C; }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Holder");
+        Assert.Single(symbols, s => s.Kind == "property" && s.Name == "A");
+        Assert.Single(symbols, s => s.Kind == "property" && s.Name == "B");
+        var c = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "C");
+        Assert.Equal("public int C;", c.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_PlainFieldWithInitializerKeepsFullSignature()
+    {
+        // `private int _x = 42;` must store the full `private int _x = 42;` as
+        // signature, not the `=`-truncated `private int _x =`. An earlier version
+        // clamped the signature to `match.Length`, which cut off at `=`. The fix
+        // clamps to the statement's `;` (or an unbalanced `}` if one is hit
+        // first). Closes #400.
+        // `private int _x = 42;` の signature は `=` で切り詰めず完全な
+        // `private int _x = 42;` を保存する必要がある。旧実装は signature を
+        // `match.Length` で clamp して `=` の手前で切れていた。修正では文終端の
+        // `;` まで（あるいは先に出現する深さ 0 の `}` の手前まで）で clamp する。
+        // Closes #400.
+        var content = string.Join(
+            "\n",
+            "public class Holder",
+            "{",
+            "    private int _x = 42;",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var field = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "_x");
+        Assert.Equal("private int _x = 42;", field.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineGenericClassHeaderStillCapturesInnerField()
+    {
+        // `public class C<T1, T2>{int X;}` must still capture field X even though
+        // CollapseCSharpGenericTypeWhitespace removes the space inside `<T1, T2>`
+        // when building the match line. Before the fix, the collapsed-space
+        // `absoluteStartColumn` was handed directly to the raw-column
+        // CSharpTypeBodyScope lookup, so the scope-gate fired too early and
+        // the field was dropped. Closes #400.
+        // `public class C<T1, T2>{int X;}` では CollapseCSharpGenericTypeWhitespace が
+        // `<T1, T2>` の内部空白を詰めるため、collapsed 列 `absoluteStartColumn` を
+        // そのまま raw 列ベースの CSharpTypeBodyScope に渡すと scope gate が誤発火し
+        // X が落ちていた。Closes #400.
+        var content = "public class C<T1, T2>{int X;}\n";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var field = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "X");
+        Assert.Equal("int X;", field.Signature);
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "C");
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineGenericFieldSignatureKeepsTerminator()
+    {
+        // `public Dictionary<string, int> Map = new(); public int B;` on one line
+        // must produce Map with its trailing `;` and B without a leading `;`.
+        // Before the fix, collapsed-space endpoints from
+        // FindCSharpPlainFieldStatementEnd were used to slice the raw line, so
+        // the generic-whitespace compression shifted the cut: Map lost its `;`
+        // and B inherited the `;` as a leading character. Closes #400.
+        // `public Dictionary<string, int> Map = new(); public int B;` を 1 行に
+        // 書いた場合、Map の signature は末尾 `;` を保ち、B の signature は
+        // 先頭 `;` を持たないこと。修正前は FindCSharpPlainFieldStatementEnd が
+        // 返す collapsed 列で raw 行を slice していたため、generic 空白の圧縮
+        // 分だけ切断位置がずれていた。Closes #400.
+        var content = "public class C { public Dictionary<string, int> Map = new(); public int B; }\n";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var map = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "Map");
+        Assert.Equal("public Dictionary<string, int> Map = new();", map.Signature);
+
+        var b = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "B");
+        Assert.Equal("public int B;", b.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultiLineFieldFollowedBySameLineFieldDoesNotCrash()
+    {
+        // A multi-line field header whose continuation line also carries a
+        // second same-line field — `public Dictionary<string, int>\n    Map = new(); public int B;`
+        // — must extract both `Map` and `B` without throwing. In the prior fix,
+        // the plain-field same-line scan continued past the first `;` using
+        // absoluteStartColumn from the merged multi-line candidate, which sits
+        // in the merged-string column domain and is not valid inside lines[i].
+        // The follow-up regex hit then reached BuildCSharpMultilineSignature
+        // with startColumn > lines[i].Length and crashed indexing with
+        // `startIndex cannot be larger than length of string`. Closes #400.
+        // 複数行 field ヘッダの continuation 行に 2 個目の同一行 field が続く
+        // `public Dictionary<string, int>\n    Map = new(); public int B;` で、
+        // 例外なく `Map` と `B` 両方が抽出できる必要がある。旧実装では plain-field の
+        // 同一行継続 scan が、マージ済み候補の absoluteStartColumn を使って
+        // statementEnd 以降へ進み、2 個目の regex マッチで
+        // BuildCSharpMultilineSignature が lines[startLineIndex][startColumn..] で
+        // 範囲外アクセスし `startIndex cannot be larger than length of string` で
+        // indexing が落ちていた。Closes #400.
+        var content = string.Join(
+            "\n",
+            "public class C",
+            "{",
+            "    public Dictionary<string, int>",
+            "        Map = new(); public int B;",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "C");
+        Assert.Single(symbols, s => s.Kind == "property" && s.Name == "Map");
+        var b = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "B");
+        Assert.Equal("public int B;", b.Signature);
     }
 
     [Fact]

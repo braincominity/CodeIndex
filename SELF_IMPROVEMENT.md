@@ -243,6 +243,36 @@ When enhancing symbol extraction, reference extraction, or language-specific heu
 - Do not force a pattern onto a language where it does not fit. If the syntax diverges enough to make the port unreliable, skip it and document why.
 - When the expansion is straightforward, include it in the same commit as the original enhancement so the languages stay in sync. When it requires non-trivial adaptation, make it a separate follow-up commit.
 
+## Design Decision — C# Extraction Ceiling (Issue #384)
+
+Context: the C# extraction layer — both `src/CodeIndex/Indexer/ReferenceExtractor.cs` (call / reference edges) and `src/CodeIndex/Indexer/SymbolExtractor.cs` (symbol rows, for example the #376 modifier-list case where `new interface` was silently dropped) — has accumulated a long tail of single-construct fixes (#200, #220, #233, #253, #257, #264, #274, #288, #291, #293, #301, #330, #338, #342, #343, #344, #349, #355, #356, #357, #361, #362, #363, #364, #367, #372, #374, #375, #376, #382 and siblings). The line-oriented regex layer in both extractors keeps running into the same four failure modes: wrapped declarations, string/comment bleed, nested bracket tracking, and scope attribution. Issue #384 asked for a recorded decision instead of one more per-construct fix.
+
+**Decision: Hybrid, with Option B as the primary direction.** We already maintain a hand-written `StructuralLineMasker` (C# / Python / Rust / JS-TS) and a JS/TS lexer-driven class-body pass inside `SymbolExtractor` — the codebase is already on the Option B path for string/comment framing. The next step is to extend that lightweight scanner for C# (and Java where syntax overlaps) so the regex consumers in `SymbolExtractor` / `ReferenceExtractor` can query scope state instead of re-parsing it ad-hoc.
+
+What the extended scanner must expose per line, at minimum:
+- enclosing class / method stack (answers "which container does this line belong to?")
+- brace / paren / angle-bracket depth (answers "am I inside an initializer / argument list / type argument list?")
+- logical declaration start line (wrapped headers and `[Attribute]`-prefixed declarations collapse to a single anchor)
+- carry-over `in_string` / `in_comment` flags from `MaskLines`
+
+**Option A — externalizing per-language regex tables into data files — is deferred, not rejected.** The current pain is driven by cross-construct regex interactions on C# / Java, not by language breadth. Moving tables to data does not remove those interactions; it just makes the same conflicts cheaper to edit.
+
+**Dependency rule:** no exception required. The extension is hand-written, following the precedent set by `StructuralLineMasker` and the JS/TS lexer. No Roslyn, no tree-sitter, no new production NuGet package. If a future bug convinces us that only a real parser is enough, that is a separate breaking-change proposal under the Breaking-Change Gate.
+
+**Exit criteria — issues that should close or become materially simpler once the scanner exposes scope + declaration-start state:**
+- Multi-line declarations: #361, #382.
+- String / comment bleed beyond the current masker: #264, #274, #288, #291, #301, #363, #372.
+- Nested initializer / bracket tracking: #257, #286, #293, #330.
+- Scope attribution: #233, #242, #252, #316.
+
+Issues outside that list stay on the ordinary per-bug track; this decision is explicitly not a commitment to refactor the extractor end-to-end in one go.
+
+**Non-goals:**
+- A full C# parser. We need enough scanner state to answer "enclosing class/method, bracket depth, inside a string/comment, logical declaration start" — nothing more.
+- Simultaneous language rewrite. C# lands first (dogfooding priority per "Priority: C# First"); Java follows only where the syntax overlap makes the port trivial.
+
+**Workflow implication:** the next landing C#/Java reference-extractor fix from the issue list above should be treated as the first real consumer of the extended scanner, so its API is shaped by a concrete fix rather than designed in isolation.
+
 ## Platform-Aware Guidance
 
 Do not assume path handling, process cleanup, or file deletion behaves the same on every OS.
@@ -543,6 +573,36 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --json
 - 逆方向（Java → C#）や、重なりの大きい他の言語ペア（TypeScript/JavaScript、Kotlin/Java、C/C++）にも同じ考え方が当てはまります。
 - 構文が十分に異なり、移植すると信頼性が下がる場合は無理をせず、見送った理由を残してください。
 - 横展開が素直にできるなら、元の強化と同じコミットに含めて言語間の同期を保ちます。非自明な適応が必要な場合は、別のフォローアップコミットにしてください。
+
+## 設計判断 — C# 抽出の天井（Issue #384）
+
+背景: C# 抽出層は `src/CodeIndex/Indexer/ReferenceExtractor.cs`（call / reference エッジ）と `src/CodeIndex/Indexer/SymbolExtractor.cs`（シンボル行、例えば #376 は interface 正規表現の修飾子リストから `new` が抜けていたため `new interface` が黙って落ちていた事案）の両方を指し、両者合わせて単一構文に対する修正が長く積み上がっている（#200、#220、#233、#253、#257、#264、#274、#288、#291、#293、#301、#330、#338、#342、#343、#344、#349、#355、#356、#357、#361、#362、#363、#364、#367、#372、#374、#375、#376、#382 など）。両抽出器の行指向正規表現層は、常に同じ 4 つの失敗モードにぶつかっている: 折り返し宣言、文字列／コメント混入、ネストした括弧追跡、スコープ帰属。Issue #384 は「これ以上の個別修正ではなく、方針を明文化せよ」という依頼だった。
+
+**結論: ハイブリッド。主軸は Option B とする。** 手書きの `StructuralLineMasker`（C# / Python / Rust / JS-TS 対応）と、`SymbolExtractor` 内の JS/TS lexer ベースのクラス本体処理は、すでに Option B への地ならしになっている。次の一歩は、この軽量 scanner を C#（構文が重なる範囲で Java も）向けに拡張し、`SymbolExtractor` / `ReferenceExtractor` の regex 消費側が scope 状態を毎回再解析するのではなく問い合わせられるようにすることだ。
+
+拡張 scanner が最低限行単位で公開すべき情報:
+- 外側の class / method スタック（「この行はどの container に属するか」）
+- 波括弧 / 丸括弧 / 山括弧の深さ（「initializer / 引数リスト / 型引数リストの内部か」）
+- 論理宣言の開始行（折り返しヘッダーや `[Attribute]` 前置の宣言を単一のアンカーに畳む）
+- `MaskLines` から引き継いだ `in_string` / `in_comment` フラグ
+
+**Option A（言語別 regex テーブルをデータファイルへ外出し）は却下ではなく延期する。** 現在の痛みは C# / Java の構文相互作用から来ており、言語の幅から来ていない。テーブルをデータへ移しても相互作用自体は消えず、編集コストが少し下がるだけ。
+
+**依存ルール:** 例外不要。拡張は `StructuralLineMasker` と JS/TS lexer の先例どおり、手書きで済ませる。Roslyn、tree-sitter、新規本番 NuGet パッケージはいずれも使わない。将来「本物の parser が必要」と判断するバグが出てきた場合は、破壊的変更ゲートを通した別提案として扱う。
+
+**終了条件 — scanner が scope + 論理宣言開始状態を公開した時点で、close もしくは大幅に簡素化できる Issue:**
+- 折り返し宣言: #361、#382。
+- 現行マスカを越える文字列/コメント混入: #264、#274、#288、#291、#301、#363、#372。
+- ネスト initializer / 括弧追跡: #257、#286、#293、#330。
+- スコープ帰属: #233、#242、#252、#316。
+
+これ以外の Issue は通常のバグ単位の修正トラックに残す。この判断は「抽出器を一度にまるごと書き換える」ことにコミットするものではない点に注意する。
+
+**スコープ外:**
+- 完全な C# parser。必要なのは「外側 class/method、括弧深さ、文字列/コメント内部か、論理宣言開始行」を答える程度の scanner 状態であり、それ以上は作らない。
+- 言語同時書き換え。C# を先に着地させ（「優先順位: C# を最優先にする」の通り）、Java は構文が重なっていて移植が自明な範囲でのみ後追いする。
+
+**運用への示唆:** 上記 Issue 一覧のうち次に着地する C# / Java reference-extractor 修正を、拡張 scanner の最初の実利用者として扱う。API の形は、机上設計ではなく具体的な修正に引きずられて決める。
 
 ## プラットフォーム差分を前提にする指針
 
