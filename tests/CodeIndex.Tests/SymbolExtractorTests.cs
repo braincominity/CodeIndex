@@ -4975,6 +4975,35 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_NewNestedInterface_MemberHiding()
+    {
+        // Closes #376: a nested `new interface` that hides a base-class nested interface must
+        // still be extracted as its own symbol. Previously the interface regex modifier list
+        // did not include `new`, so `public new interface INested` was silently dropped.
+        // Closes #376: ベースクラスのネストしたインタフェースを `new interface` で隠蔽する
+        // 派生側のネスト interface も独立したシンボルとして抽出されること。以前は
+        // interface 正規表現の修飾子リストに `new` が無く、`public new interface INested`
+        // が無言で落ちていた。
+        var content = """
+            namespace NewIfaceTest;
+            public class Base
+            {
+                public interface INested { void M(); }
+            }
+            public class Derived : Base
+            {
+                public new interface INested { void M(); }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var nested = symbols.Where(s => s.Kind == "interface" && s.Name == "INested").ToList();
+        Assert.Equal(2, nested.Count);
+        Assert.Contains(nested, s => s.ContainerName == "Base");
+        Assert.Contains(nested, s => s.ContainerName == "Derived");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsExpressionBodiedMembers()
     {
         var content = "public class Calc\n{\n    public int X => 42;\n    public string Name => \"calc\";\n    public static double Pi => 3.14;\n}";
