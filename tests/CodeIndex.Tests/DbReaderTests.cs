@@ -4187,6 +4187,96 @@ public class DbReaderTests : IDisposable
         Assert.Equal("public_or_exported_no_refs", plain.UnusedBucket);
     }
 
+    [Theory]
+    [InlineData("verbatim_standalone", "[JsonPropertyName(@\"a[\n]\")]\n    public string A { get; set; } = \"\";", 7, 9)]
+    [InlineData("raw_standalone", "[JsonPropertyName(\"\"\"a[\n]\"\"\")]\n    public string A { get; set; } = \"\";", 7, 9)]
+    [InlineData("raw_interp_standalone", "[JsonPropertyName($\"\"\"a[\n]\"\"\")]\n    public string A { get; set; } = \"\";", 7, 9)]
+    [InlineData("raw_interp_double_dollar_standalone", "[JsonPropertyName($$\"\"\"a[\n]\"\"\")]\n    public string A { get; set; } = \"\";", 7, 9)]
+    [InlineData("verbatim_inline_close", "[JsonPropertyName(@\"a[\n]\")] public string A { get; set; } = \"\";", 6, 8)]
+    [InlineData("raw_inline_close", "[JsonPropertyName(\"\"\"a[\n]\"\"\")] public string A { get; set; } = \"\";", 6, 8)]
+    [InlineData("raw_interp_inline_close", "[JsonPropertyName($\"\"\"a[\n]\"\"\")] public string A { get; set; } = \"\";", 6, 8)]
+    public void GetUnusedSymbols_MultilineAttributeLiteralWithBracketInString_KeepsReflectionContext(string label, string attributeAndDeclaration, int aLine, int bLine)
+    {
+        // Regression for #409 — multi-line verbatim / raw / raw-interpolated string
+        // literals in C# attributes with `[` or `]` inside must not cause the property
+        // carrying the reflection attribute to fall out of the
+        // `reflection_or_config_suspect` bucket. At the same time, the adjacent plain
+        // property must not inherit reflection context.
+        // #409 回帰: C# 属性内の複数行 verbatim / raw / raw 補間文字列リテラルに `[` / `]` が
+        // 含まれても、その属性を持つプロパティが `reflection_or_config_suspect` から
+        // 外れてはならない。同時に、直下の属性なしプロパティに reflection コンテキストが
+        // 漏れてはならない。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = $"src/reflection_multiline_attr_fixture_{label}.cs",
+            Lang = "csharp",
+            Size = 400,
+            Lines = 12,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var content = "using System.Text.Json.Serialization;\n\npublic class Target\n{\n    " + attributeAndDeclaration + "\n\n    public string B { get; set; } = \"\";\n}\n";
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = bLine + 2,
+                Content = content,
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "Target",
+                Line = 3,
+                StartLine = 3,
+                EndLine = bLine + 1,
+                Signature = "public class Target",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "A",
+                Line = aLine,
+                StartLine = aLine,
+                EndLine = aLine,
+                Signature = "public string A { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "B",
+                Line = bLine,
+                StartLine = bLine,
+                EndLine = bLine,
+                Signature = "public string B { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: [$"reflection_multiline_attr_fixture_{label}.cs"], excludePathPatterns: null, excludeTests: false);
+
+        var a = Assert.Single(unused, symbol => symbol.Name == "A");
+        Assert.Equal("reflection_or_config_suspect", a.UnusedBucket);
+
+        var b = Assert.Single(unused, symbol => symbol.Name == "B");
+        Assert.Equal("public_or_exported_no_refs", b.UnusedBucket);
+    }
+
     [Fact]
     public void GetUnusedSymbols_CommentBetweenAttributeAndProperty_IsClassifiedAsSuspect()
     {

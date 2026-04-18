@@ -1718,8 +1718,16 @@ public partial class DbReader
         if (currentIndex < 0 || currentIndex >= lines.Length)
             return false;
 
+        // Sanitize the excerpt across lines so multi-line verbatim / raw /
+        // raw-interpolated string literals that contain `[` or `]` in the
+        // attribute argument do not leak reflection attribute context onto
+        // adjacent symbols. Closes #409.
+        // 複数行 verbatim / raw / raw 補間文字列リテラル内の `[` / `]` が
+        // 隣接シンボルへ reflection 属性コンテキストを漏らさないよう、
+        // 抜粋を行をまたいで sanitize する。#409 を修正。
+        var sanitizedLines = SymbolExtractor.SanitizeCSharpLinesForCrossLineScan(lines);
         var triviaMask = BuildTriviaMask(lines);
-        var attributeBlock = GetAdjacentAttributeBlock(lines, triviaMask, currentIndex);
+        var attributeBlock = GetAdjacentAttributeBlock(lines, sanitizedLines, triviaMask, currentIndex);
         if (attributeBlock.Count == 0)
             return false;
 
@@ -1734,7 +1742,7 @@ public partial class DbReader
         ex.SqliteErrorCode == 1
         && ex.Message.Contains("no such table: chunks", StringComparison.OrdinalIgnoreCase);
 
-    private static List<string> GetAdjacentAttributeBlock(string[] lines, bool[] triviaMask, int anchorIndex)
+    private static List<string> GetAdjacentAttributeBlock(string[] lines, string[] sanitizedLines, bool[] triviaMask, int anchorIndex)
     {
         var anchorLine = lines[anchorIndex];
         if (LineContainsInlineAttributeAndDeclaration(anchorLine))
@@ -1743,9 +1751,21 @@ public partial class DbReader
         var declarationIndex = anchorIndex;
         if (LooksLikeAttributeBoundaryLine(anchorLine))
         {
-            declarationIndex = FindNextDeclarationLine(lines, triviaMask, anchorIndex + 1);
-            if (declarationIndex < 0)
-                return [];
+            // A line like `]")] public string A ...` is itself both the tail of a
+            // multi-line attribute literal AND the inline declaration. In that case
+            // the declaration lives on the anchor line itself, so do not walk forward
+            // looking for a separate declaration below (which would otherwise skip
+            // past the real declaration and pick up an unrelated symbol). Closes #409.
+            // `]")] public string A ...` のように複数行属性リテラルの末尾かつ
+            // インライン宣言でもある行の場合、宣言は anchor 行自身にあるため、
+            // 下方へ別の宣言を探しに行かない（探しに行くと本来の宣言を飛び越して
+            // 別シンボルを拾ってしまう）。#409 を修正。
+            if (!SanitizedLineHasInlineDeclarationTail(sanitizedLines[anchorIndex]))
+            {
+                declarationIndex = FindNextDeclarationLine(lines, triviaMask, anchorIndex + 1);
+                if (declarationIndex < 0)
+                    return [];
+            }
         }
 
         var attributeBottom = FindPreviousNonTriviaLine(lines, triviaMask, declarationIndex - 1);
@@ -1757,12 +1777,24 @@ public partial class DbReader
         // Without this guard, a line like `[JsonPropertyName("a[")] public string X { ... }`
         // would leak its reflection attribute onto the next plain property and flip
         // that unrelated symbol into the reflection_or_config_suspect bucket. Closes #375.
+        // The same leak surfaces when the `[` and the declaration are split by a
+        // multi-line verbatim / raw / raw-interpolated string literal: the line at
+        // attributeBottom then starts with a continuation tail like `)]` before the
+        // real declaration. LineContainsInlineAttributeAndDeclaration's leading-`[`
+        // anchor cannot see that pattern, so we additionally check the sanitized
+        // line for trailing declaration content after the last `]`. Closes #409.
         // 直前の非 trivia 行がすでに `[attr] decl` のインライン宣言を持つ場合、
         // その属性はその行の宣言に属し、下の anchor 行には及ばない。
         // このガードが無いと `[JsonPropertyName("a[")] public string X { ... }` の属性が
         // 下の属性なしプロパティに漏れ、無関係なシンボルが reflection_or_config_suspect に
         // 誤分類される。#375 を修正。
-        if (attributeBottom != anchorIndex && LineContainsInlineAttributeAndDeclaration(lines[attributeBottom]))
+        // `[` と宣言が複数行 verbatim / raw / raw 補間文字列リテラルで分断されると、
+        // attributeBottom の行は `)]` 等の継続末尾で始まり LineContainsInlineAttributeAndDeclaration の
+        // 先頭 `[` アンカーでは捕らえられない。sanitize 済み行の最後の `]` 以降に
+        // 宣言本体が残っていないかを併せて確認する。#409 を修正。
+        if (attributeBottom != anchorIndex
+            && (LineContainsInlineAttributeAndDeclaration(lines[attributeBottom])
+                || SanitizedLineHasInlineDeclarationTail(sanitizedLines[attributeBottom])))
             return [];
 
         var block = new List<string>();
@@ -1830,10 +1862,55 @@ public partial class DbReader
 
     private static bool LineContainsInlineAttributeAndDeclaration(string line)
     {
-        if (!LooksLikeAttributeBoundaryLine(line))
+        // Only a line that actually starts with `[` (after whitespace) can be an
+        // inline `[attr] decl;` row. Without this anchor, continuation rows of a
+        // multi-line attribute literal (e.g. the `]")]` tail of
+        // `[JsonPropertyName(@"a[\n]")]`) pass LooksLikeAttributeBoundaryLine and
+        // survive StripLeadingCSharpAttributeLists (which returns the input
+        // unchanged when the line doesn't start with `[`), so the guard in
+        // GetAdjacentAttributeBlock incorrectly treats them as standalone
+        // inline-declaration rows and drops the real attribute block above —
+        // flipping reflection-attributed properties out of
+        // `reflection_or_config_suspect`. Closes #409.
+        // 先頭が `[`（空白を除く）である行だけがインライン `[attr] decl;` 行として成立する。
+        // このアンカーが無いと、複数行にまたがる属性リテラルの継続行（例:
+        // `[JsonPropertyName(@"a[\n]")]` の末尾 `]")]`）が LooksLikeAttributeBoundaryLine を
+        // 通過し、`[` 始まりでない入力をそのまま返す StripLeadingCSharpAttributeLists の
+        // 挙動により、GetAdjacentAttributeBlock のガードがそれを単独の
+        // インライン宣言行と誤判定して本来の属性ブロックを潰し、reflection 属性付き
+        // プロパティが `reflection_or_config_suspect` から外れる。#409 を修正。
+        var index = 0;
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+        if (index >= line.Length || line[index] != '[')
             return false;
 
         return !string.IsNullOrWhiteSpace(StripLeadingCSharpAttributeLists(line));
+    }
+
+    // Detect that the cross-line-sanitized line ends an attribute run with
+    // trailing declaration content (single-line `[Foo] decl;` or the tail of a
+    // multi-line literal attribute such as `)] decl;`). The sanitizer blanks
+    // string / char / comment bodies AND their delimiters, so a genuine
+    // declaration `public string X;` shows up as non-whitespace text after the
+    // last `]`. A pure attribute line `[Foo]` has only whitespace after its
+    // last `]` and returns false here. Closes #409.
+    // 横断 sanitize 済みの行が、属性ブロックに続けて宣言本体を抱えているか
+    // （単行 `[Foo] decl;` または複数行リテラル属性の末尾 `)] decl;`）を判定する。
+    // sanitizer は文字列 / 文字 / コメントの本体と区切りを空白化するため、
+    // 実宣言 `public string X;` は最後の `]` 以降に非空白として残る。
+    // 属性単独行 `[Foo]` の場合は最後の `]` 以降が空白のみなので false を返す。#409 を修正。
+    private static bool SanitizedLineHasInlineDeclarationTail(string sanitizedLine)
+    {
+        var lastBracket = sanitizedLine.LastIndexOf(']');
+        if (lastBracket < 0)
+            return false;
+        for (var i = lastBracket + 1; i < sanitizedLine.Length; i++)
+        {
+            if (!char.IsWhiteSpace(sanitizedLine[i]))
+                return true;
+        }
+        return false;
     }
 
     private static int FindNextDeclarationLine(string[] lines, bool[] triviaMask, int startIndex)

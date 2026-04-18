@@ -4463,6 +4463,47 @@ public static class SymbolExtractor
         return new JavaScriptLexedLine(new string(sanitized), state);
     }
 
+    // Sanitize a contiguous block of C# source lines for cross-line structural
+    // analysis (attribute boundaries, bracket depth). String / char / comment
+    // content is blanked to spaces while preserving original line lengths, and
+    // the lexer state (VerbatimString / RawString / BlockComment / ...) is
+    // threaded across line boundaries so multi-line literals no longer leak
+    // stray `[` / `]` / `"` characters into downstream parsers.
+    // After `LexCSharpLine` sanitization, string delimiters themselves (`"`,
+    // `'`, `\`) are also blanked so continuation lines (e.g. `]")] decl` closing
+    // a verbatim string from the previous physical line) do not look like they
+    // open a fresh string literal when the caller scans them line-by-line.
+    // C# ソース行の塊を、横断的な構造解析（属性境界や bracket depth）向けに
+    // sanitize する。文字列 / 文字 / コメント内容は空白で置換し元の行長を保持、
+    // lexer state（VerbatimString / RawString / BlockComment など）を行をまたいで
+    // 持ち越すことで、複数行リテラル由来の `[` / `]` / `"` が下流パーサへ漏れない。
+    // `LexCSharpLine` による sanitize 後、文字列区切りそのもの（`"`, `'`, `\`）も
+    // 空白化する。こうしないと、前行の verbatim 文字列を閉じる継続行
+    // （例: `]")] decl`）が単独で走査された際に新たな文字列リテラル開始と
+    // 誤読されてしまう。
+    internal static string[] SanitizeCSharpLinesForCrossLineScan(string[] lines)
+    {
+        if (lines.Length == 0)
+            return lines;
+
+        var result = new string[lines.Length];
+        var state = new CSharpLexState();
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var lexed = LexCSharpLine(lines[i], state);
+            var chars = lexed.SanitizedLine.ToCharArray();
+            for (var k = 0; k < chars.Length; k++)
+            {
+                var ch = chars[k];
+                if (ch == '"' || ch == '\'' || ch == '\\')
+                    chars[k] = ' ';
+            }
+            result[i] = new string(chars);
+            state = lexed.EndState;
+        }
+        return result;
+    }
+
     private static CSharpLexedLine LexCSharpLine(string line, CSharpLexState state)
     {
         var sanitized = new char[line.Length];
