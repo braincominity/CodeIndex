@@ -156,8 +156,16 @@ public static class ReferenceExtractor
     // 共通 CallRegex は末尾 `(` を要求するため、`EXEC dbo.sp_Target;` など実運用で圧倒的に多い形を取りこぼす。
     // 先頭側の schema prefix は吸収し、末端の識別子だけを `name` として捕捉する。T-SQL 固有の
     // `EXEC @retval = dbo.sp_Target ...` 形にも対応し、`[sp_Target]` のような角括弧識別子は発行時に除去する。
+    // Bracketed identifiers inside the qualifier and name groups accept any character except `[`,
+    // `]`, or a line terminator. T-SQL allows `#` (temp procedure), `-` (hyphenated names),
+    // spaces, Unicode symbols, and punctuation inside bracket quoting, and the narrower `[\w ]+`
+    // would silently drop `EXEC [#tempProc]`, `EXEC [dbo].[proc-name]`, and similar legitimate
+    // forms while falsely misattributing the qualifier `[dbo]` as the proc name.
+    // 角括弧識別子は `[` / `]` / 改行以外の任意文字を許可する。T-SQL では `#`（一時プロシージャ）、
+    // `-`（ハイフン名）、空白、Unicode 記号などが正当に現れるため、`[\w ]+` ではそれらの合法な
+    // 形を取りこぼし、修飾子 `[dbo]` を proc 名として誤発行してしまう。
     private static readonly Regex SqlProcCallRegex = new(
-        @"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?(?:(?:\[[\w ]+\]|\w+)\.)*(?<name>\[[\w ]+\]|\w+)",
+        @"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?(?:(?:\[[^\[\]\r\n]+\]|\w+)\.)*(?<name>\[[^\[\]\r\n]+\]|\w+)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // C# event subscription/unsubscription: Click += OnClick — both LHS and RHS must be PascalCase identifiers
     // C# イベント購読・解除: Click += OnClick — LHS と RHS の両方が PascalCase 識別子のみ

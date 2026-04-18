@@ -3582,6 +3582,32 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SqlExecBracketedNonWordIdentifier_IsCapturedAndDoesNotMisattributeQualifier()
+    {
+        // T-SQL bracket quoting accepts any character except `[` / `]` / newline inside the brackets,
+        // so `[#tempProc]` (temp stored procedure), `[proc-name]` (hyphenated name), and `[proc.v2]`
+        // are all legitimate identifiers. A narrower `[\w ]+` quantifier would skip the bracketed
+        // name entirely and — worse — misattribute the preceding qualifier segment `[dbo]` as the
+        // proc name when only the trailing bracket has non-word characters.
+        // T-SQL のブラケット識別子は `[` / `]` / 改行以外の任意文字を含められるため、`[#tempProc]`
+        // （一時プロシージャ）、`[proc-name]`（ハイフン）、`[proc.v2]` は合法。`[\w ]+` では末端
+        // が取りこぼされ、直前の修飾子 `[dbo]` を誤って proc 名として emit してしまう。
+        const string content = """
+            EXEC [#tempProc];
+            EXEC [dbo].[proc-name];
+            EXEC [dbo].[proc.v2];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "#tempProc" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "proc-name" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "proc.v2" && r.ReferenceKind == "call" && r.Line == 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "dbo" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_SqlExecBracketedExecKeyword_IsCapturedAsProcedureName()
     {
         // A user who genuinely names a procedure `[EXEC]` uses bracket quoting to bypass the reserved
