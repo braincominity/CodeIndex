@@ -831,15 +831,19 @@ public static class SymbolExtractor
             // Boundary alternation: line-leading `^`, or after `&` / `(` / `\belse` / `\bdo` so
             // the regex (paired with the batch multi-match advance in the extractor loop) can
             // emit one symbol per `set` occurrence on the same line instead of dropping every
-            // assignment after the first match. `rem` / `::` comment lines lack the required
-            // boundary token and therefore stay excluded.
+            // assignment after the first match. `rem` / `@rem` / `::` comment lines can also
+            // contain those boundary tokens (e.g. `REM & set FAKE=1`), so they are short-
+            // circuited by `IsBatchCommentLine` before this pattern ever runs — the boundary
+            // alternation alone is not enough to keep comment bodies out of the capture.
             // 変数代入 — set VAR=value、set /a VAR=expr、set /p VAR=prompt、set "VAR=value" に対応。
             // 併せて `@set VAR=...` (echo 抑止プレフィクス) 、`set /a VAR+=1` (複合代入演算子) 、
             // `if ... set VAR=...` (1 行制御文内の代入) 、および `set A=1 & set B=2` / `( set X=1 )` /
             // `if ... ( set P=1 ) else set Q=2` / `for ... do set LOOPVAR=...` のような同一行複数ステートメント形も拾う。
             // 境界は `^` / `&` / `(` / `\belse` / `\bdo` のいずれかで、extractor 側の batch 専用
             // multi-match advance と組み合わせて 1 行中の `set` ごとに 1 シンボルを出す。
-            // `rem` / `::` コメント行はこの境界トークンを伴わないため引き続き拾わない。
+            // `rem` / `@rem` / `::` コメント行にもこれらの境界トークンが入りうる
+            // (`REM & set FAKE=1` 等) ため、この正規表現が走る前に `IsBatchCommentLine` で
+            // 行ごと早期スキップしている — 境界 alternation だけではコメント本文を弾ききれない。
             new("property", new Regex(@"(?:(?:^|&|\()\s*|(?:\belse|\bdo)\s+)(?:@\s*)?(?:if\s+.+?\s+)?set\s+(?:/[aApP]\s+)?""?(?<name>[A-Za-z_][\w]*)\s*(?:[+\-*/%&^|]|<<|>>)?=", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
         ],
         ["zig"] =
