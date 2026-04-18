@@ -1649,6 +1649,28 @@ public partial class DbReader
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
             results.Add(reader.GetString(0));
+
+        // C# attribute naming convention: a class `FooAttribute` is used as `[Foo]` in source,
+        // so reference sites are stored with symbol_name `Foo`. Add the suffix-stripped alias
+        // so impact on `FooAttribute` can find metadata-only usage sites.
+        // C# の属性命名規約: クラス `FooAttribute` はソースで `[Foo]` として使われ、参照サイトは
+        // symbol_name `Foo` で保存される。`FooAttribute` への impact でも metadata 参照サイトを
+        // 見つけられるよう、サフィックスを外した別名を追加する。
+        if (string.Equals(definition.Lang, "csharp", StringComparison.OrdinalIgnoreCase))
+        {
+            var aliases = new List<string>();
+            foreach (var name in results)
+            {
+                if (name.Length > "Attribute".Length && name.EndsWith("Attribute", StringComparison.Ordinal))
+                {
+                    var stripped = name.Substring(0, name.Length - "Attribute".Length);
+                    if (stripped.Length > 0 && !results.Contains(stripped) && !aliases.Contains(stripped))
+                        aliases.Add(stripped);
+                }
+            }
+            results.AddRange(aliases);
+        }
+
         return results;
     }
 
@@ -1707,7 +1729,8 @@ public partial class DbReader
         cmd.CommandText = $@"
             SELECT source_file_id, source_path, target_path,
                    COUNT(*) AS reference_count,
-                   GROUP_CONCAT(DISTINCT symbol_name) AS symbols
+                   GROUP_CONCAT(DISTINCT symbol_name) AS symbols,
+                   MAX(CASE WHEN logical_reference_kind IN ('attribute','annotation') THEN 1 ELSE 0 END) AS has_metadata_ref
             FROM ({innerSql}) edges
             GROUP BY source_file_id, source_path, target_path
             ORDER BY reference_count DESC, source_path, target_path";
@@ -1718,12 +1741,13 @@ public partial class DbReader
             cmd.Parameters.AddWithValue($"@impactFallbackName{i}", fallbackNames[i]);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
-        var candidates = new List<(long SourceFileId, FileDependencyResult Edge)>();
+        var candidates = new List<(long SourceFileId, bool HasMetadataRef, FileDependencyResult Edge)>();
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
             candidates.Add((
                 reader.GetInt64(0),
+                reader.GetInt32(5) == 1,
                 new FileDependencyResult
                 {
                     SourcePath = reader.GetString(1),
@@ -1737,6 +1761,19 @@ public partial class DbReader
         var filtered = new List<FileDependencyResult>();
         foreach (var candidate in candidates)
         {
+            // Metadata-only consumers (attribute / annotation sites like `[MyAudit]` or
+            // `@Inject(User.class)`) legitimately lack structured type evidence in the
+            // source file. Bypass the evidence guard for those edges so deps/impact can
+            // still surface pure-attribute consumers.
+            // metadata 専用の参照 (`[MyAudit]` や `@Inject(User.class)` のような attribute /
+            // annotation 利用) は、source 側のファイルに structured な型利用が無くても
+            // 正当な依存となる。そのため、metadata 参照を含むエッジでは evidence guard を
+            // スキップし、純粋な attribute 消費側ファイルも deps/impact に出せるようにする。
+            if (candidate.HasMetadataRef)
+            {
+                filtered.Add(candidate.Edge);
+                continue;
+            }
             if (!evidenceCache.TryGetValue(candidate.SourceFileId, out var hasEvidence))
             {
                 hasEvidence = SourceFileHasStructuredTypeEvidence(candidate.SourceFileId, definition.Name);
@@ -2320,7 +2357,7 @@ public partial class DbReader
         var sourceFilterAlias = "src";
         var targetFilterAlias = "dst";
         var sql = @"
-            WITH logical_references AS (
+            WITH logical_references_primary AS (
                 SELECT src.id AS source_file_id,
                        src.path AS source_path,
                        src.lang AS source_lang,
@@ -2365,6 +2402,24 @@ public partial class DbReader
             sql += $" AND NOT {TestPathCondition.Replace("f.path", $"{sourceFilterAlias}.path")}";
         sql += @"
                 GROUP BY src.id, src.path, src.lang, r.symbol_name, r.line, r.column_number, logical_reference_kind
+            ),
+            logical_references AS (
+                SELECT source_file_id, source_path, source_lang, symbol_name, line, column_number, logical_reference_kind
+                FROM logical_references_primary
+                UNION ALL
+                -- C# attribute suffix alias: [Foo] in source is stored with symbol_name='Foo',
+                -- but the defining class is named 'FooAttribute'. Emit the canonical 'Foo' + 'Attribute'
+                -- form so deps can match the class file as a target.
+                -- C# 属性のサフィックス別名: ソース上の [Foo] は symbol_name='Foo' で保存されるが、
+                -- 定義クラスは 'FooAttribute' 命名になるため、正規形 'Foo' + 'Attribute' を補って
+                -- deps がクラス側のファイルを target として join できるようにする。
+                SELECT source_file_id, source_path, source_lang,
+                       symbol_name || 'Attribute' AS symbol_name,
+                       line, column_number, logical_reference_kind
+                FROM logical_references_primary
+                WHERE source_lang = 'csharp'
+                  AND logical_reference_kind = 'attribute'
+                  AND symbol_name NOT LIKE '%Attribute'
             ),
             source_name_counts AS (
                 SELECT source_file_id,

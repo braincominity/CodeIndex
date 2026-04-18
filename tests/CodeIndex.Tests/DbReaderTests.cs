@@ -2312,6 +2312,43 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetFileDependencies_MatchesCSharpAttributeSuffixConvention()
+    {
+        // issue #293 follow-up: C# convention — a class `FooAttribute` is used in
+        // source as `[Foo]`, so the reference site is stored with symbol_name `Foo`.
+        // `deps` must canonicalize these so the attribute class file is still
+        // recognized as a dependency target for pure-attribute consumers.
+        // issue #293 補足: C# の規約では、クラス `FooAttribute` はソース中で `[Foo]`
+        // として使われるため、参照サイトは symbol_name `Foo` として保存される。
+        // `deps` はこれを正規化し、attribute 専用の consumer でも attribute クラスの
+        // ファイルを依存 target として認識できるようにする。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            using System;
+
+            [AttributeUsage(AttributeTargets.Class)]
+            public sealed class MyAuditAttribute : Attribute
+            {
+            }
+            """);
+        // Idiomatic `[MyAudit]` usage — symbol_name recorded as `MyAudit` but target
+        // class is `MyAuditAttribute`.
+        // 慣用的な `[MyAudit]` 利用 — symbol_name は `MyAudit` として記録されるが
+        // target クラスは `MyAuditAttribute`。
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var dependencies = _reader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        Assert.Contains(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/MyAuditAttribute.cs");
+    }
+
+    [Fact]
     public void GetGroupedSymbolHotspots_CollapsesDuplicateNamesWithoutBareJoinInflation()
     {
         InsertIndexedFile("src/Alpha.cs", "csharp",
