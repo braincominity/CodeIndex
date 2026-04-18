@@ -3553,6 +3553,108 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void ReinstallReal_SearchGrepFormExactFullLine_Succeeds()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, _) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)
+                    # Positive test for the strict grep-form branch of the
+                    # tightened awk state machine: the single line
+                    # `sample.py:<N>:def greet(name):` with no space between
+                    # the colon and the signature and no trailing diagnostic
+                    # prose must still match. Without this test the grep-form
+                    # accept path has no dedicated regression coverage — all
+                    # other success-path stubs use the range form.
+                    # grep 形成功分岐のポジティブテスト。行全体が
+                    # `sample.py:<N>:def greet(name):`（コロン直後に空白なし・
+                    # 末尾診断なし）である完全一致を通す awk 分岐を確認する。
+                    printf '%s\n' "sample.py:1:def greet(name):"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Real reinstall validation passed", stdout);
+    }
+
+    [Fact]
+    public void ReinstallReal_SearchLaterRangeHeaderRearmsFirstIndent_Succeeds()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, _) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)
+                    # Positive test for one-shot flag re-arming: the first
+                    # range-form header arms the `expect_first_indent` flag,
+                    # the first indented line under it is a non-matching
+                    # decoy that consumes the flag and abandons the block,
+                    # and THEN a second range-form header re-arms the flag
+                    # whose first indented line is exactly
+                    # `  def greet(name):`. The tightened awk state machine
+                    # must accept this shape — otherwise a single decoy
+                    # anywhere in the output would permanently disarm
+                    # matching.
+                    # one-shot フラグの再武装成功ケース。最初の範囲形ヘッダ
+                    # 直後の 1 行目が非一致 decoy で block を放棄した後、
+                    # 2 つ目の範囲形ヘッダで flag が再び立ち、その直後 1 行目
+                    # が exactly `  def greet(name):` で完全一致して通る。
+                    # 先頭 block の decoy が検証を永続的に無効化しないことを
+                    # 保証する。
+                    printf '%s\n%s\n%s\n%s\n' "sample.py:1-6" "  warning: no matches" "sample.py:10-15" "  def greet(name):"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Real reinstall validation passed", stdout);
+    }
+
+    [Fact]
     public void ReinstallReal_DoesNotRequestJsonFromSearch()
     {
         if (OperatingSystem.IsWindows())
