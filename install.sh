@@ -1055,16 +1055,16 @@ run_reinstall_real() {
     printf '%s\n' "$reinstall_version_output"
     local reinstall_expected_version="${version#v}"
     # The reported version must contain the requested tag as a whole token
-    # (e.g. "v1.2.3" must not silently satisfy a request for v1.2.30, nor
-    # must "v1.2.34" silently satisfy a request for v1.2.3). Otherwise a
-    # mirror mixup or version.json skew would silently pass.
+    # — both the left and the right side of "v<version>" must be bounded by
+    # whitespace or a string boundary. Otherwise a stub or garbled output
+    # like "prefixv1.2.3" or "v1.2.30" could silently pass validation.
     # ミラー取り違えや version.json ずれを silent pass させないため、
-    # 要求タグを境界付きで含むかどうかで検証する。
-    case "$reinstall_version_output" in
-        *"v${reinstall_expected_version}")           ;;
-        *"v${reinstall_expected_version}"[!0-9.]*)   ;;
-        *) error "Real reinstall validation: expected version ${reinstall_expected_version} in output, got: ${reinstall_version_output:-<empty>}." ;;
-    esac
+    # "v<version>" の左右両方を空白または文字列境界で区切られた token として検証する。
+    local reinstall_escaped_version
+    reinstall_escaped_version="$(printf '%s' "$reinstall_expected_version" | sed 's/[][\.*^$()+?{|/]/\\&/g')"
+    if ! printf '%s\n' "$reinstall_version_output" | grep -qE "(^|[[:space:]])v${reinstall_escaped_version}([[:space:]]|\$)"; then
+        error "Real reinstall validation: expected version v${reinstall_expected_version} as a whole token in output, got: ${reinstall_version_output:-<empty>}."
+    fi
 
     # Build a tiny scratch project and exercise `cdidx . --db <tmp>` so that
     # the validation covers the real indexing path (symbol extraction, SQLite
@@ -1109,9 +1109,19 @@ PY
     if ! reinstall_search_output="$("$reinstall_cdidx" search greet --db "$scratch_db" 2>&1)"; then
         error "Real reinstall validation: ${BINARY_NAME} search returned a non-zero exit code."
     fi
+    # Require a structured match line that references the scratch file AND
+    # the query token. A successful human-readable search prints something
+    # like "sample.py:1-2\n  def greet(name):". Checking only for "greet"
+    # in stdout would false-pass on diagnostic text such as "searching for
+    # greet returned 0 matches".
+    # 0 件でも "greet" を含む診断文が false pass しないよう、
+    # 「ファイルパス:行番号 ... greet」の構造を持つ行を要求する。
+    if ! printf '%s\n' "$reinstall_search_output" | grep -qE 'sample\.py:[0-9]'; then
+        error "Real reinstall validation: ${BINARY_NAME} search did not return a structured match for the scratch project's 'greet' symbol. Output: ${reinstall_search_output:-<empty>}."
+    fi
     case "$reinstall_search_output" in
         *greet*) ;;
-        *) error "Real reinstall validation: ${BINARY_NAME} search did not surface the 'greet' symbol from the scratch project." ;;
+        *) error "Real reinstall validation: ${BINARY_NAME} search output did not mention the 'greet' symbol." ;;
     esac
 
     info "Real reinstall validation passed for ${version}."
