@@ -6037,7 +6037,13 @@ public class SymbolExtractorTests
             "CREATE PROCEDURE [dbo].[sp_GetOrder] @Id INT AS SELECT 1;\n" +
             "CREATE OR ALTER PROCEDURE dbo.sp_UpsertUser AS SELECT 1;\n" +
             "CREATE OR ALTER VIEW dbo.v_ActiveOrders AS SELECT 1;\n" +
-            "ALTER PROCEDURE dbo.sp_DailyReport AS SELECT 2;\n";
+            "ALTER PROCEDURE dbo.sp_DailyReport AS SELECT 2;\n" +
+            "ALTER FUNCTION dbo.fn_Total() RETURNS INT AS BEGIN RETURN 1 END;\n" +
+            "ALTER PARTITION FUNCTION pf_OrdersByYear() SPLIT RANGE ('2025-01-01');\n" +
+            "ALTER SCHEMA sales TRANSFER dbo.Customers;\n" +
+            "ALTER EXTENSION hstore UPDATE TO '1.5';\n" +
+            "ALTER CERTIFICATE svc_cert WITH PRIVATE KEY (DECRYPTION BY PASSWORD = 'x');\n" +
+            "ALTER DOMAIN us_postal_code DROP NOT NULL;\n";
         var symbols = SymbolExtractor.Extract(1, "sql", content);
 
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "sales");
@@ -6056,9 +6062,20 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "[dbo].[sp_GetOrder]");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "dbo.sp_UpsertUser");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "dbo.v_ActiveOrders");
-        // ALTER on an object kind other than TABLE must now be captured too.
-        // TABLE 以外のオブジェクトに対する ALTER も捕捉されること。
+        // ALTER on an object kind other than TABLE must now be captured with the same kind
+        // contract as the matching CREATE row (function for procedure-like, namespace for schema,
+        // import for extension, class for everything else).
+        // TABLE 以外のオブジェクトに対する ALTER も、対応する CREATE 行と同じ kind 契約で
+        // 捕捉されること（プロシージャ類は function、SCHEMA は namespace、EXTENSION は import、
+        // その他は class）。
         Assert.Equal(2, symbols.Count(s => s.Name == "dbo.sp_DailyReport"));
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "dbo.sp_DailyReport" && s.Signature != null && s.Signature.StartsWith("ALTER PROCEDURE", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "dbo.fn_Total");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "pf_OrdersByYear" && s.Signature != null && s.Signature.StartsWith("ALTER PARTITION FUNCTION", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "sales" && s.Signature != null && s.Signature.StartsWith("ALTER SCHEMA", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "hstore");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "svc_cert" && s.Signature != null && s.Signature.StartsWith("ALTER CERTIFICATE", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "us_postal_code");
     }
 
     [Fact]
