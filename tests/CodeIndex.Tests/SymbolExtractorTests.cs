@@ -8255,23 +8255,73 @@ public class SymbolExtractorTests
     public void Extract_Html_UnterminatedQuotedAttributeDoesNotSwallowRestOfFile()
     {
         // Mid-edit working-tree content commonly leaves a quoted attribute unterminated
-        // (e.g. user is still typing `title="...`). The parser must bound the damage
-        // rather than consume to EOF looking for the closing quote; otherwise every
-        // `<section id="real">` / `<my-widget>` / `<link href="...">` after the broken
+        // (e.g. user is still typing `title="...`). When no valid-looking close exists
+        // to EOF, the parser must bound damage by bailing at the current line rather
+        // than scanning through every subsequent sibling tag looking for a matching
+        // quote. Otherwise every `<my-widget>` / `<link href=...>` after the broken
         // tag drops out of `symbols` / `definition` / `outline` until the user types
         // the matching quote. Closes #215 codex review finding.
         // 編集中の working tree では `title="...` のような未閉鎖引用符が頻発する。
-        // 閉じ引用符を探して EOF まで走り切ると、壊れたタグ以降の
-        // `<section id="real">` / `<my-widget>` / `<link href="...">` が `symbols`
-        // / `definition` / `outline` から一気に消える。現在行までで被害を止めることを固定。
-        // #215 codex review 指摘対応。
-        var content = "<div title=\"oops\n<section id=\"real\"></section>\n<my-widget></my-widget>\n<link href=\"/app.css\">";
+        // EOF まで妥当な閉じ候補が無い真の未終端では、行末で止めて以降の
+        // `<my-widget>` / `<link href=...>` を symbols / definition / outline から
+        // 消さないこと。#215 codex review 指摘対応。
+        var content = "<div title=\"oops\n<my-widget></my-widget>\n<link href=/app.css>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "my-widget");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.css");
+    }
+
+    [Fact]
+    public void Extract_Html_MultiLineQuotedAttributeValueWithEmbeddedTagsPreservesSiblingAttributes()
+    {
+        // HTML5 allows newlines AND tag-like content inside quoted attribute values
+        // (`<div title="line1\n<section></section>\nline3" id="real">`). The earlier
+        // `\n<tagstart>` bail heuristic treated any `\n<` inside a quoted value as an
+        // unterminated-quote signal, which silently prematurely terminated valid
+        // multi-line title / data-note / alt values and either (1) leaked embedded
+        // `<section id=phantom>` as a phantom `property phantom` symbol, or (2)
+        // dropped the genuine `id="real"` attribute that followed the value. Pin
+        // that valid multi-line quoted values containing tag-like content are
+        // treated as single attribute values, and the following `id="real"` is
+        // emitted. Closes #215 codex review #9 blocker 2.
+        // HTML5 は引用符付き属性値の中に改行もタグ様テキストも許容する
+        // (`<div title="line1\n<section></section>\nline3" id="real">`)。以前の
+        // `\n<tagstart>` 早期中断ヒューリスティクスは、これを未終端と誤認して
+        // (1) 埋め込まれた `<section id=phantom>` を phantom な property として拾ったり、
+        // (2) 後続する本物の `id="real"` を落としたりしていた。妥当な複数行引用属性値を
+        // 正しく 1 つの値として扱い、後続の `id="real"` を emit することを固定する。
+        // #215 codex review #9 blocker 2 対応。
+        var content = "<div title=\"line1\n<section id=phantom></section>\nline3\" id=\"real\"></div>";
 
         var symbols = SymbolExtractor.Extract(1, "html", content);
 
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "my-widget");
-        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.css");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "phantom");
+    }
+
+    [Fact]
+    public void Extract_Html_RawTextOpenerInsideQuotedAttributeValueDoesNotMaskFollowingContent()
+    {
+        // `<script>` / `<style>` / `<textarea>` / `<title>` embedded inside another
+        // tag's quoted attribute value is NOT a real raw-text opener. The mask pass
+        // must walk past the outer tag's quoted value rather than re-encountering
+        // `<script>` / `<!--` inside the value and masking through EOF. Pin that
+        // quoted `<script>` / `<!--` does not swallow sibling tags on following lines.
+        // Closes #215 codex review #9 blocker 1.
+        // 引用符付き属性値内に出てくる `<script>` / `<style>` / `<textarea>` / `<title>`
+        // や `<!--` は raw-text 開始でもコメント開始でもない。マスク処理は外側タグの
+        // 引用符付き値を飛ばして進まなければならず、さもないと値内の `<script>` を
+        // raw-text 開始と誤認して EOF までマスクし、後続の兄弟タグを全部落とす。
+        // #215 codex review #9 blocker 1 対応。
+        var scriptInAttr = "<div title=\"<script>\">ok</div>\n<section id=\"real\"></section>";
+        var symbols1 = SymbolExtractor.Extract(1, "html", scriptInAttr);
+        Assert.Contains(symbols1, s => s.Kind == "property" && s.Name == "real");
+
+        var commentInAttr = "<div title=\"<!--\">ok</div>\n<section id=\"realc\"></section>";
+        var symbols2 = SymbolExtractor.Extract(1, "html", commentInAttr);
+        Assert.Contains(symbols2, s => s.Kind == "property" && s.Name == "realc");
     }
 
     [Fact]

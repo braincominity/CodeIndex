@@ -1584,11 +1584,10 @@ public static class SymbolExtractor
             if (rawName != null)
             {
                 // Walk the opening tag to find its closing `>`. Multi-line
-                // quoted attribute values are OK, but we bail if the parser
-                // sees `\n<tagstart>` before closing a quote (signals an
-                // unterminated quote in mid-edit markup).
-                // 開始タグの `>` を探す。複数行に跨る引用符付き属性値は OK だが、
-                // `\n<tag>` を見つけた時点で未終端と判断して中止する。
+                // quoted attribute values are allowed; the helper only returns
+                // -1 if the opener cannot be closed before EOF.
+                // 開始タグの `>` を探す。複数行に跨る引用符付き属性値は OK。
+                // EOF 前に閉じられない場合のみ -1 を返す。
                 var openerEnd = FindHtmlTagOpenerEnd(text, i);
                 if (openerEnd < 0)
                 {
@@ -1615,6 +1614,27 @@ public static class SymbolExtractor
                 var closeGt = text.IndexOf('>', closeIdx);
                 i = closeGt < 0 ? chars.Length : closeGt + 1;
                 continue;
+            }
+
+            // Non-raw-text tag opener (including closing tags `</...`). Walk
+            // past the whole opener so quoted attribute values like
+            // `<div title="<script>">` or `<div title="<!--">` do not re-enter
+            // the raw-text / comment branches on the next character and get
+            // misidentified as raw-text/comment openers. Without this skip,
+            // the char-by-char scan would re-encounter `<script>` / `<!--`
+            // inside the attribute value and mask through EOF.
+            // raw-text 以外のタグ opener（`</...` を含む）に遭遇したら、opener 全体を
+            // 飛ばして属性値内の `<script>` / `<!--` が次の文字で raw-text / comment
+            // として再解釈されないようにする。これを入れないと属性値内の `<script>`
+            // を raw-text 本体マスク対象と誤認して以降の兄弟タグを全部飲み込む。
+            if (i + 1 < chars.Length && (IsHtmlTagNameStart(chars[i + 1]) || chars[i + 1] == '/'))
+            {
+                var openerEnd = FindHtmlTagOpenerEnd(text, i);
+                if (openerEnd >= 0)
+                {
+                    i = openerEnd + 1;
+                    continue;
+                }
             }
 
             i++;
@@ -1656,9 +1676,9 @@ public static class SymbolExtractor
     {
         // Walk from `start` (position of `<`) forward to find the opening `>`,
         // skipping over quoted attribute values. Multi-line quoted values are
-        // allowed via FindHtmlQuoteClose's `\n<` bailout heuristic.
+        // allowed per HTML5 spec.
         // `start` は `<` の位置。引用符付き属性値を `FindHtmlQuoteClose` で飛ばしつつ
-        // 開始タグの閉じ `>` を探す。複数行値は `\n<` 安全装置で許容する。
+        // 開始タグの閉じ `>` を探す。HTML5 仕様どおり複数行値も許容する。
         var i = start + 1;
         while (i < text.Length)
         {
@@ -1681,38 +1701,45 @@ public static class SymbolExtractor
     private static int FindHtmlQuoteClose(string text, int start, char quote)
     {
         // Scan forward for the matching closing quote. HTML5 allows newlines
-        // inside quoted attribute values (`<meta description="line1\nline2">`),
-        // so we cross line boundaries. However, if we hit `\n<` followed by a
-        // plausible tag-name start (`<section`, `</div`, `<!--`), treat the
-        // quote as unterminated (mid-edit source) and return -1 so the caller
-        // can bound the damage. Without this safety net, `<div title="oops\n
-        // <section id="real">...` would pair the opener's `"` with the `"`
-        // inside `id="real"` and silently swallow every sibling tag in between.
-        // 閉じ引用符を探す。HTML5 は属性値内の改行を許容するため基本は複数行
-        // 許容するが、`\n<` の直後がタグ名開始文字等の場合は編集途中の未終端
-        // 引用符とみなして -1 を返す。未終端を素通しすると、たまたま後続の
-        // `id="real"` の `"` を拾って兄弟タグを黙って飲み込む。
+        // inside quoted attribute values (`<meta description="line1\nline2">`)
+        // and tag-like content (`<div title="<section id=x>">`), so we cross
+        // line boundaries and tag-name-like bytes without bailing. The close
+        // is identified by post-value context: per HTML5 the char immediately
+        // after a quoted attribute value must be whitespace, `>`, `/`, or EOF.
+        // If no quote with valid post-context exists before EOF, fall back to
+        // the first quote candidate (matches spec tokenizer recovery for
+        // malformed content like `<div id="foo"bar>`); if not even a bare
+        // quote was seen, return -1 so the caller can bound damage at EOL.
+        // An earlier `\n<tagstart>` bail heuristic was removed: it broke
+        // strictly-valid HTML5 where a multi-line title/alt value contains
+        // tag-like content (`<div title="line1\n<section></section>\nline3" id="real">`).
+        // 閉じ引用符を探す。HTML5 は属性値内の改行とタグ様テキストを許容するため、
+        // 改行やタグ様の文字で早期中断しない。引用符を閉じとして採用する条件は、
+        // 直後が空白 / `>` / `/` / EOF の「属性値終端として妥当な文脈」にあること。
+        // その条件を満たす候補が EOF までに無ければ、最初に見つけた bare quote を
+        // フォールバックに使う（`<div id="foo"bar>` のような壊れ入力でも
+        // 仕様の tokenizer 復帰に近い挙動にする）。候補すら無ければ -1 を返し、
+        // 呼び出し元が行末で被害を止められるようにする。以前の `\n<tagstart>`
+        // 早期中断は、仕様上妥当な複数行引用属性値（`<div title="line1\n
+        // <section></section>\nline3" id="real">`）を壊すため廃止した。
+        var firstCandidate = -1;
         var i = start;
         while (i < text.Length)
         {
-            var c = text[i];
-            if (c == quote)
-                return i;
-            if (c == '\n')
+            if (text[i] == quote)
             {
-                var j = i + 1;
-                while (j < text.Length && (text[j] == ' ' || text[j] == '\t'))
-                    j++;
-                if (j + 1 < text.Length && text[j] == '<')
-                {
-                    var nextCh = text[j + 1];
-                    if (IsHtmlTagNameStart(nextCh) || nextCh == '/' || nextCh == '!')
-                        return -1;
-                }
+                if (firstCandidate < 0)
+                    firstCandidate = i;
+                var after = i + 1;
+                if (after >= text.Length)
+                    return i;
+                var nextCh = text[after];
+                if (nextCh == '>' || nextCh == '/' || char.IsWhiteSpace(nextCh))
+                    return i;
             }
             i++;
         }
-        return -1;
+        return firstCandidate;
     }
 
     private static int FindHtmlRawTextClose(string text, int start, string tagName)
@@ -1902,13 +1929,17 @@ public static class SymbolExtractor
                         // Use the shared FindHtmlQuoteClose helper so this and the raw-text
                         // mask agree on where quoted attribute values end. The helper allows
                         // multi-line quoted values (valid HTML5 like `<div title="line1\n
-                        // line2" id="real">` where `id="real"` must still be emitted), and
-                        // bails on `\n<tagstart>` (mid-edit unterminated quote, where we
-                        // must NOT keep scanning across a sibling tag and silently eat it).
+                        // line2" id="real">` where `id="real"` must still be emitted) and
+                        // tag-like content inside quoted values, identifying the close by
+                        // post-value context (`>`, `/`, whitespace, or EOF). Only truly
+                        // unterminated quotes (no matching `"` at all) return -1, so the
+                        // caller can bail to EOL without walking to EOF.
                         // 共有ヘルパー `FindHtmlQuoteClose` を使い、mask 側とも引用符終端の
                         // 判断を一致させる。複数行 quoted 属性値 (`<div title="line1\n
-                        // line2" id="real">` など) は許容し、`\n<tag>` を検出したら未終端と
-                        // 判断して兄弟タグまで飲まないようにする。
+                        // line2" id="real">` など) とタグ様テキストを含む引用符付き値を
+                        // 許容し、`>` / `/` / 空白 / EOF が直後に来る位置を終端として検出する。
+                        // 真に未終端（マッチ `"` が存在しない）場合のみ -1 を返し、呼び出し側が
+                        // EOF まで走らず行末で被害を止められるようにする。
                         var valueEnd = FindHtmlQuoteClose(maskedText, cursor, quote);
                         if (valueEnd < 0)
                         {
