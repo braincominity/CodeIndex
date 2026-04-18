@@ -1054,16 +1054,39 @@ run_reinstall_real() {
     fi
     printf '%s\n' "$reinstall_version_output"
     local reinstall_expected_version="${version#v}"
-    # The reported version must contain the requested tag as a whole token
-    # — both the left and the right side of "v<version>" must be bounded by
-    # whitespace or a string boundary. Otherwise a stub or garbled output
-    # like "prefixv1.2.3" or "v1.2.30" could silently pass validation.
-    # ミラー取り違えや version.json ずれを silent pass させないため、
-    # "v<version>" の左右両方を空白または文字列境界で区切られた token として検証する。
-    local reinstall_escaped_version
-    reinstall_escaped_version="$(printf '%s' "$reinstall_expected_version" | sed 's/[][\.*^$()+?{|/]/\\&/g')"
-    if ! printf '%s\n' "$reinstall_version_output" | grep -qE "(^|[[:space:]])v${reinstall_escaped_version}([[:space:]]|\$)"; then
-        error "Real reinstall validation: expected version v${reinstall_expected_version} as a whole token in output, got: ${reinstall_version_output:-<empty>}."
+    # Extract every v<semver> token in the output and require that the only
+    # distinct token present equals v<requested>. A plain "contains the
+    # requested version" check false-passes mixed output such as
+    # "warning: requested v1.2.3 not installed; running v9.9.9", because the
+    # requested tag appears in a diagnostic while a different version is
+    # actually running. Enumerating all tokens also catches right-side
+    # boundary violations (e.g. v1.2.30 captures as v1.2.30, which is not
+    # equal to v1.2.3) and suffix mismatches (e.g. v1.2.3 vs v1.2.3-rc.1).
+    # `grep -oE` alone has no left-boundary awareness, so `prefixv1.2.3`
+    # would still extract `v1.2.3` and silently pass; awk's match() lets us
+    # reject any candidate whose preceding character is itself an identifier
+    # char (`[A-Za-z0-9._+-]`, the same class used for the right-side suffix
+    # capture). POSIX awk's match() / RSTART / RLENGTH are supported on both
+    # macOS (BSD awk) and Linux (gawk / mawk) so this stays portable.
+    # ミラー取り違えや version.json ずれ、診断文に要求タグが紛れ込むケースを
+    # silent pass させないため、出力中の v<semver> token を全て抽出し、
+    # 唯一の値が v<要求版> と一致することを検証する。`grep -oE` だけでは
+    # `prefixv1.2.3` の左境界違反が素通りするため、awk の match() で直前文字が
+    # 識別子クラスなら棄却する。POSIX awk の RSTART/RLENGTH は BSD awk・gawk・
+    # mawk すべて対応しているためポータブル。
+    local reinstall_found_versions
+    reinstall_found_versions="$(printf '%s\n' "$reinstall_version_output" \
+        | awk '{
+            line = $0
+            while (match(line, /v[0-9]+\.[0-9]+\.[0-9]+([A-Za-z0-9._+-]*)?/)) {
+                if (RSTART == 1 || substr(line, RSTART - 1, 1) !~ /[A-Za-z0-9._+-]/)
+                    print substr(line, RSTART, RLENGTH)
+                line = substr(line, RSTART + RLENGTH)
+            }
+        }' \
+        | sort -u || true)"
+    if [ "$reinstall_found_versions" != "v${reinstall_expected_version}" ]; then
+        error "Real reinstall validation: expected exactly one version token v${reinstall_expected_version} in output, got: ${reinstall_version_output:-<empty>}."
     fi
 
     # Build a tiny scratch project and exercise `cdidx . --db <tmp>` so that
@@ -1109,15 +1132,19 @@ PY
     if ! reinstall_search_output="$("$reinstall_cdidx" search greet --db "$scratch_db" 2>&1)"; then
         error "Real reinstall validation: ${BINARY_NAME} search returned a non-zero exit code."
     fi
-    # Require a structured match line that references the scratch file AND
-    # the query token. A successful human-readable search prints something
-    # like "sample.py:1-2\n  def greet(name):". Checking only for "greet"
-    # in stdout would false-pass on diagnostic text such as "searching for
-    # greet returned 0 matches".
-    # 0 件でも "greet" を含む診断文が false pass しないよう、
-    # 「ファイルパス:行番号 ... greet」の構造を持つ行を要求する。
-    if ! printf '%s\n' "$reinstall_search_output" | grep -qE 'sample\.py:[0-9]'; then
-        error "Real reinstall validation: ${BINARY_NAME} search did not return a structured match for the scratch project's 'greet' symbol. Output: ${reinstall_search_output:-<empty>}."
+    # Require a structured match line anchored at the scratch file path AND
+    # containing the matched token. A successful human-readable search
+    # prints something like "sample.py:1-2" (path header at column 0)
+    # followed on a later line by "  def greet(name):". Anchoring the
+    # regex to "^sample\.py:" rejects diagnostic text such as "searching
+    # for greet returned 0 matches" and path-prefixed false positives such
+    # as "other/sample.py:1". A separate substring check then pins the
+    # matched token so an unrelated index hit cannot false-pass either.
+    # 0 件の診断文や `other/sample.py:1` のような path prefix での false pass を
+    # 避けるため、行頭の `sample.py:<line>` を要求し、さらに 'greet' の
+    # 出現も併せて確認する。
+    if ! printf '%s\n' "$reinstall_search_output" | grep -qE '^sample\.py:[0-9]'; then
+        error "Real reinstall validation: ${BINARY_NAME} search did not return a structured match anchored at the scratch project's sample.py path. Output: ${reinstall_search_output:-<empty>}."
     fi
     case "$reinstall_search_output" in
         *greet*) ;;

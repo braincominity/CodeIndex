@@ -2793,7 +2793,7 @@ public sealed class InstallScriptTests : IDisposable
             enforceStrictMode: false);
 
         Assert.NotEqual(0, exitCode);
-        Assert.Contains("expected version v1.2.3", stderr);
+        Assert.Contains("expected exactly one version token v1.2.3", stderr);
         Assert.Contains("9.9.9", stderr);
     }
 
@@ -2824,7 +2824,7 @@ public sealed class InstallScriptTests : IDisposable
             enforceStrictMode: false);
 
         Assert.NotEqual(0, exitCode);
-        Assert.Contains("expected version v1.2.3", stderr);
+        Assert.Contains("expected exactly one version token v1.2.3", stderr);
     }
 
     [Fact]
@@ -2854,7 +2854,7 @@ public sealed class InstallScriptTests : IDisposable
             enforceStrictMode: false);
 
         Assert.NotEqual(0, exitCode);
-        Assert.Contains("expected version v1.2.3", stderr);
+        Assert.Contains("expected exactly one version token v1.2.3", stderr);
     }
 
     [Fact]
@@ -2878,6 +2878,94 @@ public sealed class InstallScriptTests : IDisposable
                     # that happens to mention "greet". Must NOT false-pass.
                     # 構造化されていない "greet" を含む診断文は false pass させてはならない。
                     echo "searching for greet returned 0 matches"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("did not return a structured match", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_VersionMixedOutput_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version)
+                    # Mixed output: requested tag appears in a diagnostic line
+                    # while a different version is actually running. Must abort.
+                    # 要求タグが診断文に混ざりつつ別 version が走る出力は false pass させない。
+                    echo "warning: requested version v1.2.3 not installed; running v9.9.9"
+                    ;;
+                search) echo "sample.py:1: def greet(name):" ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("expected exactly one version token", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_SearchPathPrefix_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)
+                    # Path-prefix false positive: "other/sample.py:1" contains
+                    # "sample.py:1" as a substring. The second line mentions
+                    # "greet" in a diagnostic, so a split-condition check
+                    # would false-pass. Must abort because the structured
+                    # match is not anchored at the scratch project's own
+                    # sample.py path.
+                    # `other/sample.py:1` が `sample.py:1` を部分一致で含み、
+                    # かつ 'greet' を含む診断文が同居するケース。行頭アンカーで
+                    # 除外する必要がある。
+                    printf '%s\n%s\n' "other/sample.py:1" "searching for greet returned 0 matches"
                     ;;
                 *)
                     if [ "$2" = "--db" ] && [ -n "$3" ]; then
