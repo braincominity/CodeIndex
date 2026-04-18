@@ -4288,6 +4288,82 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetUnusedSymbols_CommentPrefixedInlineAttribute_KeepsReflectionContext()
+    {
+        // Regression for #409 follow-up (iteration 5) — a line-leading `/* ... */`
+        // block comment followed by an inline attribute + declaration — e.g.
+        // `/* note */ [JsonPropertyName("ok")] public string A ...` — must keep
+        // the reflection context. The anchor's inline-decl check must run against
+        // the sanitized line so the leading block comment (blanked by the
+        // cross-line sanitizer) does not break the leading-`[` anchor.
+        // #409 追加回帰 (iteration 5): 行頭の `/* ... */` ブロックコメント直後に
+        // 続くインライン属性 + 宣言（例: `/* note */ [JsonPropertyName("ok")] public string A ...`）は、
+        // 対象プロパティが reflection コンテキストを保たなければならない。
+        // anchor のインライン宣言判定は sanitize 済み行に対して行い、
+        // 行頭ブロックコメントが先頭 `[` アンカーを阻害しないようにする。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_comment_prefixed_inline_fixture.cs",
+            Lang = "csharp",
+            Size = 260,
+            Lines = 7,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 6,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class Target
+                {
+                    /* note */ [JsonPropertyName("ok")] public string A { get; set; } = "";
+                }
+
+                """,
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "Target",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 6,
+                Signature = "public class Target",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "A",
+                Line = 5,
+                StartLine = 5,
+                EndLine = 5,
+                Signature = "public string A { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["reflection_comment_prefixed_inline_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        var a = Assert.Single(unused, symbol => symbol.Name == "A");
+        Assert.Equal("reflection_or_config_suspect", a.UnusedBucket);
+    }
+
+    [Fact]
     public void GetUnusedSymbols_AttributeLineWithTrailingLineComment_KeepsReflectionContext()
     {
         // Regression for #409 follow-up — a trailing `// comment` after the closing

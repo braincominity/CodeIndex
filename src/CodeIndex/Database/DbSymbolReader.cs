@@ -1745,7 +1745,31 @@ public partial class DbReader
     private static List<string> GetAdjacentAttributeBlock(string[] lines, string[] sanitizedLines, bool[] triviaMask, int anchorIndex)
     {
         var anchorLine = lines[anchorIndex];
-        if (LineContainsInlineAttributeAndDeclaration(anchorLine))
+        // Run the inline `[attr] decl;` check against the sanitized anchor so that
+        // a line whose first non-whitespace token is a block comment — e.g.
+        // `/* note */ [JsonPropertyName("ok")] public string A { get; set; }` —
+        // still registers as an inline-attribute-with-declaration. The sanitizer
+        // blanks leading `/* ... */` bodies and delimiters to whitespace, leaving
+        // `[JsonPropertyName(    )] public string A ...` which satisfies the
+        // leading-`[` anchor in LineContainsInlineAttributeAndDeclaration. Using
+        // the original line would miss this valid C# shape and drop the property
+        // out of `reflection_or_config_suspect`. The #409 intent — refusing to
+        // treat multi-line literal continuation tails like `]")] public string A ...`
+        // as inline declarations — is preserved: sanitization cannot blank the
+        // leading `)` into a `[`, so the leading-`[` anchor still rejects those
+        // continuation rows. Closes #409.
+        // anchor 行のインライン `[attr] decl;` 判定は sanitize 済み行に対して行う。
+        // 行頭ブロックコメントの後ろに属性と宣言が並ぶ、例えば
+        // `/* note */ [JsonPropertyName("ok")] public string A { get; set; }` も
+        // sanitizer が先頭 `/* ... */` 本体と区切りを空白化するため、
+        // `[JsonPropertyName(    )] public string A ...` として扱え、
+        // LineContainsInlineAttributeAndDeclaration の先頭 `[` アンカーを満たす。
+        // original 行で判定するとこの正しい C# 形を取りこぼし、対象プロパティが
+        // `reflection_or_config_suspect` から外れてしまう。#409 の意図
+        // （`]")] public string A ...` のような複数行リテラル tail を
+        // インライン宣言と見なさない）は、sanitize で先頭 `)` が `[` に変わる
+        // ことはないため維持される。#409 を修正。
+        if (LineContainsInlineAttributeAndDeclaration(sanitizedLines[anchorIndex]))
             return [sanitizedLines[anchorIndex].Trim()];
 
         var declarationIndex = anchorIndex;
