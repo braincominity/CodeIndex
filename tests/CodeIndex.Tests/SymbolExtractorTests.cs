@@ -3287,6 +3287,85 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsReadonlyIndexers()
+    {
+        // issue #352: `readonly` is a valid indexer modifier on C# 8+ struct members.
+        // Expression-body (`public readonly int this[int i] => _arr[i];`), block-body
+        // (`public readonly string this[string key] { get => key; }`), and generic
+        // (`public readonly T this[int i] { get => _items[i]; }`) shapes must all be
+        // captured as `function` rows with C#'s metadata name `Item` and `visibility` /
+        // `returnType` populated, not dropped because `readonly` is missing from the
+        // indexer-regex modifier slot. The non-readonly baseline indexer and the
+        // readonly method baseline must continue to extract as before.
+        // issue #352: C# 8+ 構造体メンバーの `readonly` はインデクサ修飾子として有効。
+        // 式本体 (`public readonly int this[int i] => _arr[i];`)、ブロック本体
+        // (`public readonly string this[string key] { get => key; }`)、ジェネリック
+        // (`public readonly T this[int i] { get => _items[i]; }`) のいずれも、C# メタ
+        // データ名 `Item` の `function` 行として `visibility` / `returnType` を保持
+        // したまま抽出される必要がある。インデクサ regex の修飾子スロットに `readonly`
+        // が無いことで silent drop されてはならない。非 readonly なインデクサと
+        // readonly メソッドのベースラインは従来どおり抽出される。
+        var content = """
+            namespace Demo;
+
+            public struct S
+            {
+                private int[] _arr;
+
+                public readonly int this[int i] => _arr[i];
+
+                public readonly string this[string key]
+                {
+                    get => key;
+                }
+
+                public int this[long key] => 0;
+
+                public readonly int ReadMe() => 0;
+            }
+
+            public struct Bag<T>
+            {
+                private T[] _items;
+
+                public readonly T this[int i] { get => _items[i]; }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var indexerItems = symbols.Where(s => s.Kind == "function" && s.Name == "Item").ToList();
+        Assert.Equal(4, indexerItems.Count);
+
+        // Expression-body readonly indexer (int) — visibility and returnType preserved.
+        // 式本体 readonly インデクサ (int) — visibility と returnType を保持。
+        var exprReadonlyInt = Assert.Single(indexerItems.Where(s => s.ReturnType == "int" && s.Signature != null && s.Signature.Contains("this[int i]")));
+        Assert.Equal("public", exprReadonlyInt.Visibility);
+        Assert.Contains("readonly", exprReadonlyInt.Signature);
+
+        // Block-body readonly indexer (string key) — visibility and returnType preserved.
+        // ブロック本体 readonly インデクサ (string key) — visibility と returnType を保持。
+        var blockReadonlyString = Assert.Single(indexerItems.Where(s => s.ReturnType == "string"));
+        Assert.Equal("public", blockReadonlyString.Visibility);
+        Assert.Contains("readonly", blockReadonlyString.Signature);
+
+        // Non-readonly baseline indexer (int this[long key]).
+        // 非 readonly ベースラインインデクサ (int this[long key])。
+        var baselineIntLong = Assert.Single(indexerItems.Where(s => s.ReturnType == "int" && s.Signature != null && s.Signature.Contains("this[long key]")));
+        Assert.Equal("public", baselineIntLong.Visibility);
+        Assert.DoesNotContain("readonly", baselineIntLong.Signature);
+
+        // Generic readonly indexer (`public readonly T this[int i] { get => _items[i]; }`).
+        // ジェネリック readonly インデクサ。
+        var genericReadonly = Assert.Single(indexerItems.Where(s => s.ReturnType == "T"));
+        Assert.Equal("public", genericReadonly.Visibility);
+        Assert.Contains("readonly", genericReadonly.Signature);
+
+        // Baseline: `readonly` methods continue to extract as `function` with the source name.
+        // ベースライン: `readonly` メソッドは従来どおり `function` として抽出される。
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ReadMe" && s.ReturnType == "int");
+    }
+
+    [Fact]
     public void Extract_CSharp_MultilinePropertyHeader_DoesNotCreatePhantomFunctionAndKeepsSignature()
     {
         var content = """
