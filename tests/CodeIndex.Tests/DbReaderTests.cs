@@ -4428,6 +4428,87 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetUnusedSymbols_MultilineAttributeWithEmbeddedBlockCommentMentioningIgnoreAttribute_KeepsReflectionContext()
+    {
+        // Regression for #409 follow-up — a multi-line block comment embedded
+        // inside an attribute list must not leak phantom attribute names from
+        // its body. The closing comment line `[JsonIgnore] */` would otherwise
+        // survive BuildSingleLineTrivia as real text, and the phantom
+        // `JsonIgnore` would cancel the real `JsonPropertyName`, flipping the
+        // property out of `reflection_or_config_suspect`.
+        // #409 追加回帰: 属性リスト内に埋め込まれた複数行ブロックコメントの本体が
+        // 擬似的な属性名を ExtractNormalizedAttributeNames に漏らしてはならない。
+        // コメント閉じ行 `[JsonIgnore] */` がそのまま BuildSingleLineTrivia を通過すると、
+        // 幻の `JsonIgnore` が本物の `JsonPropertyName` を打ち消し、プロパティが
+        // `reflection_or_config_suspect` から外れてしまう。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_embedded_block_comment_fixture.cs",
+            Lang = "csharp",
+            Size = 360,
+            Lines = 12,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 11,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class Target
+                {
+                    [
+                        /* explanation
+                           [JsonIgnore] */
+                        JsonPropertyName("ok")
+                    ]
+                    public string E { get; set; } = "";
+                }
+
+                """,
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "Target",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 11,
+                Signature = "public class Target",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "E",
+                Line = 10,
+                StartLine = 10,
+                EndLine = 10,
+                Signature = "public string E { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["reflection_embedded_block_comment_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        var e = Assert.Single(unused, symbol => symbol.Name == "E");
+        Assert.Equal("reflection_or_config_suspect", e.UnusedBucket);
+    }
+
+    [Fact]
     public void GetUnusedSymbols_CommentBetweenAttributeAndProperty_IsClassifiedAsSuspect()
     {
         var fileId = _writer.UpsertFile(new FileRecord

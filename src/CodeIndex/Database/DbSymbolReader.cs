@@ -1746,7 +1746,7 @@ public partial class DbReader
     {
         var anchorLine = lines[anchorIndex];
         if (LineContainsInlineAttributeAndDeclaration(anchorLine))
-            return [anchorLine.Trim()];
+            return [sanitizedLines[anchorIndex].Trim()];
 
         var declarationIndex = anchorIndex;
         if (LooksLikeAttributeBoundaryLine(anchorLine))
@@ -1802,13 +1802,37 @@ public partial class DbReader
                 || SanitizedLineHasInlineDeclarationTail(sanitizedLines[attributeBottom])))
             return [];
 
+        // Build the attribute block from the cross-line-sanitized lines so
+        // comment bodies never bleed into downstream attribute-name parsing.
+        // A multi-line block comment embedded inside an attribute list, e.g.
+        //   [
+        //       /* explanation
+        //          [JsonIgnore] */
+        //       JsonPropertyName("ok")
+        //   ]
+        // has `[JsonIgnore]` inside the comment body. Its original line
+        // survives `BuildSingleLineTrivia`, and `ExtractNormalizedAttributeNames`
+        // would otherwise parse a phantom `JsonIgnore` attribute that cancels
+        // the real `JsonPropertyName`. Sanitized lines blank the comment body
+        // (with lexer state carried across physical lines), so the phantom
+        // attribute disappears while real identifiers like `JsonPropertyName`
+        // are preserved. Closes #409 follow-up.
+        // 属性ブロックは横断 sanitize 済み行から構築する。これにより、
+        // 属性リスト内に埋め込まれた複数行ブロックコメント（上の例のように
+        // `[JsonIgnore]` を本体に含むもの）のコメント本体がダウンストリームの
+        // 属性名パースへ漏れることがない。元の行を渡すと `BuildSingleLineTrivia`
+        // をすり抜けて `ExtractNormalizedAttributeNames` が幻の `JsonIgnore` を
+        // 拾い、本物の `JsonPropertyName` を打ち消してしまっていた。
+        // sanitize 済み行は物理行を跨ぐ lexer 状態でコメント本体を空白化するため、
+        // 幻の属性は消え、`JsonPropertyName` のような本物の識別子だけが残る。
+        // #409 追加修正。
         var block = new List<string>();
         var bracketDepth = 0;
         var sawBracket = false;
 
         for (int i = attributeBottom; i >= 0; i--)
         {
-            var trimmed = lines[i].Trim();
+            var trimmed = sanitizedLines[i].Trim();
             if (triviaMask[i])
             {
                 if (sawBracket)
