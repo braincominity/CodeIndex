@@ -94,6 +94,14 @@ public static class ReferenceExtractor
             // `EXECUTE IMMEDIATE 'dynamic SQL'` (Oracle / PL/pgSQL) — `IMMEDIATE` is not a call target.
             // `EXECUTE IMMEDIATE '動的SQL'` (Oracle / PL/pgSQL) — `IMMEDIATE` は呼び出し対象ではない。
             "IMMEDIATE",
+            // The keywords that introduce a stored-procedure call themselves. The no-parens form is
+            // captured by SqlProcCallRegex; the rare `EXEC(@sql)` / `EXEC('...')` dynamic-SQL form has
+            // no identifier argument, so the generic CallRegex would otherwise emit a phantom
+            // `call EXEC` / `call EXECUTE` / `call CALL` edge pointing at the keyword itself.
+            // ストアドプロシージャ呼び出しを導入するキーワード自身。括弧なし形は SqlProcCallRegex で捕捉し、
+            // 動的 SQL 形の `EXEC(@sql)` / `EXEC('...')` は識別子を持たないため、汎用 CallRegex に任せると
+            // キーワード自体を指す `call EXEC` / `call EXECUTE` / `call CALL` の幽霊エッジが生まれる。
+            "EXEC", "EXECUTE", "CALL",
         },
         // R keywords / R キーワード
         ["r"] = new HashSet<string>(StringComparer.Ordinal)
@@ -498,6 +506,7 @@ public static class ReferenceExtractor
                     var rawName = nameGroup.Value;
                     int nameIndex = nameGroup.Index;
                     string resolvedName;
+                    bool wasBracketed;
                     if (rawName.Length >= 2 && rawName[0] == '[' && rawName[^1] == ']')
                     {
                         // Normalize `[sp_Target]` to `sp_Target` so it matches the indexed symbol name,
@@ -505,13 +514,20 @@ public static class ReferenceExtractor
                         // `[sp_Target]` は識別子名と一致させるため括弧を除去し、列位置は中身の先頭に寄せる。
                         resolvedName = rawName.Substring(1, rawName.Length - 2);
                         nameIndex += 1;
+                        wasBracketed = true;
                     }
                     else
                     {
                         resolvedName = rawName;
+                        wasBracketed = false;
                     }
 
-                    if (IsIgnoredCallName(language, resolvedName))
+                    // Bracketed identifiers in T-SQL are explicitly quoted to allow reserved words
+                    // (`[ORDER]`, `[USER]`, `[AS]`, `[IMMEDIATE]`) as real object names. Skip the
+                    // keyword ignore list so a legitimate `EXEC [ORDER]` is not silently dropped.
+                    // T-SQL の角括弧付き識別子は予約語を識別子として使うための引用形。`[ORDER]` / `[USER]` /
+                    // `[AS]` / `[IMMEDIATE]` のような正当な名前を落とさないため keyword ignore list をスキップする。
+                    if (!wasBracketed && IsIgnoredCallName(language, resolvedName))
                         continue;
                     if (definitionNames != null && definitionNames.Contains(resolvedName))
                         continue;

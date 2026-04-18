@@ -3466,4 +3466,136 @@ public class ReferenceExtractorTests
         var targetRefs = references.Where(r => r.SymbolName == "sp_Target").ToList();
         Assert.Single(targetRefs);
     }
+
+    [Fact]
+    public void Extract_SqlExecDynamicSql_DoesNotEmitPhantomKeywordReference()
+    {
+        // T-SQL dynamic-SQL execution `EXEC(@sql)` / `EXEC('...')` / `EXECUTE(@sql)` pass a string or
+        // variable argument, not an identifier. SqlProcCallRegex requires whitespace after the keyword
+        // so it does not match, and the generic CallRegex used to emit a phantom `call EXEC` /
+        // `call EXECUTE` edge. The SQL ignore list now blocks EXEC / EXECUTE / CALL keyword captures.
+        // `EXEC(@sql)` / `EXEC('...')` / `EXECUTE(@sql)` は識別子ではなく動的 SQL 実行。汎用 CallRegex が
+        // キーワード自身を call として拾って幽霊エッジを作るのを ignore list で封じる。
+        const string content = """
+            CREATE PROCEDURE dbo.sp_Host AS
+            BEGIN
+                DECLARE @sql NVARCHAR(MAX) = 'SELECT 1';
+                EXEC(@sql);
+                EXEC('SELECT 2');
+                EXECUTE(@sql);
+                CALL(@sql);
+            END
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "EXEC");
+        Assert.DoesNotContain(references, r => r.SymbolName == "EXECUTE");
+        Assert.DoesNotContain(references, r => r.SymbolName == "CALL");
+    }
+
+    [Fact]
+    public void Extract_SqlExecBracketedKeywordIdentifier_IsCapturedNotFilteredAsKeyword()
+    {
+        // Bracketed identifiers in T-SQL are the canonical way to use reserved words as real object
+        // names (`[ORDER]`, `[USER]`, `[AS]`, `[IMMEDIATE]`). The bracket-stripping path must bypass
+        // the keyword ignore list so the wrapped name surfaces as a legitimate call reference.
+        // T-SQL の角括弧付き識別子は予約語を名前として使うための引用形。bracket を外したあと keyword
+        // 無視リストで落とさないことを固定する（`EXEC [ORDER]` など正当な呼び出しを落とさないため）。
+        const string content = """
+            EXEC [dbo].[ORDER];
+            EXEC [AS];
+            EXEC [IMMEDIATE];
+            CALL [USER];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "ORDER" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "AS" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "IMMEDIATE" && r.ReferenceKind == "call" && r.Line == 3);
+        Assert.Contains(references, r => r.SymbolName == "USER" && r.ReferenceKind == "call" && r.Line == 4);
+    }
+
+    [Fact]
+    public void Extract_SqlExecBracketedDedup_DoesNotEmitDuplicateForParenForm()
+    {
+        // Bracketed `EXEC [dbo].[sp_Target]()` hits both regexes but SqlProcCallRegex emits at the
+        // bracket-inner column while CallRegex emits at the raw column (the `[`). The dedup key uses
+        // the post-adjustment column, so both paths must converge on the same key and collapse to one row.
+        // ブラケット付き `[dbo].[sp_Target]()` は両 regex が異なる列で発火するが、bracket 除去後の列で
+        // dedup キーが揃うことを固定する（1 件に収まる）。
+        const string content = """
+            EXEC [dbo].[sp_Target]();
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRefs = references.Where(r => r.SymbolName == "sp_Target").ToList();
+        Assert.Single(targetRefs);
+    }
+
+    [Fact]
+    public void Extract_SqlExecUnicodeBracketedIdentifier_IsCaptured()
+    {
+        // Non-ASCII identifiers inside brackets (Japanese, accented Latin, Cyrillic) should survive the
+        // bracket-stripping path. SqlProcCallRegex allows `[\w ]+` which in .NET default regex matches
+        // Unicode word chars, so Japanese / Cyrillic / accented names are preserved.
+        // ブラケット内の非 ASCII 識別子（日本語・アクセント付き・キリル文字）も通常の識別子として
+        // 取り扱えることを固定する。
+        const string content = """
+            EXEC [dbo].[名前];
+            CALL [Ñoño];
+            EXEC [Процедура];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "名前" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Ñoño" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Процедура" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SqlCallWithArguments_CapturesProcedureName()
+    {
+        // MySQL / SQL-PSM stored procedures are invoked as `CALL proc(arg1, arg2)`. The generic
+        // CallRegex already captures this because of the trailing `(`, but the SqlProcCallRegex path
+        // should also stay out of the way (no duplicates, no misattribution to keywords).
+        // MySQL / SQL-PSM の `CALL proc(args)` は既存 CallRegex で捕捉される。SQL 新経路と重複しない
+        // ことと、`CALL` キーワード自体を call として拾わないことを固定する。
+        const string content = """
+            CALL db.my_proc(1, 2);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var procRefs = references.Where(r => r.SymbolName == "my_proc").ToList();
+        Assert.Single(procRefs);
+        Assert.Equal("call", procRefs[0].ReferenceKind);
+        Assert.DoesNotContain(references, r => r.SymbolName == "CALL");
+    }
+
+    [Fact]
+    public void Extract_SqlExecLinkedServerFourPartName_CapturesTerminalIdentifier()
+    {
+        // Linked-server / four-part names like `EXEC server.db.schema.proc` should surface the final
+        // identifier as the reference target; intermediate segments are part of the qualifier.
+        // 4 パート名 `server.db.schema.proc` は末端の識別子のみを参照対象として拾うことを固定する。
+        const string content = """
+            EXEC server1.AdventureWorks.dbo.sp_GetCustomer;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "sp_GetCustomer" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "server1");
+        Assert.DoesNotContain(references, r => r.SymbolName == "AdventureWorks");
+    }
 }
