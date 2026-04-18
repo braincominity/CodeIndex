@@ -6,12 +6,24 @@
 #   curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
 #   curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/v1.5.0/install.sh | bash -s -- v1.5.0
 #   export CDIDX_INSTALL_DIR=/usr/local/bin; curl -fsSL ... | bash
-#   bash ./install.sh --self-test-local-mirror [vX.Y.Z]
+#   bash ./install.sh --self-test-local-mirror [--self-test-allow-overwrite] [vX.Y.Z]
 #
 # Optional env vars / 任意環境変数:
 #   CDIDX_GITHUB_BASE_URL       Release download base URL override
 #   CDIDX_GITHUB_API_BASE_URL   API base URL override for latest-release lookup
 #   CDIDX_LOCAL_MIRROR_PORT     Local self-test HTTP server port (default: 18765)
+#
+# Self-test mock payload safety / セルフテスト mock 上書き防止:
+#   The --self-test-local-mirror path installs a **mock** cdidx that only
+#   handles --version. To prevent that mock from silently replacing a real
+#   ~/.local/bin/cdidx when CDIDX_INSTALL_DIR is pre-exported to a
+#   well-known system/user install path or to a directory that already
+#   holds a cdidx binary, the self-test aborts unless the caller also
+#   passes --self-test-allow-overwrite.
+#   --self-test-local-mirror は --version だけを返す mock cdidx を配置する。
+#   CDIDX_INSTALL_DIR が既知のシステム/ユーザー install 先や、既に cdidx を
+#   持つディレクトリを指しているときは、--self-test-allow-overwrite を明示
+#   しない限り self-test を中断して real install の上書きを防ぐ。
 
 set -euo pipefail
 
@@ -31,6 +43,7 @@ LOCAL_MIRROR_DIR_CLEANUP=""
 LOCAL_MIRROR_PID=""
 SELF_TEST_INSTALL_DIR_CLEANUP=""
 SELF_TEST_LOCAL_MIRROR=0
+SELF_TEST_ALLOW_OVERWRITE="${SELF_TEST_ALLOW_OVERWRITE:-0}"
 EXISTING_BIN=""
 EXISTING_VERSION=""
 EXPLICIT_VERSION_REQUESTED=0
@@ -191,6 +204,48 @@ run_curl_with_optional_loopback_bypass() {
 
 has_explicit_self_test_install_dir() {
     [ -n "${CDIDX_INSTALL_DIR:-}" ]
+}
+
+# Decide whether an explicit CDIDX_INSTALL_DIR is risky enough to refuse the
+# self-test mock install. A "risky" dir is either a well-known system/user
+# install path (where a real cdidx would normally live) or any directory that
+# already contains an executable cdidx binary. Callers can opt out of this
+# guard with --self-test-allow-overwrite.
+# 明示指定された CDIDX_INSTALL_DIR が、既知のシステム/ユーザー install 先か
+# 既に cdidx を持つディレクトリなら、mock での上書きを拒否する。解除には
+# --self-test-allow-overwrite を使う。
+is_self_test_install_dir_risky() {
+    local dir="$1"
+
+    if [ -z "$dir" ]; then
+        return 1
+    fi
+
+    # Expand a leading ~ manually; bash does not expand ~ inside env values.
+    # 先頭の ~ は env の値内では展開されないので手動で置換する。
+    case "$dir" in
+        "~"|"~/"*)
+            if [ -n "${HOME:-}" ]; then
+                dir="${HOME}${dir#\~}"
+            fi
+            ;;
+    esac
+
+    case "$dir" in
+        /usr/local/bin|/usr/bin|/opt/homebrew/bin|/opt/local/bin)
+            return 0
+            ;;
+    esac
+
+    if [ -n "${HOME:-}" ] && [ "$dir" = "${HOME}/.local/bin" ]; then
+        return 0
+    fi
+
+    if [ -x "${dir}/${BINARY_NAME}" ]; then
+        return 0
+    fi
+
+    return 1
 }
 
 release_download_base_url() {
@@ -873,7 +928,14 @@ EOF
     fi
     printf '%s  %s\n' "$checksum" "$archive_name" > "${local_release_base}/sha256sums.txt"
 
-    if ! has_explicit_self_test_install_dir; then
+    if has_explicit_self_test_install_dir; then
+        if is_self_test_install_dir_risky "$INSTALL_DIR" && [ "${SELF_TEST_ALLOW_OVERWRITE:-0}" != "1" ]; then
+            report_error "CDIDX_INSTALL_DIR=\"$INSTALL_DIR\" points at a real install path; refusing to run the mock self-test there."
+            report_error "The self-test installs a mock cdidx that only handles --version, which would silently break the real binary."
+            report_error "Unset CDIDX_INSTALL_DIR to run the self-test in an isolated temp dir, or pass --self-test-allow-overwrite if you truly want to inspect the mock layout in place."
+            error "Local mirror self-test aborted to protect an existing install at ${INSTALL_DIR}."
+        fi
+    else
         if ! self_test_install_dir="$(mktemp -d /tmp/cdidx-self-test-install.XXXXXX)"; then
             error "Failed to create isolated install directory for local mirror self-test."
         fi
@@ -932,6 +994,20 @@ if [ "${CDIDX_INSTALL_SH_LIB_ONLY:-0}" != "1" ]; then
     case "${1:-}" in
         --self-test-local-mirror)
             shift
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --self-test-allow-overwrite)
+                        SELF_TEST_ALLOW_OVERWRITE=1
+                        shift
+                        ;;
+                    --*)
+                        error "Unknown self-test option: $1"
+                        ;;
+                    *)
+                        break
+                        ;;
+                esac
+            done
             run_local_mirror_self_test "${1:-}"
             ;;
         *)

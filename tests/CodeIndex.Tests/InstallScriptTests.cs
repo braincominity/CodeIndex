@@ -2175,6 +2175,226 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void SelfTestLocalMirror_CdidxInstallDirPointsAtHomeLocalBin_AbortsToProtectRealInstall()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var homeDir = Path.Combine(_tempRoot, "self_test_guard_home");
+        var realInstallDir = Path.Combine(homeDir, ".local", "bin");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            export HOME="{{homeDir}}"
+            mkdir -p "{{realInstallDir}}"
+            printf '%s\n' '#!/usr/bin/env bash' 'echo "REAL_EXISTING_BINARY"' > "{{Path.Combine(realInstallDir, "cdidx")}}"
+            chmod +x "{{Path.Combine(realInstallDir, "cdidx")}}"
+            printf '{"version":"9.9.9"}' > "{{Path.Combine(realInstallDir, "version.json")}}"
+            printf 'real-lib' > "{{Path.Combine(realInstallDir, "libe_sqlite3.so")}}"
+
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            wait_for_local_mirror_ready() { :; }
+            python3() { sleep 30; }
+            curl() { :; }
+            main() { echo "MAIN_SHOULD_NOT_RUN"; }
+
+            run_local_mirror_self_test v1.2.3
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = realInstallDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.DoesNotContain("MAIN_SHOULD_NOT_RUN", stdout);
+        Assert.Contains("points at a real install path", stderr);
+        Assert.Contains("--self-test-allow-overwrite", stderr);
+        Assert.Contains("Local mirror self-test aborted to protect an existing install", stderr);
+
+        var realCdidx = File.ReadAllText(Path.Combine(realInstallDir, "cdidx"));
+        Assert.Contains("REAL_EXISTING_BINARY", realCdidx);
+    }
+
+    [Fact]
+    public void SelfTestLocalMirror_CdidxInstallDirContainingExistingCdidx_AbortsToProtectRealInstall()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var customInstallDir = Path.Combine(_tempRoot, "self_test_guard_custom");
+        Directory.CreateDirectory(customInstallDir);
+        var preExistingBinary = Path.Combine(customInstallDir, "cdidx");
+        File.WriteAllText(preExistingBinary, "#!/usr/bin/env bash\necho 'REAL_EXISTING_BINARY'\n");
+        File.SetUnixFileMode(preExistingBinary, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            wait_for_local_mirror_ready() { :; }
+            python3() { sleep 30; }
+            curl() { :; }
+            main() { echo "MAIN_SHOULD_NOT_RUN"; }
+
+            run_local_mirror_self_test v1.2.3
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = customInstallDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.DoesNotContain("MAIN_SHOULD_NOT_RUN", stdout);
+        Assert.Contains("points at a real install path", stderr);
+        Assert.Contains("--self-test-allow-overwrite", stderr);
+
+        var realCdidx = File.ReadAllText(preExistingBinary);
+        Assert.Contains("REAL_EXISTING_BINARY", realCdidx);
+    }
+
+    [Fact]
+    public void SelfTestLocalMirror_AllowOverwriteFlag_ProceedsDespiteRiskyInstallDir()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var homeDir = Path.Combine(_tempRoot, "self_test_allow_home");
+        var realInstallDir = Path.Combine(homeDir, ".local", "bin");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            export HOME="{{homeDir}}"
+            mkdir -p "{{realInstallDir}}"
+            printf '%s\n' '#!/usr/bin/env bash' 'echo "REAL_EXISTING_BINARY"' > "{{Path.Combine(realInstallDir, "cdidx")}}"
+            chmod +x "{{Path.Combine(realInstallDir, "cdidx")}}"
+
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            wait_for_local_mirror_ready() { :; }
+            python3() { sleep 30; }
+            curl() { :; }
+            main() {
+                echo "MAIN_INSTALL_DIR:$INSTALL_DIR"
+                mkdir -p "$INSTALL_DIR"
+                printf '%s\n' '#!/usr/bin/env bash' 'echo "cdidx v1.2.3"' > "$INSTALL_DIR/cdidx"
+                chmod +x "$INSTALL_DIR/cdidx"
+                printf '{"version":"1.2.3"}' > "$INSTALL_DIR/version.json"
+                printf 'self-test-lib' > "$INSTALL_DIR/libe_sqlite3.so"
+            }
+
+            SELF_TEST_ALLOW_OVERWRITE=1
+            run_local_mirror_self_test v1.2.3
+            echo "OVERWRITE_ALLOWED"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = realInstallDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("OVERWRITE_ALLOWED", stdout);
+        Assert.Contains($"MAIN_INSTALL_DIR:{realInstallDir}", stdout);
+        Assert.DoesNotContain("Local mirror self-test aborted", stderr);
+    }
+
+    [Fact]
+    public void SelfTestLocalMirror_AllowOverwriteCliFlag_ProceedsDespiteRiskyInstallDir()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var homeDir = Path.Combine(_tempRoot, "self_test_allow_cli_home");
+        var realInstallDir = Path.Combine(homeDir, ".local", "bin");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            export HOME="{{homeDir}}"
+            mkdir -p "{{realInstallDir}}"
+            printf '%s\n' '#!/usr/bin/env bash' 'echo "REAL_EXISTING_BINARY"' > "{{Path.Combine(realInstallDir, "cdidx")}}"
+            chmod +x "{{Path.Combine(realInstallDir, "cdidx")}}"
+
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            wait_for_local_mirror_ready() { :; }
+            python3() { sleep 30; }
+            curl() { :; }
+            main() {
+                echo "MAIN_INSTALL_DIR:$INSTALL_DIR"
+                echo "ALLOW_FLAG_VALUE:${SELF_TEST_ALLOW_OVERWRITE:-0}"
+                mkdir -p "$INSTALL_DIR"
+                printf '%s\n' '#!/usr/bin/env bash' 'echo "cdidx v1.2.3"' > "$INSTALL_DIR/cdidx"
+                chmod +x "$INSTALL_DIR/cdidx"
+                printf '{"version":"1.2.3"}' > "$INSTALL_DIR/version.json"
+                printf 'self-test-lib' > "$INSTALL_DIR/libe_sqlite3.so"
+            }
+
+            # Simulate CLI dispatch of `install.sh --self-test-local-mirror --self-test-allow-overwrite v1.2.3`
+            set -- --self-test-allow-overwrite v1.2.3
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --self-test-allow-overwrite)
+                        SELF_TEST_ALLOW_OVERWRITE=1
+                        shift
+                        ;;
+                    --*)
+                        echo "UNKNOWN_OPTION:$1" >&2
+                        exit 2
+                        ;;
+                    *)
+                        break
+                        ;;
+                esac
+            done
+            run_local_mirror_self_test "${1:-}"
+            echo "CLI_OVERWRITE_ALLOWED"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = realInstallDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("CLI_OVERWRITE_ALLOWED", stdout);
+        Assert.Contains("ALLOW_FLAG_VALUE:1", stdout);
+        Assert.DoesNotContain("Local mirror self-test aborted", stderr);
+    }
+
+    [Fact]
+    public void SelfTestLocalMirror_CdidxInstallDirPointsAtFreshCustomDir_ProceedsWithoutGuard()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var safeInstallDir = Path.Combine(_tempRoot, "self_test_safe_custom_install");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            wait_for_local_mirror_ready() { :; }
+            python3() { sleep 30; }
+            curl() { :; }
+            main() {
+                echo "MAIN_INSTALL_DIR:$INSTALL_DIR"
+                mkdir -p "$INSTALL_DIR"
+                printf '%s\n' '#!/usr/bin/env bash' 'echo "cdidx v1.2.3"' > "$INSTALL_DIR/cdidx"
+                chmod +x "$INSTALL_DIR/cdidx"
+                printf '{"version":"1.2.3"}' > "$INSTALL_DIR/version.json"
+                printf 'self-test-lib' > "$INSTALL_DIR/libe_sqlite3.so"
+            }
+
+            run_local_mirror_self_test v1.2.3
+            echo "SAFE_CUSTOM_DONE"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = safeInstallDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("SAFE_CUSTOM_DONE", stdout);
+        Assert.Contains($"MAIN_INSTALL_DIR:{safeInstallDir}", stdout);
+        Assert.DoesNotContain("Local mirror self-test aborted", stderr);
+    }
+
+    [Fact]
     public void DownloadAndInstall_UsesConfiguredReleaseBaseUrl()
     {
         if (OperatingSystem.IsWindows())

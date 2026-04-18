@@ -87,8 +87,23 @@ bash ./install.sh --self-test-local-mirror
 ```
 
 By default, this self-test installs into a temporary directory so it does not
-overwrite an existing `~/.local/bin/cdidx`. Only set `CDIDX_INSTALL_DIR`
-explicitly if you intentionally want to inspect the mock install output.
+overwrite an existing `~/.local/bin/cdidx`. If `CDIDX_INSTALL_DIR` is already
+exported (for example, as part of your normal install routine) and points at a
+well-known install path — `~/.local/bin`, `/usr/local/bin`, `/usr/bin`,
+`/opt/homebrew/bin`, `/opt/local/bin` — **or** at any directory that already
+contains a `cdidx` executable, the self-test aborts with an `ERROR:` and does
+not touch that directory. The self-test installs a mock `cdidx` that only
+handles `--version`, so the abort protects you from silently breaking the real
+binary.
+
+If you genuinely want to observe the mock payload land in a real install
+location (rare — usually you want a pre-hosted mirror instead), pass
+`--self-test-allow-overwrite`:
+
+```bash
+bash ./install.sh --self-test-local-mirror --self-test-allow-overwrite
+```
+
 It also requires `python3` and permission to bind a loopback listener on
 `127.0.0.1`; some restricted sandboxes forbid local listen sockets entirely,
 in which case this self-test must run in a less-restricted shell or against a
@@ -311,8 +326,22 @@ bash ./install.sh --self-test-local-mirror
 ```
 
 この self-test は既定では一時ディレクトリへインストールするため、既存の
-`~/.local/bin/cdidx` を上書きしません。mock の配置結果をあえて観察したい
-ときだけ `CDIDX_INSTALL_DIR` を明示してください。
+`~/.local/bin/cdidx` を上書きしません。もし通常インストール運用で
+`CDIDX_INSTALL_DIR` を既に export している場合でも、その値が
+`~/.local/bin`、`/usr/local/bin`、`/usr/bin`、`/opt/homebrew/bin`、
+`/opt/local/bin` のような既知の install 先、または既に `cdidx` 実行ファイル
+を持つディレクトリを指しているときは、`ERROR:` を出して中断し、そのディレク
+トリには一切触りません。self-test が置く `cdidx` は `--version` しか返さない
+mock なので、この中断は実バイナリが黙って壊されることを防ぐためのガードです。
+
+どうしても mock の配置結果を実際の install 先で観察したい場合（稀です。
+通常は事前ホスト済み mirror のほうが適切です）は、
+`--self-test-allow-overwrite` を併用してください:
+
+```bash
+bash ./install.sh --self-test-local-mirror --self-test-allow-overwrite
+```
+
 また、この self-test には `python3` と `127.0.0.1` への loopback listen
 権限が必要です。restricted sandbox によってはローカル listen socket 自体が
 禁止されるため、その場合はより制約の弱い shell か、事前に用意した mirror に
