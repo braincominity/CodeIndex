@@ -170,7 +170,7 @@ public static class SymbolExtractor
         "public", "private", "protected", "static", "readonly", "abstract", "override", "async", "get", "set"
     ];
 
-    private static readonly Regex CSharpEnumDeclarationRegex = new(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:file)\s+)*enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpEnumDeclarationRegex = new(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+|(?:file)\s+)*enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpEnumMemberRegex = new(@"^\s*(?<name>@?[_\p{L}]\w*)\s*(?:=\s*(?:-?\d|0x|@?[_\p{L}]\w*(?:\s*\|\s*@?[_\p{L}]\w*)*)[^""']*)?,?\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpEnumMemberNameRegex = new(@"^\s*(?<name>@?[_\p{L}]\w*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
@@ -289,11 +289,30 @@ public static class SymbolExtractor
             // using エイリアス — 一般 using より前に配置しエイリアス名を取得
             new("import",    new Regex(@"^\s*(?:global\s+)?using\s+(?<name>\w+)\s*=\s*[^;]+;", RegexOptions.Compiled), BodyStyle.None),
             new("import",    new Regex(@"^\s*(?:global\s+)?using\s+(?:static\s+)?(?<name>[^;=]+);", RegexOptions.Compiled), BodyStyle.None),
-            // Const field — must come before class/method patterns to avoid misclassification
-            // const フィールド — クラス/メソッドパターンより前に配置し誤分類を防ぐ
-            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:new|static)\s+)*const\s+(?<returnType>[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            // Const field — must come before class/method patterns to avoid misclassification.
+            // Modifier order is free: visibility may appear anywhere in the modifier sequence,
+            // so `new public const` and `public new const` are both captured. Closes #355.
+            // const フィールド — クラス/メソッドパターンより前に配置し誤分類を防ぐ。
+            // 修飾子順序は自由で、visibility は修飾子列の任意位置に現れてよい（例: `new public const` /
+            // `public new const`）。Closes #355.
+            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:new|static)\s+)*const\s+(?<returnType>[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             // Static readonly field / static readonly フィールド
-            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:new)\s+)?static\s+readonly\s+(?<returnType>[\w?.<>\[\],:\s]+?)\s+(?<name>\w+)\s*[=;]", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            // Modifier order is free: `static` and `readonly` may appear in any order, and `new`
+            // (member hiding) may appear anywhere in the modifier sequence. Visibility is also
+            // accepted anywhere, not just at the front, so legacy orderings like
+            // `readonly public static` / `static public readonly` still classify as kind `function`
+            // instead of falling through to the plain-field (kind `property`) row. Closes #355.
+            // static/readonly の順序は自由で、`new`（メンバー隠蔽）も任意位置に置ける。visibility も
+            // 先頭以外の位置に現れることを許容し、`readonly public static` や `static public readonly`
+            // のような旧来の並びでも kind `function` で取り扱う。通常フィールド（kind `property`）の
+            // 正規表現に流れ落ちないようにする。Closes #355.
+            new("function",  new Regex(
+                $@"^\s*"
+              + $@"(?=(?:(?:{CSharpVisibilityPattern}|new|static|readonly)\s+)*static\s+)"
+              + $@"(?=(?:(?:{CSharpVisibilityPattern}|new|static|readonly)\s+)*readonly\s+)"
+              + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:new|static|readonly)\s+)+"
+              + @"(?<returnType>[\w?.<>\[\],:\s]+?)\s+(?<name>\w+)\s*[=;]",
+                RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             // Plain field (instance, readonly, volatile, plain static, etc.) — kind `property`.
             // Must come AFTER the `const` and `static readonly` patterns (which take priority
             // with kind `function`), and BEFORE the structural declaration patterns.
@@ -311,30 +330,59 @@ public static class SymbolExtractor
             // visibility / modifier キーワードを negative lookahead にも並べて、regex engine が
             // それらを returnType として飲み込む方向に backtrack して `public static event …`
             // のような宣言を field としてマッチすることを防ぐ。Closes #298.
+            // Modifier order is free, so visibility may appear anywhere in the modifier
+            // sequence (e.g. `static public int X;`). Closes #355.
+            // 修飾子順序は自由で、visibility を修飾子列の任意位置に置ける
+            // （例: `static public int X;`）。Closes #355.
             new("property",  new Regex(
-                $@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?"
-              + @"(?:(?:static|readonly|volatile|new|unsafe|extern|required)\s+)*"
-              + @"(?!(?:public|private|protected|internal|static|readonly|volatile|new|unsafe|extern|required|var|class|struct|interface|enum|record|namespace|delegate\b(?!\*)|event|const|using|return|throw|yield|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await|try|do|typeof|sizeof|nameof|default|operator|this|base)\b)"
+                $@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|readonly|volatile|new|unsafe|extern|required)\s+)*"
+              + @"(?!(?:public|private|protected|internal|static|readonly|volatile|new|unsafe|extern|required|abstract|virtual|override|sealed|async|partial|file|ref|var|class|struct|interface|enum|record|namespace|delegate\b(?!\*)|event|const|using|return|throw|yield|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await|try|do|typeof|sizeof|nameof|default|operator|this|base)\b)"
               + $@"(?<returnType>{CSharpTypePattern})\s+"
               + @"(?<name>[A-Za-z_]\w*)\s*(?:=(?![=>])|;)",
                 RegexOptions.Compiled),
                 BodyStyle.None, "visibility", "returnType"),
-            // Interface — visibility optional / インターフェース — visibility 省略可
-            new("interface", new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:partial|unsafe)\s+)*interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Interface — visibility optional; modifier order is free, so visibility may appear
+            // anywhere in the modifier sequence (e.g. `partial public interface`, `file interface`,
+            // `new public interface` for nested types). Closes #355.
+            // インターフェース — visibility 省略可。修飾子順序は自由
+            // （例: `partial public interface`、`file interface`、ネスト型向けの `new public interface`）。Closes #355.
+            new("interface", new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:partial|unsafe|file|new)\s+)*interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Enum — visibility optional / enum — visibility 省略可
             new("enum",      CSharpEnumDeclarationRegex, BodyStyle.Brace, "visibility"),
-            // Struct (including record struct, ref struct, readonly struct) — visibility optional
-            // 構造体（record struct, ref struct, readonly struct を含む）— visibility 省略可
-            new("struct",    new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static|partial|readonly|file|new|ref|unsafe)\s+)*(?:record\s+)?struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            // Class (including record, record class) — visibility optional (defaults to internal for top-level)
-            // クラス（record, record class を含む）— visibility は省略可能（トップレベルでは internal がデフォルト）
-            new("class",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*(?:record\s+class\s+|record\s+|class\s+)(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            // Implicit/explicit conversion operator — must come before general operator pattern
-            // 暗黙的/明示的変換演算子 — 一般のoperatorパターンより先に配置
-            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?static\s+(?:(?:unsafe|extern)\s+)*(?<conversionKind>implicit|explicit)\s+operator\b", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            // Operator overload (+ - * / == != < > etc.) — must come before method pattern
-            // 演算子オーバーロード — メソッドパターンより前に配置
-            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?static\s+.+?\s+(?<name>operator\s+(?:checked\s+)?\S+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Struct (including record struct, ref struct, readonly struct) — visibility optional;
+            // modifier order is free, so visibility may appear anywhere in the modifier sequence
+            // (e.g. `readonly public struct`, `ref public struct`). Closes #355.
+            // 構造体（record struct, ref struct, readonly struct を含む）— visibility 省略可。
+            // 修飾子順序は自由で、visibility は任意位置に置いてよい（例: `readonly public struct`、
+            // `ref public struct`）。Closes #355.
+            new("struct",    new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|partial|readonly|file|new|ref|unsafe)\s+)*(?:record\s+)?struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Class (including record, record class) — visibility optional (defaults to internal
+            // for top-level); modifier order is free, so visibility may appear anywhere in the
+            // modifier sequence (e.g. `abstract public class`, `sealed public class`). Closes #355.
+            // クラス（record, record class を含む）— visibility は省略可能（トップレベルでは internal がデフォルト）。
+            // 修飾子順序は自由で、visibility は任意位置に置いてよい（例: `abstract public class`、
+            // `sealed public class`）。Closes #355.
+            new("class",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*(?:record\s+class\s+|record\s+|class\s+)(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Implicit/explicit conversion operator — must come before general operator pattern.
+            // Visibility may appear before or after `static` / `unsafe` / `extern`. Closes #355.
+            // 暗黙的/明示的変換演算子 — 一般のoperatorパターンより先に配置。
+            // visibility は `static` / `unsafe` / `extern` のどちら側にも置ける。Closes #355.
+            new("function",  new Regex(
+                $@"^\s*"
+              + $@"(?=(?:(?:{CSharpVisibilityPattern}|static|unsafe|extern)\s+)*static\s+)"
+              + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern)\s+)+"
+              + $@"(?<conversionKind>implicit|explicit)\s+operator\b",
+                RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Operator overload (+ - * / == != < > etc.) — must come before method pattern.
+            // Visibility may appear before or after `static`. Closes #355.
+            // 演算子オーバーロード — メソッドパターンより前に配置。
+            // visibility は `static` のどちら側にも置ける。Closes #355.
+            new("function",  new Regex(
+                $@"^\s*"
+              + $@"(?=(?:(?:{CSharpVisibilityPattern}|static|unsafe|extern)\s+)*static\s+)"
+              + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern)\s+)+"
+              + @".+?\s+(?<name>operator\s+(?:checked\s+)?\S+)\s*\(",
+                RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Method with return type — visibility optional for explicit interface impl and nested members.
             // Negative lookahead excludes call-site lines (await/return/throw/yield/var/typeof/sizeof/nameof/default/if/for/while/switch/catch/lock/using)
             // and ternary continuation branches (`? Foo(...)` / `: Foo(...)`) that would otherwise resemble returnType + name.
@@ -357,10 +405,16 @@ public static class SymbolExtractor
             // コンストラクタ初期化子 (`: base(...)` / `: this(...)`) が phantom `function base` / `function this`
             // として漏れないよう二重化する。Closes #331.
             // 注意: `new` は除外しない。`new void Hidden()` は C# のメンバー隠蔽宣言として有効。
-            new("function",  new Regex($@"^\s*(?!\[\s*(?:assembly|module|type|return|param|field|property|event|method)\s*:)(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\s*(?:(?:{CSharpVisibilityPattern})\s+)?delegate\b(?!\s*\*))(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*(?!{CSharpNonTypeKeywordPattern})(?<returnType>{CSharpTypePattern})\s+(?!(?:base|this)\b)(?<name>\w+)\s*(?:<[^>]+>\s*)?\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
-            // Constructor (no return type, name followed by parenthesis) — needs visibility
-            // コンストラクタ（戻り値なし、名前の後に括弧）— visibility 必須
-            new("function",  new Regex($@"^\s*(?<visibility>{CSharpVisibilityPattern})\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function",  new Regex($@"^\s*(?!\[\s*(?:assembly|module|type|return|param|field|property|event|method)\s*:)(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\s*(?:(?:{CSharpVisibilityPattern}|static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*delegate\b(?!\s*\*))(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*(?!{CSharpNonTypeKeywordPattern})(?<returnType>{CSharpTypePattern})\s+(?!(?:base|this)\b)(?<name>\w+)\s*(?:<[^>]+>\s*)?\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            // Constructor (no return type, name followed by parenthesis) — needs visibility.
+            // `unsafe` / `extern` can appear before or after visibility so declarations like
+            // `unsafe public S(int* p) {}` and `extern public S(int x);` are still captured
+            // with visibility populated. Closes #355.
+            // コンストラクタ（戻り値なし、名前の後に括弧）— visibility 必須。
+            // `unsafe` / `extern` は visibility の前後どちらにも置けるため、
+            // `unsafe public S(int* p) {}` や `extern public S(int x);` でも visibility を
+            // 拾える。Closes #355.
+            new("function",  new Regex($@"^\s*(?:(?:unsafe|extern)\s+)*(?<visibility>{CSharpVisibilityPattern})\s+(?:(?:unsafe|extern)\s+)*(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Property with get/set/init — visibility optional
             // Reject statement keywords (return/throw/switch/...) as the return type so that
             // multi-line statement fragments merged by BuildCSharpPropertyMatchLine — e.g.
@@ -370,7 +424,7 @@ public static class SymbolExtractor
             // `return o switch` のような複数行にまたがる文断片が `BuildCSharpPropertyMatchLine`
             // で結合された結果、property として誤判定されるのを防ぐため、戻り値型として
             // ステートメントキーワードを拒否する。Closes #233.
-            new("property",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*\{{", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("property",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*\{{", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Expression-bodied property (public int X => ...) — must come before delegate.
             // Uses BodyStyle.Brace so FindCSharpBraceRange detects '=>' and assigns a body
             // range covering the declaration line through the terminating ';', which
@@ -383,11 +437,19 @@ public static class SymbolExtractor
             // ReferenceExtractor.FindInnermostContainer が accessor 内呼び出しを外側
             // クラスではなく property に帰属させるために必要。
             // Closes #233.
-            new("property",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*=>\s*", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
-            // Delegate — visibility optional / デリゲート — visibility 省略可
-            new("delegate",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static|unsafe)\s+)?delegate\s+(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
-            // Event — visibility optional / イベント — visibility 省略可
-            new("event",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static)\s+)?event\s+(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*(?:[;=]|\{{)", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            new("property",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*=>\s*", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            // Delegate — visibility optional; modifier order is free. Accepts `static` / `unsafe` /
+            // `file` (file-scoped delegate) / `new` (nested delegate hiding). Closes #355.
+            // デリゲート — visibility 省略可。修飾子順序は自由。`static` / `unsafe` /
+            // `file`（file スコープ delegate）/ `new`（ネスト delegate の隠蔽）を受け付ける。Closes #355.
+            new("delegate",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|file|new)\s+)*delegate\s+(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            // Event — visibility optional; modifier order is free. Accepts `static` / `unsafe` /
+            // `extern` plus inheritance modifiers (`virtual` / `override` / `abstract` / `sealed` / `new`)
+            // which are all legal on event declarations per the C# spec. Closes #355.
+            // イベント — visibility 省略可。修飾子順序は自由。`static` / `unsafe` / `extern` に加え、
+            // C# 仕様で event 宣言に有効な継承修飾子 (`virtual` / `override` / `abstract` / `sealed` / `new`)
+            // も受け付ける。Closes #355.
+            new("event",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern|virtual|override|abstract|sealed|new)\s+)*event\s+(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*(?:[;=]|\{{)", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             // Explicit interface implementation (e.g. void IDisposable.Dispose())
             // Requires a valid return type (not a statement keyword) and interface name before the dot.
             // Reject named-argument labels only when they are followed by a qualified call site,
@@ -413,9 +475,11 @@ public static class SymbolExtractor
             // 明示的インターフェースプロパティ実装（式本体）。例: string IThing.Name => "x";
             new("property",  new Regex($@"^\s*(?![?:])(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>\w+)\s*=>\s*", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             // Indexer (this[...]) / インデクサ (this[...])
-            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+)?(?:(?:static|virtual|override|abstract|sealed|new|readonly|ref(?:\s+readonly)?)\s+)*(?<returnType>{CSharpTypePattern})\s+(?<name>this)\s*\[", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?<returnType>{CSharpTypePattern})\s+(?<name>this)\s*\[", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Static constructor / 静的コンストラクタ
-            new("function",  new Regex(@"^\s*static\s+(?<name>\w+)\s*\(\s*\)\s*\{?", RegexOptions.Compiled), BodyStyle.Brace),
+            // `unsafe` can appear before or after `static` (`unsafe static S()` ≡ `static unsafe S()`). Closes #355.
+            // `unsafe` は `static` の前後どちらにも置ける（`unsafe static S()` ≡ `static unsafe S()`）。Closes #355.
+            new("function",  new Regex(@"^\s*(?:unsafe\s+)?static\s+(?:unsafe\s+)?(?<name>\w+)\s*\(\s*\)\s*\{?", RegexOptions.Compiled), BodyStyle.Brace),
             // Finalizer (destructor) / ファイナライザ（デストラクタ）
             new("function",  new Regex(@"^\s*~(?<name>\w+)\s*\(\s*\)", RegexOptions.Compiled), BodyStyle.Brace),
             // Enum member (e.g. Red, Green = 1,) — requires 4+ spaces indent, name only,
@@ -775,7 +839,16 @@ public static class SymbolExtractor
     // も accessor と結合できる。末尾 `{` を許さないと、この形が未結合のまま
     // ShouldSkipCSharpBracePropertyCandidate で弾かれてしまう。
     // Closes #233.
-    private static readonly Regex CSharpPropertyHeaderPrefixRegex = new($@"^\s*(?:(?:{CSharpVisibilityPattern})\s+)?(?:(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|volatile|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?:{CSharpTypePattern})\s*(?:\w+)?\s*\{{?\s*$", RegexOptions.Compiled);
+    // Visibility / modifier ordering is free so that multi-line declarations like
+    // `static public Dictionary<string, int>` + next-line `Map = new();` or
+    // `new public const int` + next-line `C = 1;` merge into a single match line.
+    // `const` is included alongside the other field-eligible modifiers for the
+    // multi-line const field case. Closes #355.
+    // visibility / 修飾子の順序は自由にしておき、`static public Dictionary<string, int>`
+    // + 次行 `Map = new();` や `new public const int` + 次行 `C = 1;` のような
+    // 複数行宣言も 1 つのマッチ行に結合できるようにする。複数行 const フィールド向けに
+    // `const` も他の field 対応修飾子と一緒に列挙する。Closes #355.
+    private static readonly Regex CSharpPropertyHeaderPrefixRegex = new($@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|volatile|unsafe|extern|const|ref(?:\s+readonly)?)\s+)*(?:{CSharpTypePattern})\s*(?:\w+)?\s*\{{?\s*$", RegexOptions.Compiled);
 
     /// <summary>
     /// Extract symbols from the given source content.
@@ -845,7 +918,18 @@ public static class SymbolExtractor
             {
                 if (lang == "csharp" && ReferenceEquals(pattern.Regex, CSharpEnumMemberRegex))
                     continue;
-                var csharpPropertyCandidate = lang == "csharp" && pattern.Kind == "property"
+                // Merge multi-line field headers for C# regardless of kind. Kind "property" (plain
+                // fields) and kind "function" (const / static readonly fields) both need the
+                // merge. Non-field function patterns (methods, constructors, operators, indexers)
+                // are unaffected because CSharpPropertyHeaderPrefixRegex requires the line to end
+                // before `(` or `{`, so lines like `public int Foo()` never satisfy the header
+                // prefix and the merger returns the original line. Closes #355.
+                // C# の複数行フィールドヘッダ結合は kind に依らず適用する。kind "property"（通常
+                // フィールド）と kind "function"（`const` / `static readonly` フィールド）の両方で
+                // 結合が必要。method / constructor / operator / indexer のような非フィールド
+                // function パターンは `CSharpPropertyHeaderPrefixRegex` が `(` や `{` を含む行を
+                // 受け付けないため影響を受けず、merger は元の行をそのまま返す。Closes #355.
+                var csharpPropertyCandidate = lang == "csharp" && pattern.Kind is "property" or "function"
                     ? BuildCSharpPropertyMatchLine(lines, csharpMatchLines!, i)
                     : new CSharpPropertyMatchCandidate(matchLine, i, i);
                 var patternMatchLine = csharpPropertyCandidate.MatchLine;
@@ -979,16 +1063,54 @@ public static class SymbolExtractor
                         && bodyEndLine == startLine
                         ? FindSameLineBraceEndColumn(line, absoluteStartColumn, lang, kind)
                         : -1;
-                    var signature = sameLineEndColumn >= absoluteStartColumn
-                        ? line[absoluteStartColumn..(sameLineEndColumn + 1)].Trim()
-                        : lang == "csharp" && pattern.Kind == "property" && csharpPropertyCandidate.LastConsumedLineIndex > i
-                            ? BuildCSharpMultilineSignature(
-                                lines,
-                                i,
-                                absoluteStartColumn,
-                                csharpPropertyCandidate.SignatureLastLineIndex,
-                                csharpPropertyCandidate.SignatureLastLineExclusiveEndColumn)
-                            : line[absoluteStartColumn..].Trim();
+                    string signature;
+                    if (sameLineEndColumn >= absoluteStartColumn)
+                    {
+                        signature = line[absoluteStartColumn..(sameLineEndColumn + 1)].Trim();
+                    }
+                    else if (lang == "csharp" && pattern.Kind == "property" && csharpPropertyCandidate.LastConsumedLineIndex > i)
+                    {
+                        signature = BuildCSharpMultilineSignature(
+                            lines,
+                            i,
+                            absoluteStartColumn,
+                            csharpPropertyCandidate.SignatureLastLineIndex,
+                            csharpPropertyCandidate.SignatureLastLineExclusiveEndColumn);
+                    }
+                    else if (lang == "csharp"
+                        && pattern.Kind is "class" or "struct" or "interface" or "enum"
+                        && TryFindCSharpTypeHeaderExtent(
+                            lines,
+                            i,
+                            absoluteStartColumn,
+                            out var csharpTypeHeaderLastLineIndex,
+                            out var csharpTypeHeaderLastLineExclusiveEndColumn)
+                        && csharpTypeHeaderLastLineIndex > i)
+                    {
+                        // Wrapped C# type header: base list and `where` clauses often continue
+                        // onto following lines before the body-opening `{` or primary-ctor `;`.
+                        // Join them so consumers like ReferenceExtractor can resolve the base
+                        // type from the stored signature instead of silently treating the class
+                        // as having no base. Uses the comment-stripping variant so trailing or
+                        // interleaved `//` / `/* */` comments do not leak into the signature.
+                        // Closes #382.
+                        // 折り返された C# 型ヘッダ: base リストや `where` 句は本体開きの `{`
+                        // または primary-ctor 終端の `;` までに複数行へまたがることが多い。
+                        // 継続行を連結して保存し、ReferenceExtractor などが保存済み
+                        // シグネチャから base 型を解決できるようにする。末尾や途中に混じる
+                        // `//` / `/* */` コメントを signature から除去する variant を使う。
+                        // Closes #382.
+                        signature = BuildCSharpTypeHeaderSignature(
+                            lines,
+                            i,
+                            absoluteStartColumn,
+                            csharpTypeHeaderLastLineIndex,
+                            csharpTypeHeaderLastLineExclusiveEndColumn);
+                    }
+                    else
+                    {
+                        signature = line[absoluteStartColumn..].Trim();
+                    }
 
                     var declaratorEntries = lang == "csharp"
                         && pattern.Kind == "property"
@@ -4771,7 +4893,7 @@ public static class SymbolExtractor
             BodyStyle.Brace when lang is "javascript" or "typescript" => FindJavaScriptBraceRange(lines, startIndex, lang, startColumn),
             BodyStyle.Brace when lang == "csharp" => FindCSharpBraceRange(lines, startIndex, startColumn),
             BodyStyle.Brace when lang == "java" => FindJavaBraceRange(lines, startIndex, startColumn),
-            BodyStyle.Brace => FindBraceRange(lines, startIndex, startColumn),
+            BodyStyle.Brace => FindBraceRange(lines, startIndex, startColumn, lang),
             BodyStyle.Indent => FindIndentRange(lines, startIndex),
             BodyStyle.RubyEnd => FindRubyRange(lines, startIndex),
             BodyStyle.VisualBasicEnd => FindVisualBasicRange(lines, startIndex),
@@ -5007,11 +5129,38 @@ public static class SymbolExtractor
             : (startIndex + 1, null, null);
     }
 
-    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindBraceRange(string[] lines, int startIndex, int startColumn = 0)
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindBraceRange(string[] lines, int startIndex, int startColumn = 0, string? lang = null)
     {
         int depth = 0;
         bool opened = false;
         int? bodyStartLine = null;
+        // In languages where `'...'` is a regular string literal (PHP) rather than a char
+        // literal (Java/Kotlin/Scala/Swift/Go/C/C++/Dart) or a lifetime annotation (Rust / OCaml),
+        // we must scan to the next unescaped `'` regardless of length so that unbalanced `(`,
+        // `[`, `{`, `}` tokens inside long single-quoted strings do not leak into brace-depth
+        // counters and collapse the enclosing body range.
+        // PHP のように `'...'` が通常の文字列リテラルである言語では、閉じ `'` まで距離を制限せず
+        // スキップしないと、文字列内の `(` / `[` / `{` / `}` で body 範囲が壊れる。
+        bool singleQuoteIsString = lang == "php";
+        // Track () and [] depth so `{` / `}` inside annotation arguments, function-default lambdas,
+        // and similar paren/bracket-delimited contexts do not advance the body brace counter.
+        // Without this, Java headers like `class Leaf extends @Ann({A.class, B.class}) Root {`
+        // count the annotation-arg `{A.class, B.class}` as the body open/close pair, flip
+        // `opened=true` on the inner `{`, close depth to 0 on the inner `}`, and return a 1-line
+        // body range that stops before the real class body opens. Subsequent ctor-chain emission
+        // then loses the enclosing type, silently dropping `super(...)` edges for annotated Java
+        // hierarchies. Same issue applies to Kotlin / Scala default-argument lambdas inside `()`.
+        // Comments and string/char literals are also skipped so that unbalanced `(` `)` `[` `]`
+        // `{` `}` inside them (e.g. `class Leaf extends Root /* ( */ { ... }`, Kotlin docstrings,
+        // or Rust attribute comment bodies) do not leave depth counters stuck above zero and
+        // silently collapse the body range. This mirrors the C# path which already routes through
+        // LexCSharpLine before counting braces.
+        // アノテーション引数内の `{` / `}` を本物の本体ブレースと誤認しないよう `(` / `[` 深度を追い、
+        // コメント・文字列・文字リテラル内の不均衡な括弧やブレースを無視する。
+        int parenDepth = 0;
+        int bracketDepth = 0;
+        bool inBlockComment = false;
+        bool inString = false;
 
         for (int i = startIndex; i < lines.Length; i++)
         {
@@ -5021,10 +5170,124 @@ public static class SymbolExtractor
                     ? string.Empty
                     : lines[i];
 
-            foreach (var c in scanLine)
+            int sawTerminator = -1;
+            for (int j = 0; j < scanLine.Length; j++)
             {
-                if (c == '{')
+                char c = scanLine[j];
+
+                if (inBlockComment)
                 {
+                    if (c == '*' && j + 1 < scanLine.Length && scanLine[j + 1] == '/')
+                    {
+                        inBlockComment = false;
+                        j++;
+                    }
+                    continue;
+                }
+
+                if (inString)
+                {
+                    if (c == '\\' && j + 1 < scanLine.Length)
+                    {
+                        j++;
+                        continue;
+                    }
+                    if (c == '"')
+                        inString = false;
+                    continue;
+                }
+
+                if (c == '/' && j + 1 < scanLine.Length)
+                {
+                    if (scanLine[j + 1] == '/')
+                        break;
+                    if (scanLine[j + 1] == '*')
+                    {
+                        inBlockComment = true;
+                        j++;
+                        continue;
+                    }
+                }
+
+                if (c == '"')
+                {
+                    inString = true;
+                    continue;
+                }
+
+                if (c == '\'')
+                {
+                    if (singleQuoteIsString)
+                    {
+                        // PHP-style: `'...'` is a full string literal. Scan to the next
+                        // unescaped `'` on this line regardless of length so long strings
+                        // with `[` / `{` / `(` inside cannot leak into brace-depth counters.
+                        // PHP の `'...'` はフルの文字列リテラル。閉じ `'` まで距離制限なく走査する。
+                        var closeIdx = -1;
+                        for (int k = j + 1; k < scanLine.Length; k++)
+                        {
+                            if (scanLine[k] == '\\' && k + 1 < scanLine.Length)
+                            {
+                                k++;
+                                continue;
+                            }
+                            if (scanLine[k] == '\'')
+                            {
+                                closeIdx = k;
+                                break;
+                            }
+                        }
+                        // If no close on this line, swallow the rest of the line so multi-line
+                        // PHP single-quoted strings do not corrupt brace depth mid-scan.
+                        // その行に閉じが無ければ行末までスキップする（PHP の複数行 '...' 文字列対応）。
+                        j = closeIdx > 0 ? closeIdx : scanLine.Length;
+                        continue;
+                    }
+
+                    // Distinguish char literals (`'x'`, `'\n'`, `'\u{1}'`) from Rust / OCaml
+                    // lifetime annotations (`'a`, `'static`, `'_`) and from possessive text
+                    // in comments/strings we already skipped. A char literal has a closing
+                    // `'` within a short distance; a lifetime does not. If we cannot locate
+                    // a matching close within ~12 chars on this line, treat the `'` as a
+                    // regular character so `Holder<'a>` does not swallow the `{` that follows.
+                    // Rust の lifetime (`'a`) と char literal (`'x'`) を区別する。対応する閉じ `'`
+                    // が近傍に無ければ lifetime として `'` を普通の文字扱いで読み飛ばす。
+                    {
+                        var closeIdx = -1;
+                        var limit = Math.Min(scanLine.Length, j + 12);
+                        for (int k = j + 1; k < limit; k++)
+                        {
+                            if (scanLine[k] == '\\' && k + 1 < scanLine.Length)
+                            {
+                                k++;
+                                continue;
+                            }
+                            if (scanLine[k] == '\'')
+                            {
+                                closeIdx = k;
+                                break;
+                            }
+                        }
+                        if (closeIdx > 0)
+                        {
+                            j = closeIdx;
+                        }
+                    }
+                    continue;
+                }
+
+                if (c == '(')
+                    parenDepth++;
+                else if (c == ')' && parenDepth > 0)
+                    parenDepth--;
+                else if (c == '[')
+                    bracketDepth++;
+                else if (c == ']' && bracketDepth > 0)
+                    bracketDepth--;
+                else if (c == '{')
+                {
+                    if (parenDepth > 0 || bracketDepth > 0)
+                        continue;
                     depth++;
                     if (!opened)
                     {
@@ -5034,14 +5297,23 @@ public static class SymbolExtractor
                 }
                 else if (c == '}' && opened)
                 {
+                    if (parenDepth > 0 || bracketDepth > 0)
+                        continue;
                     depth--;
                     if (depth == 0)
-                        return (i + 1, bodyStartLine, i + 1);
+                    {
+                        sawTerminator = j;
+                        break;
+                    }
                 }
             }
 
-            if (!opened && scanLine.TrimEnd().EndsWith(';'))
+            if (sawTerminator >= 0)
+                return (i + 1, bodyStartLine, i + 1);
+
+            if (!opened && !inBlockComment && !inString && scanLine.TrimEnd().EndsWith(';'))
                 return (startIndex + 1, null, null);
+            // Line comments reset at end of line (handled by the break above).
         }
 
         return opened
@@ -5054,12 +5326,24 @@ public static class SymbolExtractor
     // block or quoted string does not prematurely close the containing brace range.
     // Java 用の FindBraceRange。文字列 / char / コメント / text block を enum member 抽出と同じ
     // lexer で追跡し、text block や文字列内の `}` で本体範囲が早期終了しないようにする。
-    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindJavaBraceRange(string[] lines, int startIndex, int startColumn = 0)
+    internal static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindJavaBraceRange(string[] lines, int startIndex, int startColumn = 0)
     {
         var depth = 0;
         var opened = false;
         int? bodyStartLine = null;
         var mode = JavaScanMode.Normal;
+        // Track paren/bracket/angle nesting before the body opens so that `{` / `}` appearing
+        // inside `@Ann({A.class, B.class})` type-use annotations or bounded generic arguments
+        // don't open/close the outer class body prematurely. Once the body is opened, only
+        // string/char/comment tracking matters for the depth counter, so the header-level
+        // counters are frozen.
+        // body `{` が開く前に `@Ann({...})` や `List<Map<String,Integer>>` のような annotation
+        // 引数・入れ子 generic 内の `{` / `}` で誤って開閉しないよう、header 段階の `()` / `[]`
+        // / `<>` 深さを追跡する。body が開いた後は深さ計測は不要（lexer の文字列・コメント
+        // 追跡で十分）。
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var angleDepth = 0;
 
         for (int i = startIndex; i < lines.Length; i++)
         {
@@ -5075,6 +5359,21 @@ public static class SymbolExtractor
                     continue;
 
                 var ch = line[column];
+                if (!opened)
+                {
+                    if (ch == '(') { parenDepth++; column++; continue; }
+                    if (ch == ')' && parenDepth > 0) { parenDepth--; column++; continue; }
+                    if (ch == '[') { bracketDepth++; column++; continue; }
+                    if (ch == ']' && bracketDepth > 0) { bracketDepth--; column++; continue; }
+                    if (ch == '<') { angleDepth++; column++; continue; }
+                    if (ch == '>' && angleDepth > 0) { angleDepth--; column++; continue; }
+                    if ((parenDepth > 0 || bracketDepth > 0 || angleDepth > 0))
+                    {
+                        column++;
+                        continue;
+                    }
+                }
+
                 if (ch == '{')
                 {
                     depth++;
@@ -5093,7 +5392,9 @@ public static class SymbolExtractor
                 column++;
             }
 
-            if (!opened && mode == JavaScanMode.Normal && line.TrimEnd().EndsWith(';'))
+            if (!opened && mode == JavaScanMode.Normal
+                && parenDepth == 0 && bracketDepth == 0 && angleDepth == 0
+                && line.TrimEnd().EndsWith(';'))
                 return (startIndex + 1, null, null);
         }
 
@@ -7145,6 +7446,530 @@ public static class SymbolExtractor
         }
 
         return builder.ToString().Trim();
+    }
+
+    // Scan forward from a C# type declaration header (`class` / `struct` / `interface` /
+    // `enum`) and find where the header ends — either at the body-opening `{` or the
+    // primary-constructor / forward-declaration terminator `;`. Returns the line index
+    // and column of that terminator so the signature builder can concatenate the header
+    // lines up to (but not including) the terminator. Respects paren depth for primary
+    // ctors, bracket depth for attributes on type / generic parameters, and uses the
+    // same lexer as the rest of the C# path so that `{` / `;` inside string literals,
+    // comments, or verbatim / raw strings do not short-circuit the scan. A line cap
+    // prevents runaway scans on unterminated input. Closes #382.
+    //
+    // C# 型宣言ヘッダ（`class` / `struct` / `interface` / `enum`）の終端位置を探す。
+    // 本体開きの `{` か、primary ctor / 前方宣言の `;` を終端とする。終端行と列を
+    // 返すので、シグネチャ組立側はその直前までを連結できる。primary ctor 用の
+    // 括弧深度、型 / ジェネリック引数へのアトリビュート用の角括弧深度を追跡し、
+    // 文字列リテラル、コメント、verbatim / raw 文字列の中の `{` / `;` を
+    // 誤検出しないよう、他の C# 経路と同じ lexer を共有する。未終端入力に対する
+    // 暴走防止に行数上限を設ける。Closes #382.
+    private const int CSharpTypeHeaderLookaheadLineLimit = 64;
+
+    private static bool TryFindCSharpTypeHeaderExtent(
+        string[] lines,
+        int startLineIndex,
+        int startColumn,
+        out int lastLineIndex,
+        out int? lastLineExclusiveEndColumn)
+    {
+        var lexState = new CSharpLexState();
+        var parenDepth = 0;
+        var bracketDepth = 0;
+
+        var limit = Math.Min(lines.Length, startLineIndex + CSharpTypeHeaderLookaheadLineLimit);
+        for (int i = startLineIndex; i < limit; i++)
+        {
+            var lexedLine = LexCSharpLine(lines[i], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+            var fromColumn = i == startLineIndex ? startColumn : 0;
+
+            for (int column = fromColumn; column < sanitizedLine.Length; column++)
+            {
+                var ch = sanitizedLine[column];
+                switch (ch)
+                {
+                    case '(':
+                        parenDepth++;
+                        break;
+                    case ')' when parenDepth > 0:
+                        parenDepth--;
+                        break;
+                    case '[':
+                        bracketDepth++;
+                        break;
+                    case ']' when bracketDepth > 0:
+                        bracketDepth--;
+                        break;
+                    case '{' when parenDepth == 0 && bracketDepth == 0:
+                        lastLineIndex = i;
+                        lastLineExclusiveEndColumn = column;
+                        return true;
+                    case ';' when parenDepth == 0 && bracketDepth == 0:
+                        lastLineIndex = i;
+                        lastLineExclusiveEndColumn = column;
+                        return true;
+                }
+            }
+        }
+
+        lastLineIndex = -1;
+        lastLineExclusiveEndColumn = null;
+        return false;
+    }
+
+    // Build a multi-line C# type-header signature like BuildCSharpMultilineSignature, but
+    // strip inline `//` and `/* ... */` comments that would otherwise leak into the stored
+    // `symbols.signature` when a base list or `where` clause has a trailing or interleaved
+    // comment. Uses the shared C# lexer so comment boundaries cannot be confused by `//`
+    // or `/*` characters inside string, char, verbatim, or raw string literals. String
+    // content is preserved (primary constructor default arguments, etc.). Closes #382.
+    //
+    // BuildCSharpMultilineSignature と同じく折り返された C# 型ヘッダを連結する。ただし
+    // base リストや `where` 句に混ざる `//` / `/* ... */` コメントを除去し、保存される
+    // `symbols.signature` に漏れないようにする。`//` / `/*` が文字列リテラル・char・
+    // verbatim・raw 文字列内にある場合を誤検出しないよう共有 C# lexer を使う。文字列の
+    // 中身（primary constructor のデフォルト引数など）はそのまま保持する。Closes #382.
+    private static string BuildCSharpTypeHeaderSignature(
+        string[] lines,
+        int startLineIndex,
+        int startColumn,
+        int lastLineIndex,
+        int? lastLineExclusiveEndColumn)
+    {
+        // Assemble the raw slice preserving '\n' between physical lines so multi-line raw
+        // and verbatim string literals keep their newlines and leading indentation. The
+        // dedicated sanitizer handles lex mode (Code / String / Verbatim / Raw / Char /
+        // LineComment / BlockComment) and interpolation holes in one pass.
+        // 物理行を跨ぐとき `\n` をそのまま入れてスライスを組み立て、multi-line raw や
+        // verbatim 文字列リテラルの改行と行頭インデントを保持する。専用サニタイザが
+        // lex モード（Code / String / Verbatim / Raw / Char / LineComment / BlockComment）
+        // と補間ホールを 1 パスで処理する。
+        var rawSlice = new StringBuilder();
+        for (int i = startLineIndex; i <= lastLineIndex && i < lines.Length; i++)
+        {
+            var line = lines[i];
+            // Content was split on '\n', so CRLF lines carry a trailing '\r'. Trim it so the
+            // inter-line separator stays '\n' regardless of source-file line endings.
+            // content は '\n' で分割しているため、CRLF 行は末尾に '\r' が残る。行間を
+            // 必ず '\n' に揃えるため末尾の '\r' を落とす。
+            int length = line.Length;
+            if (length > 0 && line[length - 1] == '\r')
+                length--;
+            int from = i == startLineIndex ? Math.Clamp(startColumn, 0, length) : 0;
+            int to = i == lastLineIndex && lastLineExclusiveEndColumn.HasValue
+                ? Math.Clamp(lastLineExclusiveEndColumn.Value, 0, length)
+                : length;
+            if (to < from) to = from;
+            if (i > startLineIndex)
+                rawSlice.Append('\n');
+            if (from < to)
+                rawSlice.Append(line, from, to - from);
+        }
+
+        return SanitizeCSharpTypeHeaderSlice(rawSlice.ToString()).Trim();
+    }
+
+    private enum CSharpHeaderFrameKind
+    {
+        Code,
+        LineComment,
+        BlockComment,
+        String,
+        Verbatim,
+        Raw,
+        Char,
+    }
+
+    private struct CSharpHeaderFrame
+    {
+        public CSharpHeaderFrameKind Kind;
+        public bool Interpolated;   // String / Verbatim / Raw: true if $-prefixed.
+        public int DollarCount;     // Raw: number of '$' prefixes; also the '{' count needed to open a hole.
+        public int QuoteCount;      // Raw: number of '"' in the opening delimiter; same run closes the string.
+        public int HoleBraceDepth;  // Code frame inside an interpolation hole: counts nested '{' depth. 0 means next unmatched '}' exits the hole.
+        public bool EscapeNext;     // String / Char: true if a preceding backslash awaits its escaped char.
+    }
+
+    // Sanitize a C# type header slice: strip `//` line comments and `/* ... */` block
+    // comments, collapse runs of Code-mode whitespace (including '\n' between lines) to a
+    // single space, preserve all String / Verbatim / Raw / Char literal contents verbatim
+    // (including literal whitespace runs, line breaks inside raw / verbatim strings, and
+    // escape sequences), and keep interpolation holes (`$"{expr}"`, `$@"{expr}"`, raw
+    // `$"""{expr}"""` / `$$"""{{expr}}"""`) correctly classified as Code-mode content so
+    // whitespace inside holes is collapsed while literal content outside holes is not.
+    // Closes #382.
+    //
+    // C# 型ヘッダスライスのサニタイザ: `//` 行コメントと `/* ... */` ブロックコメントを
+    // 除去し、Code モードの空白列（行間の `\n` も含む）を 1 つのスペースに畳み、String /
+    // Verbatim / Raw / Char リテラルの中身（リテラル内の空白、raw / verbatim の行末改行、
+    // エスケープ列）は verbatim に残し、補間ホール（`$"{expr}"`、`$@"{expr}"`、raw
+    // `$"""{expr}"""` / `$$"""{{expr}}"""`）内部は Code モードとして分類してホール内の
+    // 空白だけを畳み、ホール外のリテラル内容は畳まないようにする。Closes #382.
+    private static string SanitizeCSharpTypeHeaderSlice(string input)
+    {
+        if (string.IsNullOrEmpty(input))
+            return string.Empty;
+
+        var output = new StringBuilder(input.Length);
+        var stack = new Stack<CSharpHeaderFrame>();
+        stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.Code });
+        bool prevWasCodeSpace = false;
+        int i = 0;
+
+        while (i < input.Length)
+        {
+            var frame = stack.Peek();
+            var ch = input[i];
+            var next = i + 1 < input.Length ? input[i + 1] : '\0';
+
+            if (frame.Kind == CSharpHeaderFrameKind.LineComment)
+            {
+                // `//` swallows everything to the next '\n', which then flows through
+                // Code-mode whitespace handling as a single space. `//` は次の '\n' まで
+                // 食いつぶし、'\n' は Code モードで 1 スペースに畳まれる。
+                if (ch == '\n')
+                {
+                    stack.Pop();
+                    continue;
+                }
+                i++;
+                continue;
+            }
+
+            if (frame.Kind == CSharpHeaderFrameKind.BlockComment)
+            {
+                if (ch == '*' && next == '/')
+                {
+                    stack.Pop();
+                    i += 2;
+                    continue;
+                }
+                i++;
+                continue;
+            }
+
+            if (frame.Kind == CSharpHeaderFrameKind.String)
+            {
+                output.Append(ch);
+                prevWasCodeSpace = false;
+
+                if (frame.EscapeNext)
+                {
+                    frame.EscapeNext = false;
+                    stack.Pop();
+                    stack.Push(frame);
+                    i++;
+                    continue;
+                }
+                if (ch == '\\')
+                {
+                    frame.EscapeNext = true;
+                    stack.Pop();
+                    stack.Push(frame);
+                    i++;
+                    continue;
+                }
+                if (ch == '{' && frame.Interpolated)
+                {
+                    if (next == '{')
+                    {
+                        // `{{` is a literal brace inside an interpolated string.
+                        // `{{` は補間文字列内のリテラル波括弧エスケープ。
+                        output.Append(next);
+                        i += 2;
+                        continue;
+                    }
+                    stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.Code });
+                    i++;
+                    continue;
+                }
+                if (ch == '}' && frame.Interpolated && next == '}')
+                {
+                    output.Append(next);
+                    i += 2;
+                    continue;
+                }
+                if (ch == '"')
+                {
+                    stack.Pop();
+                    i++;
+                    continue;
+                }
+                i++;
+                continue;
+            }
+
+            if (frame.Kind == CSharpHeaderFrameKind.Verbatim)
+            {
+                output.Append(ch);
+                prevWasCodeSpace = false;
+
+                if (ch == '"' && next == '"')
+                {
+                    // `""` is a literal '"' escape inside a verbatim string.
+                    // verbatim 文字列内の `""` はリテラル '"' エスケープ。
+                    output.Append(next);
+                    i += 2;
+                    continue;
+                }
+                if (ch == '{' && frame.Interpolated)
+                {
+                    if (next == '{')
+                    {
+                        output.Append(next);
+                        i += 2;
+                        continue;
+                    }
+                    stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.Code });
+                    i++;
+                    continue;
+                }
+                if (ch == '}' && frame.Interpolated && next == '}')
+                {
+                    output.Append(next);
+                    i += 2;
+                    continue;
+                }
+                if (ch == '"')
+                {
+                    stack.Pop();
+                    i++;
+                    continue;
+                }
+                i++;
+                continue;
+            }
+
+            if (frame.Kind == CSharpHeaderFrameKind.Raw)
+            {
+                // In a raw string, a hole opens on a run of '{' at least DollarCount long
+                // (for $$-prefixed raw strings, {{ is literal, only {{{ opens), and the
+                // string closes on a run of '"' at least QuoteCount long.
+                // raw 文字列では、`{` が DollarCount 個以上並んでいればホール開始、
+                // 不足するならリテラルの波括弧。`"` が QuoteCount 個以上並べば文字列終端。
+                if (ch == '{' && frame.Interpolated && frame.DollarCount > 0)
+                {
+                    int runLen = 0;
+                    while (i + runLen < input.Length && input[i + runLen] == '{')
+                        runLen++;
+                    if (runLen >= frame.DollarCount)
+                    {
+                        for (int k = 0; k < frame.DollarCount; k++)
+                            output.Append('{');
+                        i += frame.DollarCount;
+                        stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.Code });
+                        prevWasCodeSpace = false;
+                        continue;
+                    }
+                    for (int k = 0; k < runLen; k++)
+                        output.Append('{');
+                    i += runLen;
+                    prevWasCodeSpace = false;
+                    continue;
+                }
+                if (ch == '"')
+                {
+                    int runLen = 0;
+                    while (i + runLen < input.Length && input[i + runLen] == '"')
+                        runLen++;
+                    if (runLen >= frame.QuoteCount)
+                    {
+                        for (int k = 0; k < frame.QuoteCount; k++)
+                            output.Append('"');
+                        i += frame.QuoteCount;
+                        stack.Pop();
+                        prevWasCodeSpace = false;
+                        continue;
+                    }
+                    for (int k = 0; k < runLen; k++)
+                        output.Append('"');
+                    i += runLen;
+                    prevWasCodeSpace = false;
+                    continue;
+                }
+                output.Append(ch);
+                prevWasCodeSpace = false;
+                i++;
+                continue;
+            }
+
+            if (frame.Kind == CSharpHeaderFrameKind.Char)
+            {
+                output.Append(ch);
+                prevWasCodeSpace = false;
+
+                if (frame.EscapeNext)
+                {
+                    frame.EscapeNext = false;
+                    stack.Pop();
+                    stack.Push(frame);
+                    i++;
+                    continue;
+                }
+                if (ch == '\\')
+                {
+                    frame.EscapeNext = true;
+                    stack.Pop();
+                    stack.Push(frame);
+                    i++;
+                    continue;
+                }
+                if (ch == '\'')
+                {
+                    stack.Pop();
+                    i++;
+                    continue;
+                }
+                i++;
+                continue;
+            }
+
+            // Code mode (root code or an open interpolation hole).
+            // Code モード（ルート コード または 開いている補間ホール）。
+            if (ch == '}' && stack.Count > 1 && frame.HoleBraceDepth == 0)
+            {
+                stack.Pop();
+                output.Append(ch);
+                prevWasCodeSpace = false;
+                i++;
+                continue;
+            }
+            if (ch == '{' && stack.Count > 1)
+            {
+                frame.HoleBraceDepth++;
+                stack.Pop();
+                stack.Push(frame);
+                output.Append(ch);
+                prevWasCodeSpace = false;
+                i++;
+                continue;
+            }
+            if (ch == '}' && stack.Count > 1)
+            {
+                frame.HoleBraceDepth--;
+                stack.Pop();
+                stack.Push(frame);
+                output.Append(ch);
+                prevWasCodeSpace = false;
+                i++;
+                continue;
+            }
+
+            if (ch == '/' && next == '/')
+            {
+                stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.LineComment });
+                if (!prevWasCodeSpace)
+                {
+                    output.Append(' ');
+                    prevWasCodeSpace = true;
+                }
+                i += 2;
+                continue;
+            }
+            if (ch == '/' && next == '*')
+            {
+                stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.BlockComment });
+                if (!prevWasCodeSpace)
+                {
+                    output.Append(' ');
+                    prevWasCodeSpace = true;
+                }
+                i += 2;
+                continue;
+            }
+
+            if (TryReadCSharpRawStringStart(input, i, out var rawPrefixLength, out var rawDelimiterLength))
+            {
+                int total = rawPrefixLength + rawDelimiterLength;
+                for (int k = 0; k < total && i + k < input.Length; k++)
+                    output.Append(input[i + k]);
+                stack.Push(new CSharpHeaderFrame
+                {
+                    Kind = CSharpHeaderFrameKind.Raw,
+                    Interpolated = rawPrefixLength > 0,
+                    DollarCount = rawPrefixLength,
+                    QuoteCount = rawDelimiterLength,
+                });
+                i += total;
+                prevWasCodeSpace = false;
+                continue;
+            }
+
+            if (ch == '$' && next == '@' && i + 2 < input.Length && input[i + 2] == '"')
+            {
+                output.Append(ch);
+                output.Append(next);
+                output.Append(input[i + 2]);
+                stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.Verbatim, Interpolated = true });
+                i += 3;
+                prevWasCodeSpace = false;
+                continue;
+            }
+            if (ch == '@' && next == '$' && i + 2 < input.Length && input[i + 2] == '"')
+            {
+                output.Append(ch);
+                output.Append(next);
+                output.Append(input[i + 2]);
+                stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.Verbatim, Interpolated = true });
+                i += 3;
+                prevWasCodeSpace = false;
+                continue;
+            }
+            if (ch == '@' && next == '"')
+            {
+                output.Append(ch);
+                output.Append(next);
+                stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.Verbatim, Interpolated = false });
+                i += 2;
+                prevWasCodeSpace = false;
+                continue;
+            }
+            if (ch == '$' && next == '"')
+            {
+                output.Append(ch);
+                output.Append(next);
+                stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.String, Interpolated = true });
+                i += 2;
+                prevWasCodeSpace = false;
+                continue;
+            }
+            if (ch == '"')
+            {
+                output.Append(ch);
+                stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.String, Interpolated = false });
+                i++;
+                prevWasCodeSpace = false;
+                continue;
+            }
+            if (ch == '\'')
+            {
+                output.Append(ch);
+                stack.Push(new CSharpHeaderFrame { Kind = CSharpHeaderFrameKind.Char });
+                i++;
+                prevWasCodeSpace = false;
+                continue;
+            }
+
+            if (char.IsWhiteSpace(ch))
+            {
+                if (!prevWasCodeSpace)
+                {
+                    output.Append(' ');
+                    prevWasCodeSpace = true;
+                }
+                i++;
+                continue;
+            }
+
+            output.Append(ch);
+            prevWasCodeSpace = false;
+            i++;
+        }
+
+        return output.ToString();
     }
 
     private static string CollapseCSharpGenericTypeWhitespace(string line)

@@ -112,6 +112,7 @@ public class FileIndexerTests
     // Bare trailing-dot forms should not match prefix rules — suffix must be non-empty.
     // 末尾ドットだけの形はプレフィックス規則に一致しない（サフィックス必須）。
     [InlineData("Dockerfile.")]
+    [InlineData("Containerfile.")]
     [InlineData("Makefile.")]
     [InlineData("GNUmakefile.")]
     public void DetectLanguage_BareTrailingDot_DoesNotMatchPrefix(string filename)
@@ -374,6 +375,130 @@ public class FileIndexerTests
         finally
         {
             Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_SkipsDirectorySymlinkPointingAtAncestor()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            var subDir = Path.Combine(tempDir, "sub");
+            Directory.CreateDirectory(subDir);
+            File.WriteAllText(Path.Combine(subDir, "foo.py"), "def hello(): pass\n");
+            // Directory symlink pointing at the ancestor (self-recursion if followed).
+            // 先祖を指すディレクトリ symlink（辿ると無限再帰になる）。
+            Directory.CreateSymbolicLink(Path.Combine(subDir, "parent_loop"), "..");
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["sub/foo.py"], files);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_SkipsFileSymlinkToRealFileInProject()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            var nested = Path.Combine(tempDir, "a", "b", "c");
+            Directory.CreateDirectory(nested);
+            File.WriteAllText(Path.Combine(nested, "foo.py"), "def hello(): pass\n");
+            // File symlink that would otherwise cause the same content to be indexed under a second path.
+            // 同じ内容が2つ目の path としても index されてしまうのを防ぐ確認。
+            File.CreateSymbolicLink(Path.Combine(tempDir, "file_symlink.py"), Path.Combine("a", "b", "c", "foo.py"));
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["a/b/c/foo.py"], files);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void GetFileIndexability_RejectsFileSymlinkSoUpdateModeSkipsIt()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var realFile = Path.Combine(tempDir, "real.py");
+            File.WriteAllText(realFile, "x = 1\n");
+            // File symlink pointing at the same-tree real file. The Unix stat() path would follow this
+            // symlink and see it as a regular file, so GetFileIndexability must gate on the reparse-point
+            // check to keep --files / --commits update paths symlink-safe.
+            // 同ツリー内の実ファイルを指すファイル symlink。Unix の stat() は symlink を辿ってしまうため、
+            // GetFileIndexability は reparse-point ガードで弾かないと --files / --commits 経路で
+            // 素通りしてしまう。
+            var linkPath = Path.Combine(tempDir, "alias.py");
+            File.CreateSymbolicLink(linkPath, realFile);
+
+            Assert.True(FileIndexer.CanIndexFile(realFile));
+            Assert.False(FileIndexer.CanIndexFile(linkPath));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void ScanFiles_SkipsDanglingSymlinksWithoutAbortingScan()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            File.WriteAllText(Path.Combine(tempDir, "real.py"), "def real(): pass\n");
+            // Dangling symlinks (target does not exist) must be skipped without aborting the scan.
+            // target が存在しない dangling symlink は、scan 全体を落とさずスキップする。
+            File.CreateSymbolicLink(Path.Combine(tempDir, "dangling.py"), "missing_target.py");
+            Directory.CreateSymbolicLink(Path.Combine(tempDir, "dangling_dir"), Path.Combine(Path.GetTempPath(), $"missing_{Guid.NewGuid():N}"));
+
+            var indexer = new FileIndexer(tempDir);
+            var files = indexer.ScanFiles()
+                .Select(path => Path.GetRelativePath(tempDir, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+
+            Assert.Equal(["real.py"], files);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
         }
     }
 
@@ -1236,6 +1361,54 @@ public class FileIndexerTests
         {
             Directory.Delete(tempDir, true);
         }
+    }
+
+    [Fact]
+    public void BuildRecord_PreservesBackslashInPosixFilename()
+    {
+        // On POSIX, '\' is a valid filename character and must not be converted to '/'.
+        // Otherwise a file named "back\slash.py" becomes a phantom "back/slash.py".
+        // POSIX では '\' は正当なファイル名文字であり、'/' に置換すべきでない。
+        // 置換すると "back\slash.py" が幻の "back/slash.py" として保存されてしまう。
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var filePath = Path.Combine(tempDir, "back\\slash.py");
+            File.WriteAllText(filePath, "def hu(): pass\n");
+
+            var indexer = new FileIndexer(tempDir);
+            var (record, _, _) = indexer.BuildRecord(filePath);
+
+            Assert.Equal("back\\slash.py", record.Path);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void NormalizePathSeparators_OnPosixKeepsBackslashInFilename()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        Assert.Equal("back\\slash.py", FileIndexer.NormalizePathSeparators("back\\slash.py"));
+        Assert.Equal("dir/back\\slash.py", FileIndexer.NormalizePathSeparators("dir/back\\slash.py"));
+    }
+
+    [Fact]
+    public void NormalizePathSeparators_OnWindowsConvertsBackslashToForwardSlash()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        Assert.Equal("src/models/user.py", FileIndexer.NormalizePathSeparators("src\\models\\user.py"));
     }
 
     [Fact]

@@ -3360,6 +3360,426 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_WrappedClassHeader_IncludesBaseListAndWhereClauseInSignature()
+    {
+        var content = """
+            namespace Demo;
+
+            public sealed class Foo<T>
+                : BaseFoo<T>, IBar, IBaz
+                where T : class, new()
+            {
+                public Foo(int x) : base(x) { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal(
+            "public sealed class Foo<T> : BaseFoo<T>, IBar, IBaz where T : class, new()",
+            foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedInterfaceHeader_IncludesBaseListInSignature()
+    {
+        var content = """
+            namespace Demo;
+
+            public interface IFoo<T>
+                : IBar<T>,
+                  IBaz
+                where T : struct
+            {
+                void Method();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var iface = Assert.Single(symbols.Where(s => s.Kind == "interface" && s.Name == "IFoo"));
+        Assert.Equal(
+            "public interface IFoo<T> : IBar<T>, IBaz where T : struct",
+            iface.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedRecordPrimaryCtorHeader_IncludesCtorParametersAndBaseList()
+    {
+        var content = """
+            namespace Demo;
+
+            public record Point<T>(
+                T X,
+                T Y)
+                : BaseRecord<T>
+                where T : INumber<T>;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var point = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Point"));
+        Assert.Equal(
+            "public record Point<T>( T X, T Y) : BaseRecord<T> where T : INumber<T>",
+            point.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedStructHeader_IncludesBaseListInSignature()
+    {
+        var content = """
+            namespace Demo;
+
+            public readonly struct Value<T>
+                : IEquatable<Value<T>>
+                where T : IComparable<T>
+            {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var value = Assert.Single(symbols.Where(s => s.Kind == "struct" && s.Name == "Value"));
+        Assert.Equal(
+            "public readonly struct Value<T> : IEquatable<Value<T>> where T : IComparable<T>",
+            value.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedEnumHeader_IncludesUnderlyingTypeInSignature()
+    {
+        var content = """
+            namespace Demo;
+
+            public enum Kind
+                : byte
+            {
+                A,
+                B,
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var kind = Assert.Single(symbols.Where(s => s.Kind == "enum" && s.Name == "Kind"));
+        Assert.Equal("public enum Kind : byte", kind.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineClassHeader_SignatureUnchanged()
+    {
+        var content = """
+            namespace Demo;
+
+            public class Foo : Bar, IBaz
+            {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal("public class Foo : Bar, IBaz", foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedClassHeaderWithLineComment_StripsCommentFromSignature()
+    {
+        // Wrapped type header with a trailing `// comment` on a base-list or `where` line
+        // must not leak comment text into `symbols.signature`. The signature is used by
+        // downstream consumers (planned #257 base resolution, #256 type-position
+        // references, `impact` / `analyze_symbol` heuristics) that need to parse the base
+        // list and `where` clauses; comment bytes in the signature would break them.
+        // Closes #382 codex review blocker.
+        // 折り返された型ヘッダの base リストや `where` 句の行末に `// comment` が
+        // 付いていても、`symbols.signature` にコメント本文が漏れないこと。signature は
+        // 下流（#257 の base 解決、#256 の型位置参照、`impact` / `analyze_symbol`
+        // ヒューリスティクス）で base リストや `where` 句を解釈するために使われるため、
+        // コメントバイトが残ると壊れる。Closes #382 の codex レビュー blocker 対応。
+        var content = """
+            namespace Demo;
+
+            public sealed class Foo<T>
+                : BaseFoo<T>, // primary base
+                  IBar,
+                  IBaz // diagnostics trait
+                where T : class, new() // must be default-constructible
+            {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal("public sealed class Foo<T> : BaseFoo<T>, IBar, IBaz where T : class, new()", foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedClassHeaderWithBlockComment_StripsCommentFromSignature()
+    {
+        // Same contract as the line-comment variant, for inline `/* ... */` block
+        // comments embedded inside a wrapped type header. Closes #382 codex review blocker.
+        // 行間や途中に挟まる `/* ... */` ブロックコメントについても同じ契約を固定する。
+        // Closes #382 の codex レビュー blocker 対応。
+        var content = """
+            namespace Demo;
+
+            public class Foo /* annotation */
+                : /* base */ Bar,
+                  IBaz
+                where /* generic */ T : class
+            {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal("public class Foo : Bar, IBaz where T : class", foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedPrimaryCtorHeaderWithStringDefault_PreservesWhitespaceInLiteral()
+    {
+        // A wrapped primary constructor header that carries a string default with internal
+        // double-space must not collapse the literal into a single space. The signature is
+        // parsed downstream to recover default values, so collapsing `"a  b"` to `"a b"`
+        // would silently rewrite source. Closes #382 codex review iteration 2 blocker.
+        // 折り返された primary constructor header に内部 2 連空白を持つ文字列デフォルトが
+        // ある場合、リテラル内の空白を潰してはいけない。signature は下流で default 値の
+        // 復元に使われるため、`"a  b"` が `"a b"` に潰れると source が書き換わったのと
+        // 同じ結果になる。Closes #382 の codex レビュー iteration 2 blocker 対応。
+        var content = """
+            namespace Demo;
+
+            public sealed class Foo(
+                string label = "a  b")
+                : BaseFoo
+            {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal(
+            "public sealed class Foo( string label = \"a  b\") : BaseFoo",
+            foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedPrimaryCtorHeaderWithVerbatimStringDefault_PreservesWhitespaceInLiteral()
+    {
+        // Verbatim string (`@"..."`) defaults may contain runs of internal whitespace that
+        // must survive signature reconstruction verbatim. Closes #382 codex review iteration
+        // 2 blocker.
+        // verbatim 文字列（`@"..."`）のデフォルトは内部の空白列をそのまま残す必要がある。
+        // Closes #382 の codex レビュー iteration 2 blocker 対応。
+        var content = """"
+            namespace Demo;
+
+            public sealed class Foo(
+                string path = @"C:\tmp\   spaces")
+                : BaseFoo
+            {
+            }
+            """";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal(
+            "public sealed class Foo( string path = @\"C:\\tmp\\   spaces\") : BaseFoo",
+            foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedPrimaryCtorHeaderWithRawStringDefault_PreservesWhitespaceInLiteral()
+    {
+        // Raw string literals (`"""..."""`) in a wrapped primary constructor default must
+        // preserve internal whitespace verbatim. Closes #382 codex review iteration 2
+        // blocker.
+        // raw 文字列リテラル（`"""..."""`）を持つ primary constructor デフォルトについて
+        // も、内部空白を verbatim に保つこと。Closes #382 の codex レビュー iteration 2
+        // blocker 対応。
+        var content = """"
+            namespace Demo;
+
+            public sealed class Foo(
+                string tag = """a   b""")
+                : BaseFoo
+            {
+            }
+            """";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal(
+            "public sealed class Foo( string tag = \"\"\"a   b\"\"\") : BaseFoo",
+            foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedPrimaryCtorHeaderWithMultilineRawStringDefault_PreservesNewlinesAndIndent()
+    {
+        // A raw string default that spans multiple physical lines must keep its `\n`
+        // characters and the per-line leading indentation verbatim. The previous
+        // line-by-line `Trim()` + `' '` join in BuildCSharpTypeHeaderSignature destroyed
+        // both, collapsing `"""\n    a  \n    b\n    """` into `""" a b """`. Closes #382
+        // codex review iteration 3 blocker.
+        // 折り返された primary constructor のデフォルトに multi-line raw string を置くと、
+        // 改行と各行先頭のインデントを verbatim に保持しなければならない。以前の line-by-line
+        // `Trim()` + ' ' 連結は両方を潰し `"""\n    a  \n    b\n    """` を `""" a b """`
+        // に圧縮していた。Closes #382 の codex レビュー iteration 3 blocker 対応。
+        var content = """"
+            namespace Demo;
+
+            public sealed class Foo(
+                string text = """
+                a  b
+                c
+                """)
+                : BaseFoo
+            {
+            }
+            """";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal(
+            "public sealed class Foo( string text = \"\"\"\n    a  b\n    c\n    \"\"\") : BaseFoo",
+            foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedMultilineRawStringDefault_NormalizesCrlfToLf()
+    {
+        // Content split on '\n' leaves trailing '\r' on every line for CRLF-terminated
+        // sources (Windows CI with autocrlf=true, files saved from VS, etc.). The header
+        // slice builder must strip that trailing '\r' so inter-line separators stay '\n'
+        // regardless of line endings. Without this normalization the signature for a
+        // multi-line raw string default would carry `\r\n` between lines on Windows and
+        // `\n` on Linux / macOS, which breaks signature equality across OSes and broke
+        // the Windows CI run of #382.
+        // `\n` で分割した場合、CRLF 終端のソースでは各行末に '\r' が残る
+        // （autocrlf=true の Windows CI、VS で保存したファイルなど）。header スライス組み
+        // 立て側で末尾 '\r' を落とさないと、行間セパレータが OS に依存して `\r\n` / `\n`
+        // になり、signature の一致判定が崩れる。これは #382 の Windows CI 失敗の原因でも
+        // あった。
+        var content =
+            "namespace Demo;\r\n" +
+            "\r\n" +
+            "public sealed class Foo(\r\n" +
+            "    string text = \"\"\"\r\n" +
+            "    a  b\r\n" +
+            "    c\r\n" +
+            "    \"\"\")\r\n" +
+            "    : BaseFoo\r\n" +
+            "{\r\n" +
+            "}\r\n";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal(
+            "public sealed class Foo( string text = \"\"\"\n    a  b\n    c\n    \"\"\") : BaseFoo",
+            foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedHeaderWithInterpolationHoleContainingNestedVerbatim_PreservesInnerLiteral()
+    {
+        // An interpolation hole in an outer `$"..."` must be classified as Code so the
+        // hole contents are lex-aware — in particular, a nested `@"..."` inside the hole
+        // must stay in Verbatim mode and preserve any internal double-space, while the
+        // outer `$"..."` literal content after the hole is still preserved verbatim.
+        // Previously, once we entered String mode we exited on the first unescaped `"`,
+        // which meant `$"{@"a  b"}  c"` re-entered Code mode at `@"` and collapsed
+        // `a  b` to `a b`. Closes #382 codex review iteration 3 blocker.
+        // 外側 `$"..."` の補間ホールは Code として分類し、ホール内は lex-aware に処理する
+        // 必要がある。ホール内の `@"..."` は Verbatim モードとして扱い、内部の 2 連空白を
+        // 保持することを固定する。以前は String に入った時点で次の `"` で即 Code に戻って
+        // いたため、`$"{@"a  b"}  c"` が `a  b` → `a b` に潰れていた。
+        // Closes #382 の codex レビュー iteration 3 blocker 対応。
+        var content = """
+            namespace Demo;
+
+            public sealed class Foo
+                : BaseFoo($"{@"a  b"}  c")
+            {
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Foo"));
+        Assert.Equal(
+            "public sealed class Foo : BaseFoo($\"{@\"a  b\"}  c\")",
+            foo.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_NonPartialBlockStyleProperty_AccessorVariants_AreCaptured()
+    {
+        // Regression coverage for #229: non-partial properties with `{` on the next line
+        // and each major accessor body style (auto, expression-bodied arrows, `init`,
+        // full method bodies) must all surface as property symbols with header-aligned
+        // start lines and end lines spanning the closing brace.
+        // #229 の回帰ガード: 非 partial プロパティで `{` が次行に来るすべての代表的な
+        // accessor 本体スタイル（auto / `get =>` `set =>` / `init` / フル本体）を、
+        // header 行を起点に閉じブレースまでを含む property として抽出し続けることを固定する。
+        var content = """
+            namespace Demo;
+
+            public class Model
+            {
+                public string BlockAuto
+                {
+                    get;
+                    set;
+                }
+
+                public string BlockFull
+                {
+                    get => _x;
+                    set => _x = value;
+                }
+
+                public int BlockInit
+                {
+                    get;
+                    init;
+                }
+
+                public string BlockWithLogic
+                {
+                    get
+                    {
+                        return _x;
+                    }
+                    set
+                    {
+                        _x = value ?? "";
+                    }
+                }
+
+                private string _x = "";
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var blockAuto = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "BlockAuto"));
+        Assert.Equal(5, blockAuto.StartLine);
+        Assert.Equal(9, blockAuto.EndLine);
+
+        var blockFull = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "BlockFull"));
+        Assert.Equal(11, blockFull.StartLine);
+        Assert.Equal(15, blockFull.EndLine);
+
+        var blockInit = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "BlockInit"));
+        Assert.Equal(17, blockInit.StartLine);
+        Assert.Equal(21, blockInit.EndLine);
+
+        var blockWithLogic = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "BlockWithLogic"));
+        Assert.Equal(23, blockWithLogic.StartLine);
+        Assert.Equal(33, blockWithLogic.EndLine);
+
+        // None of the block-style variants should leak as phantom functions with the same name.
+        // どのブロックスタイルも同名の phantom function として重複抽出されてはいけない。
+        Assert.DoesNotContain(symbols, s => s.Kind == "function"
+            && (s.Name == "BlockAuto" || s.Name == "BlockFull" || s.Name == "BlockInit" || s.Name == "BlockWithLogic"));
+    }
+
+    [Fact]
     public void Extract_CSharp_MultilineExpressionBodiedProperty_KeepsExpressionBodyRange()
     {
         var content = """
@@ -4115,6 +4535,280 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Map");
         // Regular mutable fields are now extracted as `property` / 通常のフィールドも `property` として抽出される
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "MutableField" && s.ReturnType == "string");
+    }
+
+    [Fact]
+    public void Extract_CSharp_StaticReadonlyField_FreeModifierOrder()
+    {
+        // Closes #355: C# allows modifiers to appear in any order, so `readonly static`,
+        // `readonly new static`, and `new readonly static` must all be captured as the
+        // kind `function` row (static readonly field), not fall through to the plain-field
+        // (kind `property`) row.
+        // Closes #355: C# の修飾子は任意順で書けるため、`readonly static` /
+        // `readonly new static` / `new readonly static` も kind `function`（static readonly
+        // フィールド）として取り扱い、通常フィールド（kind `property`）に流れ落ちないこと。
+        var content = """
+            public class Svc
+            {
+                public static readonly int A = 1;
+                public readonly static int B = 2;
+                public new static readonly int C = 3;
+                public readonly new static int D = 4;
+                public new readonly static int D2 = 5;
+                readonly public static int E = 6;
+                static readonly new int F = 7;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "A" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "C" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "D" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "D2" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "E" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "F" && s.ReturnType == "int");
+        // Each static readonly declaration must be captured exactly once — no duplicate `property` row
+        // from the plain-field regex.
+        // それぞれの static readonly 宣言は1回だけ捕捉する — 通常フィールド regex からの重複 `property`
+        // 行を生まないこと。
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name is "A" or "B" or "C" or "D" or "D2" or "E" or "F");
+    }
+
+    [Fact]
+    public void Extract_CSharp_Method_FreeModifierOrder()
+    {
+        // Closes #355: C# allows visibility to appear anywhere in the modifier sequence, so
+        // `static public`, `static internal`, `async public`, `override public` must all be
+        // captured as kind `function` with the correct visibility.
+        // Closes #355: visibility は修飾子シーケンスの任意位置に置けるため、`static public` /
+        // `static internal` / `async public` / `override public` もすべて kind `function` として
+        // 正しい visibility で捕捉されること。
+        var content = """
+            public class Svc
+            {
+                public static int I() => 0;
+                static public int F() => 0;
+                static internal void G() { }
+                async public System.Threading.Tasks.Task H() { return; }
+                override public int J() => 0;
+                virtual public int K() => 0;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "I" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "F" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "G" && s.Visibility == "internal");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "H" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "J" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "K" && s.Visibility == "public");
+    }
+
+    [Fact]
+    public void Extract_CSharp_Property_ModifierBeforeVisibility()
+    {
+        // Closes #355: property/indexer/event/delegate/operator rows also accept visibility
+        // that follows a modifier (e.g. `static public int X { get; set; }`).
+        // Closes #355: property / indexer / event / delegate / operator 行も、
+        // `static public int X { get; set; }` のように修飾子の後の visibility を受け付ける。
+        var content = """
+            public class Svc
+            {
+                static public int P1 { get; set; }
+                static public int P2 => 0;
+                virtual public int P3 { get; set; }
+                override public int P4 => 0;
+                static public event System.EventHandler E1;
+                static public delegate int D1(int x);
+                static public int this[int i] => 0;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P1" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P2" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P3" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P4" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "E1" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "D1" && s.Visibility == "public");
+        // Indexer is recorded as `Item` (C# metadata name) after NormalizeCSharpSymbolName.
+        // インデクサは NormalizeCSharpSymbolName で C# メタデータ名 `Item` に正規化される。
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Item" && s.Visibility == "public");
+    }
+
+    [Fact]
+    public void Extract_CSharp_TypeDeclarations_FreeModifierOrder()
+    {
+        // Closes #355: type declarations (class / struct / interface / record) also accept
+        // visibility anywhere in the modifier sequence. All fixture forms are compiler-legal
+        // (`abstract public class X {}`, `readonly public struct Y {}`, `sealed public class Z {}`,
+        // `ref public struct RS {}`, `partial public interface PI {}`) but previously fell
+        // through the type rows because visibility had to come first.
+        // Closes #355: 型宣言（class / struct / interface / record）も visibility を
+        // 修飾子列の任意位置で受け付けること。fixture はすべてコンパイラが通す合法な並びで、
+        // 以前は visibility が先頭必須のため型行をすり抜けていた。
+        var content = """
+            namespace Demo;
+            abstract public class AbstractPublicClass {}
+            sealed public class SealedPublicClass {}
+            readonly public struct ReadonlyPublicStruct {}
+            ref public struct RefPublicStruct {}
+            partial public interface PartialPublicInterface {}
+            abstract public record class AbstractPublicRecordClass {}
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "AbstractPublicClass" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "SealedPublicClass" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "ReadonlyPublicStruct" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "RefPublicStruct" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "PartialPublicInterface" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "AbstractPublicRecordClass" && s.Visibility == "public");
+    }
+
+    [Fact]
+    public void Extract_CSharp_ConstField_FreeModifierOrder()
+    {
+        // Closes #355: `const` fields also accept free modifier order. `new public const`
+        // is compiler-legal (it hides a same-named base-class const) but was previously
+        // dropped because the const row required visibility to come before `new`.
+        // Closes #355: `const` フィールドも修飾子順序自由。`new public const` は
+        // コンパイラ上合法（同名ベースクラス const の隠蔽）だが、以前は visibility が
+        // `new` より前必須のため落ちていた。
+        var content = """
+            public class Base { public const int BaseConst = 1; }
+            public class Derived : Base
+            {
+                new public const int HiddenConst = 2;
+                public new const int HiddenConst2 = 3;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "BaseConst" && s.Visibility == "public" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "HiddenConst" && s.Visibility == "public" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "HiddenConst2" && s.Visibility == "public" && s.ReturnType == "int");
+    }
+
+    [Fact]
+    public void Extract_CSharp_PlainField_FreeModifierOrder()
+    {
+        // Closes #355: plain fields (kind `property`) and multi-line field headers must also
+        // accept visibility anywhere in the modifier sequence. Previously `static public int X;`
+        // captured as a field with empty `visibility` (single-line plain-field regex was
+        // visibility-first), and multi-line declarations whose header line starts with a
+        // non-visibility modifier were dropped entirely because
+        // `CSharpPropertyHeaderPrefixRegex` (the merger trigger) was also visibility-first and
+        // did not accept `const`.
+        // Closes #355: 通常フィールド（kind `property`）と複数行フィールドヘッダも、修飾子列の
+        // 任意位置で visibility を受け付けなければならない。以前は `static public int X;` が
+        // visibility 空のまま captured され（単一行 plain-field 正規表現が visibility-first）、
+        // 非 visibility 修飾子から始まる複数行宣言は結合トリガの `CSharpPropertyHeaderPrefixRegex`
+        // 自体が visibility-first で `const` も受け付けなかったため完全に欠落していた。
+        var content = """
+            using System.Collections.Generic;
+            public class Edge
+            {
+                static public int X;
+                readonly public int Y;
+                new public static int Z = 1;
+                static public Dictionary<string, int>
+                    Map = new();
+                new public const int
+                    C = 1;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "X" && s.Visibility == "public" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Y" && s.Visibility == "public" && s.ReturnType == "int");
+        // `new public static` is promoted to kind `function` via the static readonly / const row set.
+        // `new public static` は static readonly / const 系の行で kind `function` に昇格する。
+        Assert.Contains(symbols, s => s.Name == "Z" && s.Visibility == "public" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Map" && s.Visibility == "public" && s.ReturnType != null && s.ReturnType.Contains("Dictionary"));
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "C" && s.Visibility == "public" && s.ReturnType == "int");
+    }
+
+    [Fact]
+    public void Extract_CSharp_UnsafeExtern_FreeModifierOrder()
+    {
+        // Closes #355: `unsafe` / `extern` modifiers must not force a specific slot in the
+        // modifier sequence. All fixture forms are compiler-legal but previously either dropped
+        // entirely (constructor / static constructor / event) or captured the declaration while
+        // losing `visibility` and polluting `return_type` with the leading modifiers
+        // (property / indexer).
+        // Closes #355: `unsafe` / `extern` 修飾子も修飾子列の特定位置に固定されてはならない。
+        // fixture はすべてコンパイラ上合法だが、以前は constructor / static constructor / event では
+        // そもそも抽出されず、property / indexer では visibility が欠落して return_type に
+        // 先頭修飾子が混入していた。
+        var content = """
+            public unsafe class UnsafeHolder
+            {
+                unsafe public int P1 { get; set; }
+                unsafe public int P2 => 0;
+                unsafe public event System.EventHandler E1;
+                extern public event System.EventHandler E2;
+                unsafe public int this[int* i] => 0;
+                unsafe public UnsafeHolder(int* p) { }
+                extern public UnsafeHolder(int x);
+                unsafe static UnsafeHolder() { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P1" && s.Visibility == "public" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P2" && s.Visibility == "public" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "E1" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "E2" && s.Visibility == "public");
+        // Indexer is recorded as `Item` (C# metadata name) after NormalizeCSharpSymbolName.
+        // インデクサは NormalizeCSharpSymbolName で C# メタデータ名 `Item` に正規化される。
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Item" && s.Visibility == "public" && s.ReturnType == "int");
+        // Constructors are recorded with visibility and the type name as symbol name.
+        // コンストラクタは visibility を保持し、シンボル名は型名になる。
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "UnsafeHolder" && s.Visibility == "public");
+        // Static constructor has no visibility.
+        // 静的コンストラクタは visibility を持たない。
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "UnsafeHolder" && string.IsNullOrEmpty(s.Visibility));
+    }
+
+    [Fact]
+    public void Extract_CSharp_InheritanceAndFile_FreeModifierOrder()
+    {
+        // Closes #355: inheritance modifiers on events (`virtual` / `override` / `abstract` /
+        // `sealed` / `new`) and the `file` modifier on interface / delegate declarations must
+        // be accepted in any position, with visibility still captured when present.
+        // Closes #355: event の継承修飾子 (`virtual` / `override` / `abstract` / `sealed` / `new`) と、
+        // interface / delegate 宣言の `file` 修飾子は任意位置で受理され、visibility が存在する場合は
+        // 併せて拾われる必要がある。
+        var content = """
+            file interface IWidget
+            {
+                int ProvideAnswer();
+            }
+            file delegate int Computer(int x);
+            public abstract class Base
+            {
+                abstract public event System.EventHandler A;
+                virtual public event System.EventHandler B;
+                sealed public override event System.EventHandler C;
+                new public event System.EventHandler D;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        // `file interface` should be matched as an interface symbol.
+        // `file interface` は interface シンボルとして抽出される。
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "IWidget");
+        // `file delegate` should be matched as a delegate symbol.
+        // `file delegate` は delegate シンボルとして抽出される。
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "Computer" && s.ReturnType == "int");
+        // Events with inheritance modifiers must still record visibility = "public".
+        // 継承修飾子付きの event も visibility = "public" を保持する必要がある。
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "A" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "B" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "C" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "D" && s.Visibility == "public");
     }
 
     [Fact]

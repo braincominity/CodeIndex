@@ -1279,7 +1279,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
 
-        var filePath = cmdArgs[0].Replace('\\', '/');
+        var filePath = FileIndexer.NormalizePathSeparators(cmdArgs[0]);
         var previewOptionError = ValidatePreviewOptions("outline", cmdArgs[1..], allowMaxLineWidth: false, allowFocusOptions: false);
         if (previewOptionError != null)
         {
