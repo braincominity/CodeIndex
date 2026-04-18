@@ -810,15 +810,29 @@ public static class SymbolExtractor
         ["batch"] =
         [
             // Labels — goto :X / call :X targets, the only navigation anchors in a batch script.
-            // `::` comment form has no label name, so `[\w-]+` naturally rejects it.
-            // `:EOF` is a reserved batch target used by `goto :EOF` / `call :EOF`, not a user-defined label, so exclude it.
+            // `::` comment form has no label name, so the name character class naturally rejects it.
+            // Dotted labels like `:build.release` are real batch label names, so accept `.` too.
+            // `:EOF` is a reserved batch target used by `goto :EOF` / `call :EOF`, not a user-defined
+            // label, so exclude it — but only the literal full-name `eof`. Labels that merely begin
+            // with `eof` such as `:eof2` / `:eofish` / `:end-of-file` / `:eof.x` must still surface,
+            // which is why the negative lookahead checks for name-terminating characters instead of `\b`.
             // ラベル — goto :X / call :X の着地点であり、batch スクリプト内で唯一のナビゲーションアンカー。
-            // `::` コメント形式はラベル名を持たないため、`[\w-]+` が自然に弾く。
-            // `:EOF` は `goto :EOF` / `call :EOF` 用の予約ターゲットであってユーザー定義ラベルではないため除外する。
-            new("function", new Regex(@"^\s*:(?!eof\b)(?<name>[\w-]+)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            // Variable assignment — set VAR=value, set /a VAR=expr, set /p VAR=prompt, set ""VAR=value""
-            // 変数代入 — set VAR=value、set /a VAR=expr、set /p VAR=prompt、set ""VAR=value"" に対応。
-            new("property", new Regex(@"^\s*set\s+(?:/[aApP]\s+)?""?(?<name>[A-Za-z_][\w]*)\s*=", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // `::` コメント形式はラベル名を持たないため名前文字クラスが自然に弾く。
+            // `:build.release` のようなドット付きラベルも正規のラベル名として受け入れる。
+            // `:EOF` は `goto :EOF` / `call :EOF` 用の予約ターゲットであってユーザー定義ラベルではないため除外するが、
+            // 除外するのは名前全体が `eof` のときだけ。`:eof2` / `:eofish` / `:end-of-file` / `:eof.x` のように
+            // 単に `eof` で始まるだけのラベルは通す必要があるため、`\b` ではなく名前終端文字を見る negative lookahead を使う。
+            new("function", new Regex(@"^\s*:(?!eof(?![\w.-]))(?<name>[\w.\-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // Variable assignment — set VAR=value, set /a VAR=expr, set /p VAR=prompt, set "VAR=value".
+            // Also handles `@set VAR=...` (echo suppression prefix), `set /a VAR+=1` (compound
+            // assignment operators), and `if ... set VAR=...` (inline assignment inside a one-line
+            // control statement). Leading `@` with optional whitespace, an optional `if <cond>`
+            // clause, and compound arithmetic operators are all covered in a single pattern.
+            // 変数代入 — set VAR=value、set /a VAR=expr、set /p VAR=prompt、set "VAR=value" に対応。
+            // 併せて `@set VAR=...` (echo 抑止プレフィクス) 、`set /a VAR+=1` (複合代入演算子) 、
+            // `if ... set VAR=...` (1 行制御文内の代入) も拾う。先頭の `@` + 任意の空白、任意の `if <条件>` 節、
+            // 複合算術演算子を 1 本のパターンにまとめている。
+            new("property", new Regex(@"^\s*(?:@\s*)?(?:if\s+.+?\s+)?set\s+(?:/[aApP]\s+)?""?(?<name>[A-Za-z_][\w]*)\s*(?:[+\-*/%&^|]|<<|>>)?=", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
         ],
         ["zig"] =
         [
