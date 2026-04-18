@@ -2664,6 +2664,7 @@ public sealed class InstallScriptTests : IDisposable
         if (OperatingSystem.IsWindows())
             return;
 
+        var versionSentinel = Path.Combine(_tempRoot, "reinstall_real_version_invoked");
         var searchSentinel = Path.Combine(_tempRoot, "reinstall_real_search_invoked");
 
         var (exitCode, stdout, _) = RunInstallerSnippet(
@@ -2676,15 +2677,17 @@ public sealed class InstallScriptTests : IDisposable
             #!/usr/bin/env bash
             case "\$1" in
                 --version)
-                    # First non-empty line must match `cdidx v<ver>` because
-                    # run_reinstall_real enforces the first-line shape; the
-                    # INVOKED_VERSION marker follows so the test can still
-                    # assert the stub was invoked.
-                    # run_reinstall_real の先頭行形式チェックに合わせて
-                    # `cdidx v<ver>` を先頭に置き、INVOKED_VERSION はその後に
-                    # 出して stub 呼び出し確認に使う。
+                    # run_reinstall_real requires the entire --version output
+                    # to be EXACTLY `cdidx v<ver>` on one non-empty line with
+                    # no trailing diagnostic text and no additional lines.
+                    # A sentinel file is used to confirm invocation instead
+                    # of echoing an extra marker line, because the multi-line
+                    # check would otherwise reject this stub.
+                    # 先頭行形式チェックは出力全体が `cdidx v<ver>` の 1 行だけ
+                    # であることを要求するため、呼び出し確認にはマーカー行で
+                    # はなくセンチネルファイルを使う。
+                    printf 'invoked' > "{{versionSentinel}}"
                     echo "cdidx v1.2.3"
-                    echo "INVOKED_VERSION"
                     ;;
                 search)
                     printf 'invoked' > "{{searchSentinel}}"
@@ -2707,7 +2710,7 @@ public sealed class InstallScriptTests : IDisposable
             enforceStrictMode: false);
 
         Assert.Equal(0, exitCode);
-        Assert.Contains("INVOKED_VERSION", stdout);
+        Assert.True(File.Exists(versionSentinel), "cdidx --version stub was not invoked by run_reinstall_real / run_reinstall_real が cdidx --version を呼んでいない");
         Assert.Contains("INVOKED_INDEX", stdout);
         Assert.True(File.Exists(searchSentinel), "cdidx search stub was not invoked by run_reinstall_real / run_reinstall_real が cdidx search を呼んでいない");
         Assert.Contains("Real reinstall validation passed", stdout);
@@ -3054,15 +3057,17 @@ public sealed class InstallScriptTests : IDisposable
             case "$1" in
                 --version) echo "cdidx v1.2.3" ;;
                 search)
-                    # Split-evidence false positive: structured header for the
-                    # correct path on one line, but no indented snippet line
-                    # under it — 'greet' appears only on a separate non-indented
-                    # diagnostic line. The awk state machine must require greet
-                    # to appear on a 2-space-indented line belonging to the
-                    # header's match block.
-                    # ヘッダ行は正しいパスだが、`greet` は別の非インデント診断行に
-                    # しか存在しない split-evidence ケース。awk の state machine で
-                    # ヘッダブロック内の 2 スペースインデント行の `greet` のみを拾う。
+                    # Split-evidence false positive: structured range-form
+                    # header on one line, but no indented snippet line under
+                    # it — the `greet` token appears only on a separate
+                    # non-indented diagnostic line. The awk state machine
+                    # requires the verbatim source signature `def greet(name):`
+                    # on a 2-space-indented line belonging to the header's
+                    # match block, so this non-indented diagnostic is rejected.
+                    # ヘッダは正しい range 形だが、`greet` は非インデント診断行に
+                    # しか存在しない split-evidence ケース。awk 状態機械は
+                    # match block 内のインデント行に verbatim な
+                    # `def greet(name):` を要求するため弾かれる。
                     printf '%s\n%s\n' "sample.py:1-6" "warning: greet query returned 0 matches"
                     ;;
                 *)
@@ -3209,6 +3214,150 @@ public sealed class InstallScriptTests : IDisposable
                     # 実コードの `def greet` ではなく診断文にしか現れないケース。
                     # スニペット行には `def greet` を要求して弾く。
                     printf '%s\n%s\n' "sample.py:1-6" "  warning: greet query returned 0 matches"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("did not return a structured match", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_VersionMultiLineExactFirstLinePlusDiagnostic_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version)
+                    # Multi-line shape where the FIRST non-empty line is
+                    # exactly `cdidx v1.2.3` (so the exact-first-line check
+                    # passes and token enumeration sees one distinct token
+                    # equal to the requested tag), but a second non-empty
+                    # line carries a diagnostic. Real cdidx --version output
+                    # is literally `cdidx v<ver>` on ONE non-empty line with
+                    # no additional lines, so the non-empty-line-count guard
+                    # must reject this multi-line shape.
+                    # 先頭行が完全一致するが後続行に診断文が続く multi-line
+                    # 形。非空行数チェックで弾く必要がある。
+                    printf '%s\n%s\n' "cdidx v1.2.3" "warning: expected package v1.2.3 missing"
+                    ;;
+                search) echo "sample.py:1: def greet(name):" ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("must emit exactly one non-empty line", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_SearchHeaderLineContainsDefGreetDiagnostic_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)
+                    # Header-line diagnostic that deliberately contains the
+                    # substring `def greet`, matching the strict grep-form
+                    # header `^sample\.py:[0-9]+:` but not the verbatim
+                    # scratch source signature `def greet(name):`. A loose
+                    # check that accepted the `def greet` substring alone
+                    # would false-pass; the tightened check requires the
+                    # full argument-list shape.
+                    # grep 形ヘッダにマッチするが、`def greet` を診断文内にしか
+                    # 含まず verbatim な `def greet(name):` ではないケース。
+                    # 引数リスト付きの完全な形を要求することで弾かれる。
+                    printf '%s\n' "sample.py:1: warning: expected code signature def greet missing"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("did not return a structured match", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_SearchIndentedLineContainsDefGreetDiagnostic_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)
+                    # Strict range-form header followed by a two-space-indented
+                    # diagnostic that deliberately contains the substring
+                    # `def greet` without the real argument list. A loose
+                    # indented-line check that accepted any `def greet`
+                    # substring would false-pass; the tightened check
+                    # requires the verbatim scratch source signature
+                    # `def greet(name):`.
+                    # 範囲形ヘッダの下に 2 スペースインデントで `def greet` を
+                    # 含む診断文が続くが、verbatim な `def greet(name):` では
+                    # ないケース。引数リスト付きの完全な形を要求して弾く。
+                    printf '%s\n%s\n' "sample.py:1-6" "  warning: expected code signature def greet missing"
                     ;;
                 *)
                     if [ "$2" = "--db" ] && [ -n "$3" ]; then
