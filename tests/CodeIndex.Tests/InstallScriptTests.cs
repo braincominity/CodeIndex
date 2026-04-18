@@ -490,6 +490,7 @@ public sealed class InstallScriptTests : IDisposable
 
         Assert.Equal(1, exitCode);
         Assert.Contains("Fetching latest release version", stdout);
+        Assert.Contains(curlStderr, stderr);
         Assert.Contains("CONNECT tunnel failed with HTTP 403 while reaching GitHub API", stderr);
         Assert.Contains("curl exit 56", stderr);
         Assert.Contains("CONNECT-stage HTTP 403", stderr);
@@ -584,6 +585,7 @@ public sealed class InstallScriptTests : IDisposable
             });
 
         Assert.Equal(1, exitCode);
+        Assert.Contains(curlStderr, stderr);
         Assert.Contains("CONNECT tunnel failed with HTTP 403 while reaching GitHub release host", stderr);
         Assert.Contains("curl exit 56", stderr);
         Assert.Contains("CONNECT-stage HTTP 403", stderr);

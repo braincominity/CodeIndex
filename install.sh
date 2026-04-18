@@ -226,6 +226,9 @@ curl_http_get() {
         fi
 
         if [ "$curl_status" -eq 56 ] && is_proxy_tunnel_403 "$stderr_text"; then
+            if [ -n "$stderr_text" ]; then
+                printf '%s\n' "$stderr_text" >&2
+            fi
             report_error "CONNECT tunnel failed with HTTP 403 while reaching ${source_label} at $url (curl exit 56). This deny is happening in an upstream proxy/egress policy before TLS."
             report_error "If every HTTPS endpoint fails with a CONNECT-stage HTTP 403, route substitution alone will not fix it."
             report_error "Ask your network administrator to allow-list at least one required API or artifact host path."
