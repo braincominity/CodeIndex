@@ -2349,6 +2349,151 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetFileDependencies_CSharpAttributeRawDoesNotLeakToBareNameClass_WhenSuffixTargetExists()
+    {
+        // issue #293 follow-up: `[MyAudit]` in C# is stored as symbol_name='MyAudit'.
+        // When both `class MyAudit` (plain class) and `class MyAuditAttribute`
+        // (the real attribute target) exist, the metadata edge must resolve only
+        // to `MyAuditAttribute` via the synthetic suffix alias. Keeping the raw
+        // bare-name edge would over-report: `[MyAudit]` would falsely depend on
+        // the unrelated plain `class MyAudit` file.
+        // issue #293 補足: C# の `[MyAudit]` は symbol_name='MyAudit' で保存される。
+        // `class MyAudit` (plain) と `class MyAuditAttribute` (本物の attribute)
+        // が両方あるとき、metadata エッジは synthetic suffix alias 経由で
+        // `MyAuditAttribute` だけに解決されるべき。raw の bare-name エッジを
+        // 残すと、`[MyAudit]` が無関係な plain `class MyAudit` のファイルにも
+        // 誤って依存してしまう。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            using System;
+
+            [AttributeUsage(AttributeTargets.Class)]
+            public sealed class MyAuditAttribute : Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/PlainMyAudit.cs", "csharp",
+            """
+            public class MyAudit
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var dependencies = _reader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        // Only MyAuditAttribute.cs should be a dependency target for Svc.cs;
+        // PlainMyAudit.cs must not appear.
+        // Svc.cs の依存先は MyAuditAttribute.cs のみで、PlainMyAudit.cs は
+        // 出現してはならない。
+        Assert.Contains(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/MyAuditAttribute.cs");
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/PlainMyAudit.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpAttributeDoesNotLeakToSameNameMethodOrProperty()
+    {
+        // issue #293 follow-up: `[MyAuditAttribute]` (fully qualified) must only
+        // match a class-like attribute target. A method / property named
+        // `MyAuditAttribute` in an unrelated file must never show up as a deps
+        // edge from the metadata reference. Non-metadata call-graph edges keep
+        // their previous behavior (they can still resolve to any symbol kind).
+        // issue #293 補足: `[MyAuditAttribute]` (完全形) は class 系の attribute
+        // target にしか一致してはならない。別ファイルの同名メソッド/プロパティ
+        // `MyAuditAttribute` が metadata 参照の deps エッジに現れてはいけない。
+        // 非 metadata の call-graph エッジは従来どおり任意の kind に解決できる。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            using System;
+
+            [AttributeUsage(AttributeTargets.Class)]
+            public sealed class MyAuditAttribute : Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Helpers.cs", "csharp",
+            """
+            public class Helpers
+            {
+                public void MyAuditAttribute()
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAuditAttribute]
+            public class Svc
+            {
+            }
+            """);
+
+        var dependencies = _reader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/Helpers.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpAttributeDoesNotFanOutWhenMultipleSameNameAttributeClasses()
+    {
+        // issue #293 follow-up: if multiple same-named attribute classes exist
+        // (e.g. two `MyAuditAttribute` classes in separate namespaces/files),
+        // a metadata reference `[MyAudit]` must not fan out to BOTH files. We
+        // cannot statically resolve which one the C# compiler picks without
+        // namespace / using analysis, so we drop the ambiguous metadata edge
+        // and let `impact` / `references` surface both candidates to the user.
+        // issue #293 補足: 同名 attribute クラスが複数ある場合 (例: 別名前空間/別
+        // ファイルに 2 つの `MyAuditAttribute` がある場合)、metadata 参照
+        // `[MyAudit]` を両方に fan-out させない。cdidx は namespace / using を
+        // 解析しないため正しい解決ができず、あいまいな metadata エッジは落として
+        // 両候補は `impact` / `references` 経由でユーザーに示す。
+        InsertIndexedFile("src/A/MyAuditAttribute.cs", "csharp",
+            """
+            using System;
+
+            namespace A
+            {
+                [AttributeUsage(AttributeTargets.Class)]
+                public sealed class MyAuditAttribute : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/B/MyAuditAttribute.cs", "csharp",
+            """
+            using System;
+
+            namespace B
+            {
+                [AttributeUsage(AttributeTargets.Class)]
+                public sealed class MyAuditAttribute : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var dependencies = _reader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        // Neither fan-out edge should exist; the metadata reference is ambiguous.
+        // あいまいな metadata 参照はどちらの fan-out エッジも出してはならない。
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/A/MyAuditAttribute.cs");
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/B/MyAuditAttribute.cs");
+    }
+
+    [Fact]
     public void SearchReferences_MatchesCSharpAttributeSuffixConvention_Substring()
     {
         // issue #293 follow-up: `references MyAuditAttribute` (substring mode) must

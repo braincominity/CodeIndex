@@ -2589,7 +2589,8 @@ public partial class DbReader
             ),
             logical_references AS (
                 SELECT source_file_id, source_path, source_lang, symbol_name, line, column_number, logical_reference_kind,
-                       0 AS is_attribute_alias
+                       0 AS is_attribute_alias,
+                       CASE WHEN logical_reference_kind IN ('attribute', 'annotation') THEN 1 ELSE 0 END AS is_metadata
                 FROM logical_references_primary
                 UNION ALL
                 -- C# attribute suffix alias: [Foo] in source is stored with symbol_name='Foo',
@@ -2605,27 +2606,31 @@ public partial class DbReader
                 SELECT source_file_id, source_path, source_lang,
                        symbol_name || 'Attribute' AS symbol_name,
                        line, column_number, logical_reference_kind,
-                       1 AS is_attribute_alias
+                       1 AS is_attribute_alias,
+                       1 AS is_metadata
                 FROM logical_references_primary
                 WHERE source_lang = 'csharp'
                   AND logical_reference_kind = 'attribute'
                   AND symbol_name NOT LIKE '%Attribute'
             ),
             source_name_counts AS (
+                -- Grouping includes is_metadata so metadata-only groups ([Foo] / @Foo)
+                -- can be restricted to class-like targets independently from non-metadata
+                -- call-graph groups that share the same symbol_name in the same file
+                -- (e.g. `Foo()` call + `[Foo]` attribute both present in the same source).
+                -- is_metadata を GROUP BY に含めることで、同じ source file / symbol_name を
+                -- 共有する metadata 行と call-graph 行 (例: 同じファイル内の `Foo()` 呼び出し
+                -- と `[Foo]` 属性) を別グループとして扱い、metadata 側だけに class-like
+                -- target 制限を掛けられるようにする。
                 SELECT source_file_id,
                        source_path,
                        source_lang,
                        symbol_name,
-                       -- MIN: if any real (non-alias) ref shares the same symbol_name group,
-                       -- treat the group as non-alias so the class-kind restriction only
-                       -- applies to purely synthetic alias rows.
-                       -- MIN: 同じ symbol_name のグループに real (非 alias) 行が 1 件でも
-                       -- あれば、そのグループは非 alias 扱いとし、class 種別の制限を
-                       -- 純粋に合成された alias 行にのみ適用する。
-                       MIN(is_attribute_alias) AS is_attribute_alias,
+                       is_attribute_alias,
+                       is_metadata,
                        COUNT(*) AS ref_count
                 FROM logical_references
-                GROUP BY source_file_id, source_path, source_lang, symbol_name
+                GROUP BY source_file_id, source_path, source_lang, symbol_name, is_attribute_alias, is_metadata
             ),
             target_files AS (
                 -- Collapse per-symbol rows to one per (target_path, target_lang, symbol_name)
@@ -2664,6 +2669,41 @@ public partial class DbReader
         sql += @"
                 GROUP BY dst.path, dst.lang, s.name
             ),
+            metadata_raw_suppression AS (
+                -- When a raw C# attribute reference '[Foo]' (stored as symbol_name='Foo',
+                -- logical_reference_kind='attribute') also has a synthetic suffix alias
+                -- row that resolves to a class-like 'FooAttribute' target, drop the raw
+                -- row to avoid creating a duplicate edge to any unrelated 'Foo' symbol
+                -- (method, property, local class) that merely shares the bare name.
+                -- 生の C# 属性参照 '[Foo]' (symbol_name='Foo', kind='attribute') に対して
+                -- 同じ source_file 内で 'FooAttribute' の synthetic alias 行が
+                -- class 系 target に解決できる場合、この行自体は落として
+                -- 同名の関数/プロパティ/ローカルクラス 'Foo' への誤依存を防ぐ。
+                SELECT DISTINCT lrp.source_file_id, lrp.symbol_name
+                FROM logical_references_primary lrp
+                JOIN target_files tf_alias
+                  ON tf_alias.target_lang = lrp.source_lang
+                 AND tf_alias.symbol_name = lrp.symbol_name || 'Attribute'
+                 AND tf_alias.has_class_like_kind = 1
+                WHERE lrp.source_lang = 'csharp'
+                  AND lrp.logical_reference_kind = 'attribute'
+                  AND lrp.symbol_name NOT LIKE '%Attribute'
+            ),
+            target_ambiguity AS (
+                -- Count distinct class-like target files per (target_lang, symbol_name).
+                -- Metadata references ([Foo] / @Foo) must not fan out to multiple
+                -- same-name attribute / annotation class definitions; when ambiguous,
+                -- drop the metadata edge and let `impact` / `references` guide the user.
+                -- (target_lang, symbol_name) 単位で class 系 target ファイル数を数える。
+                -- metadata 参照 ([Foo] / @Foo) は同名 attribute / annotation クラスが
+                -- 複数あるとき fan-out させず、その metadata エッジを落とす。
+                SELECT target_lang,
+                       symbol_name,
+                       COUNT(DISTINCT target_path) AS class_like_target_count
+                FROM target_files
+                WHERE has_class_like_kind = 1
+                GROUP BY target_lang, symbol_name
+            ),
             edges AS (
                 SELECT snc.source_path,
                        tf.target_path,
@@ -2673,15 +2713,40 @@ public partial class DbReader
                 JOIN target_files tf
                   ON tf.symbol_name = snc.symbol_name
                  AND tf.target_lang = snc.source_lang
+                LEFT JOIN metadata_raw_suppression mrs
+                  ON mrs.source_file_id = snc.source_file_id
+                 AND mrs.symbol_name = snc.symbol_name
+                LEFT JOIN target_ambiguity ta
+                  ON ta.target_lang = snc.source_lang
+                 AND ta.symbol_name = snc.symbol_name
                 WHERE snc.source_path != tf.target_path
-                  -- Purely synthetic C# attribute alias rows must only match class-like
-                  -- target kinds; otherwise '[Foo]' would spuriously depend on any file
-                  -- that merely defines a function / property / variable named
-                  -- 'FooAttribute'. Real attribute references continue to match any kind.
-                  -- 純粋な合成 alias 行は class 系の target 種別にのみ一致させる。
-                  -- これを許すと '[Foo]' が単に 'FooAttribute' という名前の関数や
-                  -- プロパティを持つファイルにまで誤って依存してしまう。
-                  AND (snc.is_attribute_alias = 0 OR tf.has_class_like_kind = 1)
+                  -- All metadata references ([Foo] / @Foo) and their synthetic C#
+                  -- suffix aliases must only match class-like target kinds; otherwise
+                  -- a metadata reference would spuriously depend on any file that
+                  -- merely defines a function / property / variable sharing the name.
+                  -- Non-metadata call-graph refs keep matching any kind so e.g. a
+                  -- constructor call can still tie back to a class definition.
+                  -- metadata 参照 ([Foo] / @Foo) と C# の合成 alias 行はいずれも
+                  -- class 系の target 種別にのみ一致させる。これを許すと同名の
+                  -- 関数/プロパティ/変数を持つだけのファイルまで誤って依存してしまう。
+                  -- 非 metadata の call-graph 参照は任意の kind に一致させて構わない
+                  -- (コンストラクタ呼び出しがクラス定義に結び付くケースなど)。
+                  AND (snc.is_metadata = 0 OR tf.has_class_like_kind = 1)
+                  -- Drop raw C# '[Foo]' rows when the suffix alias already resolves
+                  -- to a class-like 'FooAttribute' target in the same source file.
+                  -- 同じ source file で suffix alias が class 系 'FooAttribute' に
+                  -- 解決できている C# の raw '[Foo]' 行は落とす。
+                  AND NOT (
+                        snc.is_metadata = 1
+                    AND snc.is_attribute_alias = 0
+                    AND snc.source_lang = 'csharp'
+                    AND mrs.source_file_id IS NOT NULL
+                  )
+                  -- Metadata edges only survive when the target symbol resolves to
+                  -- a single class-like definition within scope; ambiguous cases
+                  -- (multiple same-name attribute / annotation classes) are dropped.
+                  -- metadata エッジは同名 class 系 target が 1 つだけのときのみ残す。
+                  AND (snc.is_metadata = 0 OR COALESCE(ta.class_like_target_count, 0) <= 1)
             )
             SELECT source_path,
                    target_path,
