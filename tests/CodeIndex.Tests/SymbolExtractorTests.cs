@@ -7997,4 +7997,48 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "evil-tag");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "evil");
     }
+
+    [Fact]
+    public void Extract_Html_CapturesMultiLineScriptAndLinkOpeningTags()
+    {
+        // Formatter-split opening tags must still match across lines so imports
+        // are not silently dropped. Closes #215 codex review finding.
+        // フォーマッタによって開始タグが改行されても、import を黙って落とさない
+        // ようクロス行で一致する必要がある。#215 codex review 指摘への対応。
+        var content = """
+            <script
+              type="module"
+              src="/app.js"></script>
+            <link
+              rel="stylesheet"
+              href="/app.css">
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.js");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.css");
+    }
+
+    [Fact]
+    public void Extract_Html_IgnoresSymbolsInsideTextareaAndTitleBodies()
+    {
+        // <textarea> / <title> bodies are RCDATA per the HTML spec and their
+        // contents must not leak phantom symbols. Closes #215 codex review finding.
+        // <textarea> / <title> の本体は HTML 仕様上 RCDATA であり、疑似シンボルを
+        // 漏らしてはならない。#215 codex review 指摘への対応。
+        var content = """
+            <textarea><my-widget id="fake"></my-widget></textarea>
+            <title><bogus-tag id="phantom"></bogus-tag></title>
+            <section id="real"></section>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "my-widget");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "fake");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "bogus-tag");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "phantom");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+    }
 }

@@ -1508,13 +1508,18 @@ public static class SymbolExtractor
         @"^\s+(?<name>[A-Z]\w*)\s*(?:\([^)]*\))?\s*(?:,|\{|;)\s*$",
         RegexOptions.Compiled);
 
-    // Masks the body of `<script>` / `<style>` raw-text elements and `<!-- ... -->`
-    // comments so HTML patterns cannot match inside commented-out markup or inside
-    // inline template string literals. Line breaks are preserved so downstream line
-    // numbers stay aligned.
-    // `<script>` / `<style>` の raw-text 本体と `<!-- ... -->` コメントをマスクし、
-    // コメントアウトされた markup やインラインテンプレート文字列の中を HTML パターン
-    // が誤って拾わないようにする。行番号を保つため改行は残す。
+    // Masks the body of `<script>` / `<style>` raw-text elements, the RCDATA body
+    // of `<textarea>` / `<title>`, and `<!-- ... -->` comments so HTML patterns
+    // cannot match inside commented-out markup, inline template string literals,
+    // or form / document-title placeholder text. Line breaks are preserved so
+    // downstream line numbers stay aligned. All regexes use Singleline so they
+    // cross physical line boundaries (opening tags with attributes on separate
+    // lines are common in formatted HTML).
+    // `<script>` / `<style>` の raw-text 本体、`<textarea>` / `<title>` の RCDATA 本体、
+    // `<!-- ... -->` コメントをマスクし、コメントアウトされた markup / インライン
+    // テンプレート文字列 / フォーム初期値や文書タイトル内のプレースホルダ文字列を
+    // HTML パターンが誤って拾わないようにする。行番号を保つため改行は残す。全 regex で
+    // Singleline を使い、属性が折り返された開始タグでも跨ぎ行で一致させる。
     private static readonly Regex HtmlCommentRegex = new(
         @"<!--.*?-->",
         RegexOptions.Compiled | RegexOptions.Singleline);
@@ -1524,14 +1529,15 @@ public static class SymbolExtractor
     private static readonly Regex HtmlStyleBodyRegex = new(
         @"(?<open><style\b[^>]*>)(?<body>.*?)(?<close></style\s*>)",
         RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
+    private static readonly Regex HtmlTextareaBodyRegex = new(
+        @"(?<open><textarea\b[^>]*>)(?<body>.*?)(?<close></textarea\s*>)",
+        RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
+    private static readonly Regex HtmlTitleBodyRegex = new(
+        @"(?<open><title\b[^>]*>)(?<body>.*?)(?<close></title\s*>)",
+        RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.IgnoreCase);
 
-    private static string[] MaskHtmlRawTextRegions(string[] lines)
+    private static string MaskHtmlRawTextRegions(string text)
     {
-        // Join by \n for cross-line regex, then split back. Joining with \n preserves
-        // any trailing \r from CRLF sources so line boundaries round-trip exactly.
-        // \n で join して跨ぎ行の regex を効かせた後に split し直す。CRLF 由来の末尾
-        // \r はそのまま残るので行境界は完全に往復する。
-        var text = string.Join('\n', lines);
         text = HtmlCommentRegex.Replace(text, m => BlankNonNewline(m.Value));
         text = HtmlScriptBodyRegex.Replace(
             text,
@@ -1539,7 +1545,13 @@ public static class SymbolExtractor
         text = HtmlStyleBodyRegex.Replace(
             text,
             m => m.Groups["open"].Value + BlankNonNewline(m.Groups["body"].Value) + m.Groups["close"].Value);
-        return text.Split('\n');
+        text = HtmlTextareaBodyRegex.Replace(
+            text,
+            m => m.Groups["open"].Value + BlankNonNewline(m.Groups["body"].Value) + m.Groups["close"].Value);
+        text = HtmlTitleBodyRegex.Replace(
+            text,
+            m => m.Groups["open"].Value + BlankNonNewline(m.Groups["body"].Value) + m.Groups["close"].Value);
+        return text;
     }
 
     private static string BlankNonNewline(string value)
@@ -1557,45 +1569,81 @@ public static class SymbolExtractor
 
     private static List<SymbolRecord> ExtractHtmlSymbols(long fileId, string[] lines, IReadOnlyList<SymbolPattern> patterns)
     {
-        var masked = MaskHtmlRawTextRegions(lines);
-        var symbols = new List<SymbolRecord>();
+        // Join into a single text so cross-line matches (e.g. attribute-wrapped
+        // `<script\n  src="...">`) succeed; the per-line loop used to miss these.
+        // The HTML import regexes use `[^>]*?` which matches newlines by default in
+        // .NET regex, so the cross-line opening tag is one match against the full
+        // masked text.
+        // `<script\n  src="...">` のように属性が折り返されたタグを跨ぎ行で拾うため、
+        // 行ごとではなく全文をそのままマッチ対象にする。.NET の `[^>]*?` は既定で改行も
+        // マッチするため、折り返し開始タグも 1 マッチで拾える。
+        var rawText = string.Join('\n', lines);
+        var maskedText = MaskHtmlRawTextRegions(rawText);
 
-        for (var i = 0; i < masked.Length && i < lines.Length; i++)
+        // Precompute per-line absolute offsets for O(log n) line lookup via binary
+        // search. Each lines[i] does not include the joining '\n', so lineStarts[i]
+        // points at the first character of line i.
+        // 各マッチの行番号を O(log n) で引けるように行ごとの絶対 offset を事前計算。
+        // lines[i] 自体は連結に使う '\n' を含まないため、lineStarts[i] は i 行目の
+        // 先頭文字位置を指す。
+        var lineStarts = new int[lines.Length];
+        var cursor = 0;
+        for (var i = 0; i < lines.Length; i++)
         {
-            var maskedLine = masked[i];
-            if (string.IsNullOrWhiteSpace(maskedLine))
-                continue;
+            lineStarts[i] = cursor;
+            cursor += lines[i].Length + 1;
+        }
 
-            var startLine = i + 1;
-            var signature = lines[i].Trim();
-
-            foreach (var pattern in patterns)
+        var symbols = new List<SymbolRecord>();
+        foreach (var pattern in patterns)
+        {
+            foreach (Match match in pattern.Regex.Matches(maskedText))
             {
-                foreach (Match match in pattern.Regex.Matches(maskedLine))
-                {
-                    var name = match.Groups["name"].Success
-                        ? match.Groups["name"].Value.Trim()
-                        : match.Value.Trim();
-                    if (name.Length == 0)
-                        continue;
+                var name = match.Groups["name"].Success
+                    ? match.Groups["name"].Value.Trim()
+                    : match.Value.Trim();
+                if (name.Length == 0)
+                    continue;
 
-                    symbols.Add(new SymbolRecord
-                    {
-                        FileId = fileId,
-                        Kind = pattern.Kind,
-                        Name = name,
-                        Line = startLine,
-                        StartLine = startLine,
-                        EndLine = startLine,
-                        Signature = signature,
-                    });
-                }
+                var startLine = FindHtmlLineNumber(lineStarts, match.Index);
+                var endOffset = match.Index + Math.Max(0, match.Length - 1);
+                var endLine = FindHtmlLineNumber(lineStarts, endOffset);
+                var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
+                var signature = lines[signatureIndex].Trim();
+
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = pattern.Kind,
+                    Name = name,
+                    Line = startLine,
+                    StartLine = startLine,
+                    EndLine = Math.Max(startLine, endLine),
+                    Signature = signature,
+                });
             }
         }
 
         AssignContainers(symbols);
         PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
+    }
+
+    private static int FindHtmlLineNumber(int[] lineStarts, int offset)
+    {
+        if (lineStarts.Length == 0)
+            return 1;
+        var lo = 0;
+        var hi = lineStarts.Length - 1;
+        while (lo < hi)
+        {
+            var mid = (lo + hi + 1) / 2;
+            if (lineStarts[mid] <= offset)
+                lo = mid;
+            else
+                hi = mid - 1;
+        }
+        return lo + 1;
     }
 
     private static void ExtractJavaEnumMembers(long fileId, string[] rawLines, List<SymbolRecord> symbols)
