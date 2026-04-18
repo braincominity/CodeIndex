@@ -1876,7 +1876,7 @@ public partial class DbReader
         // する場合、`[MyAudit]` 参照をどちらの target にも一意に紐付けられない。
         // そのような曖昧なケースでは metadata の evidence bypass を行わず、
         // `impact` が rename / 削除の影響範囲を過大報告しないようにする。
-        var metadataBypassSafe = IsMetadataTargetUnambiguous(definition);
+        var metadataBypassSafe = IsMetadataTargetUnambiguous(definition, lang, pathPatterns, excludePathPatterns, excludeTests);
         var evidenceCache = new Dictionary<long, bool>();
         var filtered = new List<FileDependencyResult>();
         foreach (var candidate in candidates)
@@ -1921,21 +1921,52 @@ public partial class DbReader
     // namespace / package を跨いで同名の class-like 定義が複数ある曖昧なケースでは
     // attribute / annotation 参照行が短縮名しか持たず区別できないため、metadata の
     // evidence bypass を許可しない。
-    private bool IsMetadataTargetUnambiguous(SymbolResult definition)
+    private bool IsMetadataTargetUnambiguous(
+        SymbolResult definition,
+        string? lang,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests)
     {
         if (string.IsNullOrWhiteSpace(definition.Name))
             return false;
         using var cmd = _conn.CreateCommand();
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "metadataAmbigLang");
-        cmd.CommandText = $@"
+        var sql = $@"
             SELECT COUNT(*) FROM (
                 SELECT DISTINCT f.path
                 FROM symbols s
                 JOIN files f ON s.file_id = f.id
                 WHERE s.name = @metadataAmbigName COLLATE NOCASE
                   AND s.kind IN ('class','struct','interface')
-                  AND {supportedLangFilter}
-            )";
+                  AND {supportedLangFilter}";
+        if (lang != null)
+        {
+            sql += " AND f.lang = @metadataAmbigLangFilter";
+            cmd.Parameters.AddWithValue("@metadataAmbigLangFilter", lang);
+        }
+        if (pathPatterns is { Count: > 0 })
+        {
+            var ors = new List<string>(pathPatterns.Count);
+            for (int i = 0; i < pathPatterns.Count; i++)
+            {
+                ors.Add($"f.path LIKE @metadataAmbigPath{i} ESCAPE '\\'");
+                cmd.Parameters.AddWithValue($"@metadataAmbigPath{i}", pathPatterns[i]);
+            }
+            sql += " AND (" + string.Join(" OR ", ors) + ")";
+        }
+        if (excludePathPatterns is { Count: > 0 })
+        {
+            for (int i = 0; i < excludePathPatterns.Count; i++)
+            {
+                sql += $" AND f.path NOT LIKE @metadataAmbigExcludePath{i} ESCAPE '\\'";
+                cmd.Parameters.AddWithValue($"@metadataAmbigExcludePath{i}", excludePathPatterns[i]);
+            }
+        }
+        if (excludeTests)
+            sql += $" AND NOT {TestPathCondition}";
+        sql += ")";
+        cmd.CommandText = sql;
         cmd.Parameters.AddWithValue("@metadataAmbigName", definition.Name);
         var count = Convert.ToInt32(cmd.ExecuteScalar() ?? 0);
         return count <= 1;

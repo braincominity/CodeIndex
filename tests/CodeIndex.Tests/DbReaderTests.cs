@@ -2579,26 +2579,27 @@ public class DbReaderTests : IDisposable
     [Fact]
     public void GetFileDependencyHints_SuppressesCSharpAttributeMetadataBypassOnAmbiguousTarget()
     {
-        // issue #293 review: when two classes share the `MyAuditAttribute` name across
-        // namespaces, a `[MyAudit]` reference row only carries the short name and
-        // cannot be uniquely attributed to either target. In that ambiguous case the
-        // `impact` metadata evidence bypass must be skipped so rename / removal blast
-        // radius is not over-reported.
-        // issue #293 レビュー指摘: namespace を跨いで同名の `MyAuditAttribute` クラスが
-        // 存在するとき、`[MyAudit]` 参照行は短縮名しか持たず、どちらの target にも
-        // 一意に紐付けられない。この曖昧なケースでは `impact` の metadata evidence
-        // bypass を行わず、rename / 削除の影響範囲を過大報告しないようにする。
-        InsertIndexedFile("src/A/MyAuditAttribute.cs", "csharp",
+        // issue #293 review: when two classes share the `MyAuditAttribute` name
+        // *within the active impact scope*, a `[MyAudit]` reference row only
+        // carries the short name and cannot be uniquely attributed to either
+        // target. In that ambiguous case the `impact` metadata evidence bypass
+        // must be skipped so rename / removal blast radius is not over-reported.
+        // issue #293 レビュー指摘: impact スコープ内で同名の `MyAuditAttribute`
+        // クラスが複数存在するとき、`[MyAudit]` 参照行は短縮名しか持たず、
+        // どちらの target にも一意に紐付けられない。この曖昧なケースでは
+        // `impact` の metadata evidence bypass を行わず、rename / 削除の影響
+        //範囲を過大報告しないようにする。
+        InsertIndexedFile("src/A/Inner1/MyAuditAttribute.cs", "csharp",
             """
-            namespace A;
+            namespace A.Inner1;
 
             public sealed class MyAuditAttribute : System.Attribute
             {
             }
             """);
-        InsertIndexedFile("src/B/MyAuditAttribute.cs", "csharp",
+        InsertIndexedFile("src/A/Inner2/MyAuditAttribute.cs", "csharp",
             """
-            namespace B;
+            namespace A.Inner2;
 
             public sealed class MyAuditAttribute : System.Attribute
             {
@@ -2618,12 +2619,12 @@ public class DbReaderTests : IDisposable
             }
             """);
 
-        // Narrow `impact` to src/A/ so ResolveImpactDefinitions returns exactly one
-        // definition. Without the ambiguity guard, the metadata bypass would fabricate
-        // a heuristic edge even though the `[MyAudit]` target is qualifier-ambiguous.
-        // src/A/ に絞ることで ResolveImpactDefinitions が 1 件だけ返す状態を作る。
-        // ambiguity guard が無ければ、`[MyAudit]` の target が qualifier 曖昧でも
-        // metadata bypass が heuristic エッジを作ってしまう。
+        // Both ambiguous definitions are within the `src/A/` scope; without the
+        // ambiguity guard, the metadata bypass would fabricate a heuristic edge
+        // even though the `[MyAudit]` target is qualifier-ambiguous.
+        // src/A/ スコープ内に曖昧な定義が 2 件ある。ambiguity guard が無ければ、
+        // `[MyAudit]` の target が qualifier 曖昧でも metadata bypass が heuristic
+        // エッジを作ってしまう。
         var result = _reader.AnalyzeImpact(
             "MyAuditAttribute",
             maxDepth: 3,
@@ -2660,6 +2661,140 @@ public class DbReaderTests : IDisposable
             """);
 
         var result = _reader.AnalyzeImpact("MyAuditAttribute", maxDepth: 3, limit: 20, lang: "csharp");
+
+        Assert.Contains(result.FileImpacts, f => f.SourcePath == "src/Svc.cs" && f.TargetPath == "src/MyAuditAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencyHints_MetadataBypassAmbiguityGuard_RespectsLangScope()
+    {
+        // issue #293 round-11 follow-up: the ambiguity guard must honor the active
+        // `--lang` scope. A same-named class in an unrelated language must not
+        // suppress the C# metadata bypass because attribute reference rows are
+        // already language-qualified through the graph-supported `f.lang = 'csharp'`
+        // join on the reference side.
+        // issue #293 round-11 追加: ambiguity guard は active な `--lang` スコープを
+        // 尊重すべき。別言語に同名クラスが存在しても C# の metadata bypass を
+        // 潰してはならない — 参照側の join で既に言語修飾されているため、曖昧性は
+        // 言語スコープ内でのみ判定する。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+        // Unrelated Java class / annotation sharing the unqualified name — must not
+        // affect the C#-only impact query.
+        // 無関係な Java 側の同名クラス / アノテーション — C# 限定の impact クエリに
+        // 影響してはならない。
+        InsertIndexedFile("src/java/MyAuditAttribute.java", "java",
+            """
+            package pkg;
+
+            public @interface MyAuditAttribute {
+            }
+            """);
+
+        var result = _reader.AnalyzeImpact("MyAuditAttribute", maxDepth: 3, limit: 20, lang: "csharp");
+
+        Assert.Contains(result.FileImpacts, f => f.SourcePath == "src/Svc.cs" && f.TargetPath == "src/MyAuditAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencyHints_MetadataBypassAmbiguityGuard_RespectsPathScope()
+    {
+        // issue #293 round-11 follow-up: ambiguity guard must honor `--path`
+        // scoping. A same-named class outside the requested path subtree should
+        // not suppress the bypass inside that subtree.
+        // issue #293 round-11 追加: ambiguity guard は `--path` スコープを尊重すべき。
+        // 要求した path サブツリー外にある同名クラスが、サブツリー内の bypass を
+        // 潰してはならない。
+        InsertIndexedFile("src/A/MyAuditAttribute.cs", "csharp",
+            """
+            namespace A;
+
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/A/Svc.cs", "csharp",
+            """
+            namespace A;
+
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+        // Out-of-scope same-named definition in src/B/ — must not affect the
+        // src/A/-scoped impact query.
+        // スコープ外 src/B/ の同名定義 — src/A/ 限定の impact クエリに影響してはならない。
+        InsertIndexedFile("src/B/MyAuditAttribute.cs", "csharp",
+            """
+            namespace B;
+
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+
+        var result = _reader.AnalyzeImpact(
+            "MyAuditAttribute",
+            maxDepth: 3,
+            limit: 20,
+            lang: "csharp",
+            pathPatterns: new[] { "src/A/" });
+
+        Assert.Contains(result.FileImpacts, f => f.SourcePath == "src/A/Svc.cs" && f.TargetPath == "src/A/MyAuditAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencyHints_MetadataBypassAmbiguityGuard_RespectsExcludeTests()
+    {
+        // issue #293 round-11 follow-up: ambiguity guard must honor
+        // `--exclude-tests`. A same-named class only present in tests should not
+        // suppress the bypass when the caller has already excluded tests from the
+        // impact scope.
+        // issue #293 round-11 追加: ambiguity guard は `--exclude-tests` を尊重すべき。
+        // test 配下にしか存在しない同名定義が、test を除外した impact クエリの
+        // bypass を潰してはならない。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+        // Test-only same-named definition — must be filtered out when the caller
+        // passes excludeTests=true so the bypass stays active in the source scope.
+        // test 配下にしかない同名定義 — excludeTests=true のときはスコープ外になり、
+        // source 側の bypass を維持すべき。
+        InsertIndexedFile("tests/CodeIndex.Tests/MyAuditAttributeTests.cs", "csharp",
+            """
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+
+        var result = _reader.AnalyzeImpact(
+            "MyAuditAttribute",
+            maxDepth: 3,
+            limit: 20,
+            lang: "csharp",
+            excludeTests: true);
 
         Assert.Contains(result.FileImpacts, f => f.SourcePath == "src/Svc.cs" && f.TargetPath == "src/MyAuditAttribute.cs");
     }
