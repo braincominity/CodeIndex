@@ -1125,24 +1125,30 @@ public static class SymbolExtractor
                         && pattern.BodyStyle == BodyStyle.None)
                     {
                         // For a plain C# field (kind `property`, BodyStyle.None), clamp the
-                        // signature to the declarator itself rather than `line[start..]`.
-                        // Without this clamp, `public int X; } }` inside a same-line nested
-                        // type carries the trailing `} }` into X's signature, which breaks
-                        // the same-line `ContainsSymbol` check in AssignContainers (the
-                        // enclosing `Inner` class signature ends in a single `}` so it does
-                        // not "contain" a signature that ends in `} }`) and makes X attach
-                        // to Outer instead of Inner. Closes #400.
+                        // signature to the end of the field's declaration statement (the
+                        // terminating `;`, or — if an unbalanced `}` from a same-line
+                        // enclosing type body is hit first — the position of that `}`).
+                        // This keeps initializer-backed fields such as
+                        // `private int _x = 42;` carrying a full `private int _x = 42;`
+                        // signature instead of being truncated at `=`, and still prevents
+                        // `public int X; } }` inside a same-line nested type from leaking
+                        // the trailing `} }` into X's signature (which would break the
+                        // same-line `ContainsSymbol` check in `AssignContainers` and make
+                        // X attach to `Outer` instead of `Inner`). Closes #400.
                         // C# の通常フィールド（kind `property`、BodyStyle.None）では、signature を
-                        // 行末まで取らず宣言終端（`;` または `=`）までに絞る。このクランプが無いと
-                        // `public int X; } }` のような同一行ネスト型内のフィールドでは trailing
-                        // `} }` まで signature に含まれてしまい、AssignContainers の同一行
-                        // ContainsSymbol 判定（囲む `Inner` の signature が単一の `}` で終わるため、
-                        // `} }` で終わる signature を「含む」と見なせない）が壊れ、X が Inner ではなく
-                        // Outer にぶら下がる。Closes #400.
-                        var clampedEnd = absoluteStartColumn + Math.Max(1, match.Length);
-                        if (clampedEnd > line.Length)
-                            clampedEnd = line.Length;
-                        signature = line[absoluteStartColumn..clampedEnd].Trim();
+                        // 宣言文の終端（`;` まで、または同一行の囲む型本体の閉じ `}` が先に
+                        // 来ればその位置）までで clamp する。`private int _x = 42;` のような
+                        // 初期化子付きフィールドでも signature が `=` で切れず完全に残り、かつ
+                        // `public int X; } }` のような同一行ネスト型内のフィールドでも
+                        // trailing `} }` が signature に混入せず、AssignContainers の
+                        // ContainsSymbol 判定が正しく動いて X が Inner ではなく Outer に
+                        // ぶら下がる事故が起きない。Closes #400.
+                        var statementEnd = FindCSharpPlainFieldStatementEnd(patternMatchLine, absoluteStartColumn);
+                        if (statementEnd > line.Length)
+                            statementEnd = line.Length;
+                        if (statementEnd <= absoluteStartColumn)
+                            statementEnd = Math.Min(absoluteStartColumn + Math.Max(1, match.Length), line.Length);
+                        signature = line[absoluteStartColumn..statementEnd].Trim();
                     }
                     else
                     {
@@ -1238,35 +1244,46 @@ public static class SymbolExtractor
                         && pattern.Kind == "property"
                         && pattern.BodyStyle == BodyStyle.None)
                     {
-                        // Only continue scanning the same line if the match was a clean
-                        // single-declarator `;`-terminated field. When the match ended at
-                        // `=` (initializer), or when a multi-declarator expansion fired,
-                        // the declarator expander has already consumed through the
-                        // terminating `;` and any trailing text after the match belongs to
-                        // the very same statement. Re-running the regex over that tail
-                        // re-interprets fragments like `1, _b, _c =` as a new field with
-                        // `return_type = "1, _b,"`, which then produces phantom declarator
-                        // symbols. Break out in those cases without setting
-                        // `stopAfterFirstPatternMatch` so later unrelated patterns on the
-                        // same line still get a chance to run. Closes #400.
-                        // 同一行での property スキャン継続は、宣言が単一 declarator かつ `;`
-                        // 終端のときに限る。マッチが `=` で終わっている（初期化子がある）
-                        // ケースや多 declarator 展開が走ったケースでは、declarator 展開側が
-                        // 既に `;` まで消費しており、マッチ後の残り文字列は同一ステートメント
-                        // の一部である。再度正規表現を回すと `1, _b, _c =` のような残骸を
-                        // `return_type = "1, _b,"` の新しい field として拾い、擬似的な
-                        // declarator シンボルを量産してしまう。そうしたケースでは
-                        // `stopAfterFirstPatternMatch` を立てずに break し、同じ行の
-                        // 他パターン（class 等）には機会を残す。Closes #400.
-                        var matchEndIndex = absoluteStartColumn + Math.Max(1, match.Length);
-                        var matchEndedAtEquals = matchEndIndex > 0
-                            && matchEndIndex <= line.Length
-                            && line[matchEndIndex - 1] == '=';
-                        if (declaratorEntries != null || matchEndedAtEquals)
+                        // Advance past the end of the full field declaration statement
+                        // (the top-level `;`, with paren / bracket / brace depth tracking
+                        // so `{` / `;` inside an initializer cannot short-circuit the
+                        // scan) and continue. Using the statement end rather than the
+                        // regex match end keeps later same-line field statements visible
+                        // to the same pattern: without this, `A = 1; B;` stopped after
+                        // capturing `A` and dropped `B`, and `A, B; C;` stopped after
+                        // expanding `A, B` as a declarator list and dropped `C`. It also
+                        // avoids the earlier regression where advancing to the match end
+                        // (which sits on `=` when the field has an initializer) made the
+                        // regex re-match the tail `1, _b, _c =` as a bogus field with
+                        // `return_type = "1, _b,"`. If the scanner hits an unbalanced
+                        // `}` (the closing brace of the enclosing type body) before a
+                        // `;`, break out without setting `stopAfterFirstPatternMatch` so
+                        // later unrelated patterns on the same line still get a chance
+                        // to run. Closes #400.
+                        // フィールド宣言文全体の終端（`;`、paren / bracket / brace 深さを
+                        // 追って初期化子内の `{` や `;` で途切れないようにする）まで進めて
+                        // 同一パターンで scan を続ける。regex match の末尾ではなく文の
+                        // 終端で advance するのが肝心で、これが無いと `A = 1; B;` は
+                        // `A` を拾った時点で止まって `B` を取り落とし、`A, B; C;` は
+                        // `A, B` を declarator list として展開した時点で `C` を取り落とす。
+                        // さらに、match の末尾（初期化子付きなら `=`）まで進めて continue
+                        // すると正規表現が残りの `1, _b, _c =` を `return_type = "1, _b,"`
+                        // の偽フィールドとして再マッチしていた旧 regression も再発しない。
+                        // `;` より先に囲む型本体の閉じ `}`（深さ 0）に到達した場合は、
+                        // `stopAfterFirstPatternMatch` を立てずに break して同一行の他
+                        // パターン（class 等）へ機会を残す。Closes #400.
+                        var statementEnd = FindCSharpPlainFieldStatementEnd(patternMatchLine, absoluteStartColumn);
+                        if (statementEnd < patternMatchLine.Length
+                            && patternMatchLine[statementEnd] == '}')
+                        {
                             break;
-                        if (matchEndIndex <= lineOffset)
-                            matchEndIndex = lineOffset + 1;
-                        lineOffset = matchEndIndex;
+                        }
+                        var advance = statementEnd;
+                        if (advance <= lineOffset)
+                            advance = lineOffset + 1;
+                        if (advance >= patternMatchLine.Length)
+                            break;
+                        lineOffset = advance;
                         continue;
                     }
 
@@ -7206,6 +7223,76 @@ public static class SymbolExtractor
         }
 
         return -1;
+    }
+
+    // For C# plain fields (kind `property`, BodyStyle.None), find the end of the
+    // field's declaration statement on the same (merged) match line so the
+    // signature can be clamped to the full declaration text and the same-line
+    // pattern scanner can resume after the terminating `;`. Walks with paren /
+    // bracket / brace depth tracking so `{` / `}` inside an initializer
+    // (collection or object initializer, lambda body) does not short-circuit
+    // the scan; when an unbalanced `}` is encountered (the closing brace of
+    // the enclosing type body) the position of that `}` is returned instead
+    // so signature and advance both stop before the wrapper terminator. Input
+    // is expected to be the structurally-masked match line so string-literal
+    // `{` / `;` cannot poison the depth tracker.
+    // C# 通常フィールド（kind `property`、BodyStyle.None）向けに、結合済みマッチ行での
+    // 宣言文の終端位置を返す。signature を `;` まで含む完全な宣言文字列に揃え、かつ
+    // 同一行のパターンスキャンを `;` の次から再開できるようにするために使う。paren /
+    // bracket / brace の深さを追うので、初期化子（コレクション / オブジェクト初期化子や
+    // ラムダ本体）内の `{` / `}` で判定が途切れない。深さ 0 で出現する `}`（囲む型本体の
+    // 閉じ括弧）は、その位置をそのまま返すため signature と advance の両方がラッパー
+    // 終端の手前で止まる。入力は構造的にマスク済みのマッチ行を想定し、文字列リテラル内の
+    // `{` / `;` が深さトラッカを誤認させないようにしている。
+    private static int FindCSharpPlainFieldStatementEnd(string maskedLine, int startIndex)
+    {
+        int parenDepth = 0;
+        int bracketDepth = 0;
+        int braceDepth = 0;
+        var index = Math.Max(0, startIndex);
+        while (index < maskedLine.Length)
+        {
+            var ch = maskedLine[index];
+            if (ch == '(')
+            {
+                parenDepth++;
+            }
+            else if (ch == ')')
+            {
+                if (parenDepth > 0) parenDepth--;
+            }
+            else if (ch == '[')
+            {
+                bracketDepth++;
+            }
+            else if (ch == ']')
+            {
+                if (bracketDepth > 0) bracketDepth--;
+            }
+            else if (ch == '{')
+            {
+                braceDepth++;
+            }
+            else if (ch == '}')
+            {
+                if (braceDepth > 0)
+                {
+                    braceDepth--;
+                }
+                else
+                {
+                    return index;
+                }
+            }
+            else if (ch == ';' && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+            {
+                return index + 1;
+            }
+
+            index++;
+        }
+
+        return maskedLine.Length;
     }
 
     private static int FindSameLineBraceEndColumn(string line, int startColumn, string? lang, string kind)

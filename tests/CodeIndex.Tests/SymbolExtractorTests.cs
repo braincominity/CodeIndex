@@ -7171,6 +7171,73 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_SameLineFieldWithInitializerFollowedByAnotherField()
+    {
+        // `public class Holder { public int A = 1; public int B; }` must capture
+        // both `A` and `B`. The prior fix broke out of the same-line scan as soon
+        // as the plain-field pattern matched a `=`-terminated declaration, which
+        // dropped any following same-line field statement. Closes #400.
+        // `public class Holder { public int A = 1; public int B; }` では `A` と
+        // `B` の両方が抽出される必要がある。旧修正は `=` 終端フィールドを拾った
+        // 時点で同一行スキャンを break してしまい、直後の同一行フィールドを
+        // 取り落としていた。Closes #400.
+        var content = "public class Holder { public int A = 1; public int B; }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Holder");
+        var a = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "A");
+        var b = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "B");
+        Assert.Equal("public int A = 1;", a.Signature);
+        Assert.Equal("public int B;", b.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineDeclaratorListFollowedByAnotherField()
+    {
+        // `public class Holder { public int A, B; public int C; }` must capture
+        // three property rows (A, B via declarator list, plus C from the second
+        // same-line field statement). The prior fix broke out of the same-line
+        // scan after declarator expansion and silently dropped `C`. Closes #400.
+        // `public class Holder { public int A, B; public int C; }` では declarator
+        // list 展開で A と B、続く同一行 field 文から C、合わせて 3 シンボルを
+        // 抽出する必要がある。旧修正は declarator 展開後に同一行スキャンを break
+        // して C を取り落としていた。Closes #400.
+        var content = "public class Holder { public int A, B; public int C; }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Holder");
+        Assert.Single(symbols, s => s.Kind == "property" && s.Name == "A");
+        Assert.Single(symbols, s => s.Kind == "property" && s.Name == "B");
+        var c = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "C");
+        Assert.Equal("public int C;", c.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_PlainFieldWithInitializerKeepsFullSignature()
+    {
+        // `private int _x = 42;` must store the full `private int _x = 42;` as
+        // signature, not the `=`-truncated `private int _x =`. An earlier version
+        // clamped the signature to `match.Length`, which cut off at `=`. The fix
+        // clamps to the statement's `;` (or an unbalanced `}` if one is hit
+        // first). Closes #400.
+        // `private int _x = 42;` の signature は `=` で切り詰めず完全な
+        // `private int _x = 42;` を保存する必要がある。旧実装は signature を
+        // `match.Length` で clamp して `=` の手前で切れていた。修正では文終端の
+        // `;` まで（あるいは先に出現する深さ 0 の `}` の手前まで）で clamp する。
+        // Closes #400.
+        var content = string.Join(
+            "\n",
+            "public class Holder",
+            "{",
+            "    private int _x = 42;",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var field = Assert.Single(symbols, s => s.Kind == "property" && s.Name == "_x");
+        Assert.Equal("private int _x = 42;", field.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsFunctionPointerField()
     {
         // Function-pointer field (`delegate*<int, void> Callback;`) must be captured.
