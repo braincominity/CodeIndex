@@ -582,8 +582,10 @@ public static class ConsoleUi
                 COMPREPLY=($(compgen -W ""--db --json --limit --lang --path --exclude-path --exclude-tests --body --max-line-width --exact --exact-name --help"" -- ""$cur""))
             elif [ ""$cmd"" = ""hotspots"" ]; then
                 COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --count --group-by-name --help"" -- ""$cur""))
+            elif [ ""$cmd"" = ""search"" ]; then
+                COMPREPLY=($(compgen -W ""--db --json --limit --lang --path --exclude-path --exclude-tests --count --fts --snippet-lines --max-line-width --since --exact --exact-substring --exact-name --help"" -- ""$cur""))
             else
-                COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --body --count --fts --snippet-lines --max-line-width --since --depth --reverse --exact --exact-substring --exact-name --help"" -- ""$cur""))
+                COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --body --count --since --depth --reverse --exact --exact-name --help"" -- ""$cur""))
             fi
             ;;
     esac
@@ -683,6 +685,24 @@ _cdidx() {{
                     '--count[Count only]' \
                     '--group-by-name[Hotspots: collapse same-name rows across files]' \
                     '*:query'
+            elif [[ $subcmd == search ]]; then
+                _arguments \
+                    '--db[Database path]:file:_files' \
+                    '--json[JSON output]' \
+                    '--limit[Max results]:number' \
+                    '--lang[Filter by language]:language:({GetCompletionLangs()})' \
+                    '--path[Path filter]:pattern' \
+                    '--exclude-path[Exclude path]:pattern' \
+                    '--exclude-tests[Exclude tests]' \
+                    '--count[Count only]' \
+                    '--fts[Raw FTS5 syntax]' \
+                    '--snippet-lines[Snippet length]:number' \
+                    '--max-line-width[Clamp long single-line snippets]:number' \
+                    '--since[Filter by modified-since timestamp]:datetime' \
+                    '--exact[Backward-compatible exact shorthand]' \
+                    '--exact-substring[Search-only exact substring match]' \
+                    '--exact-name[Exact symbol-name equality]' \
+                    '*:query'
             else
                 _arguments \
                     '--db[Database path]:file:_files' \
@@ -695,11 +715,7 @@ _cdidx() {{
                     '--exclude-tests[Exclude tests]' \
                     '--body[Include body]' \
                     '--count[Count only]' \
-                    '--fts[Raw FTS5 syntax]' \
-                    '--snippet-lines[Snippet length]:number' \
-                    '--max-line-width[Clamp long single-line snippets]:number' \
                     '--exact[Backward-compatible exact shorthand]' \
-                    '--exact-substring[Search-only exact substring match]' \
                     '--exact-name[Exact symbol-name equality]' \
                     '*:query'
             fi

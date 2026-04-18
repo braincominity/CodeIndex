@@ -262,6 +262,44 @@ public class ConsoleUiTests
         }
     }
 
+    [Theory]
+    [InlineData("bash")]
+    [InlineData("zsh")]
+    public void PrintCompletions_BashAndZshScopeMaxLineWidthToSearchBranch(string shell)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            using var writer = new StringWriter();
+            try
+            {
+                Console.SetOut(writer);
+                Assert.True(ConsoleUi.PrintCompletions(shell));
+                var output = writer.ToString();
+                if (shell == "bash")
+                {
+                    Assert.Contains("elif [ \"$cmd\" = \"search\" ]; then", output);
+                    var searchBranch = ExtractBetween(output, "elif [ \"$cmd\" = \"search\" ]; then", "else\n");
+                    var genericBranch = ExtractBetween(output, "else\n                COMPREPLY=($(compgen -W \"", "\" -- \"$cur\"))\n            fi");
+                    Assert.Contains("--max-line-width", searchBranch);
+                    Assert.DoesNotContain("--max-line-width", genericBranch);
+                }
+                else
+                {
+                    Assert.Contains("elif [[ $subcmd == search ]]; then", output);
+                    var searchBranch = ExtractBetween(output, "elif [[ $subcmd == search ]]; then", "else\n");
+                    var genericBranch = ExtractBetween(output, "else\n                _arguments", "fi\n            ;;");
+                    Assert.Contains("--max-line-width", searchBranch);
+                    Assert.DoesNotContain("--max-line-width", genericBranch);
+                }
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+        }
+    }
+
     [Fact]
     public void PrintUsage_ShowsWorkingFindDashedLiteralExample()
     {
