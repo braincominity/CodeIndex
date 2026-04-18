@@ -2580,50 +2580,72 @@ public partial class DbReader
     // plausible metadata target (`[Attribute]` / `@Annotation` / `@decorator`).
     // Rules by language:
     //   - C# (`csharp`): only `kind = 'class'` with an inheritance clause
-    //     (signature LIKE '%: %'). `struct` / `interface` cannot be attribute
-    //     targets even when they share the `MyAuditAttribute` name, so they
-    //     must not count toward the ambiguity guard or produce metadata
-    //     edges. Transitive base-type resolution is not available at SQL
-    //     time, so "has an inheritance clause" is the portable approximation
-    //     for direct `: Attribute` plus indirect `: BaseAudit` where
-    //     BaseAudit itself derives from Attribute. Legacy DBs without a
-    //     `symbols.signature` column degrade to `kind = 'class'` only so
-    //     read-only / pre-migration indexes still return a result instead of
-    //     crashing with `no such column`.
-    //   - JS / TS (`javascript` / `typescript`): decorators legitimately
-    //     target both class-like constructs AND factory `function`
-    //     definitions (e.g. `function sealed(target) {}` used as
-    //     `@sealed class Foo {}`), so `function` must be accepted too.
+    //     (`signature LIKE '%: %'`). Transitive base-type resolution is not
+    //     available at SQL time, so "has any inheritance clause" is the
+    //     portable approximation for direct `: Attribute` plus indirect
+    //     `: BaseAudit` where `BaseAudit` itself derives from Attribute.
+    //     Extractor-driven authoritative `is_metadata_target` classification is
+    //     tracked as a follow-up (issue #435) and would let `deps` / `impact`
+    //     reject non-attribute classes like `class MyAuditAttribute : BaseService`
+    //     that this heuristic cannot distinguish.
+    //     For legacy-migration DBs whose `signature` column exists but stores
+    //     NULL for individual C# class rows, fall back to the canonical C#
+    //     attribute-naming convention (`name LIKE '%Attribute'`). This is
+    //     strictly narrower than the previous unconditional NULL-signature
+    //     pass-through and prevents every NULL-signature class from being
+    //     treated as a plausible metadata target. DBs without any `signature`
+    //     column at all degrade to the same naming heuristic.
+    //   - JS / TS (`javascript` / `typescript`): decorators target runtime
+    //     entities — classes and factory `function` definitions
+    //     (e.g. `function sealed(target) {}` used as `@sealed class Foo {}`).
+    //     TypeScript `interface` is a compile-time type-only construct and
+    //     cannot be a decorator target at runtime; including it would let a
+    //     same-name `interface` inject false ambiguity against the real
+    //     `function` or `class` provider and silently drop the decorator edge.
     //   - Everything else (Java `@interface`, Kotlin `annotation class`,
     //     Scala annotation classes, etc.): the annotation target is a
     //     class-like declaration, so keep the original class-like candidate
     //     set (`class` / `struct` / `interface`).
     // `deps` と `impact` で共有する言語別 metadata-target 適格性判定。
-    // C# は class 限定 + 継承節チェック(signature 列欠落時、または row 側 signature が
-    // NULL の legacy-migration DB では class 限定のみへ縮退)。
-    // JS / TS は decorator が function factory も対象にするため function を許容。
+    // C# は `kind = 'class'` かつ継承節を持つ行を対象とする（直接/間接の Attribute 継承を
+    // ポータブルに近似するため）。signature 列は存在するが値が NULL の legacy-migration
+    // DB では C# の命名規約 `name LIKE '%Attribute'` にフォールバック — 従来の
+    // 無条件許容より厳密で、NULL-signature の全 class を metadata target 扱いしない。
+    // signature 列自体が無い旧 DB も同じ命名規約ヒューリスティックを使う。
+    // extractor 主導の authoritative な `is_metadata_target` 判定は follow-up（issue #435）
+    // として追跡しており、schema 化すれば `class MyAuditAttribute : BaseService` のような
+    // 非 attribute 継承も厳密に除外できるが、現状のヒューリスティックでは判別できない。
+    // JS / TS は decorator が runtime entity (class / factory function) のみ対象。
+    // TypeScript の `interface` は型定義で runtime decorator target にならないため除外し、
+    // 同名 `interface` が本物の `function` / `class` provider を曖昧化するのを防ぐ。
     // それ以外は従来どおり class-like を候補にする。
     private string BuildMetadataTargetKindExpr(string fileAlias)
     {
         // C# clause — class only (interface/struct cannot be attribute targets).
-        // When the `signature` column exists but an individual row's signature is
-        // NULL (e.g. a DB whose schema was migrated in-place without reindexing),
-        // we cannot verify the inheritance clause, so we conservatively keep such
-        // rows eligible just like the column-missing `1 = 1` fallback. Otherwise a
-        // real `[MyAudit]` → `class MyAuditAttribute : System.Attribute` edge would
-        // silently disappear from `deps` / `impact` on legacy-migration DBs.
+        // Non-NULL signature: accept any inheritance clause (`: %`) as the portable
+        // approximation of direct/indirect Attribute derivation (see issue #435).
+        // NULL signature: require the C# attribute naming convention
+        // (`name LIKE '%Attribute'`). This is strictly narrower than the previous
+        // unconditional NULL pass-through and prevents arbitrary NULL-signature
+        // classes on a legacy-migration DB from being treated as metadata targets.
+        // DBs missing the `signature` column entirely degrade to the same naming
+        // heuristic.
         // C# は class のみ（interface/struct は attribute target にできない）。
-        // signature 列は存在するが row の signature が NULL のケース(その場 migration で列だけ
-        // 追加された legacy DB)では inheritance clause を検証できないため、列欠落時の
-        // `1 = 1` fallback と同じ扱いで eligibility を保守的に維持する。そうしないと
-        // 本物の `[MyAudit]` → `class MyAuditAttribute : System.Attribute` edge が
-        // legacy-migration DB で silent に落ちる。
+        // 非 NULL signature は従来どおり継承節 `: %` で判定（直接/間接 Attribute の近似）。
+        // NULL signature は C# 命名規約 `name LIKE '%Attribute'` に縮退 — 従来の
+        // 無条件許容より厳密で、legacy-migration DB で任意の NULL-signature class が
+        // metadata target 扱いされるのを防ぐ。signature 列欠落 DB も同じ命名規約を使う。
         var csharpClause = _symbolColumns.Contains("signature")
-            ? $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND (s.signature IS NULL OR s.signature LIKE '%: %'))"
-            : $"({fileAlias}.lang = 'csharp' AND s.kind = 'class')";
-        // JS / TS clause — decorators target classes and factory functions.
-        // JS / TS は decorator が class と factory function を対象にする。
-        var jsClause = $"({fileAlias}.lang IN ('javascript','typescript') AND s.kind IN ('class','struct','interface','function'))";
+            ? $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND ((s.signature IS NOT NULL AND s.signature LIKE '%: %') OR (s.signature IS NULL AND s.name LIKE '%Attribute')))"
+            : $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND s.name LIKE '%Attribute')";
+        // JS / TS clause — decorators target runtime entities (classes and factory
+        // functions). TS `interface` is a type-only construct that cannot be a
+        // decorator target, so excluding it avoids false ambiguity against a
+        // real function/class provider sharing the same name.
+        // JS / TS: decorator は runtime entity (class / factory function) のみ対象。
+        // TS の `interface` は型定義のため除外しないと同名 interface が偽の曖昧さを
+        // 発生させる。
+        var jsClause = $"({fileAlias}.lang IN ('javascript','typescript') AND s.kind IN ('class','function'))";
         // All other graph-supported languages keep the original class-like set.
         // その他の graph 対応言語は従来どおり class-like を対象にする。
         var otherClause = $"({fileAlias}.lang NOT IN ('csharp','javascript','typescript') AND s.kind IN ('class','struct','interface'))";

@@ -3409,6 +3409,107 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetFileDependencies_CSharp_LegacyDbWithNullSignature_NonAttributeName_DoesNotBlockMetadataEdge()
+    {
+        // issue #293 round-20: the NULL-signature fallback must not treat
+        // arbitrary classes as metadata targets. Before this round the clause
+        // accepted `signature IS NULL` for every C# `class`, so on a legacy-migration
+        // DB a non-attribute class named `HelperClient` could share a name with an
+        // attribute-applied site and silently inject false ambiguity. The tightened
+        // fallback requires the canonical C# attribute naming convention
+        // (`name LIKE '%Attribute'`), so a NULL-signature `HelperClient` is no
+        // longer counted and the real `[MyAudit]` edge to `MyAuditAttribute`
+        // survives even when both rows have NULL signatures.
+        // issue #293 round-20: NULL-signature フォールバックが任意の class を
+        // metadata target 扱いしないこと。以前は legacy-migration DB で
+        // `signature IS NULL` のすべての C# class を許容しており、attribute 名と
+        // 同名の非 attribute class (`HelperClient`) が偽の曖昧さを発生させ得た。
+        // 新しいフォールバックは C# の命名規約 `name LIKE '%Attribute'` を要求する
+        // ため、NULL-sig かつ非 *Attribute 名の class は候補から外れ、本物の
+        // `[MyAudit]` → `MyAuditAttribute` edge は両行の signature が NULL でも
+        // 残る。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/HelperClient.cs", "csharp",
+            """
+            namespace Unrelated;
+
+            public class HelperClient : BaseService
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        // Simulate partial-migration: all C# class rows have NULL signature.
+        // partial-migration 再現: すべての C# class 行の signature を NULL 化。
+        using (var cmd = _db.Connection.CreateCommand())
+        {
+            cmd.CommandText = "UPDATE symbols SET signature = NULL WHERE kind = 'class'";
+            cmd.ExecuteNonQuery();
+        }
+
+        var deps = _reader.GetFileDependencies(
+            limit: 50,
+            lang: "csharp");
+
+        Assert.Contains(deps, d =>
+            d.SourcePath == "src/Svc.cs" &&
+            d.TargetPath == "src/MyAuditAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_JavaScript_SameNameInterface_DoesNotBlockFunctionDecoratorEdge()
+    {
+        // issue #293 round-20: TypeScript `interface` is a compile-time type-only
+        // construct and cannot be a runtime decorator target, so a same-name
+        // `interface` must NOT count toward metadata-target ambiguity against a
+        // real `function` provider. The metadata-target predicate for JS/TS
+        // therefore restricts candidate kinds to `class` and `function` only.
+        // issue #293 round-20: TS の `interface` はコンパイル時型のため runtime
+        // decorator target になれない。同名 `interface` が本物の `function`
+        // provider への decorator edge を潰さないよう、JS/TS の metadata-target
+        // 候補 kind は `class` と `function` に限定する。
+        InsertIndexedFile("src/decorators.ts", "typescript",
+            """
+            export function sealed(target: any): void {
+                Object.freeze(target);
+            }
+            """);
+        InsertIndexedFile("src/types.ts", "typescript",
+            """
+            export interface sealed {
+                readonly frozen: boolean;
+            }
+            """);
+        InsertIndexedFile("src/model.ts", "typescript",
+            """
+            import { sealed } from './decorators';
+
+            @sealed
+            class Foo {
+            }
+            """);
+
+        var deps = _reader.GetFileDependencies(
+            limit: 50,
+            lang: "typescript");
+
+        Assert.Contains(deps, d =>
+            d.SourcePath == "src/model.ts" &&
+            d.TargetPath == "src/decorators.ts");
+    }
+
+    [Fact]
     public void GetFileDependencies_CSharp_SameNameInterface_DoesNotBlockMetadataEdge()
     {
         // issue #293 round-18: ambiguity should only count truly attribute-eligible
