@@ -235,6 +235,559 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void Search_FindsCjkSubstringInsideLongerToken()
+    {
+        // FTS5 default tokenizer (unicode61) treats an entire CJK run like "計算する" as one token.
+        // Without the CJK-only prefix-match fallback, `search 計算` would miss `def 計算する`.
+        // FTS5既定のunicode61トークナイザは「計算する」を単一トークンとして扱う。
+        // CJK 限定の prefix match fallback を付与しない限り、`search 計算` は `def 計算する` を取りこぼす。
+        InsertIndexedFile("src/cjk.py", "python",
+            "def 計算する(値):\n    return 値 * 2\n");
+
+        var results = _reader.Search("計算");
+
+        Assert.Contains(results, r => r.Path == "src/cjk.py");
+    }
+
+    [Fact]
+    public void Search_CjkFullTokenQueryStillFindsExactFullToken()
+    {
+        // Positive regression: the CJK prefix fallback must not break the case where the
+        // query already IS the full token. Searching '計算する' must still find content
+        // containing '計算する'. This pins the "CJK prefix fallback does not regress exact
+        // matches", NOT "CJK prefix fallback narrows to exact matches" — CJK tokens always
+        // take the prefix path, so '計算する' also matches '計算する追加' (that widening is
+        // intentional; users who want strict equality should use `--exact` / `instr`).
+        // 正の回帰テスト: クエリが既に完全トークンの場合でも CJK prefix fallback が壊していないこと。
+        // 「完全一致を保つ」ではなく「完全一致を取りこぼさない」ことを固定する点に注意 — CJK トークンは
+        // 常に prefix 経路を通るので '計算する' は '計算する追加' にもヒットする（意図的な挙動で、
+        // 厳密一致が必要なら `--exact` / `instr` 経路を使う）。
+        InsertIndexedFile("src/cjk_exact.py", "python",
+            "def 計算する(値):\n    return 値\n");
+
+        var results = _reader.Search("計算する");
+
+        Assert.Contains(results, r => r.Path == "src/cjk_exact.py");
+    }
+
+    [Fact]
+    public void Search_CjkFullTokenQueryAlsoWidensToLongerTokens()
+    {
+        // Pins the intentional widening: a CJK query ALWAYS takes the prefix fallback, so
+        // searching '計算する' also returns chunks containing '計算する追加'. This is the
+        // documented semantics — users who need strict equality must use the exact path.
+        // If a future change wants to narrow full-token CJK queries to non-prefix, this
+        // test should be the first to break and force an explicit decision, not a silent
+        // drift. Without this pin, issue #198 could be "fixed" by a revert that re-breaks
+        // the original reproduction (search 計算 → 0 hits) and no test would catch it.
+        // 意図的なワイドニングを固定する: CJK クエリは必ず prefix fallback を通るため、
+        // '計算する' の検索は '計算する追加' を含むチャンクも返す。厳密一致が必要な場合は
+        // exact 経路を使うのが仕様。将来この挙動を変更する場合にこのテストが最初に壊れ、
+        // 静かに #198 の元再現（search 計算 → 0 件）に戻されることを防ぐアンカー。
+        InsertIndexedFile("src/cjk_widen_short.py", "python",
+            "def 計算する(値):\n    return 値\n");
+        InsertIndexedFile("src/cjk_widen_long.py", "python",
+            "def 計算する追加(値):\n    return 値 + 1\n");
+
+        var results = _reader.Search("計算する");
+
+        Assert.Contains(results, r => r.Path == "src/cjk_widen_short.py");
+        Assert.Contains(results, r => r.Path == "src/cjk_widen_long.py");
+    }
+
+    [Fact]
+    public void Search_CjkPrefixDoesNotMatchUnrelatedCjkTokens()
+    {
+        // The CJK prefix fallback must widen only to tokens that literally start with the
+        // query codepoints. An unrelated CJK word like '検索' must not match '計算' even
+        // though both are CJK single-token runs under unicode61.
+        // CJK prefix fallback はクエリのコードポイントから始まるトークンにのみ拡張されるべき。
+        // '検索' のような無関係なCJK語は、同じくunicode61で単一トークン扱いされても '計算' にマッチしてはならない。
+        InsertIndexedFile("src/cjk_match.py", "python",
+            "def 計算する(値):\n    return 値\n");
+        InsertIndexedFile("src/cjk_unrelated.py", "python",
+            "def 検索する(値):\n    return 値\n");
+
+        var results = _reader.Search("計算");
+
+        Assert.Contains(results, r => r.Path == "src/cjk_match.py");
+        Assert.DoesNotContain(results, r => r.Path == "src/cjk_unrelated.py");
+    }
+
+    [Fact]
+    public void Search_EmojiMixedTokenDoesNotPrefixWidenToAsciiNeighbors()
+    {
+        // Regression guard for the most damaging over-widening case: if an emoji-mixed
+        // token was auto-upgraded to a prefix phrase (earlier in this fix's iterations it
+        // was), unicode61 would strip the emoji and the query would become a pure ASCII
+        // prefix search ('"foo"*') — sweeping in unrelated neighbors like 'foobar'. The
+        // sanitizer must therefore NOT add a prefix '*' to emoji-mixed tokens. Note: this
+        // only protects against PREFIX widening (neighbors that merely start with the
+        // ASCII fragment). It does NOT and cannot claim "exact-phrase semantics" against
+        // content where unicode61 indexes an identical ASCII token — see the companion
+        // `Search_EmojiMixedTokenFallsBackToAsciiToken_UseExactForStrict` pin.
+        // 最大の over-widening 回帰防止: emoji 混在トークンに prefix '*' が付くと、unicode61 が
+        // emoji を drop するため実質 '"foo"*' となり 'foobar' のような無関係な近傍を拾う。
+        // サニタイザは emoji 混在トークンに prefix を付与してはならない。ただしこれは
+        // 「prefix 拡張を防ぐ」までで、unicode61 が同じ ASCII トークンを indexing した内容に
+        // 対して完全一致を保証するものではない（下記の companion pin を参照）。
+        InsertIndexedFile("src/emoji_mixed.py", "python",
+            "def foo🎉():\n    return 1\n");
+        InsertIndexedFile("src/ascii_prefix_neighbor.py", "python",
+            "def foobar():\n    return 2\n");
+
+        var results = _reader.Search("foo🎉");
+
+        Assert.Contains(results, r => r.Path == "src/emoji_mixed.py");
+        Assert.DoesNotContain(results, r => r.Path == "src/ascii_prefix_neighbor.py");
+    }
+
+    [Fact]
+    public void Search_EmojiMixedTokenFallsBackToAsciiToken_UseExactForStrict()
+    {
+        // Known limitation pin: unicode61 drops emoji codepoints during BOTH indexing and
+        // query tokenization, so 'foo🎉' is indexed as the FTS token 'foo' and a literal
+        // query 'foo🎉' is tokenized as the FTS phrase '"foo"'. The FTS path therefore
+        // cannot distinguish between `def foo():` and `def foo🎉():` — both are FTS-equal.
+        // Users who need strict equality over emoji must route through the exact-substring
+        // path (`--exact` on the CLI, which uses SQLite `instr` against raw content and
+        // bypasses unicode61 tokenization entirely). This test pins that limitation so
+        // documentation and CHANGELOG cannot silently claim "exact-phrase semantics".
+        // 既知の制限の固定: unicode61 は indexing とクエリの両段階で emoji を drop するため、
+        // 'foo🎉' は FTS トークンとしては 'foo' と同じになる。FTS 経路では `def foo():` と
+        // `def foo🎉():` を区別できず、完全一致が必要なら `--exact` 経路（SQLite `instr`）を
+        // 使う必要がある。文書・CHANGELOG がこの制限を見落として「完全一致を保つ」と誤って
+        // 謳わないよう、挙動を明示的に固定する。
+        InsertIndexedFile("src/emoji_mixed_fallback.py", "python",
+            "def foo🎉():\n    return 1\n");
+        InsertIndexedFile("src/ascii_exact_twin.py", "python",
+            "def foo():\n    return 3\n");
+
+        var ftsResults = _reader.Search("foo🎉");
+
+        // FTS path cannot distinguish — both show up because unicode61 drops '🎉' on both sides.
+        // FTS 経路では区別できない — unicode61 が両側で '🎉' を drop するため。
+        Assert.Contains(ftsResults, r => r.Path == "src/emoji_mixed_fallback.py");
+        Assert.Contains(ftsResults, r => r.Path == "src/ascii_exact_twin.py");
+
+        // The exact path DOES distinguish via instr() on raw content.
+        // exact 経路は instr() により区別できる。
+        var exactResults = _reader.Search("foo🎉", exact: true);
+        Assert.Contains(exactResults, r => r.Path == "src/emoji_mixed_fallback.py");
+        Assert.DoesNotContain(exactResults, r => r.Path == "src/ascii_exact_twin.py");
+    }
+
+    [Fact]
+    public void Search_LatinDiacriticTokenDoesNotWidenToPrefixSearch()
+    {
+        // Latin-diacritic tokens (e.g. 'naïve') are tokenized normally by unicode61,
+        // so the CJK-only prefix fallback must NOT fire. Otherwise a literal 'naïve'
+        // query would silently widen to match 'naïvety', 'naïveness', etc.
+        // Latin系ダイアクリティカル付きトークン（例: 'naïve'）はunicode61で通常トークン化されるため、
+        // CJK限定のprefix fallbackが発動してはならない。発動すると 'naïve' が 'naïvety' 等まで広がる。
+        InsertIndexedFile("src/latin_exact.py", "python",
+            "def naïve():\n    return 1\n");
+        InsertIndexedFile("src/latin_longer.py", "python",
+            "def naïvety():\n    return 2\n");
+
+        var results = _reader.Search("naïve");
+
+        Assert.Contains(results, r => r.Path == "src/latin_exact.py");
+        Assert.DoesNotContain(results, r => r.Path == "src/latin_longer.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpCjkExtensionHSubstringInsideLongerToken()
+    {
+        // Regression guard for CJK Unified Ideographs Extension H (U+31350..U+323AF,
+        // added in Unicode 15.0). These codepoints are non-BMP (supplementary plane) so
+        // they surface in .NET strings as surrogate pairs. If the predicate only walks
+        // chars instead of runes, or forgets Extension H's range, `search '𱍐'` returns
+        // 0 results against content containing `𱍐abc` — the exact #198 zero-hit shape,
+        // reproduced on a newer Unicode block. Pin that a CJK Extension H query still
+        // takes the prefix path and finds longer-token content.
+        // CJK Extension H (U+31350..U+323AF, Unicode 15.0) の回帰テスト。
+        // これらは非 BMP（補助面）のコードポイントで、.NET の string ではサロゲートペアとして
+        // 現れる。述語が char 走査だったり Extension H を忘れていたりすると、`search '𱍐'` が
+        // `𱍐abc` を含む内容に対して 0 件を返す — #198 の元症状そのものが新ブロックで再発する。
+        // CJK Extension H クエリが prefix 経路を通り、長いトークンの内容も見つけることを固定する。
+        var extensionHChar = char.ConvertFromUtf32(0x31350);
+        InsertIndexedFile("src/ext_h.py", "python",
+            $"def {extensionHChar}abc(x):\n    return x\n");
+
+        var results = _reader.Search(extensionHChar);
+
+        Assert.Contains(results, r => r.Path == "src/ext_h.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpCjkExtensionISubstringInsideLongerToken()
+    {
+        // Regression guard for CJK Unified Ideographs Extension I (U+2EBF0..U+2EE5F,
+        // Unicode 15.1, added 2023). Same non-BMP / surrogate-pair concern as Extension H,
+        // pinned separately so that a later "cleanup" dropping either range would break
+        // its own dedicated test instead of silently regressing.
+        // CJK Extension I (U+2EBF0..U+2EE5F, Unicode 15.1) の回帰テスト。
+        // Extension H と同じく非 BMP だが、どちらかの範囲を「整理」で外すとそれぞれ固有の
+        // テストが壊れるよう、別テストとして固定する。
+        var extensionIChar = char.ConvertFromUtf32(0x2EBF0);
+        InsertIndexedFile("src/ext_i.py", "python",
+            $"def {extensionIChar}abc(x):\n    return x\n");
+
+        var results = _reader.Search(extensionIChar);
+
+        Assert.Contains(results, r => r.Path == "src/ext_i.py");
+    }
+
+    [Fact]
+    public void Search_FindsIdeographicIterationMarkInsideLongerToken()
+    {
+        // Regression guard for Han-script codepoints outside the CJK Unified Ideographs
+        // blocks. '々' (U+3005, ideographic iteration mark) is Unicode script=Han but lives
+        // in the CJK Symbols and Punctuation block. unicode61 keeps it as a word character,
+        // so without explicit inclusion in the CJK prefix fallback set, `search '々'` returns
+        // 0 results against content containing `々abc` — same shape as #198 on a different
+        // codepoint class.
+        // CJK Unified Ideographs 範囲外の Han script コードポイントの回帰テスト。'々' (U+3005) は
+        // Unicode script=Han だが CJK Symbols and Punctuation ブロックに属する。unicode61 では
+        // 単語文字扱いなので、CJK prefix fallback セットに明示的に含めないと `search '々'` が
+        // `々abc` を含むファイルに対し 0 件を返す — #198 の別コードポイント版。
+        InsertIndexedFile("src/iter_mark.py", "python",
+            "def 々abc(x):\n    return x\n");
+
+        var results = _reader.Search("々");
+
+        Assert.Contains(results, r => r.Path == "src/iter_mark.py");
+    }
+
+    [Fact]
+    public void Search_FindsIdeographicZeroInsideLongerToken()
+    {
+        // Same concern as 々 above but for '〇' (U+3007, ideographic number zero).
+        // 上の 々 と同様、'〇' (U+3007) についての回帰テスト。
+        InsertIndexedFile("src/ideograph_zero.py", "python",
+            "def 〇abc(x):\n    return x\n");
+
+        var results = _reader.Search("〇");
+
+        Assert.Contains(results, r => r.Path == "src/ideograph_zero.py");
+    }
+
+    [Fact]
+    public void Search_FindsHalfwidthHangulSubstringInsideLongerToken()
+    {
+        // Regression guard for halfwidth Hangul letters (U+FFA0..U+FFDC). unicode61 keeps
+        // them as word characters, so without including that range in the CJK prefix
+        // fallback, `search 'ﾱ'` returns 0 results against content containing 'ﾱﾲﾳabc'.
+        // This is the same 0-hit shape as #198 on the halfwidth Hangul block, which is
+        // why the halfwidth range extends past U+FF9F (halfwidth Katakana) to U+FFDC.
+        // 半角ハングル (U+FFA0..U+FFDC) の回帰テスト。unicode61 は単語文字として扱うため、
+        // CJK prefix fallback 範囲に含めないと `search 'ﾱ'` が 'ﾱﾲﾳabc' を含む内容に対して
+        // 0 件になる — 半角ハングル版の #198 再現。U+FF9F までではなく U+FFDC まで広げる
+        // 必要がある理由を固定する。
+        InsertIndexedFile("src/halfwidth_hangul.py", "python",
+            "def ﾱﾲﾳabc(x):\n    return x\n");
+
+        var results = _reader.Search("ﾱ");
+
+        Assert.Contains(results, r => r.Path == "src/halfwidth_hangul.py");
+    }
+
+    [Fact]
+    public void Search_FindsVerticalKanaRepeatMarkInsideLongerToken()
+    {
+        // Regression guard for the vertical kana repeat mark block (U+3031..U+3035), Unicode
+        // category Lm (Letter Modifier). These codepoints are used in vertical-text Japanese
+        // as iteration marks. unicode61 keeps them as word characters, so without explicit
+        // inclusion in the CJK prefix fallback set, `search '〱'` returns 0 results against
+        // content containing `〱abc` — same shape as #198 on another Japanese block.
+        // 縦書き仮名反復記号（U+3031..U+3035、Unicode カテゴリ Lm）の回帰テスト。unicode61 では
+        // 単語文字として扱われるため、CJK prefix fallback セットに明示的に含めないと
+        // `search '〱'` が `〱abc` に対して 0 件を返す — 別ブロック版の #198 再現。
+        InsertIndexedFile("src/vertical_kana.py", "python",
+            "def 〱abc(x):\n    return x\n");
+
+        var results = _reader.Search("〱");
+
+        Assert.Contains(results, r => r.Path == "src/vertical_kana.py");
+    }
+
+    [Fact]
+    public void Search_FindsBopomofoInsideLongerToken()
+    {
+        // Regression guard for Bopomofo (U+3100..U+312F), the Mandarin Chinese phonetic
+        // system ("zhuyin"). Bopomofo letters are Unicode category Lo and survive unicode61
+        // tokenization as regular word characters, so a bare phrase query like `search 'ㄅ'`
+        // used to return 0 against content containing `ㄅabc` — same shape as the original
+        // #198 repro but on a different script. Pin that Bopomofo queries take the prefix
+        // fallback path.
+        // 注音符号（ボポモフォ、U+3100..U+312F、中国語発音）の回帰テスト。Unicode カテゴリ Lo で
+        // unicode61 は単語文字として保つため、`search 'ㄅ'` が `ㄅabc` に対して 0 件を返す
+        // 状態を防ぐ — #198 を別スクリプトで再現した形。
+        InsertIndexedFile("src/bopomofo.py", "python",
+            "def ㄅabc(x):\n    return x\n");
+
+        var results = _reader.Search("ㄅ");
+
+        Assert.Contains(results, r => r.Path == "src/bopomofo.py");
+    }
+
+    [Fact]
+    public void Search_FindsBopomofoExtendedInsideLongerToken()
+    {
+        // Regression guard for Bopomofo Extended (U+31A0..U+31BF), which extends zhuyin with
+        // additional phonetic letters used for minority Chinese dialects (e.g. Min Nan, Hakka).
+        // Same category / tokenization concern as Bopomofo above; pinned separately so a later
+        // cleanup that drops either range breaks its own dedicated test.
+        // 拡張注音符号（U+31A0..U+31BF、閩南語や客家語等の発音）の回帰テスト。Bopomofo と同じく
+        // 単語文字扱いなので、それぞれの範囲を独立に固定する。
+        InsertIndexedFile("src/bopomofo_ext.py", "python",
+            "def ㆠabc(x):\n    return x\n");
+
+        var results = _reader.Search("ㆠ");
+
+        Assert.Contains(results, r => r.Path == "src/bopomofo_ext.py");
+    }
+
+    [Fact]
+    public void Search_FindsYiSyllableInsideLongerToken()
+    {
+        // Regression guard for Yi Syllables (U+A000..U+A48F), the syllabary used by the Nuosu
+        // (Yi) people in southwestern China. Yi syllables are Unicode category Lo, so unicode61
+        // keeps them as word characters; without CJK prefix promotion, `search 'ꀀ'` returns 0
+        // results against content containing 'ꀀabc' — same 0-hit shape as #198 on another
+        // Unicode-15-adjacent historical East Asian script. Yi Radicals (U+A490..U+A4CF) are
+        // intentionally excluded upstream because they are category So and dropped by unicode61.
+        // 彝文字音節（Yi Syllables、U+A000..U+A48F、中国南西部のノス族の文字体系）の回帰テスト。
+        // Unicode カテゴリ Lo で unicode61 は単語文字として扱うため、CJK prefix 昇格なしでは
+        // `search 'ꀀ'` が 'ꀀabc' を含む内容に対して 0 件を返す — #198 の別スクリプト版。
+        // 彝文字部首（Yi Radicals、U+A490..U+A4CF）は Unicode カテゴリ So のため上流で意図的に除外。
+        InsertIndexedFile("src/yi_syllables.py", "python",
+            "def ꀀabc(x):\n    return x\n");
+
+        var results = _reader.Search("ꀀ");
+
+        Assert.Contains(results, r => r.Path == "src/yi_syllables.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpTangutSubstringInsideLongerToken()
+    {
+        // Regression guard for Tangut (U+17000..U+187FF), a non-BMP historical East Asian
+        // logographic script used by the Western Xia empire (11th–13th century). Tangut is
+        // Unicode category Lo and unicode61 keeps it as word characters, so the surrogate-pair
+        // aware rune walk AND an explicit U+17000..U+187FF range entry are both required for
+        // `search '𗀀'` to match '𗀀abc'. Pinned as a dedicated Tangut-block test so a future
+        // rewrite that collapses Tangut into a different neighboring block breaks here, not
+        // silently on Chinese archaeological text.
+        // 西夏文字（Tangut、U+17000..U+187FF、西夏帝国の非 BMP 表意文字）の回帰テスト。
+        // Unicode カテゴリ Lo で unicode61 が単語文字として扱うため、rune 走査と U+17000..U+187FF
+        // 範囲の CJK prefix 包含の両方がないと `search '𗀀'` が '𗀀abc' を拾えない。Tangut ブロック
+        // 単独のテストとして固定し、将来別ブロックへ統合するような書き換えがあっても中国考古
+        // テキストで黙って回帰する前にここで壊れるようにする。
+        var tangutChar = char.ConvertFromUtf32(0x17000);
+        InsertIndexedFile("src/tangut.py", "python",
+            $"def {tangutChar}abc(x):\n    return x\n");
+
+        var results = _reader.Search(tangutChar);
+
+        Assert.Contains(results, r => r.Path == "src/tangut.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpTangutComponentsSubstringInsideLongerToken()
+    {
+        // Regression guard for Tangut Components (U+18800..U+18AFF), the non-BMP block of
+        // radical / stroke components used to build Tangut logographs. Separate Unicode block
+        // and separate predicate branch from Tangut itself, so this test exercises its own
+        // branch rather than aliasing to the Tangut test. Unicode category Lo; unicode61 keeps
+        // it as word characters; same #198 zero-hit shape without explicit prefix fallback.
+        // 西夏文字部品（Tangut Components、U+18800..U+18AFF、非 BMP の西夏文字構成要素）の
+        // 回帰テスト。Tangut 本体とは別の Unicode ブロック・別の分岐を踏むため、Tangut テストと
+        // エイリアス化せず専用分岐を検証する。Unicode カテゴリ Lo で unicode61 は単語文字として
+        // 扱うため、prefix fallback なしでは #198 と同じ 0 件症状になる。
+        var tangutComponentsChar = char.ConvertFromUtf32(0x18800);
+        InsertIndexedFile("src/tangut_components.py", "python",
+            $"def {tangutComponentsChar}abc(x):\n    return x\n");
+
+        var results = _reader.Search(tangutComponentsChar);
+
+        Assert.Contains(results, r => r.Path == "src/tangut_components.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpKhitanSmallScriptSubstringInsideLongerToken()
+    {
+        // Regression guard for Khitan Small Script (U+18B00..U+18CFF), the non-BMP script of
+        // the Liao dynasty's Khitan people (10th–13th century). Separate Unicode block and
+        // separate predicate branch from Tangut / Tangut Components / Tangut Supplement, so
+        // this test exercises its own branch. Unicode category Lo; unicode61 keeps it as
+        // word characters.
+        // 契丹小字（Khitan Small Script、U+18B00..U+18CFF、遼朝の非 BMP 表音文字）の回帰テスト。
+        // Tangut / Tangut Components / Tangut Supplement とは別の Unicode ブロック・別の分岐。
+        // Unicode カテゴリ Lo で unicode61 は単語文字として扱う。
+        var khitanChar = char.ConvertFromUtf32(0x18B00);
+        InsertIndexedFile("src/khitan_small.py", "python",
+            $"def {khitanChar}abc(x):\n    return x\n");
+
+        var results = _reader.Search(khitanChar);
+
+        Assert.Contains(results, r => r.Path == "src/khitan_small.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpTangutSupplementSubstringInsideLongerToken()
+    {
+        // Regression guard for Tangut Supplement (U+18D00..U+18D8F), the small non-BMP block
+        // added in Unicode 13.0 alongside Khitan Small Script. Separate predicate branch from
+        // Tangut / Tangut Components / Khitan, so this test exercises its own branch. Unicode
+        // category Lo; unicode61 keeps it as word characters.
+        // 西夏文字補助（Tangut Supplement、U+18D00..U+18D8F、Unicode 13.0 で Khitan Small Script と
+        // 同時追加された小規模な非 BMP ブロック）の回帰テスト。Tangut / Tangut Components /
+        // Khitan とは別の分岐。Unicode カテゴリ Lo で unicode61 は単語文字として扱う。
+        var tangutSupplementChar = char.ConvertFromUtf32(0x18D00);
+        InsertIndexedFile("src/tangut_supplement.py", "python",
+            $"def {tangutSupplementChar}abc(x):\n    return x\n");
+
+        var results = _reader.Search(tangutSupplementChar);
+
+        Assert.Contains(results, r => r.Path == "src/tangut_supplement.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpTangutIterationMarkInsideLongerToken()
+    {
+        // Regression guard for the Tangut Iteration Mark (U+16FE0), a non-BMP codepoint in the
+        // Ideographic Symbols and Punctuation block used to annotate repeated Tangut
+        // characters. Unicode category Lm (Modifier Letter) on the current runtime; unicode61
+        // keeps Lm codepoints as word characters, so `search '𖿠'` returned 0 against '𖿠abc'
+        // without explicit CJK prefix promotion. The Ideographic Symbols and Punctuation
+        // iteration / annotation codepoints (U+16FE0 Tangut iteration, U+16FE1 Nüshu iteration,
+        // U+16FE3 Old Chinese iteration, U+16FE4 Khitan filler, U+16FF0 / U+16FF1 Vietnamese
+        // reading marks) are listed individually in the predicate so U+16FE2 (Po, dropped by
+        // unicode61) does not ride along. Pinned separately so the Lm / ideographic-annotation
+        // branch cannot regress silently.
+        // Tangut 反復記号（U+16FE0、非 BMP の Ideographic Symbols and Punctuation ブロック）の
+        // 回帰テスト。現行ランタイムでは Unicode カテゴリ Lm で unicode61 は単語文字として扱う。
+        // そのため CJK prefix 昇格がなければ `search '𖿠'` は '𖿠abc' に対して 0 件を返す。
+        // Ideographic Symbols and Punctuation の反復 / 注釈記号（U+16FE0 / 16FE1 / 16FE3 / 16FE4
+        // / 16FF0 / 16FF1）は個別列挙にし、U+16FE2 (Po, unicode61 が drop) を巻き込まないように
+        // している。Lm / ideographic annotation 分岐の回帰をここで固定する。
+        var tangutIterationMark = char.ConvertFromUtf32(0x16FE0);
+        InsertIndexedFile("src/tangut_iter.py", "python",
+            $"def {tangutIterationMark}abc(x):\n    return x\n");
+
+        var results = _reader.Search(tangutIterationMark);
+
+        Assert.Contains(results, r => r.Path == "src/tangut_iter.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpKhitanSmallScriptFillerInsideLongerToken()
+    {
+        // Regression guard for U+16FE4 (Khitan Small Script Filler), a non-BMP codepoint in the
+        // Ideographic Symbols and Punctuation block. On the current runtime this is Unicode
+        // category Mn (Nonspacing Mark); unicode61 still keeps Mn codepoints as word
+        // characters, so `search '𖿤'` returned 0 against '𖿤abc' without explicit CJK prefix
+        // promotion. Pinned so the Mn / Khitan-annotation case is covered in addition to Lm.
+        // 契丹小字フィラー（U+16FE4、非 BMP の Ideographic Symbols and Punctuation ブロック）の
+        // 回帰テスト。現行ランタイムでは Unicode カテゴリ Mn。unicode61 は Mn も単語文字として
+        // 扱うため、CJK prefix 昇格がなければ `search '𖿤'` は '𖿤abc' に対して 0 件を返す。
+        // Lm だけでなく Mn / 契丹注釈のケースも別途固定する。
+        var khitanFiller = char.ConvertFromUtf32(0x16FE4);
+        InsertIndexedFile("src/khitan_filler.py", "python",
+            $"def {khitanFiller}abc(x):\n    return x\n");
+
+        var results = _reader.Search(khitanFiller);
+
+        Assert.Contains(results, r => r.Path == "src/khitan_filler.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpVietnameseReadingMarkInsideLongerToken()
+    {
+        // Regression guard for U+16FF0 (Vietnamese Alternate Reading Mark CA), a non-BMP
+        // codepoint in the Ideographic Symbols and Punctuation block used to annotate Chu Nom
+        // (Han-based Vietnamese) text. On the current runtime this is Unicode category Mc
+        // (Spacing Mark); unicode61 keeps Mc codepoints as word characters, so `search '𖿰'`
+        // returned 0 against '𖿰abc' without explicit CJK prefix promotion. Pinned so the Mc /
+        // Chu-Nom-annotation case is covered in addition to Lm / Mn.
+        // ベトナム語 Chu Nom 読み記号 CA（U+16FF0、非 BMP の Ideographic Symbols and Punctuation
+        // ブロック）の回帰テスト。現行ランタイムでは Unicode カテゴリ Mc。unicode61 は Mc も
+        // 単語文字として扱うため、CJK prefix 昇格がなければ `search '𖿰'` は '𖿰abc' に対して
+        // 0 件を返す。Lm / Mn だけでなく Mc / Chu Nom 注釈のケースも固定する。
+        var vietnameseReadingMark = char.ConvertFromUtf32(0x16FF0);
+        InsertIndexedFile("src/vietnamese_ca.py", "python",
+            $"def {vietnameseReadingMark}abc(x):\n    return x\n");
+
+        var results = _reader.Search(vietnameseReadingMark);
+
+        Assert.Contains(results, r => r.Path == "src/vietnamese_ca.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpNushuSubstringInsideLongerToken()
+    {
+        // Regression guard for Nüshu (U+1B170..U+1B2FF), a non-BMP syllabic script historically
+        // used by women in Jiangyong County, Hunan, China. Unicode category Lo; unicode61 keeps
+        // it as word characters. Non-BMP, so the same surrogate-pair-aware rune walk and explicit
+        // range inclusion required for Tangut also apply here. Without them, `search '𛅰'` returns
+        // 0 against '𛅰abc' — #198 repeated on another non-BMP historical East Asian script.
+        // 女書（Nüshu、U+1B170..U+1B2FF、中国湖南省江永県で女性たちが使った非 BMP 音節文字）の
+        // 回帰テスト。Unicode カテゴリ Lo で unicode61 は単語文字として扱う。非 BMP のため、
+        // Tangut と同じく rune 走査と範囲追加の両方が必要。抜けると `search '𛅰'` が '𛅰abc' に
+        // 対して 0 件を返す — #198 の非 BMP 歴史的東アジア文字版。
+        var nushuChar = char.ConvertFromUtf32(0x1B170);
+        InsertIndexedFile("src/nushu.py", "python",
+            $"def {nushuChar}abc(x):\n    return x\n");
+
+        var results = _reader.Search(nushuChar);
+
+        Assert.Contains(results, r => r.Path == "src/nushu.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpKanaExtendedBSubstringInsideLongerToken()
+    {
+        // Regression guard for Kana Extended-B (U+1AFF0..U+1AFFF, Unicode 15.0). Non-BMP
+        // kana codepoints are represented as surrogate pairs in .NET strings; the predicate
+        // must walk runes rather than chars AND must include this range in the fallback
+        // set. Without it, `search '𚿰'` returns 0 results against content containing
+        // '𚿰abc' — identical 0-hit shape to #198.
+        // Kana Extended-B (U+1AFF0..U+1AFFF, Unicode 15.0) の回帰テスト。非 BMP の仮名は
+        // .NET 文字列ではサロゲートペアとして現れるため、述語は rune を走査し、さらにこの
+        // 範囲を fallback セットに含める必要がある。抜けると `search '𚿰'` が '𚿰abc' を含む
+        // 内容に対して 0 件を返す — #198 と同じ症状が Kana Extended-B で再発する。
+        var kanaExtendedBChar = char.ConvertFromUtf32(0x1AFF0);
+        InsertIndexedFile("src/kana_ext_b.py", "python",
+            $"def {kanaExtendedBChar}abc(x):\n    return x\n");
+
+        var results = _reader.Search(kanaExtendedBChar);
+
+        Assert.Contains(results, r => r.Path == "src/kana_ext_b.py");
+    }
+
+    [Fact]
+    public void CountSearchResults_IncludesCjkSubstringMatches()
+    {
+        // Count path shares the sanitizer, so the CJK prefix fallback must apply there too.
+        // Pin the exact count/fileCount instead of a loose `>= 1` so drift that inflates
+        // the count (e.g. prefix promotion leaking into an unrelated file) is caught too.
+        // カウント経路も同じサニタイザを共有するため、CJKの prefix フォールバックが効く必要がある。
+        // 緩い `>= 1` ではなく厳密な count/fileCount を固定し、prefix 昇格が無関係なファイルに
+        // 漏れて count が膨らむようなドリフトも捕える。
+        InsertIndexedFile("src/cjk_count_hit.py", "python",
+            "def 計算する(値):\n    return 値\n");
+        InsertIndexedFile("src/cjk_count_miss.py", "python",
+            "def 検索する(値):\n    return 値\n");
+
+        var counts = _reader.CountSearchResults("計算");
+
+        Assert.Equal(1, counts.Count);
+        Assert.Equal(1, counts.FileCount);
+    }
+
+    [Fact]
     public void SearchSymbols_FindsByName()
     {
         var results = _reader.SearchSymbols("authenticate");
@@ -2250,6 +2803,1349 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetFileDependencies_IncludesMetadataReferencesAsCompileTimeDependencies()
+    {
+        // issue #293 follow-up: the attribute class `JsonConverter` is referenced
+        // both as a runtime `new JsonConverter(...)` call AND as compile-time
+        // attribute metadata `[JsonConverter(...)]`. Renaming or removing the
+        // class breaks both sites, so `cdidx deps` MUST surface both edges as
+        // real file-level dependencies. (`callers` / `callees` stay call-graph-
+        // only and reject `--kind attribute|annotation` separately at the CLI /
+        // MCP boundary — that is a different contract.)
+        // issue #293 補足: attribute クラス `JsonConverter` は runtime の
+        // `new JsonConverter(...)` としても、compile-time の `[JsonConverter(...)]`
+        // 属性 metadata としても参照される。クラスを rename / 削除すれば両方の
+        // サイトが壊れるため、`cdidx deps` は両方のエッジをファイル単位の本物の
+        // 依存として出す必要がある。(`callers` / `callees` は call-graph 専用で、
+        // metadata 種別は CLI / MCP boundary 側で別途拒否する)
+        InsertIndexedFile("src/JsonConverterAttribute.cs", "csharp",
+            """
+            using System;
+
+            [AttributeUsage(AttributeTargets.Class)]
+            public class JsonConverter : Attribute
+            {
+                public Type ConverterType { get; }
+                public JsonConverter(Type converterType) => ConverterType = converterType;
+            }
+            """);
+        // Metadata-only usage — attribute form. Compile-time dependency: renaming
+        // `JsonConverter` breaks this file at build time.
+        // metadata-only の利用 (attribute 形式)。compile-time 依存:
+        // `JsonConverter` を rename すればこのファイルも build-time で壊れる。
+        InsertIndexedFile("src/Serializer.cs", "csharp",
+            """
+            [JsonConverter(typeof(int))]
+            public class SerializerConfig
+            {
+            }
+            """);
+        // Runtime dependency — `new JsonConverter(...)` is a `call` / `instantiate` edge.
+        // 実行時の依存 — `new JsonConverter(...)` は `call` / `instantiate` 種別の edge。
+        InsertIndexedFile("src/Caller.cs", "csharp",
+            """
+            public class Caller
+            {
+                public void Do()
+                {
+                    var c = new JsonConverter(typeof(int));
+                }
+            }
+            """);
+
+        var dependencies = _reader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        // Both Caller.cs (runtime `instantiate`) and Serializer.cs (attribute
+        // metadata) must appear as dependencies of JsonConverterAttribute.cs.
+        // Caller.cs (runtime `instantiate`) と Serializer.cs (attribute metadata)
+        // の両方が JsonConverterAttribute.cs への依存として現れる。
+        Assert.Equal(2, dependencies.Count);
+        Assert.Contains(dependencies, d => d.SourcePath == "src/Caller.cs" && d.TargetPath == "src/JsonConverterAttribute.cs");
+        Assert.Contains(dependencies, d => d.SourcePath == "src/Serializer.cs" && d.TargetPath == "src/JsonConverterAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_MatchesCSharpAttributeSuffixConvention()
+    {
+        // issue #293 follow-up: C# convention — a class `FooAttribute` is used in
+        // source as `[Foo]`, so the reference site is stored with symbol_name `Foo`.
+        // `deps` must canonicalize these so the attribute class file is still
+        // recognized as a dependency target for pure-attribute consumers.
+        // issue #293 補足: C# の規約では、クラス `FooAttribute` はソース中で `[Foo]`
+        // として使われるため、参照サイトは symbol_name `Foo` として保存される。
+        // `deps` はこれを正規化し、attribute 専用の consumer でも attribute クラスの
+        // ファイルを依存 target として認識できるようにする。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            using System;
+
+            [AttributeUsage(AttributeTargets.Class)]
+            public sealed class MyAuditAttribute : Attribute
+            {
+            }
+            """);
+        // Idiomatic `[MyAudit]` usage — symbol_name recorded as `MyAudit` but target
+        // class is `MyAuditAttribute`.
+        // 慣用的な `[MyAudit]` 利用 — symbol_name は `MyAudit` として記録されるが
+        // target クラスは `MyAuditAttribute`。
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var dependencies = _reader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        Assert.Contains(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/MyAuditAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpGenericNoArgAttribute_StillIndexedAndResolvesToAttributeClass()
+    {
+        // issue #293 round-15 follow-up: generic no-arg C# attributes like
+        // `[MyAudit<int>]` and multi-line `[\n MyAttr<int>\n]` must still be
+        // indexed as `attribute` references so `deps` can route them through
+        // the suffix-alias synthesizer to the real attribute class file.
+        // Before the regex was widened these forms fell through both CallRegex
+        // (no `(`) and the no-arg regex (generic `<...>` after the name broke
+        // the `(?=[\],]|$)` anchor), producing zero edges.
+        // issue #293 round-15 補足: `[MyAudit<int>]` や複数行の `[\n MyAttr<int>\n]`
+        // のようなジェネリック引数なし属性も `attribute` として取り込まれ、
+        // suffix alias を経由して実属性クラスへの依存エッジに正規化される
+        // こと。正規表現の拡張前は両 regex とも拾えず、エッジが 0 件だった。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            using System;
+
+            public sealed class MyAuditAttribute<T> : Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/MyAttrAttribute.cs", "csharp",
+            """
+            using System;
+
+            public sealed class MyAttrAttribute<T> : Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit<int>]
+            [
+                MyAttr<int>
+            ]
+            public class Svc
+            {
+            }
+            """);
+
+        var dependencies = _reader.GetFileDependencies(limit: 20, lang: "csharp");
+
+        Assert.Contains(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/MyAuditAttribute.cs");
+        Assert.Contains(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/MyAttrAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpGenericNoArgAttribute_AssemblyTarget_IsIndexed()
+    {
+        // issue #293 round-15 follow-up: `[assembly: MyAttr<string>]` — assembly
+        // targeted generic no-arg attribute must also reach the attribute class.
+        // issue #293 round-15 補足: `[assembly: MyAttr<string>]` のような
+        // assembly targeted ジェネリック引数なし属性も同様にインデックスされ、
+        // attribute クラスに解決されること。
+        InsertIndexedFile("src/MyAttrAttribute.cs", "csharp",
+            """
+            using System;
+
+            public sealed class MyAttrAttribute<T> : Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/AssemblyInfo.cs", "csharp",
+            """
+            [assembly: MyAttr<string>]
+            """);
+
+        var dependencies = _reader.GetFileDependencies(limit: 20, lang: "csharp");
+
+        Assert.Contains(dependencies, d => d.SourcePath == "src/AssemblyInfo.cs" && d.TargetPath == "src/MyAttrAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpAttributeRawDoesNotLeakToBareNameClass_WhenSuffixTargetExists()
+    {
+        // issue #293 follow-up: `[MyAudit]` in C# is stored as symbol_name='MyAudit'.
+        // When both `class MyAudit` (plain class) and `class MyAuditAttribute`
+        // (the real attribute target) exist, the metadata edge must resolve only
+        // to `MyAuditAttribute` via the synthetic suffix alias. Keeping the raw
+        // bare-name edge would over-report: `[MyAudit]` would falsely depend on
+        // the unrelated plain `class MyAudit` file.
+        // issue #293 補足: C# の `[MyAudit]` は symbol_name='MyAudit' で保存される。
+        // `class MyAudit` (plain) と `class MyAuditAttribute` (本物の attribute)
+        // が両方あるとき、metadata エッジは synthetic suffix alias 経由で
+        // `MyAuditAttribute` だけに解決されるべき。raw の bare-name エッジを
+        // 残すと、`[MyAudit]` が無関係な plain `class MyAudit` のファイルにも
+        // 誤って依存してしまう。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            using System;
+
+            [AttributeUsage(AttributeTargets.Class)]
+            public sealed class MyAuditAttribute : Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/PlainMyAudit.cs", "csharp",
+            """
+            public class MyAudit
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var dependencies = _reader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        // Only MyAuditAttribute.cs should be a dependency target for Svc.cs;
+        // PlainMyAudit.cs must not appear.
+        // Svc.cs の依存先は MyAuditAttribute.cs のみで、PlainMyAudit.cs は
+        // 出現してはならない。
+        Assert.Contains(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/MyAuditAttribute.cs");
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/PlainMyAudit.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpAttributeDoesNotLeakToSameNameMethodOrProperty()
+    {
+        // issue #293 follow-up: `[MyAuditAttribute]` (fully qualified) must only
+        // match a class-like attribute target. A method / property named
+        // `MyAuditAttribute` in an unrelated file must never show up as a deps
+        // edge from the metadata reference. Non-metadata call-graph edges keep
+        // their previous behavior (they can still resolve to any symbol kind).
+        // issue #293 補足: `[MyAuditAttribute]` (完全形) は class 系の attribute
+        // target にしか一致してはならない。別ファイルの同名メソッド/プロパティ
+        // `MyAuditAttribute` が metadata 参照の deps エッジに現れてはいけない。
+        // 非 metadata の call-graph エッジは従来どおり任意の kind に解決できる。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            using System;
+
+            [AttributeUsage(AttributeTargets.Class)]
+            public sealed class MyAuditAttribute : Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Helpers.cs", "csharp",
+            """
+            public class Helpers
+            {
+                public void MyAuditAttribute()
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAuditAttribute]
+            public class Svc
+            {
+            }
+            """);
+
+        var dependencies = _reader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/Helpers.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpAttributeAmbiguityCountsSameFileDuplicateClassDefinitions()
+    {
+        // issue #293 follow-up: when a single source file defines TWO same-named
+        // class-like attribute targets under different namespaces (idiomatic C#
+        // with multiple `namespace { ... }` blocks in one .cs file), the metadata
+        // edge must be dropped as ambiguous just like the multi-file case. A
+        // path-level count (COUNT DISTINCT target_path) would see `count = 1`
+        // because both definitions live in the same file, so the previous
+        // target_ambiguity CTE falsely treated the target as unambiguous. The
+        // rewritten CTE joins back through files + symbols so it counts at
+        // symbol-identity level and correctly sees `count = 2`.
+        // issue #293 補足: 1 つの .cs ファイルに別名前空間で同名 class-like が 2 つ
+        // 定義されている場合 (C# でよくある `namespace { ... }` 複数ブロック形式)
+        // でも、複数ファイルのときと同様に metadata edge は ambiguous として落とす
+        // 必要がある。path 単位 (COUNT DISTINCT target_path) だと両方が同じ file に
+        // あるため count=1 となり、従来の target_ambiguity では誤って一意扱いされた。
+        // 書き直した CTE は files + symbols に JOIN し直すため、symbol identity 単位
+        // で count=2 を正しく検出する。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            using System;
+
+            namespace A
+            {
+                [AttributeUsage(AttributeTargets.Class)]
+                public sealed class MyAuditAttribute : Attribute
+                {
+                }
+            }
+
+            namespace B
+            {
+                [AttributeUsage(AttributeTargets.Class)]
+                public sealed class MyAuditAttribute : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var dependencies = _reader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        // Even though both MyAuditAttribute definitions live in the same file, the
+        // metadata reference is still ambiguous and must not produce a deps edge.
+        // 同じファイル内にある 2 つの MyAuditAttribute 定義でも metadata 参照は
+        // 曖昧扱いのため、deps edge を出してはならない。
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/MyAuditAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpAttributeDoesNotFanOutWhenMultipleSameNameAttributeClasses()
+    {
+        // issue #293 follow-up: if multiple same-named attribute classes exist
+        // (e.g. two `MyAuditAttribute` classes in separate namespaces/files),
+        // a metadata reference `[MyAudit]` must not fan out to BOTH files. We
+        // cannot statically resolve which one the C# compiler picks without
+        // namespace / using analysis, so we drop the ambiguous metadata edge
+        // and let `impact` / `references` surface both candidates to the user.
+        // issue #293 補足: 同名 attribute クラスが複数ある場合 (例: 別名前空間/別
+        // ファイルに 2 つの `MyAuditAttribute` がある場合)、metadata 参照
+        // `[MyAudit]` を両方に fan-out させない。cdidx は namespace / using を
+        // 解析しないため正しい解決ができず、あいまいな metadata エッジは落として
+        // 両候補は `impact` / `references` 経由でユーザーに示す。
+        InsertIndexedFile("src/A/MyAuditAttribute.cs", "csharp",
+            """
+            using System;
+
+            namespace A
+            {
+                [AttributeUsage(AttributeTargets.Class)]
+                public sealed class MyAuditAttribute : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/B/MyAuditAttribute.cs", "csharp",
+            """
+            using System;
+
+            namespace B
+            {
+                [AttributeUsage(AttributeTargets.Class)]
+                public sealed class MyAuditAttribute : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var dependencies = _reader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        // Neither fan-out edge should exist; the metadata reference is ambiguous.
+        // あいまいな metadata 参照はどちらの fan-out エッジも出してはならない。
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/A/MyAuditAttribute.cs");
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/B/MyAuditAttribute.cs");
+    }
+
+    [Fact]
+    public void SearchReferences_MatchesCSharpAttributeSuffixConvention_Substring()
+    {
+        // issue #293 follow-up: `references MyAuditAttribute` (substring mode) must
+        // find `[MyAudit]` call sites so `references` / `inspect` / `analyze_symbol`
+        // stay consistent with `deps` / `impact` canonicalization.
+        // issue #293 補足: `references MyAuditAttribute`（部分一致モード）が `[MyAudit]`
+        // 参照サイトを見つけられなければならず、`references` / `inspect` /
+        // `analyze_symbol` が `deps` / `impact` の正規化と整合する必要がある。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            using System;
+
+            [AttributeUsage(AttributeTargets.Class)]
+            public sealed class MyAuditAttribute : Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var results = _reader.SearchReferences("MyAuditAttribute", lang: "csharp");
+
+        Assert.Contains(results, r => r.Path == "src/Svc.cs" && r.ReferenceKind == "attribute");
+    }
+
+    [Fact]
+    public void SearchReferences_MatchesCSharpAttributeSuffixConvention_Exact()
+    {
+        // Same scenario under `--exact` — the suffix alias must be applied even when
+        // exact-name matching is requested, otherwise `references MyAuditAttribute
+        // --exact` loses the attribute call site.
+        // `--exact` 指定下でも同様 — exact match の場合でも suffix alias を適用しない
+        // と、`references MyAuditAttribute --exact` は attribute 参照サイトを取りこぼす。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            using System;
+
+            [AttributeUsage(AttributeTargets.Class)]
+            public sealed class MyAuditAttribute : Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var results = _reader.SearchReferences("MyAuditAttribute", lang: "csharp", exact: true);
+
+        Assert.Contains(results, r => r.Path == "src/Svc.cs" && r.ReferenceKind == "attribute");
+    }
+
+    [Fact]
+    public void SearchReferences_CSharpAttributeSuffixAliasDoesNotBleedToOtherLanguages()
+    {
+        // Alias must be C# only — a Java `@MyAudit(...)` annotation using the
+        // suffix convention is not part of the Java ecosystem, so querying for
+        // `MyAuditAttribute` under Java scope must not spuriously match `MyAudit`.
+        // alias は C# 限定 — Java の `@MyAudit(...)` annotation は suffix 規約を使わない
+        // ので、Java スコープで `MyAuditAttribute` を指定したときに `MyAudit` に
+        // 誤って match してはならない。
+        InsertIndexedFile("src/Svc.java", "java",
+            """
+            @MyAudit
+            public class Svc {
+            }
+            """);
+
+        var results = _reader.SearchReferences("MyAuditAttribute", lang: "java");
+
+        Assert.Empty(results);
+    }
+
+    [Fact]
+    public void SearchReferences_CSharpAttributeSuffixAlias_NotAppliedToCallKind()
+    {
+        // Adversarial review #7 follow-up: the suffix alias must NOT bleed into
+        // `--kind call` queries. `references FooAttribute --kind call --lang csharp`
+        // must not match a plain `Foo()` call — that would be a false positive.
+        // adversarial review #7 補足: suffix alias を `--kind call` クエリに波及させない。
+        // `references FooAttribute --kind call --lang csharp` が素の `Foo()` 呼び出しに
+        // 一致してはならない（誤一致になる）。
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            public class Svc
+            {
+                public void Call()
+                {
+                    MyAudit();
+                }
+            }
+            """);
+
+        var results = _reader.SearchReferences("MyAuditAttribute", lang: "csharp", referenceKind: "call");
+
+        Assert.DoesNotContain(results, r => r.SymbolName == "MyAudit");
+    }
+
+    [Fact]
+    public void SearchReferences_CSharpAttributeSuffixAlias_UnscopedLangStillLimitsToCSharpAttributeRows()
+    {
+        // When `--lang` is omitted, the alias must still only match C# attribute rows.
+        // A Java `@MyAudit(...)` or a bare `MyAudit()` call must not leak through.
+        // `--lang` を省略したときも、alias は C# の attribute 行にしか一致してはならない。
+        // Java の `@MyAudit(...)` や素の `MyAudit()` 呼び出しが漏れてはならない。
+        InsertIndexedFile("src/Svc.java", "java",
+            """
+            @MyAudit
+            public class Svc {
+            }
+            """);
+        InsertIndexedFile("src/Caller.cs", "csharp",
+            """
+            public class Caller
+            {
+                public void Go()
+                {
+                    MyAudit();
+                }
+            }
+            """);
+        InsertIndexedFile("src/Target.cs", "csharp",
+            """
+            [MyAudit]
+            public class Target
+            {
+            }
+            """);
+
+        var results = _reader.SearchReferences("MyAuditAttribute");
+
+        // Should include the C# attribute site on Target.cs …
+        Assert.Contains(results, r => r.Path == "src/Target.cs" && r.ReferenceKind == "attribute");
+        // … but must NOT include the Java annotation nor the C# call row via alias.
+        Assert.DoesNotContain(results, r => r.Path == "src/Svc.java");
+        Assert.DoesNotContain(results, r => r.Path == "src/Caller.cs" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void SearchReferences_CSharpAttributeSuffixAlias_CaseInsensitiveQuery()
+    {
+        // The surrounding exact / substring paths are case-insensitive (folded or
+        // NOCASE), so the suffix-stripping step must also be case-insensitive —
+        // `references myauditattribute` / `MyAuditATTRIBUTE --exact` / etc. must
+        // still produce the `MyAudit` alias and reach the `[MyAudit]` site.
+        // 周辺の exact / substring 経路は case-insensitive（folded or NOCASE）なので、
+        // suffix 除去も case-insensitive であるべき。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            using System;
+
+            public sealed class MyAuditAttribute : Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var lowercaseResults = _reader.SearchReferences("myauditattribute", lang: "csharp");
+        Assert.Contains(lowercaseResults, r => r.Path == "src/Svc.cs" && r.ReferenceKind == "attribute");
+
+        var mixedCaseExactResults = _reader.SearchReferences("MyAuditATTRIBUTE", lang: "csharp", exact: true);
+        Assert.Contains(mixedCaseExactResults, r => r.Path == "src/Svc.cs" && r.ReferenceKind == "attribute");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpAttributeAliasOnlyMatchesClassLikeTargets()
+    {
+        // issue #293 review: the C# attribute suffix alias UNION synthesizes a
+        // `FooAttribute` lookup key for `[Foo]` references. Without a kind guard the
+        // subsequent name-only join would spuriously attribute the consumer to any
+        // file that merely defines a function / property / variable also named
+        // `FooAttribute`. Only class-like target symbols should match synthetic alias
+        // rows.
+        // issue #293 レビュー指摘: `[Foo]` 用の alias UNION は `FooAttribute` という
+        // lookup key を合成するが、kind によるガードが無いと、偶然 `FooAttribute`
+        // という名前を持つ関数 / プロパティ / 変数を含むファイルにまで依存が張られて
+        // しまう。合成 alias 行は class 系の target にのみ一致すべき。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            using System;
+
+            [AttributeUsage(AttributeTargets.Class)]
+            public sealed class MyAuditAttribute : Attribute
+            {
+            }
+            """);
+        // Unrelated file containing a function named `MyAuditAttribute` — not an
+        // attribute class, so `[MyAudit]` must not produce a dependency edge to it.
+        // 無関係なファイルに関数として `MyAuditAttribute` が居るケース。
+        // `[MyAudit]` はこのファイルへの依存を作ってはいけない。
+        InsertIndexedFile("src/Util.cs", "csharp",
+            """
+            public static class Util
+            {
+                public static void MyAuditAttribute()
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var dependencies = _reader.GetFileDependencies(limit: 20, lang: "csharp");
+
+        Assert.Contains(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/MyAuditAttribute.cs");
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/Util.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencyHints_SuppressesCSharpAttributeMetadataBypassOnAmbiguousTarget()
+    {
+        // issue #293 review: when two classes share the `MyAuditAttribute` name
+        // *within the active impact scope*, a `[MyAudit]` reference row only
+        // carries the short name and cannot be uniquely attributed to either
+        // target. In that ambiguous case the `impact` metadata evidence bypass
+        // must be skipped so rename / removal blast radius is not over-reported.
+        // issue #293 レビュー指摘: impact スコープ内で同名の `MyAuditAttribute`
+        // クラスが複数存在するとき、`[MyAudit]` 参照行は短縮名しか持たず、
+        // どちらの target にも一意に紐付けられない。この曖昧なケースでは
+        // `impact` の metadata evidence bypass を行わず、rename / 削除の影響
+        //範囲を過大報告しないようにする。
+        InsertIndexedFile("src/A/Inner1/MyAuditAttribute.cs", "csharp",
+            """
+            namespace A.Inner1;
+
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/A/Inner2/MyAuditAttribute.cs", "csharp",
+            """
+            namespace A.Inner2;
+
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+        // Pure attribute consumer in src/A/ — no structured type evidence exists for
+        // `MyAuditAttribute` other than the `[MyAudit]` use site itself.
+        // src/A/ に純粋な attribute consumer — `MyAuditAttribute` に対する構造化された
+        // 型証拠は `[MyAudit]` use site 以外には無い。
+        InsertIndexedFile("src/A/Svc.cs", "csharp",
+            """
+            namespace A;
+
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        // Both ambiguous definitions are within the `src/A/` scope; without the
+        // ambiguity guard, the metadata bypass would fabricate a heuristic edge
+        // even though the `[MyAudit]` target is qualifier-ambiguous.
+        // src/A/ スコープ内に曖昧な定義が 2 件ある。ambiguity guard が無ければ、
+        // `[MyAudit]` の target が qualifier 曖昧でも metadata bypass が heuristic
+        // エッジを作ってしまう。
+        var result = _reader.AnalyzeImpact(
+            "MyAuditAttribute",
+            maxDepth: 3,
+            limit: 20,
+            lang: "csharp",
+            pathPatterns: new[] { "src/A/" });
+
+        Assert.DoesNotContain(result.FileImpacts, f => f.SourcePath == "src/A/Svc.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencyHints_CSharpAttributeMetadataBypassAppliesWhenTargetUnambiguous()
+    {
+        // issue #293 review: the ambiguity guard must only fire when genuinely
+        // ambiguous. With a single class-like `MyAuditAttribute` definition the
+        // metadata bypass should still surface the `[MyAudit]` consumer as a
+        // file-level hint, preserving the legitimate pure-attribute consumer case.
+        // issue #293 レビュー指摘: ambiguity guard は本当に曖昧なときだけ発動すべき。
+        // `MyAuditAttribute` の class 定義が 1 件しかない場合は従来通り metadata
+        // bypass で `[MyAudit]` consumer を file-level hint として出し、純粋な
+        // attribute consumer の正当な検出を保つ。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var result = _reader.AnalyzeImpact("MyAuditAttribute", maxDepth: 3, limit: 20, lang: "csharp");
+
+        Assert.Contains(result.FileImpacts, f => f.SourcePath == "src/Svc.cs" && f.TargetPath == "src/MyAuditAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencyHints_MetadataBypassAmbiguityGuard_CountsSameFileDuplicateDefinitions()
+    {
+        // issue #293 follow-up: the `impact` metadata bypass ambiguity guard must
+        // count class-like definitions at symbol-identity level rather than at path
+        // level. A single .cs file with two same-named `MyAuditAttribute` class
+        // declarations under different namespaces is still ambiguous — metadata
+        // reference rows only keep the short name `MyAudit` and cannot resolve
+        // between `A.MyAuditAttribute` and `B.MyAuditAttribute`. Previously the
+        // guard counted `SELECT DISTINCT f.path` so both definitions collapsed to
+        // 1 and the bypass falsely fired, mis-attributing `[MyAudit]` consumers to
+        // the impact of a specific target when the true resolution is unknown.
+        // issue #293 補足: `impact` の metadata bypass 曖昧性ガードは、path 単位
+        // ではなく symbol identity 単位で class-like 定義を数える必要がある。1 つの
+        // .cs ファイル内に別名前空間で `MyAuditAttribute` が 2 つ定義されていても、
+        // metadata 参照は短縮名 `MyAudit` しか持たず `A.MyAuditAttribute` と
+        // `B.MyAuditAttribute` を区別できないため依然として曖昧。従来は
+        // `SELECT DISTINCT f.path` で数えていたため両定義が 1 に潰れ、bypass が
+        // 誤って発動し `[MyAudit]` consumer を特定 target の影響範囲へ誤帰属させていた。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            using System;
+
+            namespace A
+            {
+                [AttributeUsage(AttributeTargets.Class)]
+                public sealed class MyAuditAttribute : Attribute
+                {
+                }
+            }
+
+            namespace B
+            {
+                [AttributeUsage(AttributeTargets.Class)]
+                public sealed class MyAuditAttribute : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var result = _reader.AnalyzeImpact("MyAuditAttribute", maxDepth: 3, limit: 20, lang: "csharp");
+
+        // Two same-named class-like definitions in one file still make the target
+        // ambiguous, so the `[MyAudit]` consumer must not surface as a file-level
+        // impact hint — the metadata evidence bypass should fall through to the
+        // normal structured-evidence check, which `[MyAudit]`-only consumers fail.
+        // 同じファイル内の 2 つの同名 class-like 定義でも target は曖昧なので、
+        // `[MyAudit]` consumer は file-level impact hint に現れてはいけない。
+        // metadata evidence bypass は通常の structured-evidence 判定へフォール
+        // スルーし、pure `[MyAudit]` consumer はそこで落ちる。
+        Assert.DoesNotContain(result.FileImpacts, f => f.SourcePath == "src/Svc.cs" && f.TargetPath == "src/MyAuditAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencyHints_CSharpAttributeSuffixAlias_DoesNotLeakToSameFileSiblings()
+    {
+        // issue #293 round-12 follow-up: the C# `Attribute` suffix alias used by
+        // ResolveImpactFallbackNames must only be applied to the resolved
+        // definition's own name. If it were applied to every same-file fallback
+        // name (e.g. a nested `BarAttribute` inside the file that defines
+        // `FooAttribute`), `impact FooAttribute` would falsely claim `[Bar]` use
+        // sites as its own blast radius.
+        // issue #293 round-12 追加: ResolveImpactFallbackNames の C# `Attribute`
+        // suffix 別名は、解決済み定義自身の名前にだけ適用すべき。same-file
+        // fallback 名全体（例: `FooAttribute` と同一ファイルに nested で存在する
+        // `BarAttribute`）にまで strip を適用すると、`impact FooAttribute` が
+        // `[Bar]` 利用を自身の影響範囲として誤報告してしまう。
+        InsertIndexedFile("src/FooAttribute.cs", "csharp",
+            """
+            public sealed class FooAttribute : System.Attribute
+            {
+                public sealed class BarAttribute : System.Attribute
+                {
+                }
+            }
+            """);
+        // A separate file uses `[Bar]` — that must NOT show up in
+        // `impact FooAttribute` because it references `BarAttribute`, not
+        // `FooAttribute`.
+        // 別ファイルで `[Bar]` を使う — これは `BarAttribute` の参照であり、
+        // `FooAttribute` の `impact` には出てはならない。
+        InsertIndexedFile("src/UseBar.cs", "csharp",
+            """
+            [Bar]
+            public class UseBar
+            {
+            }
+            """);
+
+        var result = _reader.AnalyzeImpact("FooAttribute", maxDepth: 3, limit: 20, lang: "csharp");
+
+        Assert.DoesNotContain(result.FileImpacts, f => f.SourcePath == "src/UseBar.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencyHints_MetadataBypassAmbiguityGuard_RespectsLangScope()
+    {
+        // issue #293 round-11 follow-up: the ambiguity guard must honor the active
+        // `--lang` scope. A same-named class in an unrelated language must not
+        // suppress the C# metadata bypass because attribute reference rows are
+        // already language-qualified through the graph-supported `f.lang = 'csharp'`
+        // join on the reference side.
+        // issue #293 round-11 追加: ambiguity guard は active な `--lang` スコープを
+        // 尊重すべき。別言語に同名クラスが存在しても C# の metadata bypass を
+        // 潰してはならない — 参照側の join で既に言語修飾されているため、曖昧性は
+        // 言語スコープ内でのみ判定する。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+        // Unrelated Java class / annotation sharing the unqualified name — must not
+        // affect the C#-only impact query.
+        // 無関係な Java 側の同名クラス / アノテーション — C# 限定の impact クエリに
+        // 影響してはならない。
+        InsertIndexedFile("src/java/MyAuditAttribute.java", "java",
+            """
+            package pkg;
+
+            public @interface MyAuditAttribute {
+            }
+            """);
+
+        var result = _reader.AnalyzeImpact("MyAuditAttribute", maxDepth: 3, limit: 20, lang: "csharp");
+
+        Assert.Contains(result.FileImpacts, f => f.SourcePath == "src/Svc.cs" && f.TargetPath == "src/MyAuditAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencyHints_MetadataBypassAmbiguityGuard_RespectsPathScope()
+    {
+        // issue #293 round-11 follow-up: ambiguity guard must honor `--path`
+        // scoping. A same-named class outside the requested path subtree should
+        // not suppress the bypass inside that subtree.
+        // issue #293 round-11 追加: ambiguity guard は `--path` スコープを尊重すべき。
+        // 要求した path サブツリー外にある同名クラスが、サブツリー内の bypass を
+        // 潰してはならない。
+        InsertIndexedFile("src/A/MyAuditAttribute.cs", "csharp",
+            """
+            namespace A;
+
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/A/Svc.cs", "csharp",
+            """
+            namespace A;
+
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+        // Out-of-scope same-named definition in src/B/ — must not affect the
+        // src/A/-scoped impact query.
+        // スコープ外 src/B/ の同名定義 — src/A/ 限定の impact クエリに影響してはならない。
+        InsertIndexedFile("src/B/MyAuditAttribute.cs", "csharp",
+            """
+            namespace B;
+
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+
+        var result = _reader.AnalyzeImpact(
+            "MyAuditAttribute",
+            maxDepth: 3,
+            limit: 20,
+            lang: "csharp",
+            pathPatterns: new[] { "src/A/" });
+
+        Assert.Contains(result.FileImpacts, f => f.SourcePath == "src/A/Svc.cs" && f.TargetPath == "src/A/MyAuditAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencyHints_MetadataBypassAmbiguityGuard_CliPathPatternEscaping_SuppressesWhenInScopeIsAmbiguous()
+    {
+        // issue #293 round-15 follow-up: path / exclude-path parameters must be
+        // wrapped with `%...%` and routed through EscapeLikeQuery so the LIKE
+        // predicate accepts CLI-style prefixes like `src/A/`. Without the wrap
+        // the ambiguity count would underflow to 1 (unambiguous), and the
+        // metadata bypass would falsely fire even though two MyAuditAttribute
+        // classes exist side-by-side in the requested subtree.
+        // issue #293 round-15 補足: path / exclude-path のバインドは他の reader
+        // 経路と同じ `%...%` + EscapeLikeQuery に揃える必要がある。生値で渡すと
+        // `src/A/` のような CLI 形では LIKE が一致せず、要求したサブツリーに
+        // 同名 MyAuditAttribute が 2 件存在しても曖昧性カウントが 1 に落ち、
+        // 本来抑止すべき metadata bypass が誤発火してしまう。
+        InsertIndexedFile("src/A/Inner1/MyAuditAttribute.cs", "csharp",
+            """
+            namespace A.Inner1;
+
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/A/Inner2/MyAuditAttribute.cs", "csharp",
+            """
+            namespace A.Inner2;
+
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/A/Svc.cs", "csharp",
+            """
+            namespace A;
+
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var result = _reader.AnalyzeImpact(
+            "MyAuditAttribute",
+            maxDepth: 3,
+            limit: 20,
+            lang: "csharp",
+            pathPatterns: new[] { "src/A/" });
+
+        Assert.DoesNotContain(result.FileImpacts, f =>
+            f.SourcePath == "src/A/Svc.cs" &&
+            (f.TargetPath == "src/A/Inner1/MyAuditAttribute.cs" || f.TargetPath == "src/A/Inner2/MyAuditAttribute.cs"));
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharp_PlainClassWithAttributeSuffixName_DoesNotCountAsAmbiguity()
+    {
+        // issue #293 round-16: same metadata-eligibility filter must apply to
+        // the `deps` command. target_files.has_metadata_target_kind and the
+        // target_ambiguity JOIN both require C# class-like targets to inherit
+        // from an Attribute-suffixed base, so a plain `MyAuditAttribute`
+        // cannot ambiguate the edge from `Svc.cs` to the real attribute class.
+        // issue #293 round-16: 同じ適格性フィルタを deps にも適用する。
+        // target_files.has_metadata_target_kind と target_ambiguity JOIN は
+        // C# では Attribute suffix 継承を要求するため、plain `MyAuditAttribute` が
+        // 存在しても実 attribute クラスへのエッジは残る。
+        InsertIndexedFile("src/Real/MyAuditAttribute.cs", "csharp",
+            """
+            namespace Real;
+
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Unrelated/MyAuditAttribute.cs", "csharp",
+            """
+            namespace Unrelated;
+
+            public sealed class MyAuditAttribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Real/Svc.cs", "csharp",
+            """
+            namespace Real;
+
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var deps = _reader.GetFileDependencies(
+            limit: 50,
+            lang: "csharp");
+
+        Assert.Contains(deps, d =>
+            d.SourcePath == "src/Real/Svc.cs" &&
+            d.TargetPath == "src/Real/MyAuditAttribute.cs");
+        Assert.DoesNotContain(deps, d =>
+            d.SourcePath == "src/Real/Svc.cs" &&
+            d.TargetPath == "src/Unrelated/MyAuditAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpNestedGenericNoArgAttribute_ResolvesToAttributeClass()
+    {
+        // issue #293 round-16: the no-arg C# attribute regex must handle
+        // nested generic type arguments (e.g. `[MyAttr<Dictionary<string, int>>]`).
+        // Previously the inner `<...>` segment excluded `>`, which broke on the
+        // first inner `>` and classified the reference as a call.
+        // issue #293 round-16: 引数なし C# 属性 regex が
+        // `[MyAttr<Dictionary<string, int>>]` のようなネスト generic を
+        // 扱えること。以前は内側の `<...>` セグメントが `>` を除外していて、
+        // 最初の内側 `>` で崩れて call として誤分類されていた。
+        InsertIndexedFile("src/MyAttrAttribute.cs", "csharp",
+            """
+            using System;
+            using System.Collections.Generic;
+
+            public sealed class MyAttrAttribute : Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            using System.Collections.Generic;
+
+            [MyAttr<Dictionary<string, int>>]
+            public class Svc
+            {
+            }
+            """);
+
+        var deps = _reader.GetFileDependencies(
+            limit: 50,
+            lang: "csharp");
+
+        Assert.Contains(deps, d =>
+            d.SourcePath == "src/Svc.cs" &&
+            d.TargetPath == "src/MyAttrAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharp_IndirectAttributeInheritance_ResolvesAsMetadataTarget()
+    {
+        // issue #293 round-17: the metadata-eligibility filter must not require
+        // the immediate base class to end in `Attribute`. Indirect inheritance
+        // like `class MyAuditAttribute : BaseAudit` where `BaseAudit : Attribute`
+        // is a valid `[MyAudit]` target at compile time. The previous strict
+        // pattern (`signature LIKE '%: %Attribute%'`) wrongly excluded the
+        // indirectly-derived class and dropped the deps edge. The loosened
+        // pattern (`signature LIKE '%: %'`) accepts any class with an
+        // inheritance clause, which is the best portable approximation since
+        // SQL cannot resolve base types transitively.
+        // issue #293 round-17: metadata 適格性フィルタは直接基底が
+        // `Attribute` で終わることを要求してはならない。
+        // `class MyAuditAttribute : BaseAudit` で `BaseAudit : Attribute` の
+        // ような間接継承も `[MyAudit]` の有効な target である。以前の
+        // 厳格パターンは間接継承を弾いて deps エッジを落としていた。
+        // 緩和パターンは「継承節を持つ class」を近似として採用する。
+        InsertIndexedFile("src/BaseAudit.cs", "csharp",
+            """
+            namespace App;
+
+            public abstract class BaseAudit : System.Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            namespace App;
+
+            public sealed class MyAuditAttribute : BaseAudit
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            namespace App;
+
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var deps = _reader.GetFileDependencies(
+            limit: 50,
+            lang: "csharp");
+
+        Assert.Contains(deps, d =>
+            d.SourcePath == "src/Svc.cs" &&
+            d.TargetPath == "src/MyAuditAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_JavaScriptFunctionDecorator_ResolvesAsDependency()
+    {
+        // issue #293 round-18: JavaScript/TypeScript decorators legitimately target
+        // factory `function`s (e.g. `function sealed(target) { ... }`), not only
+        // class-like definitions. The metadata-target predicate must accept
+        // `function` for JS/TS or decorator edges to a function target are dropped
+        // from `deps`.
+        // issue #293 round-18: JS/TS decorator は `function sealed(target){...}` のような
+        // factory 関数も正当な target となる。JS/TS では `function` を metadata target の
+        // 対象 kind として許可しないと、function を対象とする decorator edge が deps から欠落する。
+        InsertIndexedFile("src/decorators.js", "javascript",
+            """
+            export function sealed(target) {
+                Object.freeze(target);
+            }
+            """);
+        InsertIndexedFile("src/model.js", "javascript",
+            """
+            import { sealed } from './decorators.js';
+
+            @sealed
+            class Foo {
+            }
+            """);
+
+        var deps = _reader.GetFileDependencies(
+            limit: 50,
+            lang: "javascript");
+
+        Assert.Contains(deps, d =>
+            d.SourcePath == "src/model.js" &&
+            d.TargetPath == "src/decorators.js");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharp_LegacyDbWithNullSignature_StillResolvesAttributeEdge()
+    {
+        // issue #293 round-19: the metadata-target signature clause must degrade
+        // gracefully when the `symbols.signature` column exists but individual
+        // rows carry NULL values — the common shape of a DB whose schema was
+        // migrated in place (`TryMigrateForRead`) without reindexing. Requiring
+        // `signature LIKE '%: %'` would silently drop the real
+        // `[MyAudit]` → `class MyAuditAttribute : System.Attribute` edge there,
+        // so the clause must treat NULL signature as eligible (equivalent to the
+        // column-missing `1 = 1` fallback).
+        // issue #293 round-19: metadata-target の signature 句は、列は存在するが
+        // row の値が NULL の legacy-migration DB でも degrade する必要がある。
+        // LIKE を強要すると本物の `[MyAudit]` edge が silent に落ちる。
+        // 列欠落時の `1 = 1` fallback と同じく NULL も eligible にする。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        // Simulate the partial-migration shape: signature column is present but the
+        // C# class row has a NULL signature, as if the schema were upgraded in place
+        // without re-running extraction.
+        // partial-migration の形を再現: signature 列はあるが C# class 行の signature が
+        // NULL の状態 — その場 schema 移行後に再抽出していない DB と同じ。
+        using (var cmd = _db.Connection.CreateCommand())
+        {
+            cmd.CommandText = "UPDATE symbols SET signature = NULL WHERE name = 'MyAuditAttribute' AND kind = 'class'";
+            cmd.ExecuteNonQuery();
+        }
+
+        var deps = _reader.GetFileDependencies(
+            limit: 50,
+            lang: "csharp");
+
+        Assert.Contains(deps, d =>
+            d.SourcePath == "src/Svc.cs" &&
+            d.TargetPath == "src/MyAuditAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharp_LegacyDbWithNullSignature_NonAttributeName_DoesNotBlockMetadataEdge()
+    {
+        // issue #293 round-20: the NULL-signature fallback must not treat
+        // arbitrary classes as metadata targets. Before this round the clause
+        // accepted `signature IS NULL` for every C# `class`, so on a legacy-migration
+        // DB a non-attribute class named `HelperClient` could share a name with an
+        // attribute-applied site and silently inject false ambiguity. The tightened
+        // fallback requires the canonical C# attribute naming convention
+        // (`name LIKE '%Attribute'`), so a NULL-signature `HelperClient` is no
+        // longer counted and the real `[MyAudit]` edge to `MyAuditAttribute`
+        // survives even when both rows have NULL signatures.
+        // issue #293 round-20: NULL-signature フォールバックが任意の class を
+        // metadata target 扱いしないこと。以前は legacy-migration DB で
+        // `signature IS NULL` のすべての C# class を許容しており、attribute 名と
+        // 同名の非 attribute class (`HelperClient`) が偽の曖昧さを発生させ得た。
+        // 新しいフォールバックは C# の命名規約 `name LIKE '%Attribute'` を要求する
+        // ため、NULL-sig かつ非 *Attribute 名の class は候補から外れ、本物の
+        // `[MyAudit]` → `MyAuditAttribute` edge は両行の signature が NULL でも
+        // 残る。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/HelperClient.cs", "csharp",
+            """
+            namespace Unrelated;
+
+            public class HelperClient : BaseService
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        // Simulate partial-migration: all C# class rows have NULL signature.
+        // partial-migration 再現: すべての C# class 行の signature を NULL 化。
+        using (var cmd = _db.Connection.CreateCommand())
+        {
+            cmd.CommandText = "UPDATE symbols SET signature = NULL WHERE kind = 'class'";
+            cmd.ExecuteNonQuery();
+        }
+
+        var deps = _reader.GetFileDependencies(
+            limit: 50,
+            lang: "csharp");
+
+        Assert.Contains(deps, d =>
+            d.SourcePath == "src/Svc.cs" &&
+            d.TargetPath == "src/MyAuditAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_JavaScript_SameNameInterface_DoesNotBlockFunctionDecoratorEdge()
+    {
+        // issue #293 round-20: TypeScript `interface` is a compile-time type-only
+        // construct and cannot be a runtime decorator target, so a same-name
+        // `interface` must NOT count toward metadata-target ambiguity against a
+        // real `function` provider. The metadata-target predicate for JS/TS
+        // therefore restricts candidate kinds to `class` and `function` only.
+        // issue #293 round-20: TS の `interface` はコンパイル時型のため runtime
+        // decorator target になれない。同名 `interface` が本物の `function`
+        // provider への decorator edge を潰さないよう、JS/TS の metadata-target
+        // 候補 kind は `class` と `function` に限定する。
+        InsertIndexedFile("src/decorators.ts", "typescript",
+            """
+            export function sealed(target: any): void {
+                Object.freeze(target);
+            }
+            """);
+        InsertIndexedFile("src/types.ts", "typescript",
+            """
+            export interface sealed {
+                readonly frozen: boolean;
+            }
+            """);
+        InsertIndexedFile("src/model.ts", "typescript",
+            """
+            import { sealed } from './decorators';
+
+            @sealed
+            class Foo {
+            }
+            """);
+
+        var deps = _reader.GetFileDependencies(
+            limit: 50,
+            lang: "typescript");
+
+        Assert.Contains(deps, d =>
+            d.SourcePath == "src/model.ts" &&
+            d.TargetPath == "src/decorators.ts");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharp_SameNameInterface_DoesNotBlockMetadataEdge()
+    {
+        // issue #293 round-18: ambiguity should only count truly attribute-eligible
+        // duplicates. In C#, only `class` can inherit from `System.Attribute` —
+        // a same-named `interface` or `struct` cannot be an attribute target, so it
+        // must not suppress the metadata deps edge to the legitimate attribute class.
+        // issue #293 round-18: ambiguity 判定は attribute 適格な重複だけを数えるべき。
+        // C# では `class` のみが `System.Attribute` を継承できるため、同名の
+        // `interface` や `struct` が存在しても metadata deps edge を抑止してはならない。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/IMyAudit.cs", "csharp",
+            """
+            public interface MyAuditAttribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var deps = _reader.GetFileDependencies(
+            limit: 50,
+            lang: "csharp");
+
+        Assert.Contains(deps, d =>
+            d.SourcePath == "src/Svc.cs" &&
+            d.TargetPath == "src/MyAuditAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencyHints_MetadataBypassAmbiguityGuard_RespectsExcludeTests()
+    {
+        // issue #293 round-11 follow-up: ambiguity guard must honor
+        // `--exclude-tests`. A same-named class only present in tests should not
+        // suppress the bypass when the caller has already excluded tests from the
+        // impact scope.
+        // issue #293 round-11 追加: ambiguity guard は `--exclude-tests` を尊重すべき。
+        // test 配下にしか存在しない同名定義が、test を除外した impact クエリの
+        // bypass を潰してはならない。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+        // Test-only same-named definition — must be filtered out when the caller
+        // passes excludeTests=true so the bypass stays active in the source scope.
+        // test 配下にしかない同名定義 — excludeTests=true のときはスコープ外になり、
+        // source 側の bypass を維持すべき。
+        InsertIndexedFile("tests/CodeIndex.Tests/MyAuditAttributeTests.cs", "csharp",
+            """
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+
+        var result = _reader.AnalyzeImpact(
+            "MyAuditAttribute",
+            maxDepth: 3,
+            limit: 20,
+            lang: "csharp",
+            excludeTests: true);
+
+        Assert.Contains(result.FileImpacts, f => f.SourcePath == "src/Svc.cs" && f.TargetPath == "src/MyAuditAttribute.cs");
+    }
+
+    [Fact]
     public void GetGroupedSymbolHotspots_CollapsesDuplicateNamesWithoutBareJoinInflation()
     {
         InsertIndexedFile("src/Alpha.cs", "csharp",
@@ -2396,6 +4292,46 @@ public class DbReaderTests : IDisposable
         Assert.Equal("Hook", bundledCallee.CallerName);
         Assert.Equal("Changed", bundledCallee.CalleeName);
         Assert.Equal("subscribe", bundledCallee.ReferenceKind);
+    }
+
+    [Fact]
+    public void GetTransitiveCallers_FollowsSubscribeEdges()
+    {
+        // Regression: impact BFS must share the call-graph contract with callers/callees,
+        // so event subscriptions (`Changed += OnChanged`) also participate in the transitive
+        // caller chain rather than being stripped like metadata edges.
+        // リグレッション: impact BFS も callers/callees と同じ call-graph 契約を共有し、
+        // イベント購読 (`Changed += OnChanged`) が transitive caller chain に含まれること。
+        InsertIndexedFile("src/impact_subscribe_publisher.cs", "csharp",
+            """
+            using System;
+
+            public class SubPublisher
+            {
+                public event EventHandler? Changed;
+            }
+            """);
+        InsertIndexedFile("src/impact_subscribe_subscriber.cs", "csharp",
+            """
+            using System;
+
+            public class SubSubscriber
+            {
+                public void Hook(SubPublisher publisher)
+                {
+                    publisher.Changed += OnChanged;
+                }
+
+                private void OnChanged(object? sender, EventArgs e) { }
+            }
+            """);
+
+        var (impact, truncated) = _reader.GetTransitiveCallers(
+            "Changed", maxDepth: 2, limit: 10, lang: "csharp", pathPatterns: ["impact_subscribe_"]);
+
+        Assert.False(truncated);
+        var caller = Assert.Single(impact);
+        Assert.Equal("Hook", caller.CallerName);
     }
 
     [Fact]

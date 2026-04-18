@@ -230,6 +230,7 @@ public static class QueryCommandRunner
                     Console.Error.WriteLine("No definitions found.");
                     WriteExactZeroHint(exactZeroHint);
                     WriteKindHint(options.Kind, reader);
+                    WriteLangHint(options.Lang, reader);
                     WriteZeroResultHints(options, reader, "Try 'search' for full-text matches instead of symbol lookup.");
                 }
                 return CommandExitCodes.NotFound;
@@ -392,6 +393,8 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "callers"))
             return CommandExitCodes.UsageError;
+        if (TryRejectMetadataKindForGraphCommand("callers", options.Kind))
+            return CommandExitCodes.UsageError;
         if (!TryResolveNameExactMode(options, "callers", out var exact, out var exactError))
         {
             Console.Error.WriteLine(exactError);
@@ -492,6 +495,8 @@ public static class QueryCommandRunner
         if (TryWriteUnsupportedOptionError("callees", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--exact", "--exact-name", "--exact-substring"]))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "callees"))
+            return CommandExitCodes.UsageError;
+        if (TryRejectMetadataKindForGraphCommand("callees", options.Kind))
             return CommandExitCodes.UsageError;
         if (!TryResolveNameExactMode(options, "callees", out var exact, out var exactError))
         {
@@ -705,6 +710,7 @@ public static class QueryCommandRunner
                     Console.Error.WriteLine("No symbols found.");
                     WriteExactZeroHint(exactZeroHint);
                     WriteKindHint(options.Kind, reader);
+                    WriteLangHint(options.Lang, reader);
                     WriteZeroResultHints(options, reader);
                 }
                 return CommandExitCodes.NotFound;
@@ -2377,7 +2383,11 @@ public static class QueryCommandRunner
                     break;
                 case "--lang":
                     if (TryReadStringOptionValue(args, ref i, "--lang", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var langValue, out var langError))
-                        lang = langValue;
+                        // Normalize to lowercase so '--lang Python' == '--lang python' — every LangMap key and
+                        // every DB 'files.lang' row is lowercase, so the SQL filter and WriteLangHint match.
+                        // '--lang Python' と '--lang python' を同一視するため lowercase 正規化する。LangMap の key と
+                        // DB の `files.lang` はすべて lowercase なので、SQL filter と WriteLangHint が一致する。
+                        lang = langValue?.ToLowerInvariant();
                     else
                         AddParseError(langError!);
                     break;
@@ -2395,7 +2405,11 @@ public static class QueryCommandRunner
                     break;
                 case "--kind":
                     if (TryReadStringOptionValue(args, ref i, "--kind", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var kindValue, out var kindError))
-                        kind = kindValue;
+                        // Normalize to lowercase so '--kind FUNCTION' == '--kind function'. AllValidKinds entries
+                        // and every DB 'symbols.kind' row are lowercase.
+                        // '--kind FUNCTION' と '--kind function' を同一視するため lowercase 正規化する。AllValidKinds
+                        // と DB の `symbols.kind` はすべて lowercase。
+                        kind = kindValue?.ToLowerInvariant();
                     else
                         AddParseError(kindError!);
                     break;
@@ -3023,7 +3037,7 @@ public static class QueryCommandRunner
     private static readonly string[] AllValidKinds =
         ["class", "delegate", "enum", "event", "function", "import", "interface", "namespace", "property", "struct"];
     private static readonly string[] AllValidReferenceKinds =
-        ["call", "instantiate", "subscribe"];
+        ["annotation", "attribute", "call", "instantiate", "subscribe"];
 
     private static void WriteKindHint(string? kind, DbReader reader)
     {
@@ -3055,6 +3069,44 @@ public static class QueryCommandRunner
         }
 
         Console.Error.WriteLine($"Hint: '{kind}' is not a known reference kind for '{command}'. Available reference kinds: {string.Join(", ", AllValidReferenceKinds)}");
+    }
+
+    // Reference kinds that are valid `references --kind` values but NOT valid
+    // `callers --kind` / `callees --kind` values. A metadata row (`attribute` /
+    // `annotation`) is attributed to its enclosing body-range symbol rather than
+    // to the annotated target itself, so `callers Obsolete --kind attribute` and
+    // equivalent `callees` queries return structurally wrong answers: method-level
+    // metadata is reported under the enclosing class, and file-level targets
+    // like `[assembly: ...]` drop entirely because `container_name` is null.
+    // Reject these kinds at the CLI boundary and redirect users to
+    // `references --kind attribute|annotation` (which IS correct).
+    // `references --kind` では有効だが、`callers --kind` / `callees --kind` では
+    // 使ってはいけない reference kind。metadata 行は注釈対象そのものではなく
+    // body-range 上の外側シンボルに帰属するため、`callers` / `callees` でこの kind を
+    // 受け付けると構造的に誤答する（メソッドレベルは外側クラスに寄り、
+    // `[assembly: ...]` のようなファイルレベルは `container_name = null` で丸ごと消える）。
+    // CLI 境界で弾き、正しい列挙パスである `references --kind attribute|annotation` に誘導する。
+    private static readonly HashSet<string> MetadataReferenceKinds = new(StringComparer.Ordinal)
+    {
+        "attribute", "annotation",
+    };
+
+    /// <summary>
+    /// Reject `--kind attribute` / `--kind annotation` on commands (`callers` / `callees`)
+    /// whose data model cannot answer metadata questions correctly. Returns true if the
+    /// kind was rejected; the caller should then return `CommandExitCodes.UsageError`.
+    /// `callers` / `callees` のようにデータモデル的に metadata に答えられないコマンドで
+    /// `--kind attribute` / `--kind annotation` を弾く。弾いた場合 true を返すので、
+    /// 呼び出し側は `CommandExitCodes.UsageError` を返すこと。
+    /// </summary>
+    private static bool TryRejectMetadataKindForGraphCommand(string command, string? kind)
+    {
+        if (string.IsNullOrWhiteSpace(kind) || !MetadataReferenceKinds.Contains(kind))
+            return false;
+
+        Console.Error.WriteLine($"Error: '--kind {kind}' is not supported on '{command}'. Metadata references are attributed to the enclosing body-range symbol rather than the annotated target, so `{command} --kind {kind}` cannot return accurate rows (file-level targets such as `[assembly: ...]` drop entirely).");
+        Console.Error.WriteLine($"Hint: use `cdidx references <name> --kind {kind}` for metadata enumeration instead.");
+        return true;
     }
 
     private static void WriteGraphSupportHint(string? lang)

@@ -426,6 +426,67 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpInterpolatedAndVerbatimStrings_Issue264_Repro_CapturesHoleCallsAndSuppressesPhantoms()
+    {
+        // Regression for issue #264 exact repro: single-line $"..." interpolated
+        // strings, multi-line $@"..." AND the alternate @$"..." verbatim-interpolated
+        // ordering, and non-interpolated @"..." verbatim strings must all be handled
+        // correctly: interpolation-hole call sites are captured (for both $@" and @$"
+        // orderings, which StructuralLineMasker handles via dedicated branches) while
+        // pure verbatim bodies never leak phantom references.
+        // issue #264 repro 回帰: 単行 $"..."、複数行 $@"..." と代替順序 @$"..." の
+        // 双方の補間ホール内の呼び出しが捕捉され、非補間 @"..." 本体からは phantom
+        // 参照を漏らさないこと。
+        const string content = """"
+            namespace Demo;
+            public class Helper
+            {
+                public static string GetName() => "bob";
+                public static int    GetAge()  => 42;
+                public static string Format(string s) => s;
+            }
+            public class Caller
+            {
+                public void Work()
+                {
+                    var s1 = $"Hello {Helper.GetName()}";
+                    var s2 = $"Age: {Helper.GetAge()} years";
+                    var s3 = $"Nested {Helper.Format(Helper.GetName())}";
+                    var s4 = $@"Multi
+            line {Helper.GetName()} text";
+                    var s6 = @$"Alt
+            order {Helper.GetName()} {Helper.GetAge()} end";
+                    var s5 = Helper.GetName();
+                    var sql = @"SELECT PhantomCall() FROM PhantomTable()
+            MoreFake() lines";
+                }
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var getNameCalls = references
+            .Where(r => r.SymbolName == "GetName" && r.ReferenceKind == "call")
+            .ToList();
+        Assert.Equal(5, getNameCalls.Count);
+        Assert.All(getNameCalls, r => Assert.Equal("Work", r.ContainerName));
+
+        var getAgeCalls = references
+            .Where(r => r.SymbolName == "GetAge" && r.ReferenceKind == "call")
+            .ToList();
+        Assert.Equal(2, getAgeCalls.Count);
+        Assert.All(getAgeCalls, r => Assert.Equal("Work", r.ContainerName));
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Format" && r.ReferenceKind == "call" && r.ContainerName == "Work");
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "PhantomCall");
+        Assert.DoesNotContain(references, r => r.SymbolName == "PhantomTable");
+        Assert.DoesNotContain(references, r => r.SymbolName == "MoreFake");
+    }
+
+    [Fact]
     public void Extract_CsharpMultiLineRawString_IssueRepro_DoesNotLeakPhantomCallReferences()
     {
         // Regression for issue #288 exact repro: C# 11 raw strings, interpolated raw
@@ -728,8 +789,13 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpReturnTargetAttribute_CallIsNotDropped()
+    public void Extract_CsharpReturnTargetAttribute_ReferenceIsRecordedAsAttribute()
     {
+        // issue #293: C# attributes (including targeted `[return: ...]` form) are recorded as
+        // `attribute` kind — the reference must not be dropped, but also must not pollute the
+        // call-graph with a phantom `call` row.
+        // issue #293: C# 属性（`[return: ...]` の target 付きも含む）は `attribute` として
+        // 記録される。参照自体は失われないが、call-graph を `call` 行で汚染してはならない。
         const string content = """
             using System.Runtime.InteropServices;
 
@@ -746,14 +812,15 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var marshalAsCalls = references
-            .Where(reference => reference.SymbolName == "MarshalAs" && reference.ReferenceKind == "call")
+        var marshalAsRefs = references
+            .Where(reference => reference.SymbolName == "MarshalAs")
             .OrderBy(reference => reference.Line)
             .ToList();
 
-        Assert.Equal(2, marshalAsCalls.Count);
-        Assert.Equal([5, 8], marshalAsCalls.Select(reference => reference.Line).ToArray());
-        Assert.All(marshalAsCalls, reference => Assert.Equal("Foo", reference.ContainerName));
+        Assert.Equal(2, marshalAsRefs.Count);
+        Assert.Equal([5, 8], marshalAsRefs.Select(reference => reference.Line).ToArray());
+        Assert.All(marshalAsRefs, reference => Assert.Equal("attribute", reference.ReferenceKind));
+        Assert.All(marshalAsRefs, reference => Assert.Equal("Foo", reference.ContainerName));
     }
 
     [Fact]
@@ -4358,5 +4425,1638 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r =>
             r.SymbolName == "Root" && r.ReferenceKind == "call"
             && r.ContainerKind == "function" && r.ContainerName == "Leaf");
+    }
+
+    [Fact]
+    public void Extract_SqlExecNoParens_CapturesStoredProcedureCall()
+    {
+        // issue #232: T-SQL `EXEC <proc>;` (no parentheses) is the dominant stored-procedure
+        // call form. CallRegex requires a trailing `(`, so without SqlProcCallRegex the
+        // reference graph misses every `EXEC`/`EXECUTE`/`CALL` site that does not use parens.
+        // issue #232: T-SQL の `EXEC <proc>;` (括弧なし) がストアド呼び出しの主要形。
+        const string content = """
+            EXEC dbo.sp_Target;
+            EXECUTE sp_Target;
+            EXEC dbo.sp_Target @x = 1, @y = 2;
+            EXEC dbo.sp_Target 1, 2;
+            EXEC dbo.sp_Target();
+            EXEC [dbo].[sp_Target];
+            CALL sp_Target();
+            CALL sp_Target;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRefs = references.Where(r => r.SymbolName == "sp_Target").ToList();
+        Assert.Equal(8, targetRefs.Count);
+        Assert.All(targetRefs, r => Assert.Equal("call", r.ReferenceKind));
+    }
+
+    [Fact]
+    public void Extract_SqlExecWithReturnAssignment_CapturesStoredProcedureCall()
+    {
+        // T-SQL return-value assignment: `EXEC @retval = dbo.sp_Target ...`. The call target
+        // is still `sp_Target`, not `@retval`.
+        // T-SQL の戻り値代入形式。呼び出し対象はあくまで `sp_Target`。
+        const string content = """
+            DECLARE @r int;
+            EXEC @r = dbo.sp_Target @x = 1;
+            EXECUTE @r = sp_Target;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRefs = references.Where(r => r.SymbolName == "sp_Target").ToList();
+        Assert.Equal(2, targetRefs.Count);
+        Assert.All(targetRefs, r => Assert.Equal("call", r.ReferenceKind));
+    }
+
+    [Fact]
+    public void Extract_SqlExecuteAs_NotExtractedAsReference()
+    {
+        // `EXECUTE AS '<user>'` is a context switch, not a stored-procedure call. `AS` must not
+        // leak into the reference graph as `call AS`. Same for lowercase `as`.
+        // `EXECUTE AS` はコンテキスト切替でありプロシージャ呼び出しではない。大文字小文字どちらでも参照化しない。
+        const string content = """
+            EXECUTE AS 'dbo';
+            execute as user = 'admin';
+            EXECUTE IMMEDIATE 'SELECT 1';
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName.Equals("AS", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(references, r => r.SymbolName.Equals("IMMEDIATE", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Extract_SqlExecInsideStringLiteral_NotExtractedAsReference()
+    {
+        // `EXEC` text inside a SQL string literal must not produce a reference — the literal is
+        // dynamic SQL stored as data, not a call site.
+        // SQL 文字列リテラル内の `EXEC` は動的 SQL の中身であり呼び出し箇所ではない。
+        const string content = """
+            DECLARE @sql nvarchar(max) = 'EXEC dbo.sp_InsideString;';
+            EXEC sp_executesql @sql;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "sp_InsideString");
+        // The outer EXEC of sp_executesql still becomes a reference.
+        // 外側の EXEC による sp_executesql の参照は残る。
+        Assert.Contains(references, r => r.SymbolName == "sp_executesql" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SqlExecCallDedup_DoesNotEmitDuplicateForParenForm()
+    {
+        // When a call already has a trailing `(`, the shared CallRegex and SqlProcCallRegex both
+        // match the same name at the same column. Dedup must collapse them into one reference row.
+        // `(` 付きの形は CallRegex と SqlProcCallRegex の両方がヒットするが、dedup で 1 件に収まる。
+        const string content = """
+            EXEC dbo.sp_Target();
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRefs = references.Where(r => r.SymbolName == "sp_Target").ToList();
+        Assert.Single(targetRefs);
+    }
+
+    [Fact]
+    public void Extract_SqlExecDynamicSql_DoesNotEmitPhantomKeywordReference()
+    {
+        // T-SQL dynamic-SQL execution `EXEC(@sql)` / `EXEC('...')` / `EXECUTE(@sql)` pass a string or
+        // variable argument, not an identifier. SqlProcCallRegex requires whitespace after the keyword
+        // so it does not match, and the generic CallRegex used to emit a phantom `call EXEC` /
+        // `call EXECUTE` edge. The SQL ignore list now blocks EXEC / EXECUTE / CALL keyword captures.
+        // `EXEC(@sql)` / `EXEC('...')` / `EXECUTE(@sql)` は識別子ではなく動的 SQL 実行。汎用 CallRegex が
+        // キーワード自身を call として拾って幽霊エッジを作るのを ignore list で封じる。
+        const string content = """
+            CREATE PROCEDURE dbo.sp_Host AS
+            BEGIN
+                DECLARE @sql NVARCHAR(MAX) = 'SELECT 1';
+                EXEC(@sql);
+                EXEC('SELECT 2');
+                EXECUTE(@sql);
+                CALL(@sql);
+            END
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "EXEC");
+        Assert.DoesNotContain(references, r => r.SymbolName == "EXECUTE");
+        Assert.DoesNotContain(references, r => r.SymbolName == "CALL");
+    }
+
+    [Fact]
+    public void Extract_SqlExecBracketedKeywordIdentifier_IsCapturedNotFilteredAsKeyword()
+    {
+        // Bracketed identifiers in T-SQL are the canonical way to use reserved words as real object
+        // names (`[ORDER]`, `[USER]`, `[AS]`, `[IMMEDIATE]`). The bracket-stripping path must bypass
+        // the keyword ignore list so the wrapped name surfaces as a legitimate call reference.
+        // T-SQL の角括弧付き識別子は予約語を名前として使うための引用形。bracket を外したあと keyword
+        // 無視リストで落とさないことを固定する（`EXEC [ORDER]` など正当な呼び出しを落とさないため）。
+        const string content = """
+            EXEC [dbo].[ORDER];
+            EXEC [AS];
+            EXEC [IMMEDIATE];
+            CALL [USER];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "ORDER" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "AS" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "IMMEDIATE" && r.ReferenceKind == "call" && r.Line == 3);
+        Assert.Contains(references, r => r.SymbolName == "USER" && r.ReferenceKind == "call" && r.Line == 4);
+    }
+
+    [Fact]
+    public void Extract_SqlExecBracketedDedup_DoesNotEmitDuplicateForParenForm()
+    {
+        // Bracketed `EXEC [dbo].[sp_Target]()` hits both regexes but SqlProcCallRegex emits at the
+        // bracket-inner column while CallRegex emits at the raw column (the `[`). The dedup key uses
+        // the post-adjustment column, so both paths must converge on the same key and collapse to one row.
+        // ブラケット付き `[dbo].[sp_Target]()` は両 regex が異なる列で発火するが、bracket 除去後の列で
+        // dedup キーが揃うことを固定する（1 件に収まる）。
+        const string content = """
+            EXEC [dbo].[sp_Target]();
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRefs = references.Where(r => r.SymbolName == "sp_Target").ToList();
+        Assert.Single(targetRefs);
+    }
+
+    [Fact]
+    public void Extract_SqlExecUnicodeBracketedIdentifier_IsCaptured()
+    {
+        // Non-ASCII identifiers inside brackets (Japanese, accented Latin, Cyrillic) should survive the
+        // bracket-stripping path. SqlProcCallRegex allows `[\w ]+` which in .NET default regex matches
+        // Unicode word chars, so Japanese / Cyrillic / accented names are preserved.
+        // ブラケット内の非 ASCII 識別子（日本語・アクセント付き・キリル文字）も通常の識別子として
+        // 取り扱えることを固定する。
+        const string content = """
+            EXEC [dbo].[名前];
+            CALL [Ñoño];
+            EXEC [Процедура];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "名前" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Ñoño" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Процедура" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SqlCallWithArguments_CapturesProcedureName()
+    {
+        // MySQL / MariaDB stored procedures are invoked as `CALL proc(arg1, arg2)`. The generic
+        // CallRegex already captures this because of the trailing `(`, but the SqlProcCallRegex path
+        // should also stay out of the way (no duplicates, no misattribution to keywords).
+        // MySQL / MariaDB の `CALL proc(args)` は既存 CallRegex で捕捉される。SQL 新経路と重複しない
+        // ことと、`CALL` キーワード自体を call として拾わないことを固定する。
+        const string content = """
+            CALL db.my_proc(1, 2);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var procRefs = references.Where(r => r.SymbolName == "my_proc").ToList();
+        Assert.Single(procRefs);
+        Assert.Equal("call", procRefs[0].ReferenceKind);
+        Assert.DoesNotContain(references, r => r.SymbolName == "CALL");
+    }
+
+    [Fact]
+    public void Extract_SqlExecBracketedNonWordIdentifier_IsCapturedAndDoesNotMisattributeQualifier()
+    {
+        // T-SQL bracket quoting accepts any character except `[` / `]` / newline inside the brackets,
+        // so `[#tempProc]` (temp stored procedure), `[proc-name]` (hyphenated name), and `[proc.v2]`
+        // are all legitimate identifiers. A narrower `[\w ]+` quantifier would skip the bracketed
+        // name entirely and — worse — misattribute the preceding qualifier segment `[dbo]` as the
+        // proc name when only the trailing bracket has non-word characters.
+        // T-SQL のブラケット識別子は `[` / `]` / 改行以外の任意文字を含められるため、`[#tempProc]`
+        // （一時プロシージャ）、`[proc-name]`（ハイフン）、`[proc.v2]` は合法。`[\w ]+` では末端
+        // が取りこぼされ、直前の修飾子 `[dbo]` を誤って proc 名として emit してしまう。
+        const string content = """
+            EXEC [#tempProc];
+            EXEC [dbo].[proc-name];
+            EXEC [dbo].[proc.v2];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "#tempProc" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "proc-name" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "proc.v2" && r.ReferenceKind == "call" && r.Line == 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "dbo" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SqlExecBracketedExecKeyword_IsCapturedAsProcedureName()
+    {
+        // A user who genuinely names a procedure `[EXEC]` uses bracket quoting to bypass the reserved
+        // word. SqlProcCallRegex captures it, bracket stripping yields `EXEC`, and the bracketed branch
+        // skips the keyword ignore list so `EXEC` surfaces as a proc-name call reference — distinct
+        // from the dynamic-SQL path where the keyword is suppressed because there is no identifier.
+        // ユーザが本当に `[EXEC]` という proc 名を使った場合は、SqlProcCallRegex → bracket 除去後に
+        // `EXEC` が残り、bracketed 分岐で keyword ignore list を通過して call エッジとして残ることを固定する。
+        const string content = """
+            EXEC [dbo].[EXEC];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "EXEC" && r.ReferenceKind == "call" && r.Line == 1);
+    }
+
+    [Fact]
+    public void Extract_SqlExecVariableProcName_DoesNotEmitReference()
+    {
+        // `EXEC @spName @param = 1` invokes a procedure whose name lives in a variable at runtime.
+        // There is no static identifier to index, so no call edge should be emitted for the variable
+        // and no phantom EXEC / `@spName` reference should surface.
+        // `EXEC @spName @param` は実行時決定の変数名呼び出し。静的な識別子がないため edge は出さないし、
+        // `EXEC` / `@spName` の幽霊エッジも出ないことを固定する。
+        const string content = """
+            EXEC @spName @param = 1;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Empty(references.Where(r => r.ReferenceKind == "call"));
+    }
+
+    [Fact]
+    public void Extract_SqlExecLinkedServerFourPartName_CapturesTerminalIdentifier()
+    {
+        // Linked-server / four-part names like `EXEC server.db.schema.proc` should surface the final
+        // identifier as the reference target; intermediate segments are part of the qualifier.
+        // 4 パート名 `server.db.schema.proc` は末端の識別子のみを参照対象として拾うことを固定する。
+        const string content = """
+            EXEC server1.AdventureWorks.dbo.sp_GetCustomer;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "sp_GetCustomer" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "server1");
+        Assert.DoesNotContain(references, r => r.SymbolName == "AdventureWorks");
+    }
+
+    [Fact]
+    public void Extract_SqlExecOmittedQualifierSegments_CapturesTerminalIdentifier()
+    {
+        // SQL Server's four-part naming permits any middle segment to be omitted (e.g. using the
+        // default database / schema), producing literal `..` in the qualifier chain. The previous
+        // pattern accepted only non-empty qualifier segments, so `EXEC AdventureWorks..sp_GetCustomer;`
+        // and `EXEC [AdventureWorks]..[proc-name];` terminated at the first segment and mis-emitted
+        // the qualifier (`AdventureWorks`) as the proc name.
+        // SQL Server の 4 パート名は中間セグメント（既定データベース／スキーマ）を省略でき、
+        // `..` が残る。以前は空セグメントを許さなかったため、末端ではなく先頭修飾子を proc 名と
+        // して誤発行していた。省略形でも必ず末端識別子を取ることを固定する。
+        const string content = """
+            EXEC AdventureWorks..sp_GetCustomer;
+            EXEC [AdventureWorks]..[proc-name];
+            EXEC srv.db..sp_with_omitted_schema;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "sp_GetCustomer" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "proc-name" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "sp_with_omitted_schema" && r.ReferenceKind == "call" && r.Line == 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "AdventureWorks" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "srv" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "db" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SqlCallBacktickQuotedIdentifier_IsCapturedAndDoesNotMisattributeQualifier()
+    {
+        // MySQL / MariaDB use backticks to quote identifiers. The shared PrepareLine
+        // would strip backtick content as a string literal, so the SQL path uses a SQL-aware
+        // sanitizer that preserves backticks. Bare backticks (`` CALL `proc-name` ``), qualified
+        // backticks (`` CALL db.`proc-name` ``), and fully-quoted qualifier chains
+        // (`` CALL `mydb`.`do_stuff` ``) should surface the terminal identifier without emitting
+        // the qualifier as a phantom call edge.
+        // MySQL / MariaDB はバッククォートで識別子を引用する。共有 PrepareLine は
+        // バッククォート内容を文字列として除去するため、SQL 経路では専用サニタイザで保持する。
+        // 単独のバッククォート、修飾子付き、完全引用 (`` `mydb`.`do_stuff` ``) のいずれも末端
+        // 識別子だけを拾い、修飾子の幽霊エッジが出ないことを固定する。
+        const string content = """
+            CALL `proc-name`;
+            CALL db.`proc-name`;
+            CALL `mydb`.`do_stuff`;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "proc-name" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "proc-name" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "do_stuff" && r.ReferenceKind == "call" && r.Line == 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "db" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "mydb" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SqlCallBacktickReservedWord_SurvivesQuoteStripping()
+    {
+        // A MySQL user may legitimately name a procedure after a reserved word by backtick-quoting
+        // it (`` CALL `order`; ``). After quote stripping, the resulting `order` should still surface
+        // as a call edge rather than being silently dropped by the SQL keyword ignore list —
+        // mirroring the T-SQL `[ORDER]` / `[AS]` behavior pinned by
+        // `Extract_SqlExecBracketedReservedWord_IsCapturedAfterBracketStripping` / bracketed-EXEC tests.
+        // MySQL ではバッククォート引用で予約語を proc 名として使える。引用除去後の `order` を
+        // keyword ignore list で黙って落とさず、T-SQL の `[ORDER]` / `[AS]` と同じく call エッジが
+        // 残ることを固定する。
+        const string content = """
+            CALL `order`;
+            CALL `select`;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "order" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "select" && r.ReferenceKind == "call" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SqlHashCommentedCall_DoesNotEmitReference()
+    {
+        // MySQL / MariaDB accept `#` as a line comment in addition to ANSI `--`. The SQL-aware
+        // sanitizer must strip content after `#` so commented-out EXEC / CALL statements do not
+        // surface as phantom call edges. This mirrors the `--` comment behavior already pinned by
+        // other SQL tests.
+        // MySQL / MariaDB は ANSI の `--` に加えて `#` も行コメントとして扱う。SQL 用サニタイザは
+        // `#` 以降を除去し、コメントアウトされた EXEC / CALL が幽霊エッジとして浮き上がらないように
+        // する。`--` コメントの扱いと対にして固定する。
+        const string content = """
+            # CALL commented_out;
+            CALL real_proc;
+            -- EXEC dashed_out;
+            EXEC real_exec;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "commented_out" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "dashed_out" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "real_proc" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "real_exec" && r.ReferenceKind == "call" && r.Line == 4);
+    }
+
+    [Fact]
+    public void Extract_SqlCallBacktickIdentifierContainingHash_IsCaptured()
+    {
+        // A `#` inside a backtick-quoted identifier is part of the identifier, not a comment marker.
+        // The SQL-aware sanitizer must respect backtick boundaries before treating `#` as a comment,
+        // otherwise `` CALL `proc#1`; `` would be truncated to `` CALL `proc `` and lost.
+        // バッククォート内の `#` は識別子の一部であり、コメント開始記号ではない。SQL 用サニタイザは
+        // `#` をコメントとして扱う前にバッククォート境界を考慮する必要があり、さもなくば
+        // `` CALL `proc#1`; `` が `` CALL `proc `` に切れて call エッジが失われる。
+        const string content = """
+            CALL `proc#1`;
+            EXEC [proc#sqlserver];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "proc#1" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "proc#sqlserver" && r.ReferenceKind == "call" && r.Line == 2);
+    }
+    [Fact]
+    public void Extract_CsharpAttribute_ClassifiedAsAttribute()
+    {
+        // issue #293: `[Obsolete("msg")]` must produce an `attribute` reference, not a phantom `call`.
+        // issue #293: `[Obsolete("msg")]` は `call` ではなく `attribute` として記録されること。
+        const string content = """
+            using System;
+            [Obsolete("old")]
+            public class Old
+            {
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var obsolete = Assert.Single(references.Where(r => r.SymbolName == "Obsolete"));
+        Assert.Equal("attribute", obsolete.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpTargetedAttribute_ClassifiedAsAttribute()
+    {
+        // issue #293: `[return: NotNull("x")]` targeted attribute is classified as `attribute`.
+        // issue #293: `[return: NotNull("x")]` のターゲット付き属性も `attribute` になること。
+        const string content = """
+            public class C
+            {
+                [return: NotNull("x")]
+                public string M() => string.Empty;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var notNull = Assert.Single(references.Where(r => r.SymbolName == "NotNull"));
+        Assert.Equal("attribute", notNull.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpMultipleAttributes_ClassifiedAsAttribute()
+    {
+        // issue #293: `[Foo("a"), Bar("b")]` — both entries in a comma-separated attribute list
+        // must be classified as `attribute`.
+        // issue #293: `[Foo("a"), Bar("b")]` のカンマ区切り属性リストは全て `attribute` になること。
+        const string content = """
+            [Foo("a"), Bar("b")]
+            public class C { }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var foo = Assert.Single(references.Where(r => r.SymbolName == "Foo"));
+        var bar = Assert.Single(references.Where(r => r.SymbolName == "Bar"));
+        Assert.Equal("attribute", foo.ReferenceKind);
+        Assert.Equal("attribute", bar.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpAttributeWithNewArgument_InstantiateStaysInstantiate()
+    {
+        // Inside attribute arguments, `new Foo()` still counts as `instantiate` — only the
+        // attribute identifier itself is reclassified.
+        // 属性引数内の `new Foo()` は従来通り `instantiate`。属性名本体のみが再分類される。
+        const string content = """
+            [AttributeUsage(AttributeTargets.Class)]
+            public class C { }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var au = Assert.Single(references.Where(r => r.SymbolName == "AttributeUsage"));
+        Assert.Equal("attribute", au.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpMethodBodyCall_StaysCall()
+    {
+        // Regression guard: ordinary method calls inside method bodies must still produce `call`,
+        // not be mistaken for attribute references due to unrelated `[` tokens on nearby lines.
+        // 回帰防止: メソッド本体内の通常呼び出しは、近くの `[` トークンの影響で `attribute` と
+        // 誤判定されず `call` のまま残ること。
+        const string content = """
+            public class C
+            {
+                public int Run() => Compute(42);
+                public int Compute(int x) => x;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var compute = Assert.Single(references.Where(r => r.SymbolName == "Compute"));
+        Assert.Equal("call", compute.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_JavaAnnotation_ClassifiedAsAnnotation()
+    {
+        // issue #293: `@Deprecated(since="1.0")` must produce an `annotation` reference, not a phantom `call`.
+        // issue #293: `@Deprecated(since="1.0")` は `call` ではなく `annotation` として記録されること。
+        const string content = """
+            public class AnnotatedClass {
+                @Deprecated(since="1.0")
+                public void doWork() { }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        var deprecated = Assert.Single(references.Where(r => r.SymbolName == "Deprecated"));
+        Assert.Equal("annotation", deprecated.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_JavaQualifiedAnnotation_ClassifiedAsAnnotation()
+    {
+        // issue #293: `@org.junit.Test(timeout=1000)` — dotted qualifier chain still resolves to `@`.
+        // issue #293: `@org.junit.Test(timeout=1000)` のような修飾付き注釈も `annotation` になること。
+        const string content = """
+            public class T {
+                @org.junit.Test(timeout=1000)
+                public void testIt() { }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        var testAnno = Assert.Single(references.Where(r => r.SymbolName == "Test"));
+        Assert.Equal("annotation", testAnno.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_KotlinAnnotation_ClassifiedAsAnnotation()
+    {
+        // issue #293: Kotlin `@Deprecated("msg")` also emits `annotation`.
+        // issue #293: Kotlin の `@Deprecated("msg")` も `annotation` になること。
+        const string content = """
+            class K {
+                @Deprecated("msg")
+                fun old() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        var deprecated = Assert.Single(references.Where(r => r.SymbolName == "Deprecated"));
+        Assert.Equal("annotation", deprecated.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_SwiftAttributeWithArgs_ClassifiedAsAnnotation()
+    {
+        // issue #293 follow-up: Swift `@available(...)` / `@objc` / `@MainActor` are
+        // compile-time metadata, not runtime calls. Before the fix they were recorded
+        // as `call` references (polluting `callers`/`callees`/`hotspots`/`impact`) and
+        // `@objc` / `@MainActor` no-arg attributes dropped entirely from the index.
+        // After the fix they must all classify as `annotation`.
+        // issue #293 補足: Swift の `@available(...)` / `@objc` / `@MainActor` は compile-time
+        // metadata であり runtime の call ではない。修正前は `call` として記録され
+        // (`callers`/`callees`/`hotspots`/`impact` が汚染)、`@objc` / `@MainActor` の no-arg
+        // 版はインデックスから完全に脱落していた。修正後はすべて `annotation` として分類される。
+        const string content = """
+            import Foundation
+
+            @available(iOS 13.0, *)
+            class NetworkClient {
+                @objc func fetch() {}
+
+                @MainActor
+                func process() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        var available = Assert.Single(references.Where(r => r.SymbolName == "available"));
+        Assert.Equal("annotation", available.ReferenceKind);
+
+        var objc = Assert.Single(references.Where(r => r.SymbolName == "objc"));
+        Assert.Equal("annotation", objc.ReferenceKind);
+
+        var mainActor = Assert.Single(references.Where(r => r.SymbolName == "MainActor"));
+        Assert.Equal("annotation", mainActor.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_GradleAnnotation_ClassifiedAsAnnotation()
+    {
+        // issue #293 follow-up: Gradle/Groovy `@CompileStatic` / `@TaskAction` and similar
+        // transform/task annotations are compile-time metadata. Before the fix they were
+        // recorded as `call` references (or dropped for the no-arg form), which made
+        // `callers TaskAction` / `callees` pick up fake graph edges in build scripts.
+        // After the fix they must all classify as `annotation`.
+        // issue #293 補足: Gradle/Groovy の `@CompileStatic` / `@TaskAction` なども compile-time
+        // metadata。修正前は `call` として記録されるか no-arg 版が脱落し、ビルドスクリプトで
+        // `callers TaskAction` / `callees` に偽のグラフエッジが混入していた。修正後はすべて
+        // `annotation` として分類される。
+        const string content = """
+            import groovy.transform.CompileStatic
+
+            @CompileStatic
+            class BuildConfig {
+                @TaskAction
+                void run() {
+                    println "built"
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "gradle", content);
+        var references = ReferenceExtractor.Extract(1, "gradle", content, symbols);
+
+        var compileStatic = Assert.Single(references.Where(r => r.SymbolName == "CompileStatic"));
+        Assert.Equal("annotation", compileStatic.ReferenceKind);
+
+        var taskAction = Assert.Single(references.Where(r => r.SymbolName == "TaskAction"));
+        Assert.Equal("annotation", taskAction.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_JavaMethodBodyCall_StaysCall()
+    {
+        // Regression guard: ordinary Java method call remains `call`, not `annotation`.
+        // 回帰防止: Java のメソッド本体内の通常呼び出しは `annotation` に誤判定されず `call` のまま。
+        const string content = """
+            public class J {
+                public int add(int a, int b) { return compute(a, b); }
+                public int compute(int a, int b) { return a + b; }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        var compute = Assert.Single(references.Where(r => r.SymbolName == "compute"));
+        Assert.Equal("call", compute.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpCollectionExpression_StaysCall()
+    {
+        // issue #293 regression: C# 12 collection expressions `var xs = [Make(), Make()]`
+        // share the `[...]` syntax with attributes but must NOT be classified as `attribute`.
+        // issue #293 回帰防止: C# 12 collection expression `var xs = [Make(), Make()]` は
+        // 属性と同じ `[...]` 構文を共有するが `attribute` に誤分類してはならない。
+        const string content = """
+            public class C
+            {
+                public int Make() => 42;
+                public void Run()
+                {
+                    var xs = [Make(), Make()];
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var makeRefs = references.Where(r => r.SymbolName == "Make").ToList();
+        Assert.Equal(2, makeRefs.Count);
+        Assert.All(makeRefs, r => Assert.Equal("call", r.ReferenceKind));
+        Assert.All(makeRefs, r => Assert.Equal("Run", r.ContainerName));
+    }
+
+    [Fact]
+    public void Extract_CsharpCollectionExpressionInArgument_StaysCall()
+    {
+        // Collection expressions appearing as arguments, nested in other expressions, or
+        // after `return` must still classify inner calls as `call`, not `attribute`.
+        // 引数やネストされた式、`return` 後の collection expression 内の呼び出しは `call` のまま。
+        const string content = """
+            public class C
+            {
+                public int Make() => 42;
+                public int[] Wrap() => [Make(), Make()];
+                public void Consume(int[] xs) { }
+                public void Run()
+                {
+                    Consume([Make(), Make()]);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var makeRefs = references.Where(r => r.SymbolName == "Make").ToList();
+        Assert.Equal(4, makeRefs.Count);
+        Assert.All(makeRefs, r => Assert.Equal("call", r.ReferenceKind));
+    }
+
+    [Fact]
+    public void Extract_CsharpIndexerAccess_StaysCall()
+    {
+        // `arr[Compute()]` — `[` is preceded by an identifier, so it is an indexer, not an
+        // attribute, and the inner call must stay `call`.
+        // `arr[Compute()]` は indexer で、`[` の直前が識別子のため attribute 扱いにはしない。
+        const string content = """
+            public class C
+            {
+                public int Compute() => 0;
+                public int Read(int[] arr) => arr[Compute()];
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var compute = Assert.Single(references.Where(r => r.SymbolName == "Compute"));
+        Assert.Equal("call", compute.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_KotlinFieldTargetAnnotation_ClassifiedAsAnnotation()
+    {
+        // issue #293 follow-up: Kotlin use-site target `@field:Deprecated("msg")` must be
+        // classified as `annotation`, not `call`.
+        // issue #293 補足: Kotlin の use-site target `@field:Deprecated("msg")` も `annotation`。
+        const string content = """
+            class Example {
+                @field:Deprecated("msg")
+                val value: Int = 0
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        var deprecated = Assert.Single(references.Where(r => r.SymbolName == "Deprecated"));
+        Assert.Equal("annotation", deprecated.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_KotlinGetTargetAnnotation_ClassifiedAsAnnotation()
+    {
+        // Kotlin `@get:JsonName("x")` property getter target annotation.
+        // Kotlin の `@get:JsonName("x")` プロパティ getter 向け注釈も `annotation`。
+        const string content = """
+            class K {
+                @get:JsonName("x")
+                val x: Int = 0
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        var jsonName = Assert.Single(references.Where(r => r.SymbolName == "JsonName"));
+        Assert.Equal("annotation", jsonName.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_KotlinFileTargetAnnotation_ClassifiedAsAnnotation()
+    {
+        // Kotlin `@file:JvmName("Foo")` file-level target annotation.
+        // Kotlin の `@file:JvmName("Foo")` ファイル単位注釈も `annotation`。
+        const string content = """
+            @file:JvmName("Foo")
+
+            package example
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        var jvmName = Assert.Single(references.Where(r => r.SymbolName == "JvmName"));
+        Assert.Equal("annotation", jvmName.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpChainedIndexerCalls_StayCall()
+    {
+        // issue #293 follow-up: `arr[Compute()][Compute()]` — the second `[` is preceded by
+        // an indexer-closing `]`, not an attribute-section `]`. Walking back to the matching
+        // `[` must find an expression-position bracket so both inner calls remain `call`.
+        // issue #293 補足: `arr[Compute()][Compute()]` の 2 個目の `[` は indexer の `]` に
+        // 続くだけで attribute section の終端ではないため、対応する `[` まで戻って宣言位置で
+        // ないことを確認し、両方の呼び出しを `call` のまま残す。
+        const string content = """
+            public class C
+            {
+                public int Compute() => 0;
+                public int Read(int[][] arr) => arr[Compute()][Compute()];
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var computeRefs = references.Where(r => r.SymbolName == "Compute").ToList();
+        Assert.Equal(2, computeRefs.Count);
+        Assert.All(computeRefs, r => Assert.Equal("call", r.ReferenceKind));
+    }
+
+    [Fact]
+    public void Extract_CsharpMatrixIndexerCalls_StayCall()
+    {
+        // Two consecutive indexer accesses on a matrix — `matrix[Row()][Col()]` — must keep
+        // both inner calls as `call`.
+        // 連続 indexer `matrix[Row()][Col()]` でも、両方の呼び出しが `call` のまま残ること。
+        const string content = """
+            public class M
+            {
+                public int Row() => 0;
+                public int Col() => 0;
+                public int Read(int[,] matrix) => matrix[Row(), Col()];
+                public int Read2(int[][] grid) => grid[Row()][Col()];
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var row = references.Where(r => r.SymbolName == "Row").ToList();
+        var col = references.Where(r => r.SymbolName == "Col").ToList();
+        Assert.Equal(2, row.Count);
+        Assert.Equal(2, col.Count);
+        Assert.All(row, r => Assert.Equal("call", r.ReferenceKind));
+        Assert.All(col, r => Assert.Equal("call", r.ReferenceKind));
+    }
+
+    [Fact]
+    public void Extract_CsharpChainedAttributeLists_StayAttribute()
+    {
+        // `[A(...)][B(...)]` on a declaration — the chained attribute-list form must still
+        // classify both entries as `attribute` after the indexer-safety walk-back.
+        // `[A(...)][B(...)]` の連続 attribute list は、indexer との区別が入ったあとも両方 `attribute`。
+        const string content = """
+            [A("x")][B("y")]
+            public class C { }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var a = Assert.Single(references.Where(r => r.SymbolName == "A"));
+        var b = Assert.Single(references.Where(r => r.SymbolName == "B"));
+        Assert.Equal("attribute", a.ReferenceKind);
+        Assert.Equal("attribute", b.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpParameterAttributes_ClassifiedAsAttribute()
+    {
+        // Parameter attributes are introduced by `(` or `,` rather than a scope boundary, so
+        // the classifier must use forward lookahead from `[` to disambiguate against C# 12
+        // collection expressions in argument position like `Consume([Make()])`.
+        // パラメータ属性は `(` や `,` に続くため、collection expression と区別するには `[` から
+        // 対応する `]` まで前方を走査して、直後が識別子かを確認する必要がある。
+        const string content = """
+            public class C
+            {
+                public void M([Attr("x")] int a, [Other("y")] int b) { }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var attr = Assert.Single(references.Where(r => r.SymbolName == "Attr"));
+        var other = Assert.Single(references.Where(r => r.SymbolName == "Other"));
+        Assert.Equal("attribute", attr.ReferenceKind);
+        Assert.Equal("attribute", other.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpMultiLineAttribute_ClassifiedAsAttribute()
+    {
+        // A multi-line attribute list `[\n Foo("x")\n ]` must still classify `Foo` as
+        // attribute even though the opening `[` is not on the same line as the identifier.
+        // `[` と `Foo("x")` が別行にある場合でも `Foo` を属性として判定すること。
+        const string content = """
+            [
+                Foo("x")
+            ]
+            public class C { }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var foo = Assert.Single(references.Where(r => r.SymbolName == "Foo"));
+        Assert.Equal("attribute", foo.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpMultiLineParameterAttribute_ClassifiedAsAttribute()
+    {
+        // Parameter attribute split across lines — `(` ends one line, `[Attr]` sits on the
+        // next, and the declaration continues after. Cross-line lookahead must still find
+        // the identifier after the matching `]`.
+        // 改行を挟んだパラメータ属性でも、跨行 lookahead で `]` の直後に続く識別子まで到達し、
+        // 属性として判定できること。
+        const string content = """
+            public class C
+            {
+                public void M(
+                    [Attr("x")]
+                    int a)
+                {
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var attr = Assert.Single(references.Where(r => r.SymbolName == "Attr"));
+        Assert.Equal("attribute", attr.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpTargetedAttribute_StaysAttribute()
+    {
+        // Regression: `[return: NotNullWhen(true)]` is recognised as an attribute section by
+        // the pre-pass (bracket position, not `target:` heuristics). Keep the case covered.
+        // リグレッション: `[return: NotNullWhen(true)]` も属性セクションとして判定されること。
+        const string content = """
+            public class C
+            {
+                [return: NotNullWhen(true)]
+                public bool Try() => true;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var notNullWhen = Assert.Single(references.Where(r => r.SymbolName == "NotNullWhen"));
+        Assert.Equal("attribute", notNullWhen.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpCollectionExpressionInArgument_StaysCallAfterParen()
+    {
+        // Defense-in-depth: `Consume([Make()])` has `[` immediately after `(`, matching the
+        // parameter-attribute entry point, but forward lookahead sees `)` after the matching
+        // `]` and correctly keeps `Make` as `call`.
+        // `Consume([Make()])` のように `(` 直後に `[` が続くケースでも、`]` の直後が `)` であれば
+        // collection expression として `call` のままであること。
+        const string content = """
+            public class C
+            {
+                public void M()
+                {
+                    Consume([Make(), Make()]);
+                }
+                private static int Make() => 0;
+                private void Consume(int[] xs) { }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var makeRefs = references.Where(r => r.SymbolName == "Make").ToList();
+        Assert.Equal(2, makeRefs.Count);
+        Assert.All(makeRefs, r => Assert.Equal("call", r.ReferenceKind));
+    }
+
+    [Fact]
+    public void Extract_CsharpCollectionExpressionPatternMatch_StaysCall()
+    {
+        // Regression: `[Make()] is int[] xs` is a pattern expression, not an attribute. The
+        // next token after `]` is the contextual keyword `is`, so `Make` must stay `call`.
+        // リグレッション: `[Make()] is int[] xs` はパターン式なので、`]` の次の `is` を属性の続きと誤認せず `Make` は `call`。
+        const string content = """
+            public class C
+            {
+                public bool M()
+                {
+                    return Consume([Make()] is int[] xs && xs.Length > 0);
+                }
+                private static int Make() => 0;
+                private bool Consume(bool b) => b;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var make = Assert.Single(references.Where(r => r.SymbolName == "Make"));
+        Assert.Equal("call", make.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpCollectionExpressionAsCast_StaysCall()
+    {
+        // Regression: `[Make()] as int[]` is an `as` cast, not an attribute. The classifier
+        // must treat `as` as expression continuation and keep `Make` as `call`.
+        // リグレッション: `[Make()] as int[]` は `as` キャストなので `Make` は `call` のまま。
+        const string content = """
+            public class C
+            {
+                public void M()
+                {
+                    var arr = ([Make()] as int[]);
+                }
+                private static int Make() => 0;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var make = Assert.Single(references.Where(r => r.SymbolName == "Make"));
+        Assert.Equal("call", make.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpCollectionExpressionSwitchExpression_StaysCall()
+    {
+        // Regression: `[Make()] switch { ... }` is a switch expression over a collection,
+        // not an attribute. The classifier must treat `switch` as expression continuation.
+        // リグレッション: `[Make()] switch { ... }` は collection に対する switch 式のため `Make` は `call`。
+        const string content = """
+            public class C
+            {
+                public bool M() => Consume([Make()] switch { _ => true });
+                private static int Make() => 0;
+                private bool Consume(bool b) => b;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var make = Assert.Single(references.Where(r => r.SymbolName == "Make"));
+        Assert.Equal("call", make.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpTupleTypedParameterAttribute_ClassifiedAsAttribute()
+    {
+        // Regression: `void M([Attr("x")] (int, int) value)` — the token after `]` is `(`
+        // (tuple type syntax), which must still be treated as a declaration start so the
+        // preceding `[...]` is classified as an attribute.
+        // リグレッション: `void M([Attr("x")] (int, int) value)` のように `]` の直後が tuple 型の `(` でも属性扱い。
+        const string content = """
+            public class C
+            {
+                public void M([Attr("x")] (int a, int b) value) { }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var attr = Assert.Single(references.Where(r => r.SymbolName == "Attr"));
+        Assert.Equal("attribute", attr.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpTypeParameterAttribute_ClassifiedAsAttribute()
+    {
+        // Regression: `class C<[Attr("x")] T>` — the `[` is preceded by `<`, which is a valid
+        // attribute position for type parameters. The classifier must accept `<` alongside
+        // `(` and `,` as parameter-list entry points.
+        // リグレッション: `class C<[Attr("x")] T>` のように `<` の直後にある型パラメータ属性も検出できること。
+        const string content = """
+            public class C<[Attr("x")] T>
+            {
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var attr = Assert.Single(references.Where(r => r.SymbolName == "Attr"));
+        Assert.Equal("attribute", attr.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpLambdaAttribute_ClassifiedAsAttribute()
+    {
+        // Regression: `var f = [Attr("x")] () => 0;` — the `[` is preceded by `=`, and the token
+        // after `]` is `(` (lambda parameter list). The classifier must accept `=` as a valid
+        // attribute-entry context alongside `(`, `,`, `<`.
+        // リグレッション: `var f = [Attr("x")] () => 0;` のように `=` の直後にあるラムダ属性も検出できること。
+        const string content = """
+            public class C
+            {
+                public void M()
+                {
+                    var f = [Attr("x")] () => 0;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var attr = Assert.Single(references.Where(r => r.SymbolName == "Attr"));
+        Assert.Equal("attribute", attr.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpNoArgAttribute_ClassifiedAsAttribute()
+    {
+        // Regression (issue #293): `[Serializable]`, `[Obsolete]`, `[System.Obsolete]`,
+        // `[assembly: CLSCompliant]`, `[Required, Key]` — bare no-arg attributes were not
+        // indexed at all because CallRegex requires `(`. A dedicated no-arg entry path
+        // must emit them with kind `attribute`.
+        // リグレッション (issue #293): `[Serializable]` などの引数なし属性も `attribute` として
+        // インデックスされること。CallRegex は `(` を要求するため専用の取り込み経路が必要。
+        const string content = """
+            [assembly: CLSCompliant]
+            [Serializable]
+            [Obsolete]
+            [System.Obsolete]
+            [Required, Key]
+            public class C
+            {
+            }
+            """;
+
+        var references = ReferenceExtractor.Extract(1, "csharp", content, []);
+
+        Assert.Single(references.Where(r => r.SymbolName == "CLSCompliant" && r.ReferenceKind == "attribute"));
+        Assert.Single(references.Where(r => r.SymbolName == "Serializable" && r.ReferenceKind == "attribute"));
+        // `[System.Obsolete]` — the qualifier chain is part of the attribute, and the emitted
+        // reference should carry the final segment (`Obsolete`). There are two `Obsolete` rows
+        // (the plain `[Obsolete]` above and the qualified `[System.Obsolete]`), both attribute.
+        Assert.Equal(2, references.Count(r => r.SymbolName == "Obsolete" && r.ReferenceKind == "attribute"));
+        Assert.Single(references.Where(r => r.SymbolName == "Required" && r.ReferenceKind == "attribute"));
+        Assert.Single(references.Where(r => r.SymbolName == "Key" && r.ReferenceKind == "attribute"));
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpIndexerAccess_NotClassifiedAsAttribute()
+    {
+        // Regression (issue #293): `arr[i]` looks like a bare `[name]` token, but it is an
+        // indexer expression, not an attribute. The no-arg attribute path must defer to the
+        // attribute-range pre-pass so indexer access is not misclassified as `attribute`.
+        // リグレッション (issue #293): `arr[i]` のような indexer アクセスは `[name]` 形だが
+        // 属性ではない。属性レンジ pre-pass を経由することで attribute への誤分類を防ぐ。
+        const string content = """
+            public class C
+            {
+                public int M(int[] arr, int i) => arr[i];
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "i" && r.ReferenceKind == "attribute");
+    }
+
+    [Fact]
+    public void Extract_JavaNoArgAnnotation_ClassifiedAsAnnotation()
+    {
+        // Regression (issue #293): `@Deprecated`, `@Override`, `@org.junit.Test` — bare no-arg
+        // annotations were not indexed because CallRegex requires `(`. A dedicated no-arg
+        // regex must emit them with kind `annotation`.
+        // リグレッション (issue #293): `@Deprecated` などの引数なし Java annotation も
+        // `annotation` として認識されること。
+        const string content = """
+            public class C {
+                @Deprecated
+                @Override
+                @org.junit.Test
+                public void m() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Single(references.Where(r => r.SymbolName == "Deprecated" && r.ReferenceKind == "annotation"));
+        Assert.Single(references.Where(r => r.SymbolName == "Override" && r.ReferenceKind == "annotation"));
+        Assert.Single(references.Where(r => r.SymbolName == "Test" && r.ReferenceKind == "annotation"));
+    }
+
+    [Fact]
+    public void Extract_KotlinNoArgTargetAnnotation_ClassifiedAsAnnotation()
+    {
+        // Regression (issue #293): `@field:Deprecated` — use-site target without parentheses.
+        // リグレッション (issue #293): `@field:Deprecated` のような use-site target 付き
+        // 引数なしアノテーションも `annotation` 判定になること。
+        const string content = """
+            class C {
+                @field:Deprecated
+                val x: Int = 0
+            }
+            """;
+
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, []);
+
+        var deprecated = Assert.Single(references.Where(r => r.SymbolName == "Deprecated"));
+        Assert.Equal("annotation", deprecated.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_KotlinReturnAtLabel_NotClassifiedAsAnnotation()
+    {
+        // Regression (issue #293): `return@foo` is a Kotlin label reference, not an annotation.
+        // The leading lookbehind `(?<![\w)])` in the no-arg annotation regex must prevent a
+        // match where `@` is preceded by an identifier character.
+        // リグレッション (issue #293): `return@foo` は Kotlin のラベル参照で annotation ではない。
+        // 先頭 lookbehind で識別子に続く `@` を除外すること。
+        const string content = """
+            fun outer() {
+                listOf(1).forEach foo@{
+                    return@foo
+                }
+            }
+            """;
+
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, []);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "foo" && r.ReferenceKind == "annotation");
+    }
+
+    [Fact]
+    public void Extract_CsharpGlobalQualifiedNoArgAttribute_ClassifiedAsAttribute()
+    {
+        // Regression (issue #293 follow-up): `[global::System.Obsolete]` — fully qualified
+        // attribute using the `global::` alias. The no-arg attribute regex must accept both
+        // `.` and `::` as qualifier separators so these references are not silently dropped.
+        // リグレッション (issue #293 補足): `[global::System.Obsolete]` のように `::` で修飾した
+        // 引数なし属性も `attribute` として取り込まれること。
+        const string content = """
+            [global::System.Obsolete]
+            public class C
+            {
+            }
+            """;
+
+        var references = ReferenceExtractor.Extract(1, "csharp", content, []);
+
+        var obsolete = Assert.Single(references.Where(r => r.SymbolName == "Obsolete"));
+        Assert.Equal("attribute", obsolete.ReferenceKind);
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpMultiLineNoArgAttribute_ClassifiedAsAttribute()
+    {
+        // Regression (issue #293 follow-up): multi-line no-arg attribute forms such as
+        // `[\n Serializable\n]`, `[\n global::System.Obsolete\n]`, and `[Serializable,\n Obsolete]`
+        // must still classify as `attribute`. The attribute range pre-pass already tracks the
+        // section across line breaks; the no-arg regex must not reject identifiers just because
+        // the opening `[` or `,` is on a previous line.
+        // リグレッション (issue #293 補足): `[\n Serializable\n]` のように `[` と識別子が別行に
+        // ある複数行形、`[\n global::System.Obsolete\n]` のような `::` 修飾複数行形、そして
+        // `[Serializable,\n Obsolete]` のような行を跨ぐカンマ区切りも `attribute` として取り込まれること。
+        const string content = """
+            [
+                Serializable
+            ]
+            [
+                global::System.Obsolete
+            ]
+            [Required,
+                Key]
+            public class C
+            {
+            }
+            """;
+
+        // Use SymbolExtractor to mirror end-to-end indexing: if SymbolExtractor misclassifies
+        // a bare identifier inside a multi-line attribute section as a top-level symbol, the
+        // reference would be filtered out via the `definitionNames` guard and this test would
+        // catch that regression instead of silently passing with `[]` symbols.
+        // SymbolExtractor を通すことで end-to-end と同じ流れを再現する。複数行属性セクション内の
+        // 裸識別子を誤ってトップレベルのシンボルとして抽出してしまうと `definitionNames` ガードで
+        // 参照が脱落してしまうため、本テストがその退行も検出する。
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var serializable = Assert.Single(references.Where(r => r.SymbolName == "Serializable"));
+        Assert.Equal("attribute", serializable.ReferenceKind);
+        var obsolete = Assert.Single(references.Where(r => r.SymbolName == "Obsolete"));
+        Assert.Equal("attribute", obsolete.ReferenceKind);
+        var required = Assert.Single(references.Where(r => r.SymbolName == "Required"));
+        Assert.Equal("attribute", required.ReferenceKind);
+        var key = Assert.Single(references.Where(r => r.SymbolName == "Key"));
+        Assert.Equal("attribute", key.ReferenceKind);
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpGenericNoArgAttribute_ClassifiedAsAttribute()
+    {
+        // Regression (issue #293 follow-up): generic no-arg C# attributes such as
+        // `[MyAudit<int>]`, `[assembly: MyAttr<string>]`, and multi-line `[\n MyAttr<int>\n]`
+        // must still classify as `attribute`. The no-arg attribute regex must accept an
+        // optional generic argument list after the name so these references are indexed.
+        // リグレッション (issue #293 補足): `[MyAudit<int>]` などのジェネリック引数なし属性、
+        // `[assembly: MyAttr<string>]` のような assembly targeted 形、そして複数行の
+        // `[\n MyAttr<int>\n]` も `attribute` として取り込まれること。
+        const string content = """
+            [assembly: MyAttr<string>]
+            [MyAudit<int>]
+            [
+                MyAttr<int>
+            ]
+            public class C
+            {
+            }
+            """;
+
+        var references = ReferenceExtractor.Extract(1, "csharp", content, []);
+
+        var myAudit = Assert.Single(references.Where(r => r.SymbolName == "MyAudit"));
+        Assert.Equal("attribute", myAudit.ReferenceKind);
+        Assert.Equal(2, references.Count(r => r.SymbolName == "MyAttr" && r.ReferenceKind == "attribute"));
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpNestedGenericNoArgAttribute_ClassifiedAsAttribute()
+    {
+        // Regression (issue #293 round-16 follow-up): nested generic no-arg C#
+        // attributes such as `[MyAttr<Dictionary<string, int>>]` and
+        // `[MyAttr<ValueTuple<int, List<string>>>]` must still classify as
+        // `attribute`. The previous `<[^>\n]+>` generic segment stopped at the
+        // first `>` and left the outer `>` dangling, so nested-generic
+        // attributes were silently dropped from the index.
+        // リグレッション (issue #293 round-16 補足): `[MyAttr<Dictionary<string, int>>]`
+        // のような入れ子ジェネリック引数を持つ引数なし属性も `attribute` として
+        // 取り込まれること。`<...>` 内部で `>` を除外する以前の実装では最初の `>`
+        // で止まってしまい、nested generic 属性が黙って脱落していた。
+        const string content = """
+            [MyAttr<Dictionary<string, int>>]
+            [MyOther<ValueTuple<int, List<string>>>]
+            [
+                MyMulti<Dictionary<string, List<int>>>
+            ]
+            public class C
+            {
+            }
+            """;
+
+        var references = ReferenceExtractor.Extract(1, "csharp", content, []);
+
+        var a = Assert.Single(references.Where(r => r.SymbolName == "MyAttr"));
+        Assert.Equal("attribute", a.ReferenceKind);
+        var b = Assert.Single(references.Where(r => r.SymbolName == "MyOther"));
+        Assert.Equal("attribute", b.ReferenceKind);
+        var c = Assert.Single(references.Where(r => r.SymbolName == "MyMulti"));
+        Assert.Equal("attribute", c.ReferenceKind);
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpNoArgParameterAttribute_ClassifiedAsAttribute()
+    {
+        // Regression (issue #293 follow-up): no-arg parameter attributes such as
+        // `void M([FromServices] IService s)` must still classify as `attribute`.
+        // A previous iteration of the top-level-zone gate tracked paren depth globally
+        // so the attribute section — which opens at global paren depth 1 inside the
+        // method parameter list — never entered top-level. The fix is to track paren
+        // depth section-locally so the section's own `[` / `]` define its zero point.
+        // リグレッション (issue #293 補足): `void M([FromServices] IService s)` のような
+        // 引数なしパラメータ属性も引き続き `attribute` として取り込まれること。
+        const string content = """
+            public class S
+            {
+                public void M([FromServices] IService s) { }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var fromServices = Assert.Single(references.Where(r => r.SymbolName == "FromServices"));
+        Assert.Equal("attribute", fromServices.ReferenceKind);
+        Assert.DoesNotContain(references, r => r.SymbolName == "FromServices" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpNoArgDelegateAndLambdaParameterAttributes_ClassifiedAsAttribute()
+    {
+        // Regression (issue #293 follow-up): no-arg attributes on delegate parameters and
+        // lambda parameters also open their `[` inside outer parens, so they require
+        // section-local paren-depth tracking for top-level zone detection.
+        // リグレッション (issue #293 補足): デリゲート・ラムダの仮引数に付く no-arg 属性も
+        // `(` の中で `[` が開くため、section-local の paren 深さ追跡が必要。
+        const string content = """
+            public delegate void D([Attr] int x);
+            public class C
+            {
+                public void M()
+                {
+                    System.Func<int, int> f = ([Attr] int x) => x;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        // Both occurrences of `Attr` should be classified as `attribute`, not `call`.
+        // 2 箇所の `Attr` が `attribute` として分類され、`call` にはならないこと。
+        var attrs = references.Where(r => r.SymbolName == "Attr").ToList();
+        Assert.Equal(2, attrs.Count);
+        Assert.All(attrs, r => Assert.Equal("attribute", r.ReferenceKind));
+    }
+
+    [Fact]
+    public void Extract_CsharpMultiLineNoArgAttribute_NonLeadingOpenBracket_ClassifiedAsAttribute()
+    {
+        // Regression (issue #293 follow-up): multi-line `[...]` sections that open with `[`
+        // appearing AFTER other text on the opening line (e.g. `void M([`, `class C<[`,
+        // `delegate void D([`) must also blank out the interior in SymbolExtractor. Otherwise
+        // the bare identifier on the interior line is extracted as a phantom `function`
+        // declaration, and the downstream `definitionNames` guard suppresses the real
+        // `attribute` reference, silently dropping it from `references --kind attribute`.
+        // リグレッション (issue #293 補足): 開口行の途中で `[` が開く複数行属性
+        // (`void M([`, `class C<[`, `delegate void D([` 等) も SymbolExtractor 側で
+        // 内部を空白化しなければならない。そうしないと、内部行の裸識別子が phantom な
+        // `function` 宣言として抽出され、下流の `definitionNames` ガードに食われて
+        // 本来の `attribute` 参照が `references --kind attribute` から消える。
+        const string content = """
+            public class Foo
+            {
+                public void M([
+                    FromServices
+                ] IService s) { }
+            }
+
+            public class Bar<[
+                TypeParamAttr
+            ] T>
+            {
+            }
+
+            public delegate void D([
+                DelegateParamAttr
+            ] int x);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        // None of the attribute names should be misclassified as phantom function symbols.
+        // 属性名が phantom な function シンボルとして抽出されていないこと。
+        Assert.DoesNotContain(symbols, s => s.Name == "FromServices" && s.Kind == "function");
+        Assert.DoesNotContain(symbols, s => s.Name == "TypeParamAttr" && s.Kind == "function");
+        Assert.DoesNotContain(symbols, s => s.Name == "DelegateParamAttr" && s.Kind == "function");
+
+        var fromServices = Assert.Single(references.Where(r => r.SymbolName == "FromServices"));
+        Assert.Equal("attribute", fromServices.ReferenceKind);
+
+        var typeParamAttr = Assert.Single(references.Where(r => r.SymbolName == "TypeParamAttr"));
+        Assert.Equal("attribute", typeParamAttr.ReferenceKind);
+
+        var delegateParamAttr = Assert.Single(references.Where(r => r.SymbolName == "DelegateParamAttr"));
+        Assert.Equal("attribute", delegateParamAttr.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpMultiLineAttributeArgumentEnum_NotClassifiedAsAttribute()
+    {
+        // Regression (issue #293 follow-up): identifiers appearing inside the argument list of
+        // a multi-line attribute such as `ConverterStrategy.AllowNumbers` must NOT be recorded
+        // as `attribute` references. Only the attribute-list top level (`[`/`,` boundary, paren
+        // depth 0) is a valid no-arg attribute name position.
+        // リグレッション (issue #293 補足): 複数行属性の引数リスト内にある識別子
+        // (例: `ConverterStrategy.AllowNumbers`) は `attribute` として記録してはならない。
+        // 属性リストの top-level (paren 深さ 0 の `[` / `,` 境界) のみが no-arg 属性名の位置。
+        const string content = """
+            [
+                JsonConverter(
+                    ConverterStrategy.AllowNumbers
+                )
+            ]
+            public class A
+            {
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        // JsonConverter is the only attribute here (with-args, classified by the metadata path).
+        var jsonConverter = Assert.Single(references.Where(r => r.SymbolName == "JsonConverter"));
+        Assert.Equal("attribute", jsonConverter.ReferenceKind);
+
+        // AllowNumbers is an enum member access inside the attribute arguments — it must not be
+        // picked up as a no-arg attribute even though it happens to end at end-of-line inside
+        // the `[...]` section.
+        // AllowNumbers は属性引数内の enum メンバーアクセスなので、no-arg 属性として取り込まれないこと。
+        Assert.DoesNotContain(references, r => r.SymbolName == "AllowNumbers" && r.ReferenceKind == "attribute");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ConverterStrategy" && r.ReferenceKind == "attribute");
+    }
+
+    [Fact]
+    public void Extract_CsharpAliasQualifiedNoArgAttribute_ClassifiedAsAttribute()
+    {
+        // Regression (issue #293 follow-up): `[Alias::MyAttr]` — alias-qualified attribute.
+        // The qualifier separator may be `::` (extern alias) as well as `.`; the name segment
+        // must still be emitted with kind `attribute`.
+        // リグレッション (issue #293 補足): `[Alias::MyAttr]` のように extern alias 修飾された
+        // 引数なし属性も `attribute` として取り込まれること。
+        const string content = """
+            [Alias::MyAttr]
+            public class C
+            {
+            }
+            """;
+
+        var references = ReferenceExtractor.Extract(1, "csharp", content, []);
+
+        var attr = Assert.Single(references.Where(r => r.SymbolName == "MyAttr"));
+        Assert.Equal("attribute", attr.ReferenceKind);
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptDecorator_ClassifiedAsAnnotation()
+    {
+        // Regression (issue #293 follow-up): JavaScript is a graph-supported language, so
+        // its `@Decorator` / `@Decorator()` forms must be reclassified to `annotation` instead
+        // of leaking into call-graph edges. Both bare `@sealed` (no-arg, via the dedicated
+        // regex) and `@injectable()` (via CallRegex + TryClassifyMetadataReference) must end
+        // up as `annotation`.
+        // リグレッション (issue #293 補足): JavaScript も graph 対応言語なので、`@Decorator`
+        // / `@Decorator()` は `annotation` に再分類され、call graph を汚染しないこと。
+        const string content = """
+            @sealed
+            @injectable()
+            class Foo {}
+            """;
+
+        var references = ReferenceExtractor.Extract(1, "javascript", content, []);
+
+        var sealedRef = Assert.Single(references.Where(r => r.SymbolName == "sealed"));
+        Assert.Equal("annotation", sealedRef.ReferenceKind);
+        var injectable = Assert.Single(references.Where(r => r.SymbolName == "injectable"));
+        Assert.Equal("annotation", injectable.ReferenceKind);
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_KotlinQualifiedFieldTargetAnnotation_ClassifiedAsAnnotation()
+    {
+        // issue #293 follow-up: Kotlin use-site target with a fully-qualified annotation
+        // name, e.g. `@field:com.example.Deprecated("msg")`, must be classified as
+        // `annotation` — the dotted qualifier chain plus the `target:` prefix must both
+        // resolve back to `@`.
+        // issue #293 補足: Kotlin の `@field:com.example.Deprecated("msg")` のように use-site
+        // target と修飾付き注釈名が組み合わさった場合も `annotation` 判定になること。
+        const string content = """
+            class Example {
+                @field:com.example.Deprecated("msg")
+                val value: Int = 0
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        var deprecated = Assert.Single(references.Where(r => r.SymbolName == "Deprecated"));
+        Assert.Equal("annotation", deprecated.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_KotlinQualifiedGetTargetAnnotation_ClassifiedAsAnnotation()
+    {
+        // Kotlin `@get:com.fasterxml.jackson.annotation.JsonProperty("x")` — use-site target
+        // combined with a long qualifier chain must still be `annotation`.
+        // Kotlin の `@get:com.fasterxml.jackson.annotation.JsonProperty("x")` も `annotation`。
+        const string content = """
+            class K {
+                @get:com.fasterxml.jackson.annotation.JsonProperty("x")
+                val x: Int = 0
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        var jsonProperty = Assert.Single(references.Where(r => r.SymbolName == "JsonProperty"));
+        Assert.Equal("annotation", jsonProperty.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_KotlinQualifiedAnnotationWithoutTarget_ClassifiedAsAnnotation()
+    {
+        // Regression guard: fully-qualified annotation name without a use-site target, e.g.
+        // `@org.junit.Test(...)`, must still be `annotation`.
+        // 退行防止: use-site target のない `@org.junit.Test(...)` も引き続き `annotation`。
+        const string content = """
+            class K {
+                @org.junit.Test(expected = Exception::class)
+                fun run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        var test = Assert.Single(references.Where(r => r.SymbolName == "Test"));
+        Assert.Equal("annotation", test.ReferenceKind);
     }
 }
