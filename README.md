@@ -77,6 +77,15 @@ That is the whole loop:
 ### Option A: One-liner install (no .NET required)
 
 Works in containers, CI, and any Linux/macOS environment — no .NET SDK needed.
+This includes AI cloud harnesses such as **Claude Code** and **OpenAI Codex**
+containers when they can execute shell commands and reach the release assets.
+For restricted-network cloud sessions, see
+[CLOUD_BOOTSTRAP_PROMPT.md](CLOUD_BOOTSTRAP_PROMPT.md).
+That guide also covers `CDIDX_GITHUB_BASE_URL` /
+`CDIDX_GITHUB_API_BASE_URL` for mirror or proxy installs, plus the isolated
+local-mirror self-test path. The self-test requires `python3` and permission
+to listen on `127.0.0.1`; if the default port is busy, move it with
+`CDIDX_LOCAL_MIRROR_PORT=18766`.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
@@ -952,6 +961,15 @@ cdidx search "handleRequest"
 ### 方法A: ワンライナーインストール（.NET 不要）
 
 コンテナ、CI、Linux/macOS 環境で .NET SDK なしで使えます。
+これは **Claude Code** や **OpenAI Codex** のクラウド実行環境
+（シェル実行とリリース取得が可能な場合）も含みます。ネットワーク制約のある
+クラウドセッション向け手順は
+[CLOUD_BOOTSTRAP_PROMPT.md](CLOUD_BOOTSTRAP_PROMPT.md) を参照してください。
+同ガイドには、mirror / proxy install 用の
+`CDIDX_GITHUB_BASE_URL` / `CDIDX_GITHUB_API_BASE_URL`、隔離された
+local-mirror self-test の使い方、そして `python3` と `127.0.0.1` への
+listen 権限が必要なことも書いてあります。既定ポートが埋まっている場合は
+`CDIDX_LOCAL_MIRROR_PORT=18766` で変更できます。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash

@@ -617,13 +617,51 @@ See [Exit codes](README.md#exit-codes) in README.
 
 > **Maintainers / forkers only** — see [MAINTAINERS.md](MAINTAINERS.md). End users can skip this section.
 
-This section explains — in detail — the mechanism by which a Claude Code
-cloud session that follows [CLOUD_BOOTSTRAP_PROMPT.md](CLOUD_BOOTSTRAP_PROMPT.md)
-ends up with a working `cdidx` binary plus a working SQLite runtime, even
-though the container has no .NET SDK installed. Understanding each layer
-matters because every regression in the install path is invisible to
-anyone who can just run `dotnet build` — the cloud session is the canary
-for the published release experience.
+This section explains — in detail — the mechanism by which a cloud AI coding
+session (for example Claude Code or OpenAI Codex) that follows
+[CLOUD_BOOTSTRAP_PROMPT.md](CLOUD_BOOTSTRAP_PROMPT.md) ends up with a working
+`cdidx` binary plus a working SQLite runtime, even though the container has no
+.NET SDK installed. Understanding each layer matters because every regression
+in the install path is invisible to anyone who can just run `dotnet build` —
+the cloud session is the canary for the published release experience.
+
+The bootstrap prompt now documents three cloud-specific installer knobs that
+matter for maintainers. `CDIDX_GITHUB_BASE_URL` and
+`CDIDX_GITHUB_API_BASE_URL` let restricted-egress sessions swap the release
+download host and latest-release API host independently. The built-in
+`--self-test-local-mirror` path is intentionally isolated from the real
+`~/.local/bin` install unless a non-empty `CDIDX_INSTALL_DIR` is provided. When
+a non-empty `CDIDX_INSTALL_DIR` *is* provided, the self-test now refuses to run
+against risky targets — well-known system paths (`/usr/local/bin`, `/usr/bin`,
+`/opt/homebrew/bin`, `/opt/local/bin`), `$HOME/.local/bin`, and any directory
+that already contains a `cdidx` executable — because the mock payload only
+responds to `--version` and would silently cripple a real install. Unset
+`CDIDX_INSTALL_DIR` to fall back to the isolated temp dir, or pass
+`--self-test-allow-overwrite` on the CLI when you genuinely need to inspect
+the mock layout in place. The escape hatch is intentionally CLI-only — a
+`SELF_TEST_ALLOW_OVERWRITE=1` value inherited from the caller's environment
+is ignored, so a stale env var in the user's shell or CI cannot silently
+reintroduce the bypass. The self-test also still requires `python3` plus
+permission to bind a loopback listener on
+`127.0.0.1`; some sandboxes forbid that outright, in which case the self-test
+must run in a less-restricted shell or against a pre-hosted mirror.
+
+For pre-release validation beyond the mock self-test, `install.sh
+--reinstall-real <version>` downloads and installs the requested release tag
+into an isolated `/tmp/cdidx-reinstall-real.XXXXXX` dir, runs `cdidx --version`
+and verifies the reported version matches the requested tag, then builds a
+tiny scratch Python project in `/tmp/cdidx-reinstall-scratch.XXXXXX` and runs
+`cdidx . --db <scratch>/.cdidx/codeindex.db` followed by
+`cdidx search greet --db <...>` against it and confirms the match payload
+surfaces the scratch symbol. Human-readable output is used on purpose:
+trimmed release builds fail fast with exit code 4 on `--json`, so a validation
+mode that asked for `--json` would never succeed against a real release. This
+exercises the real indexing path (symbol extraction, native SQLite load, FTS5)
+on the freshly-downloaded binary — `--self-test-local-mirror` only stubs
+`--version` and would miss those regressions. `CDIDX_INSTALL_DIR` is
+intentionally ignored by `--reinstall-real` so a broken build can never
+clobber a working real install, and both temp dirs are cleaned up on normal
+exit and on failure via `trap`.
 
 ### The moving parts
 
@@ -1635,11 +1673,15 @@ READMEの[終了コード](README.md#終了コード)セクションを参照し
 
 - **クロスコンパイルの linux-arm64 にランタイムスモークテストがない** — `release.yml` は x64 ランナー上で `linux-arm64` をクロスコンパイルする（`dotnet publish -r linux-arm64 --self-contained`）。ランナーが ARM バイナリをネイティブ実行できないためテストはスキップされる。理想的には QEMU ベースのスモークテスト（`cdidx --version`）をリリース前に実行すべきだが、GitHub Actions の無料枠ランナーには QEMU も ARM ランナーも含まれない。QEMU セットアップステップの追加は可能だが、リリースごとに CI の複雑さと実行時間が増す。.NET のクロスコンパイルは公式サポート機能で広く使われているため、実際に壊れたアーティファクトが出るリスクは低い。将来 ARM 固有の不具合が報告された場合、`docker run --platform linux/arm64` と QEMU の組み合わせが最初の対策となる。
 
-## Cloud Claude Code bootstrap（.NET SDK なし）
+## Cloud AI コーディングハーネス bootstrap（Claude Code / Codex、.NET SDK なし）
 
 > **Maintainer・forker 向け** — 全体の索引は [MAINTAINERS.md](MAINTAINERS.md) を参照。エンドユーザーは読み飛ばして構いません。
 
-このセクションでは、[CLOUD_BOOTSTRAP_PROMPT.md](CLOUD_BOOTSTRAP_PROMPT.md) に従う Claude Code のCloud セッションが、.NET SDK がインストールされていないコンテナにもかかわらず、動作する `cdidx` バイナリと SQLite ランタイムを手に入れるまでの仕組みを詳述する。インストールパスのリグレッションは `dotnet build` が動く環境では不可視なため、Cloud セッションは公開リリース体験のカナリアとなる（「炭鉱のカナリア」に由来する比喩。ここでいうカナリアはペットとして飼われる小型の鳴鳥で、体が小さく呼吸も速いため人間より遥かに少ない量の有毒ガスで中毒症状を起こす。かつて炭鉱ではこの性質を利用し、人間より先に一酸化炭素などの有毒ガスに反応して鳴き止む・倒れるカナリアを坑内に連れて入り、作業員がまだ気付けない危険を早期に検知する生体センサーとして使っていた。そこから転じて IT では、本番のユーザーが被害を受ける前に異常を真っ先に検知する役割を指す）。各層を理解することが重要である理由はここにある。
+このセクションでは、[CLOUD_BOOTSTRAP_PROMPT.md](CLOUD_BOOTSTRAP_PROMPT.md) に従う Cloud AI コーディングセッション（例: Claude Code / OpenAI Codex）が、.NET SDK がインストールされていないコンテナにもかかわらず、動作する `cdidx` バイナリと SQLite ランタイムを手に入れるまでの仕組みを詳述する。インストールパスのリグレッションは `dotnet build` が動く環境では不可視なため、Cloud セッションは公開リリース体験のカナリアとなる（「炭鉱のカナリア」に由来する比喩。ここでいうカナリアはペットとして飼われる小型の鳴鳥で、体が小さく呼吸も速いため人間より遥かに少ない量の有毒ガスで中毒症状を起こす。かつて炭鉱ではこの性質を利用し、人間より先に一酸化炭素などの有毒ガスに反応して鳴き止む・倒れるカナリアを坑内に連れて入り、作業員がまだ気付けない危険を早期に検知する生体センサーとして使っていた。そこから転じて IT では、本番のユーザーが被害を受ける前に異常を真っ先に検知する役割を指す）。各層を理解することが重要である理由はここにある。
+
+bootstrap prompt では、maintainer が押さえるべき cloud 向け installer knob も明示している。`CDIDX_GITHUB_BASE_URL` と `CDIDX_GITHUB_API_BASE_URL` は、egress 制限付きセッションで release download host と latest-release API host を別々に差し替えるためのもの。組み込みの `--self-test-local-mirror` 経路は、非空の `CDIDX_INSTALL_DIR` を与えない限り実 `~/.local/bin` install を汚さないよう隔離されている。非空の `CDIDX_INSTALL_DIR` が *指定されている* ときも、self-test はリスクのある対象 — よく使われるシステムパス（`/usr/local/bin`、`/usr/bin`、`/opt/homebrew/bin`、`/opt/local/bin`）、`$HOME/.local/bin`、そして既に `cdidx` 実体が存在する任意のディレクトリ — への書き込みを拒否して abort する。mock payload は `--version` にしか応答しないため、実インストールが無言で機能不全になるのを防ぐためである。隔離された tempdir に戻すなら `CDIDX_INSTALL_DIR` を unset すればよく、どうしても現地で mock layout を確認したい場合は CLI フラグ `--self-test-allow-overwrite` を渡してガードを解除する。エスケープハッチは意図的に CLI 専用とし、呼び出し側の env に残った `SELF_TEST_ALLOW_OVERWRITE=1` は継承しない（古い env var による silent bypass を防ぐため）。self-test には引き続き `python3` と `127.0.0.1` への loopback listen 権限が必要で、sandbox によっては完全に禁止される。その場合、この self-test はより制約の弱い shell か、事前に用意した mirror に対して実行する必要がある。
+
+mock に頼らないリリース前検証として、`install.sh --reinstall-real <version>` は指定タグを隔離された `/tmp/cdidx-reinstall-real.XXXXXX` にダウンロード・インストールしたうえで、`cdidx --version` を走らせて報告されたバージョンが要求タグと一致することを検証し、さらに `/tmp/cdidx-reinstall-scratch.XXXXXX` に極小の Python プロジェクトを生成して `cdidx . --db <scratch>/.cdidx/codeindex.db` と `cdidx search greet --db <...>` を通し、出力中にスクラッチシンボルが現れることを確認する。出力は人間向けフォーマットを意図的に使う: trimmed release build は `--json` に対して exit code 4 で早期失敗するため、`--json` を要求する検証モードは実リリースでは原理的に成功し得ない。これにより、新しいバイナリの上で実インデックス経路（シンボル抽出、ネイティブ SQLite ロード、FTS5 検索）まで実際に動くかを確認できる。`--self-test-local-mirror` のモックは `--version` しかスタブしないため、インデックスや検索経路の回帰はそちらでは素通りしてしまう。`--reinstall-real` は `CDIDX_INSTALL_DIR` を意図的に無視するので、検証モードで壊れたビルドが実インストールを上書きすることはない。temp インストールディレクトリとスクラッチディレクトリは、正常終了でも失敗でも `trap` によって確実に片付けられる。
 
 ### 構成要素
 
