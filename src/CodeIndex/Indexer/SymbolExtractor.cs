@@ -122,7 +122,25 @@ public static class SymbolExtractor
     private readonly record struct CSharpLexState(
         CSharpLexMode Mode = CSharpLexMode.Code,
         bool EscapeNext = false,
-        int RawDelimiterLength = 0);
+        int RawDelimiterLength = 0,
+        // Interpolation tracking for $@"..." / @$"..." / $"""..."""  / $$"""..."""  etc.
+        // IsInterpolated / InterpolationDollarCount describe the CURRENT string mode
+        // (only meaningful while Mode is a string mode). Return* fields preserve the
+        // outer interpolated string's info while we are inside an interpolation hole
+        // (Mode = Code with InterpolationBraceDepth > 0). Only one level of nesting
+        // is tracked — matches the single-line TrySkipCSharpStringOrCharLiteral
+        // approximation in DbSymbolReader.
+        // 補間 verbatim / raw 文字列のホール追跡。IsInterpolated / InterpolationDollarCount は
+        // 現在のモード（string 系モードのときだけ意味を持つ）を表し、Return* は
+        // ホール内（Mode = Code かつ InterpolationBraceDepth > 0）の間、外側の
+        // 補間文字列情報を退避する。ネストは 1 レベルのみで、単一行版
+        // TrySkipCSharpStringOrCharLiteral と同等の近似とする。
+        bool IsInterpolated = false,
+        int InterpolationDollarCount = 0,
+        int InterpolationBraceDepth = 0,
+        CSharpLexMode InterpolationReturnMode = CSharpLexMode.Code,
+        int InterpolationReturnRawDelimiterLength = 0,
+        int InterpolationReturnDollarCount = 0);
 
     private readonly record struct CSharpLexedLine(
         string SanitizedLine,
@@ -4582,6 +4600,44 @@ public static class SymbolExtractor
             if (state.Mode == CSharpLexMode.VerbatimString)
             {
                 sanitized[i] = ch == '"' ? '"' : ' ';
+
+                // Interpolation hole handling for $@"..." / @$"...".
+                // { opens a hole (unless {{, which is a literal {). Entering a hole
+                // switches to Code mode so inner strings / brackets are parsed normally;
+                // Return* fields preserve the outer verbatim-interp context.
+                // 補間 verbatim 文字列（$@"..." / @$"..."）のホール処理。
+                // { 単独でホール開始（{{ は literal {）。ホール進入時は Code モードへ切替。
+                if (state.IsInterpolated && ch == '{')
+                {
+                    if (next == '{')
+                    {
+                        sanitized[i + 1] = ' ';
+                        i += 2;
+                        continue;
+                    }
+
+                    sanitized[i] = ' ';
+                    state = state with
+                    {
+                        Mode = CSharpLexMode.Code,
+                        InterpolationReturnMode = CSharpLexMode.VerbatimString,
+                        InterpolationReturnRawDelimiterLength = 0,
+                        InterpolationReturnDollarCount = state.InterpolationDollarCount,
+                        InterpolationBraceDepth = 1,
+                        IsInterpolated = false,
+                        InterpolationDollarCount = 0,
+                    };
+                    i++;
+                    continue;
+                }
+
+                if (state.IsInterpolated && ch == '}' && next == '}')
+                {
+                    sanitized[i + 1] = ' ';
+                    i += 2;
+                    continue;
+                }
+
                 if (ch == '"' && next == '"')
                 {
                     sanitized[i + 1] = '"';
@@ -4590,7 +4646,12 @@ public static class SymbolExtractor
                 }
 
                 if (ch == '"')
-                    state = state with { Mode = CSharpLexMode.Code };
+                    state = state with
+                    {
+                        Mode = CSharpLexMode.Code,
+                        IsInterpolated = false,
+                        InterpolationDollarCount = 0,
+                    };
 
                 i++;
                 continue;
@@ -4599,19 +4660,143 @@ public static class SymbolExtractor
             if (state.Mode == CSharpLexMode.RawString)
             {
                 sanitized[i] = ' ';
+
+                // Interpolation hole handling for $"""..."""  (and multi-$ forms).
+                // A run of N consecutive `{` where N = InterpolationDollarCount opens
+                // a hole; fewer are literal string content. Closing mirrors this but
+                // is handled in the Code-mode hole tracking below.
+                // 補間 raw 文字列（$"""..."""  と $$"""..."""  など）のホール処理。
+                // `{` 連続数 N が InterpolationDollarCount と一致したらホール開始。
+                if (state.IsInterpolated && ch == '{')
+                {
+                    var openRun = 0;
+                    while (i + openRun < line.Length && line[i + openRun] == '{')
+                        openRun++;
+
+                    var dollarCount = state.InterpolationDollarCount;
+                    if (openRun >= dollarCount)
+                    {
+                        for (var j = 0; j < dollarCount && i + j < line.Length; j++)
+                            sanitized[i + j] = ' ';
+
+                        state = state with
+                        {
+                            Mode = CSharpLexMode.Code,
+                            InterpolationReturnMode = CSharpLexMode.RawString,
+                            InterpolationReturnRawDelimiterLength = state.RawDelimiterLength,
+                            InterpolationReturnDollarCount = dollarCount,
+                            InterpolationBraceDepth = 1,
+                            IsInterpolated = false,
+                            InterpolationDollarCount = 0,
+                            RawDelimiterLength = 0,
+                        };
+                        i += dollarCount;
+                        continue;
+                    }
+
+                    for (var j = 0; j < openRun && i + j < line.Length; j++)
+                        sanitized[i + j] = ' ';
+                    i += openRun;
+                    continue;
+                }
+
                 if (ch == '"' && HasCSharpQuoteRun(line, i, state.RawDelimiterLength))
                 {
                     var quoteRunLength = GetCSharpQuoteRunLength(line, i);
                     for (var j = 0; j < quoteRunLength && i + j < line.Length; j++)
                         sanitized[i + j] = ' ';
 
-                    state = state with { Mode = CSharpLexMode.Code, RawDelimiterLength = 0 };
+                    state = state with
+                    {
+                        Mode = CSharpLexMode.Code,
+                        RawDelimiterLength = 0,
+                        IsInterpolated = false,
+                        InterpolationDollarCount = 0,
+                    };
                     i += quoteRunLength;
                     continue;
                 }
 
                 i++;
                 continue;
+            }
+
+            // Interpolation hole tracking. Only active when we are inside a hole of
+            // an outer interpolated string (Mode = Code, InterpolationReturnMode set).
+            // { increments depth; } decrements, and at depth 1 tries to close the hole
+            // using the outer string's dollar count.
+            // ホール内の括弧追跡。外側補間文字列のホール内（Mode=Code かつ Return* セット時）
+            // のみ有効。{ で深さ++、} で --。深さ 1 で外側 dollar count を満たせば閉じる。
+            if (state.Mode == CSharpLexMode.Code
+                && state.InterpolationReturnMode != CSharpLexMode.Code
+                && state.InterpolationBraceDepth > 0)
+            {
+                if (ch == '{')
+                {
+                    sanitized[i] = ch;
+                    state = state with { InterpolationBraceDepth = state.InterpolationBraceDepth + 1 };
+                    i++;
+                    continue;
+                }
+
+                if (ch == '}')
+                {
+                    if (state.InterpolationBraceDepth > 1)
+                    {
+                        sanitized[i] = ch;
+                        state = state with { InterpolationBraceDepth = state.InterpolationBraceDepth - 1 };
+                        i++;
+                        continue;
+                    }
+
+                    if (state.InterpolationReturnMode == CSharpLexMode.VerbatimString)
+                    {
+                        sanitized[i] = ' ';
+                        state = state with
+                        {
+                            Mode = CSharpLexMode.VerbatimString,
+                            IsInterpolated = true,
+                            InterpolationDollarCount = state.InterpolationReturnDollarCount,
+                            InterpolationBraceDepth = 0,
+                            InterpolationReturnMode = CSharpLexMode.Code,
+                            InterpolationReturnRawDelimiterLength = 0,
+                            InterpolationReturnDollarCount = 0,
+                        };
+                        i++;
+                        continue;
+                    }
+
+                    if (state.InterpolationReturnMode == CSharpLexMode.RawString)
+                    {
+                        var closeRun = 0;
+                        while (i + closeRun < line.Length && line[i + closeRun] == '}')
+                            closeRun++;
+
+                        var dollarCount = state.InterpolationReturnDollarCount;
+                        if (closeRun >= dollarCount)
+                        {
+                            for (var j = 0; j < dollarCount && i + j < line.Length; j++)
+                                sanitized[i + j] = ' ';
+
+                            state = state with
+                            {
+                                Mode = CSharpLexMode.RawString,
+                                RawDelimiterLength = state.InterpolationReturnRawDelimiterLength,
+                                IsInterpolated = true,
+                                InterpolationDollarCount = dollarCount,
+                                InterpolationBraceDepth = 0,
+                                InterpolationReturnMode = CSharpLexMode.Code,
+                                InterpolationReturnRawDelimiterLength = 0,
+                                InterpolationReturnDollarCount = 0,
+                            };
+                            i += dollarCount;
+                            continue;
+                        }
+
+                        // Not enough } — fall through to normal code handling.
+                        // dollar count に満たない } — 通常の Code ハンドリングへ。
+                    }
+                }
             }
 
             if (ch == '/' && next == '/')
@@ -4646,7 +4831,13 @@ public static class SymbolExtractor
                 for (var j = 0; j < rawPrefixLength + rawDelimiterLength && i + j < line.Length; j++)
                     sanitized[i + j] = ' ';
 
-                state = state with { Mode = CSharpLexMode.RawString, RawDelimiterLength = rawDelimiterLength };
+                state = state with
+                {
+                    Mode = CSharpLexMode.RawString,
+                    RawDelimiterLength = rawDelimiterLength,
+                    IsInterpolated = rawPrefixLength > 0,
+                    InterpolationDollarCount = rawPrefixLength,
+                };
                 i += rawPrefixLength + rawDelimiterLength;
                 continue;
             }
@@ -4655,7 +4846,12 @@ public static class SymbolExtractor
             {
                 sanitized[i] = ' ';
                 sanitized[i + 1] = '"';
-                state = state with { Mode = CSharpLexMode.VerbatimString };
+                state = state with
+                {
+                    Mode = CSharpLexMode.VerbatimString,
+                    IsInterpolated = false,
+                    InterpolationDollarCount = 0,
+                };
                 i += 2;
                 continue;
             }
@@ -4665,7 +4861,12 @@ public static class SymbolExtractor
                 sanitized[i] = ' ';
                 sanitized[i + 1] = ' ';
                 sanitized[i + 2] = '"';
-                state = state with { Mode = CSharpLexMode.VerbatimString };
+                state = state with
+                {
+                    Mode = CSharpLexMode.VerbatimString,
+                    IsInterpolated = true,
+                    InterpolationDollarCount = 1,
+                };
                 i += 3;
                 continue;
             }
@@ -4675,7 +4876,12 @@ public static class SymbolExtractor
                 sanitized[i] = ' ';
                 sanitized[i + 1] = ' ';
                 sanitized[i + 2] = '"';
-                state = state with { Mode = CSharpLexMode.VerbatimString };
+                state = state with
+                {
+                    Mode = CSharpLexMode.VerbatimString,
+                    IsInterpolated = true,
+                    InterpolationDollarCount = 1,
+                };
                 i += 3;
                 continue;
             }

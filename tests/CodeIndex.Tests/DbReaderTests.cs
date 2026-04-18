@@ -4195,6 +4195,16 @@ public class DbReaderTests : IDisposable
     [InlineData("verbatim_inline_close", "[JsonPropertyName(@\"a[\n]\")] public string A { get; set; } = \"\";", 6, 8)]
     [InlineData("raw_inline_close", "[JsonPropertyName(\"\"\"a[\n]\"\"\")] public string A { get; set; } = \"\";", 6, 8)]
     [InlineData("raw_interp_inline_close", "[JsonPropertyName($\"\"\"a[\n]\"\"\")] public string A { get; set; } = \"\";", 6, 8)]
+    // Interpolation-hole cases (#409 follow-up, iteration 4): the sanitizer must
+    // not let quotes / triple-quote runs inside an interpolation hole prematurely
+    // close the outer interpolated string, which would leak the hole's inner
+    // string content as phantom attribute text (e.g. a fake `[JsonIgnore]`).
+    // 補間ホール内の `"` / `"""` 連続が外側の補間文字列を早期終了させて、
+    // ホール内の文字列内容が擬似 attribute（例: 擬似 `[JsonIgnore]`）として
+    // 漏れないことを検証する (#409 iteration 4 回帰)。
+    [InlineData("verbatim_interp_hole_with_dollar_at", "[JsonPropertyName($@\"{\n\"[JsonIgnore]\"}\")]\n    public string A { get; set; } = \"\";", 7, 9)]
+    [InlineData("verbatim_interp_hole_with_at_dollar", "[JsonPropertyName(@$\"{\n\"[JsonIgnore]\"}\")]\n    public string A { get; set; } = \"\";", 7, 9)]
+    [InlineData("raw_interp_hole_with_triple_quote_run", "[JsonPropertyName($\"\"\"{\n\"\"\"[JsonIgnore]\"\"\"}\"\"\")]\n    public string A { get; set; } = \"\";", 7, 9)]
     public void GetUnusedSymbols_MultilineAttributeLiteralWithBracketInString_KeepsReflectionContext(string label, string attributeAndDeclaration, int aLine, int bLine)
     {
         // Regression for #409 — multi-line verbatim / raw / raw-interpolated string
