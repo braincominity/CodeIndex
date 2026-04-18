@@ -373,7 +373,7 @@ public sealed class InstallScriptTests : IDisposable
 
         Assert.Equal(1, exitCode);
         Assert.Contains("Fetching latest release version", stdout);
-        Assert.Contains("GitHub API rate limit exceeded while fetching the latest release", stderr);
+        Assert.Contains("GitHub API rate limit exceeded while fetching", stderr);
         Assert.Contains("pass an explicit version", stderr);
         Assert.DoesNotContain("Check your network connection", stderr);
     }
@@ -424,7 +424,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("Fetching latest release version", stdout);
         Assert.DoesNotContain("Done!", stdout);
         Assert.DoesNotContain("DOWNLOAD_SHOULD_NOT_RUN", stdout);
-        Assert.Contains("GitHub API rate limit exceeded while fetching the latest release", stderr);
+        Assert.Contains("GitHub API rate limit exceeded while fetching", stderr);
     }
 
     [Fact]
@@ -455,7 +455,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("Fetching latest release version", stdout);
         Assert.DoesNotContain("Done!", stdout);
         Assert.DoesNotContain("DOWNLOAD_SHOULD_NOT_RUN", stdout);
-        Assert.Contains("Network error reaching GitHub while fetching", stderr);
+        Assert.Contains("Network error reaching GitHub API while fetching", stderr);
         Assert.Contains("curl exit 7", stderr);
     }
 
@@ -1300,7 +1300,8 @@ public sealed class InstallScriptTests : IDisposable
 
         Assert.Equal(1, exitCode);
         Assert.Contains("HTTP 404", stderr);
-        Assert.Contains("version v0.99.0 exists and publishes linux-x64 assets", stderr);
+        Assert.Contains("version v0.99.0 exists", stderr);
+        Assert.Contains("linux-x64 assets", stderr);
         Assert.DoesNotContain("Check your network connection", stderr);
     }
 
@@ -1494,6 +1495,82 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Equal(string.Empty, stderr);
         Assert.Contains("Version: v1.2.3", stdout);
         Assert.Contains("https://mirror.example/api/repos/Widthdom/CodeIndex/releases/latest", stdout);
+    }
+
+    [Fact]
+    public void ResolveVersion_ConfiguredApiBase403_PrintsConfiguredEndpointGuidance()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            curl() {
+                local output_path=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o)
+                            output_path="$2"
+                            shift 2
+                            ;;
+                        -w)
+                            shift 2
+                            ;;
+                        *)
+                            shift
+                            ;;
+                    esac
+                done
+
+                printf '{"message":"forbidden"}' > "$output_path"
+                printf '403'
+                return 0
+            }
+
+            resolve_version ""
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_GITHUB_API_BASE_URL"] = "https://mirror.example/api",
+            });
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Fetching latest release version", stdout);
+        Assert.Contains("configured latest-release API (https://mirror.example/api) returned HTTP 403", stderr);
+        Assert.Contains("https://mirror.example/api/repos/Widthdom/CodeIndex/releases/latest", stderr);
+        Assert.DoesNotContain("GitHub API returned HTTP 403", stderr);
+    }
+
+    [Fact]
+    public void DownloadAndInstall_ConfiguredReleaseBaseNetworkFailure_PrintsConfiguredHostGuidance()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "configured_release_base_network_failure");
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            VERSION="v1.2.3"
+            OS_NAME="linux"
+            ARCH_NAME="x64"
+            RID="linux-x64"
+
+            curl() {
+                return 7
+            }
+
+            download_and_install
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+                ["CDIDX_GITHUB_BASE_URL"] = "https://mirror.example/releases",
+            });
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Network error reaching configured release host (https://mirror.example/releases)", stderr);
+        Assert.Contains("https://mirror.example/releases/Widthdom/CodeIndex/releases/download/v1.2.3/CodeIndex-linux-x64.tar.gz", stderr);
+        Assert.DoesNotContain("Network error reaching GitHub", stderr);
     }
 
     [Fact]
@@ -1752,6 +1829,38 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("SELF_TEST_BIND_FAILED", stderr);
         Assert.DoesNotContain("Check your connection or corporate proxy", stderr);
         Assert.DoesNotContain("CDIDX_LOCAL_MIRROR_PORT", stderr);
+    }
+
+    [Fact]
+    public void SelfTestLocalMirror_AddressAlreadyInUse_PrintsPortSpecificGuidance()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "self_test_port_in_use");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            python3() {
+                echo "OSError: [Errno 48] Address already in use" >&2
+                return 1
+            }
+            curl() { :; }
+            main() { echo "MAIN_SHOULD_NOT_RUN"; }
+
+            run_local_mirror_self_test v1.2.3
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(1, exitCode);
+        Assert.DoesNotContain("MAIN_SHOULD_NOT_RUN", stdout);
+        Assert.Contains("Address already in use", stderr);
+        Assert.Contains("CDIDX_LOCAL_MIRROR_PORT", stderr);
+        Assert.Contains("free port", stderr);
     }
 
     [Fact]

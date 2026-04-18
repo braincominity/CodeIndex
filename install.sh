@@ -136,6 +136,22 @@ latest_release_api_url() {
     printf '%s/repos/%s/releases/latest' "$GITHUB_API_BASE_URL" "$REPO"
 }
 
+latest_release_api_diagnostic_label() {
+    if [ "$GITHUB_API_BASE_URL" = "https://api.github.com" ]; then
+        printf '%s' "GitHub API"
+    else
+        printf 'configured latest-release API (%s)' "$GITHUB_API_BASE_URL"
+    fi
+}
+
+release_host_diagnostic_label() {
+    if [ "$GITHUB_BASE_URL" = "https://github.com" ]; then
+        printf '%s' "GitHub release host"
+    else
+        printf 'configured release host (%s)' "$GITHUB_BASE_URL"
+    fi
+}
+
 is_loopback_url() {
     case "$1" in
         http://127.0.0.1:*|https://127.0.0.1:*|http://localhost:*|https://localhost:*)
@@ -184,6 +200,7 @@ release_download_base_url() {
 curl_http_get() {
     local url="$1"
     local output_path="$2"
+    local source_label="${3:-remote host}"
     local http_code
 
     if http_code="$(run_curl_with_optional_loopback_bypass "$url" -sSL -o "$output_path" -w '%{http_code}' "$url")"; then
@@ -194,10 +211,10 @@ curl_http_get() {
 
         case "$curl_status" in
             6|7|28|35|52|56)
-                report_error "Network error reaching GitHub while fetching $url (curl exit $curl_status). Check your connection or corporate proxy."
+                report_error "Network error reaching ${source_label} while fetching $url (curl exit $curl_status). Check your connection, proxy, or configured mirror."
                 ;;
             *)
-                report_error "curl failed while fetching $url (exit $curl_status)."
+                report_error "curl failed while fetching ${source_label} at $url (exit $curl_status)."
                 ;;
         esac
 
@@ -211,14 +228,16 @@ fetch_latest_release_version() {
 
     local api_url="https://api.github.com/repos/${REPO}/releases/latest"
     local api_url
+    local api_label
     api_url="$(latest_release_api_url)"
+    api_label="$(latest_release_api_diagnostic_label)"
     local response_file
     if ! response_file="$(mktemp)"; then
         error "Failed to create temporary file for latest-release lookup."
     fi
 
     local http_code
-    if ! http_code="$(curl_http_get "$api_url" "$response_file")"; then
+    if ! http_code="$(curl_http_get "$api_url" "$response_file" "$api_label")"; then
         rm -f "$response_file"
         return 1
     fi
@@ -230,22 +249,22 @@ fetch_latest_release_version() {
         200) ;;
         403)
             if printf '%s' "$api_response" | grep -qi "rate limit"; then
-                report_error "GitHub API rate limit exceeded while fetching the latest release. Retry later, or pass an explicit version: 'curl ... | bash -s -- vX.Y.Z'."
+                report_error "${api_label} rate limit exceeded while fetching ${api_url}. Retry later, or pass an explicit version: 'curl ... | bash -s -- vX.Y.Z'."
                 return 1
             fi
-            report_error "GitHub API returned HTTP 403 while fetching the latest release. Check your GitHub access or proxy configuration."
+            report_error "${api_label} returned HTTP 403 while fetching ${api_url}. Check the configured API endpoint, credentials, or proxy configuration."
             return 1
             ;;
         404)
-            report_error "GitHub API returned HTTP 404 while fetching the latest release. Check that REPO=${REPO} exists."
+            report_error "${api_label} returned HTTP 404 while fetching ${api_url}. Check that REPO=${REPO} and the configured API base are correct."
             return 1
             ;;
         5??)
-            report_error "GitHub API returned HTTP $http_code while fetching the latest release. GitHub may be temporarily unavailable; retry in a few minutes."
+            report_error "${api_label} returned HTTP $http_code while fetching ${api_url}. The configured API endpoint may be temporarily unavailable; retry in a few minutes."
             return 1
             ;;
         *)
-            report_error "GitHub API returned HTTP $http_code while fetching the latest release."
+            report_error "${api_label} returned HTTP $http_code while fetching ${api_url}."
             return 1
             ;;
     esac
@@ -253,7 +272,7 @@ fetch_latest_release_version() {
     local version
     version="$(extract_release_tag_name "$api_response")"
     if [ -z "$version" ]; then
-        report_error "Could not determine latest version from GitHub API response."
+        report_error "Could not determine latest version from ${api_label} response at ${api_url}."
         return 1
     fi
 
@@ -387,28 +406,30 @@ download_release_file() {
     local url="$1"
     local output_path="$2"
     local description="$3"
+    local release_host_label
+    release_host_label="$(release_host_diagnostic_label)"
 
     local http_code
-    if ! http_code="$(curl_http_get "$url" "$output_path")"; then
+    if ! http_code="$(curl_http_get "$url" "$output_path" "$release_host_label")"; then
         return 1
     fi
 
     case "$http_code" in
         200) ;;
         403)
-            report_error "Failed to download ${description} from $url (HTTP 403). GitHub may be rate-limiting or blocking the request."
+            report_error "Failed to download ${description} from ${release_host_label} at $url (HTTP 403). The configured release host may be blocking or rate-limiting the request."
             return 1
             ;;
         404)
-            report_error "Failed to download ${description} from $url (HTTP 404). Check that version ${VERSION} exists and publishes ${RID} assets."
+            report_error "Failed to download ${description} from ${release_host_label} at $url (HTTP 404). Check that version ${VERSION} exists and that the configured release host publishes ${RID} assets."
             return 1
             ;;
         5??)
-            report_error "Failed to download ${description} from $url (HTTP $http_code). GitHub may be temporarily unavailable; retry in a few minutes."
+            report_error "Failed to download ${description} from ${release_host_label} at $url (HTTP $http_code). The configured release host may be temporarily unavailable; retry in a few minutes."
             return 1
             ;;
         *)
-            report_error "Failed to download ${description} from $url (HTTP $http_code)."
+            report_error "Failed to download ${description} from ${release_host_label} at $url (HTTP $http_code)."
             return 1
             ;;
     esac

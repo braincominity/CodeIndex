@@ -3,13 +3,13 @@
 > **Maintainers / forkers only** — see [MAINTAINERS.md](MAINTAINERS.md). End users running cdidx on their own codebase don't need this file.
 > **Maintainer・forker 向け** — 全体の索引は [MAINTAINERS.md](MAINTAINERS.md) を参照。自分のコードベースに cdidx を使うだけのエンドユーザーには不要です。
 
-Kickoff prompt for Claude Code (cloud / claude.ai/code) sessions that work on
-this repo without a local .NET SDK. Paste the English block or the Japanese
-block — not both — into your session's first message.
+Kickoff prompt for cloud AI coding sessions (for example Claude Code or OpenAI
+Codex) that work on this repo without a local .NET SDK. Paste the English
+block or the Japanese block — not both — into your session's first message.
 
-Cloud 側の Claude Code セッション（.NET SDK が無い前提）に最初に投げる
-プロンプトです。英語ブロックか日本語ブロックの**どちらか一方**を貼り付けて
-ください。両方は貼らないでください。
+Cloud 側の AI コーディングセッション（例: Claude Code / OpenAI Codex、
+.NET SDK が無い前提）に最初に投げるプロンプトです。英語ブロックか日本語
+ブロックの**どちらか一方**を貼り付けてください。両方は貼らないでください。
 
 ---
 
@@ -102,6 +102,13 @@ copies the binary **plus the adjacent runtime assets** (`version.json` and
 `$HOME/.local/bin/`. All three files must end up there — the native SQLite
 library is loaded via P/Invoke from the binary's directory, and
 `version.json` is what `cdidx --version` reads.
+
+### Claude-specific tripwire note
+
+The installer and smoke-test guidance above applies to Claude Code and
+Codex-style shells. The next step is specifically about this repo's
+tracked `.claude/settings.json` tripwire, so it only matters on harnesses
+that enforce those Claude permission rules.
 
 ### Step 1.5 — Invoke `cdidx` via its fully expanded absolute path
 
@@ -308,6 +315,13 @@ bash ./install.sh --self-test-local-mirror
 配置します。3ファイルが揃っている必要があります — ネイティブ SQLite
 ライブラリはバイナリのディレクトリから P/Invoke でロードされ、
 `version.json` は `cdidx --version` が読むファイルです。
+
+### Claude 専用 tripwire メモ
+
+ここまでの installer / smoke test 手順は Claude Code と Codex 系 shell の
+どちらにも当てはまります。次の step は、このリポジトリが追跡している
+`.claude/settings.json` tripwire に関する話なので、その Claude 系 permission
+ルールが効くハーネスでだけ意味があります。
 
 ### Step 1.5 — `cdidx` は完全展開した絶対パスで呼び出す
 
