@@ -1968,16 +1968,15 @@ public partial class DbReader
         // `class MyAuditAttribute { }` だけを除外することで metadata
         // bypass の誤抑止を防ぐ。非 attribute を過剰に含めるが、無効な
         // `[MyFoo]` はコンパイルできないので実参照にはならず実害が無い。
-        // 署名列が無い legacy DB では degrade して class-like 全体を候補にする。
-        var csharpMetadataFilterForF = BuildCSharpMetadataTargetFilter("f");
+        // 署名列が無い legacy DB では degrade して class 限定のみ使う。
+        var metadataTargetKindExprF = BuildMetadataTargetKindExpr("f");
         var sql = $@"
             SELECT COUNT(*) FROM (
                 SELECT DISTINCT f.path, s.line, s.name
                 FROM symbols s
                 JOIN files f ON s.file_id = f.id
                 WHERE s.name = @metadataAmbigName COLLATE NOCASE
-                  AND s.kind IN ('class','struct','interface')
-                  AND ({csharpMetadataFilterForF})
+                  AND {metadataTargetKindExprF}
                   AND {supportedLangFilter}";
         if (lang != null)
         {
@@ -2574,33 +2573,49 @@ public partial class DbReader
         return fallbackSql ?? "NULL";
     }
 
-    // Build the C# metadata-target eligibility predicate used by `deps`
-    // (target_files / target_ambiguity) and `impact` (IsMetadataTargetUnambiguous).
-    // Returns a SQL fragment that evaluates to TRUE when a symbol row under the
-    // given files-table alias should be counted as a plausible `[Attribute]`
-    // target. Transitive base-type resolution isn't available at SQL time, so
-    // we approximate with "has an inheritance clause" — any C# class declared
-    // with a `: ...` base list qualifies (direct `: Attribute`, indirect
-    // `: BaseAudit` where BaseAudit derives from Attribute, or any other
-    // base). Non-inheriting plain classes are excluded. Legacy DBs without a
-    // `symbols.signature` column degrade to the broad class-like set so
-    // read-only / pre-migration indexes do not crash with `no such column`.
-    // `deps` と `impact` で共有する C# metadata-target 適格性判定。基底型を
-    // SQL 時点で遡れないため、「継承節を持つ」を近似とする(直接・間接の
-    // Attribute 継承を両方拾う)。継承のない plain class だけを除外する。
-    // signature 列が無い legacy/read-only DB では判定を無効化し、従来の
-    // class-like 全体を候補集合にするので読み取り失敗しない。
-    private string BuildCSharpMetadataTargetFilter(string fileAlias)
+    // Build the language-aware metadata-target eligibility predicate used by
+    // `deps` (target_files / target_ambiguity) and `impact`
+    // (IsMetadataTargetUnambiguous). Returns a SQL fragment that evaluates to
+    // TRUE when a `(symbols s, files <fileAlias>)` row should be counted as a
+    // plausible metadata target (`[Attribute]` / `@Annotation` / `@decorator`).
+    // Rules by language:
+    //   - C# (`csharp`): only `kind = 'class'` with an inheritance clause
+    //     (signature LIKE '%: %'). `struct` / `interface` cannot be attribute
+    //     targets even when they share the `MyAuditAttribute` name, so they
+    //     must not count toward the ambiguity guard or produce metadata
+    //     edges. Transitive base-type resolution is not available at SQL
+    //     time, so "has an inheritance clause" is the portable approximation
+    //     for direct `: Attribute` plus indirect `: BaseAudit` where
+    //     BaseAudit itself derives from Attribute. Legacy DBs without a
+    //     `symbols.signature` column degrade to `kind = 'class'` only so
+    //     read-only / pre-migration indexes still return a result instead of
+    //     crashing with `no such column`.
+    //   - JS / TS (`javascript` / `typescript`): decorators legitimately
+    //     target both class-like constructs AND factory `function`
+    //     definitions (e.g. `function sealed(target) {}` used as
+    //     `@sealed class Foo {}`), so `function` must be accepted too.
+    //   - Everything else (Java `@interface`, Kotlin `annotation class`,
+    //     Scala annotation classes, etc.): the annotation target is a
+    //     class-like declaration, so keep the original class-like candidate
+    //     set (`class` / `struct` / `interface`).
+    // `deps` と `impact` で共有する言語別 metadata-target 適格性判定。
+    // C# は class 限定 + 継承節チェック(signature 列欠落時は class 限定のみ)。
+    // JS / TS は decorator が function factory も対象にするため function を許容。
+    // それ以外は従来どおり class-like を候補にする。
+    private string BuildMetadataTargetKindExpr(string fileAlias)
     {
-        if (!_symbolColumns.Contains("signature"))
-        {
-            // Legacy schema — no signature column available. Fall back to the
-            // pre-metadata-eligibility behavior so `deps`/`impact` still return
-            // results rather than crashing.
-            // signature 列が無い legacy schema — filter を無効化して従来挙動に戻す。
-            return "1 = 1";
-        }
-        return $"{fileAlias}.lang != 'csharp' OR (s.signature IS NOT NULL AND s.signature LIKE '%: %')";
+        // C# clause — class only (interface/struct cannot be attribute targets).
+        // C# は class のみ（interface/struct は attribute target にできない）。
+        var csharpClause = _symbolColumns.Contains("signature")
+            ? $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND s.signature IS NOT NULL AND s.signature LIKE '%: %')"
+            : $"({fileAlias}.lang = 'csharp' AND s.kind = 'class')";
+        // JS / TS clause — decorators target classes and factory functions.
+        // JS / TS は decorator が class と factory function を対象にする。
+        var jsClause = $"({fileAlias}.lang IN ('javascript','typescript') AND s.kind IN ('class','struct','interface','function'))";
+        // All other graph-supported languages keep the original class-like set.
+        // その他の graph 対応言語は従来どおり class-like を対象にする。
+        var otherClause = $"({fileAlias}.lang NOT IN ('csharp','javascript','typescript') AND s.kind IN ('class','struct','interface'))";
+        return $"({csharpClause} OR {jsClause} OR {otherClause})";
     }
 
     /// <summary>
@@ -2739,8 +2754,7 @@ public partial class DbReader
                        dst.lang AS target_lang,
                        s.name AS symbol_name,
                        MAX(CASE WHEN s.kind IN ('class','struct','interface') THEN 1 ELSE 0 END) AS has_class_like_kind,
-                       MAX(CASE WHEN s.kind IN ('class','struct','interface')
-                                 AND (" + BuildCSharpMetadataTargetFilter("dst") + @")
+                       MAX(CASE WHEN " + BuildMetadataTargetKindExpr("dst") + @"
                                 THEN 1 ELSE 0 END) AS has_metadata_target_kind
                 FROM symbols s
                 JOIN files dst ON s.file_id = dst.id
@@ -2814,16 +2828,16 @@ public partial class DbReader
                 JOIN symbols s
                   ON s.file_id = dst.id
                  AND s.name = tf.symbol_name
-                 AND s.kind IN ('class','struct','interface')
-                 -- Same C# metadata-eligibility filter as target_files: a C# class
-                 -- must have an inheritance clause to qualify as an attribute-target
-                 -- candidate (covers direct : Attribute and indirect : BaseAudit
-                 -- inheritance). Non-inheriting plain classes are not valid targets
-                 -- and should not contribute to the ambiguity count.
-                 -- target_files と同じ適格性フィルタ。C# クラスは継承節を持つときだけ
-                 -- 候補になる(直接 : Attribute も、間接 : BaseAudit も救う)。
-                 -- 継承のない plain class は候補から外し ambiguity を誤判定しない。
-                 AND (" + BuildCSharpMetadataTargetFilter("dst") + @")
+                 -- Same language-aware metadata-eligibility filter as
+                 -- target_files: C# restricts to `class` with inheritance
+                 -- clause (interface/struct cannot be attribute targets);
+                 -- JS/TS additionally accepts `function` (decorator
+                 -- factory); others keep the class-like candidate set.
+                 -- target_files と同じ言語別 metadata 適格性フィルタ。
+                 -- C# は class 限定 + 継承節 (interface/struct は除外)。
+                 -- JS/TS は decorator factory 用に function も許容。
+                 -- それ以外は class-like 全体を候補にする。
+                 AND " + BuildMetadataTargetKindExpr("dst") + @"
                 WHERE tf.has_metadata_target_kind = 1
                 GROUP BY tf.target_lang, tf.symbol_name
             ),

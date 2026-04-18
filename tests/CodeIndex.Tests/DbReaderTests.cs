@@ -3325,6 +3325,80 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetFileDependencies_JavaScriptFunctionDecorator_ResolvesAsDependency()
+    {
+        // issue #293 round-18: JavaScript/TypeScript decorators legitimately target
+        // factory `function`s (e.g. `function sealed(target) { ... }`), not only
+        // class-like definitions. The metadata-target predicate must accept
+        // `function` for JS/TS or decorator edges to a function target are dropped
+        // from `deps`.
+        // issue #293 round-18: JS/TS decorator は `function sealed(target){...}` のような
+        // factory 関数も正当な target となる。JS/TS では `function` を metadata target の
+        // 対象 kind として許可しないと、function を対象とする decorator edge が deps から欠落する。
+        InsertIndexedFile("src/decorators.js", "javascript",
+            """
+            export function sealed(target) {
+                Object.freeze(target);
+            }
+            """);
+        InsertIndexedFile("src/model.js", "javascript",
+            """
+            import { sealed } from './decorators.js';
+
+            @sealed
+            class Foo {
+            }
+            """);
+
+        var deps = _reader.GetFileDependencies(
+            limit: 50,
+            lang: "javascript");
+
+        Assert.Contains(deps, d =>
+            d.SourcePath == "src/model.js" &&
+            d.TargetPath == "src/decorators.js");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharp_SameNameInterface_DoesNotBlockMetadataEdge()
+    {
+        // issue #293 round-18: ambiguity should only count truly attribute-eligible
+        // duplicates. In C#, only `class` can inherit from `System.Attribute` —
+        // a same-named `interface` or `struct` cannot be an attribute target, so it
+        // must not suppress the metadata deps edge to the legitimate attribute class.
+        // issue #293 round-18: ambiguity 判定は attribute 適格な重複だけを数えるべき。
+        // C# では `class` のみが `System.Attribute` を継承できるため、同名の
+        // `interface` や `struct` が存在しても metadata deps edge を抑止してはならない。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/IMyAudit.cs", "csharp",
+            """
+            public interface MyAuditAttribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var deps = _reader.GetFileDependencies(
+            limit: 50,
+            lang: "csharp");
+
+        Assert.Contains(deps, d =>
+            d.SourcePath == "src/Svc.cs" &&
+            d.TargetPath == "src/MyAuditAttribute.cs");
+    }
+
+    [Fact]
     public void GetFileDependencyHints_MetadataBypassAmbiguityGuard_RespectsExcludeTests()
     {
         // issue #293 round-11 follow-up: ambiguity guard must honor
