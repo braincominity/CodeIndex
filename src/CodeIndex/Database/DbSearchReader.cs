@@ -79,23 +79,38 @@ public partial class DbReader
     {
         // Exclude symbol categories up front so emoji / pictographs / currency marks
         // never trigger CJK prefix fallback even if they live inside CJK-adjacent blocks.
-        // `OtherNotAssigned` (Cn) is deliberately NOT excluded: .NET's Unicode tables lag
-        // the Unicode Consortium's releases, so recently assigned codepoints (e.g. Extension I
-        // at U+2EBF0..U+2EE5F, assigned in Unicode 15.1) still report as Cn on .NET 8.
-        // Promoting those codepoints through the block-envelope ranges below matches what
-        // unicode61 actually indexes with its Unicode 9.0 tables; excluding Cn here would
-        // silently regress real CJK codepoints simply because the runtime has not caught up.
-        // Truly unassigned codepoints inside block-envelope ranges are harmless: unicode61
-        // drops them from indexed content, so no match can occur either way.
+        // `OtherNotAssigned` (Cn) is deliberately NOT excluded. The simple reason is that
+        // .NET's Unicode tables lag the Unicode Consortium's releases — codepoints newly
+        // assigned by Unicode (e.g. Extension I at U+2EBF0..U+2EE5F, assigned in Unicode
+        // 15.1) still report as Cn on .NET 8 — so excluding Cn here would silently regress
+        // real CJK codepoints simply because the runtime has not caught up. The subtler
+        // reason is that SQLite's bundled `unicode61` tokenizer carries its own (different
+        // and older) Unicode tables: empirical verification through the locally built
+        // binary on .NET 8 shows that codepoints which .NET reports as Cn inside the
+        // block-envelope ranges below (e.g. Tangut's reserved U+187F8..U+187FF, Khitan's
+        // reserved U+18CD6..U+18CFF, Tangut Supplement's reserved U+18D09..U+18D8F) are
+        // still kept as word characters by unicode61 during indexing. Allowing them to
+        // prefix-promote is therefore not only safe but necessary: it preserves the same
+        // "`search <codepoint>` must match a chunk containing `<codepoint>abc`" invariant
+        // that the whole #198 fix is built on. Truly unreachable codepoints (ones that
+        // neither .NET nor unicode61 treat as word characters) cannot produce a match even
+        // if the predicate returns true, because FTS5's query tokenizer drops them on its
+        // own side.
         // シンボル系カテゴリは先に除外。emoji等がCJK隣接ブロックにあってもprefix fallbackを起こさせない。
-        // `OtherNotAssigned` (Cn) は意図的に除外しない。.NET の Unicode テーブルは Unicode
-        // Consortium のリリースに遅れるため、新しく割り当てられたコードポイント（例: Unicode
-        // 15.1 で追加された Extension I の U+2EBF0..U+2EE5F）でも .NET 8 では依然として Cn と
-        // 報告される。それらを下のブロックベース範囲で promote する方が、unicode61（Unicode 9.0
-        // テーブル）の実際のインデックス挙動と整合する。ここで Cn を除外すると、ランタイム側の
-        // テーブル更新遅延だけを理由に実在の CJK コードポイントが静かに regressions する。ブロック
-        // ベース範囲内の本当に未割当なコードポイントは無害 — unicode61 がインデックス側で drop
-        // するため、どちらにしてもマッチは発生しない。
+        // `OtherNotAssigned` (Cn) は意図的に除外しない。単純な理由: .NET の Unicode テーブルは
+        // Unicode Consortium のリリースに遅れるため、Unicode で新たに割り当てられた
+        // コードポイント（例: Unicode 15.1 で追加された Extension I の U+2EBF0..U+2EE5F）も
+        // .NET 8 では依然として Cn と報告される。ここで Cn を除外すると、ランタイム側のテーブル
+        // 更新遅延だけを理由に実在の CJK コードポイントが静かに regressions する。踏み込んだ理由:
+        // SQLite 同梱の `unicode61` トークナイザは .NET とは別の（そしてより古い）Unicode
+        // テーブルを持っており、ローカルビルドしたバイナリを .NET 8 で動かして検証した結果、
+        // .NET が Cn と報告する「ブロック末尾の予約領域」のコードポイント (例: Tangut の
+        // U+187F8..U+187FF、Khitan の U+18CD6..U+18CFF、Tangut Supplement の
+        // U+18D09..U+18D8F) も unicode61 は indexing 側で単語文字として保持する。よってこれらを
+        // prefix 昇格の対象に含めるのは安全かつ必要で、#198 の根幹不変条件「`search <codepoint>`
+        // は `<codepoint>abc` を含むチャンクに必ずヒットする」を壊さないための前提になっている。
+        // 本当に到達不能なコードポイント（.NET も unicode61 も単語文字として扱わないもの）は、
+        // 述語が true を返しても FTS5 側のクエリトークナイザが落とすので一致は発生しない。
         var category = Rune.GetUnicodeCategory(rune);
         if (category is UnicodeCategory.OtherSymbol
                      or UnicodeCategory.MathSymbol
@@ -170,11 +185,16 @@ public partial class DbReader
         // Unicode groups with / adjacent to CJK. Each Unicode block is listed as its own
         // branch so (a) regression tests can exercise one branch at a time and (b) future
         // narrowing or widening of any single block does not drag the others. Block-envelope
-        // ranges cover each block's full allocated space including small unassigned trailing
-        // holes (e.g. Tangut's U+187F8..U+187FF, Khitan Small Script's U+18CD6..U+18CFF,
-        // Tangut Supplement's U+18D09..U+18D8F on the current runtime Unicode tables); the
-        // holes are harmless because unicode61 drops unassigned codepoints from indexed
-        // content, so no spurious match can occur through a prefix-promoted query.
+        // ranges cover each block's full Unicode-block bounds including the small reserved
+        // holes at each block's tail (e.g. Tangut's U+187F8..U+187FF, Khitan Small Script's
+        // U+18CD6..U+18CFF, Tangut Supplement's U+18D09..U+18D8F, which .NET 8 reports as
+        // Cn on today's runtime tables). Empirically — verified through the locally built
+        // binary on .NET 8 — unicode61 still keeps those codepoints as word characters
+        // during indexing, so content containing `<hole-codepoint>abc` is indexed as a
+        // single token and needs prefix promotion to satisfy the same #198 invariant.
+        // Prefix-promoting these holes therefore produces correct behavior: if the
+        // codepoint appears in indexed content, the search finds it; if it does not, FTS5
+        // simply returns no rows.
         //   * Yi Syllables (U+A000..U+A48F, Lo — Nuosu syllabary)
         //   * Tangut (U+17000..U+187FF, Lo — Western Xia logographs, non-BMP)
         //   * Tangut Components (U+18800..U+18AFF, Lo — non-BMP)
@@ -195,9 +215,14 @@ public partial class DbReader
         // 東アジアの歴史的文字で unicode61 が単語文字として扱い、Unicode 上も CJK 隣接に
         // 配置されているブロック。将来いずれかを絞ったり広げたりしても他ブロックが巻き添えに
         // ならないよう、Unicode ブロック単位で個別分岐にする。ブロックベース範囲は各ブロックの
-        // 割当境界全域を覆うので、末尾の小さな未割当領域 (例: Tangut の U+187F8..U+187FF、Khitan
-        // の U+18CD6..U+18CFF、Tangut Supplement の U+18D09..U+18D8F) も含まれるが、未割当
-        // コードポイントは unicode61 がインデックス側で drop するため、prefix 昇格クエリでも誤マッチは起こらない。
+        // Unicode ブロック境界全域を覆うので、末尾の小さな予約領域（例: Tangut の
+        // U+187F8..U+187FF、Khitan の U+18CD6..U+18CFF、Tangut Supplement の U+18D09..U+18D8F、
+        // いずれも現行の .NET 8 ランタイムでは Cn）も含まれる。ローカルビルドしたバイナリを
+        // .NET 8 で動かして実証した結果、これらの予約領域コードポイントも unicode61 は
+        // indexing 側で単語文字として保持する。したがって `<予約領域>abc` を含むコンテンツは
+        // 単一トークンとしてインデックスされ、#198 と同じ不変条件を満たすには prefix 昇格が必要。
+        // 予約領域を prefix 昇格してもコンテンツ中にそのコードポイントが現れれば一致するだけで、
+        // 存在しなければ FTS5 は単に 0 行を返す — どちらも期待される挙動で誤マッチにはならない。
         //   * Yi Syllables (U+A000..U+A48F, Lo — 中国南西部のノス族音節文字)
         //   * Tangut (U+17000..U+187FF, Lo — 西夏の表意文字、非 BMP)
         //   * Tangut Components (U+18800..U+18AFF, Lo — 非 BMP)
