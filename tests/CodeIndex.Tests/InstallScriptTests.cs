@@ -2676,8 +2676,15 @@ public sealed class InstallScriptTests : IDisposable
             #!/usr/bin/env bash
             case "\$1" in
                 --version)
-                    echo "INVOKED_VERSION"
+                    # First non-empty line must match `cdidx v<ver>` because
+                    # run_reinstall_real enforces the first-line shape; the
+                    # INVOKED_VERSION marker follows so the test can still
+                    # assert the stub was invoked.
+                    # run_reinstall_real の先頭行形式チェックに合わせて
+                    # `cdidx v<ver>` を先頭に置き、INVOKED_VERSION はその後に
+                    # 出して stub 呼び出し確認に使う。
                     echo "cdidx v1.2.3"
+                    echo "INVOKED_VERSION"
                     ;;
                 search)
                     printf 'invoked' > "{{searchSentinel}}"
@@ -2966,6 +2973,97 @@ public sealed class InstallScriptTests : IDisposable
                     # かつ 'greet' を含む診断文が同居するケース。行頭アンカーで
                     # 除外する必要がある。
                     printf '%s\n%s\n' "other/sample.py:1" "searching for greet returned 0 matches"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("did not return a structured match", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_VersionDiagnosticOnlyRequestedToken_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version)
+                    # Diagnostic-only output whose sole v<semver> token equals
+                    # the requested one but does NOT represent the binary's
+                    # actual reported version. First-line form check must reject.
+                    # v<semver> token は要求版と一致するものの、実バイナリの
+                    # バージョン行ではなく診断文のみというケース。先頭行形式
+                    # チェックで弾く必要がある。
+                    echo "see /releases/v1.2.3/notes for details"
+                    ;;
+                search) echo "sample.py:1: def greet(name):" ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("first non-empty line of cdidx --version must start with", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_SearchHeaderPlusDiagnosticGreet_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)
+                    # Split-evidence false positive: structured header for the
+                    # correct path on one line, but no indented snippet line
+                    # under it — 'greet' appears only on a separate non-indented
+                    # diagnostic line. The awk state machine must require greet
+                    # to appear on a 2-space-indented line belonging to the
+                    # header's match block.
+                    # ヘッダ行は正しいパスだが、`greet` は別の非インデント診断行に
+                    # しか存在しない split-evidence ケース。awk の state machine で
+                    # ヘッダブロック内の 2 スペースインデント行の `greet` のみを拾う。
+                    printf '%s\n%s\n' "sample.py:1-6" "warning: greet query returned 0 matches"
                     ;;
                 *)
                     if [ "$2" = "--db" ] && [ -n "$3" ]; then

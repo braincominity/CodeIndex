@@ -1088,6 +1088,28 @@ run_reinstall_real() {
     if [ "$reinstall_found_versions" != "v${reinstall_expected_version}" ]; then
         error "Real reinstall validation: expected exactly one version token v${reinstall_expected_version} in output, got: ${reinstall_version_output:-<empty>}."
     fi
+    # Token enumeration alone still false-passes a diagnostic-only output
+    # whose single extracted token happens to equal the requested tag but
+    # does not represent the binary's own reported version, e.g.
+    # "warning: expected package v1.2.3" or "see /releases/v1.2.3/notes".
+    # Real `cdidx --version` output is literally `cdidx v<ver>` on the
+    # first line (verified against the current build), so require that the
+    # first non-empty line starts with `${BINARY_NAME} v<requested>` with
+    # either end-of-line or whitespace after the version — that pins the
+    # requested tag to the actual version line rather than free-form text
+    # that merely mentions it.
+    # single-token の診断文だけで silent pass しないよう、`cdidx --version` の
+    # 先頭非空行が `${BINARY_NAME} v<要求版>` 形式で始まることも要求する
+    # （実バイナリの `--version` 出力は `cdidx v<ver>` の 1 行）。
+    local reinstall_first_version_line
+    reinstall_first_version_line="$(printf '%s\n' "$reinstall_version_output" | awk 'NF { print; exit }')"
+    case "$reinstall_first_version_line" in
+        "${BINARY_NAME} v${reinstall_expected_version}"|"${BINARY_NAME} v${reinstall_expected_version} "*)
+            ;;
+        *)
+            error "Real reinstall validation: first non-empty line of ${BINARY_NAME} --version must start with '${BINARY_NAME} v${reinstall_expected_version}' but got: ${reinstall_first_version_line:-<empty>}."
+            ;;
+    esac
 
     # Build a tiny scratch project and exercise `cdidx . --db <tmp>` so that
     # the validation covers the real indexing path (symbol extraction, SQLite
@@ -1132,24 +1154,47 @@ PY
     if ! reinstall_search_output="$("$reinstall_cdidx" search greet --db "$scratch_db" 2>&1)"; then
         error "Real reinstall validation: ${BINARY_NAME} search returned a non-zero exit code."
     fi
-    # Require a structured match line anchored at the scratch file path AND
-    # containing the matched token. A successful human-readable search
-    # prints something like "sample.py:1-2" (path header at column 0)
-    # followed on a later line by "  def greet(name):". Anchoring the
-    # regex to "^sample\.py:" rejects diagnostic text such as "searching
-    # for greet returned 0 matches" and path-prefixed false positives such
-    # as "other/sample.py:1". A separate substring check then pins the
-    # matched token so an unrelated index hit cannot false-pass either.
-    # 0 件の診断文や `other/sample.py:1` のような path prefix での false pass を
-    # 避けるため、行頭の `sample.py:<line>` を要求し、さらに 'greet' の
-    # 出現も併せて確認する。
-    if ! printf '%s\n' "$reinstall_search_output" | grep -qE '^sample\.py:[0-9]'; then
-        error "Real reinstall validation: ${BINARY_NAME} search did not return a structured match anchored at the scratch project's sample.py path. Output: ${reinstall_search_output:-<empty>}."
+    # Require a structured match block anchored at the scratch file path AND
+    # containing the matched token on an indented snippet line that belongs
+    # to the SAME match block. A successful human-readable search prints:
+    #     sample.py:1-2
+    #       def greet(name):
+    #           return "hello"
+    # where the path header is at column 0 and the snippet lines are indented
+    # with two spaces. A split-evidence false pass like
+    #     sample.py:1-6
+    #     warning: greet query returned 0 matches
+    # would satisfy two independent checks (`^sample\.py:` + `*greet*`) but
+    # does not represent a real FTS hit. The awk state machine below enters
+    # "match block" mode only when it sees `^sample\.py:<digit>`, looks for
+    # `greet` in a subsequent indented line (`^  `), and exits the block on
+    # any non-indented / non-empty line such as the summary `(N results ...)`
+    # footer. This couples both predicates to the same structured output
+    # region without requiring the header line itself to contain the token.
+    # 構造化ヘッダ `^sample\.py:<digit>` と、そのブロック内のインデント済み
+    # スニペット行に現れる 'greet' を 1 つの状態機械でまとめて検証することで、
+    # `sample.py:...` と `greet` 診断文を別行に置いた split-evidence の
+    # false pass も弾く。ブロックの終端は空行またはインデント無しの次行。
+    if ! printf '%s\n' "$reinstall_search_output" | awk '
+        /^sample\.py:[0-9]/ {
+            # Single-line "grep-like" form "sample.py:1: def greet(name):"
+            # where the header line itself carries the snippet.
+            # ヘッダ行自体に snippet が載る単一行フォーマット。
+            if ($0 ~ /greet/) { found = 1; exit 0 }
+            # Multi-line human-readable form where the header is followed by
+            # indented snippet lines; enter block mode and look for greet
+            # on a two-space-indented line before the block terminates on
+            # any non-indented or blank line (e.g. summary footer).
+            # ヘッダ行と 2 スペースインデントされた snippet の複数行フォーマット。
+            in_block = 1
+            next
+        }
+        /^  .*greet/ { if (in_block) { found = 1; exit 0 } }
+        /^[^ ]/ || /^$/ { in_block = 0 }
+        END { exit (found ? 0 : 1) }
+    '; then
+        error "Real reinstall validation: ${BINARY_NAME} search did not return a structured match block at sample.py containing a snippet line for 'greet'. Output: ${reinstall_search_output:-<empty>}."
     fi
-    case "$reinstall_search_output" in
-        *greet*) ;;
-        *) error "Real reinstall validation: ${BINARY_NAME} search output did not mention the 'greet' symbol." ;;
-    esac
 
     info "Real reinstall validation passed for ${version}."
 }
