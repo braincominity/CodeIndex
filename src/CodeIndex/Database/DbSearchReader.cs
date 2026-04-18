@@ -79,7 +79,23 @@ public partial class DbReader
     {
         // Exclude symbol categories up front so emoji / pictographs / currency marks
         // never trigger CJK prefix fallback even if they live inside CJK-adjacent blocks.
+        // `OtherNotAssigned` (Cn) is deliberately NOT excluded: .NET's Unicode tables lag
+        // the Unicode Consortium's releases, so recently assigned codepoints (e.g. Extension I
+        // at U+2EBF0..U+2EE5F, assigned in Unicode 15.1) still report as Cn on .NET 8.
+        // Promoting those codepoints through the block-envelope ranges below matches what
+        // unicode61 actually indexes with its Unicode 9.0 tables; excluding Cn here would
+        // silently regress real CJK codepoints simply because the runtime has not caught up.
+        // Truly unassigned codepoints inside block-envelope ranges are harmless: unicode61
+        // drops them from indexed content, so no match can occur either way.
         // シンボル系カテゴリは先に除外。emoji等がCJK隣接ブロックにあってもprefix fallbackを起こさせない。
+        // `OtherNotAssigned` (Cn) は意図的に除外しない。.NET の Unicode テーブルは Unicode
+        // Consortium のリリースに遅れるため、新しく割り当てられたコードポイント（例: Unicode
+        // 15.1 で追加された Extension I の U+2EBF0..U+2EE5F）でも .NET 8 では依然として Cn と
+        // 報告される。それらを下のブロックベース範囲で promote する方が、unicode61（Unicode 9.0
+        // テーブル）の実際のインデックス挙動と整合する。ここで Cn を除外すると、ランタイム側の
+        // テーブル更新遅延だけを理由に実在の CJK コードポイントが静かに regressions する。ブロック
+        // ベース範囲内の本当に未割当なコードポイントは無害 — unicode61 がインデックス側で drop
+        // するため、どちらにしてもマッチは発生しない。
         var category = Rune.GetUnicodeCategory(rune);
         if (category is UnicodeCategory.OtherSymbol
                      or UnicodeCategory.MathSymbol
@@ -151,18 +167,61 @@ public partial class DbReader
         if (value >= 0x2F800 && value <= 0x2FA1F) return true;
 
         // Historical East Asian scripts that unicode61 keeps as word characters and which
-        // Unicode groups with / adjacent to CJK: Yi Syllables (U+A000..U+A48F, Lo), Nüshu
-        // (U+1B170..U+1B2FF, Lo — women's script from Jiangyong China), and the contiguous
-        // Tangut / Tangut Components / Khitan Small Script / Tangut Supplement non-BMP block
-        // (U+17000..U+18D8F). Yi Radicals (U+A490..U+A4CF) are intentionally excluded because
-        // they are Unicode category So and are dropped by unicode61 during tokenization.
+        // Unicode groups with / adjacent to CJK. Each Unicode block is listed as its own
+        // branch so (a) regression tests can exercise one branch at a time and (b) future
+        // narrowing or widening of any single block does not drag the others. Block-envelope
+        // ranges cover each block's full allocated space including small unassigned trailing
+        // holes (e.g. Tangut's U+187F8..U+187FF, Khitan Small Script's U+18CD6..U+18CFF,
+        // Tangut Supplement's U+18D09..U+18D8F on the current runtime Unicode tables); the
+        // holes are harmless because unicode61 drops unassigned codepoints from indexed
+        // content, so no spurious match can occur through a prefix-promoted query.
+        //   * Yi Syllables (U+A000..U+A48F, Lo — Nuosu syllabary)
+        //   * Tangut (U+17000..U+187FF, Lo — Western Xia logographs, non-BMP)
+        //   * Tangut Components (U+18800..U+18AFF, Lo — non-BMP)
+        //   * Khitan Small Script (U+18B00..U+18CFF, Lo — non-BMP)
+        //   * Tangut Supplement (U+18D00..U+18D8F, Lo — non-BMP)
+        //   * Nüshu (U+1B170..U+1B2FF, Lo — Jiangyong women's script, non-BMP)
+        // Also add the individual iteration / annotation codepoints in the Ideographic
+        // Symbols and Punctuation block (U+16FE0..U+16FF1) that annotate Han-based
+        // historical text. On the current runtime these are category Lm (U+16FE0 Tangut
+        // iteration mark, U+16FE1 Nüshu iteration mark, U+16FE3 Old Chinese iteration
+        // mark), Mn (U+16FE4 Khitan Small Script filler), and Mc (U+16FF0 / U+16FF1
+        // Vietnamese alternate reading marks CA / NHAY). All are kept as word characters
+        // by unicode61 and reproduce the #198 zero-hit shape without explicit CJK prefix
+        // promotion. U+16FE2 (Old Chinese hook mark) is intentionally excluded because
+        // it is Unicode category Po and unicode61 drops it during tokenization. Yi
+        // Radicals (U+A490..U+A4CF) are intentionally excluded because they are Unicode
+        // category So and are also dropped by unicode61 during tokenization.
         // 東アジアの歴史的文字で unicode61 が単語文字として扱い、Unicode 上も CJK 隣接に
-        // 配置されているブロック: 彝文字 (Yi Syllables, U+A000..U+A48F, Lo)、女書 (Nüshu,
-        // U+1B170..U+1B2FF, Lo)、西夏文字 / 西夏文字部品 / 契丹小字 / 西夏文字補助の連続する
-        // 非 BMP ブロック (U+17000..U+18D8F)。Yi Radicals (U+A490..U+A4CF) は Unicode カテゴリ
-        // So で unicode61 が drop するため意図的に除外する。
+        // 配置されているブロック。将来いずれかを絞ったり広げたりしても他ブロックが巻き添えに
+        // ならないよう、Unicode ブロック単位で個別分岐にする。ブロックベース範囲は各ブロックの
+        // 割当境界全域を覆うので、末尾の小さな未割当領域 (例: Tangut の U+187F8..U+187FF、Khitan
+        // の U+18CD6..U+18CFF、Tangut Supplement の U+18D09..U+18D8F) も含まれるが、未割当
+        // コードポイントは unicode61 がインデックス側で drop するため、prefix 昇格クエリでも誤マッチは起こらない。
+        //   * Yi Syllables (U+A000..U+A48F, Lo — 中国南西部のノス族音節文字)
+        //   * Tangut (U+17000..U+187FF, Lo — 西夏の表意文字、非 BMP)
+        //   * Tangut Components (U+18800..U+18AFF, Lo — 非 BMP)
+        //   * Khitan Small Script (U+18B00..U+18CFF, Lo — 非 BMP)
+        //   * Tangut Supplement (U+18D00..U+18D8F, Lo — 非 BMP)
+        //   * Nüshu (U+1B170..U+1B2FF, Lo — 湖南省江永県の女性専用音節文字、非 BMP)
+        // また Ideographic Symbols and Punctuation ブロック (U+16FE0..U+16FF1) の反復 /
+        // 注釈記号も個別に含める。現行ランタイムではカテゴリ Lm (U+16FE0 Tangut 反復記号、
+        // U+16FE1 Nüshu 反復記号、U+16FE3 Old Chinese 反復記号)、Mn (U+16FE4 Khitan Small
+        // Script filler)、Mc (U+16FF0 / U+16FF1 ベトナム語 Chu Nom 読み記号 CA / NHAY)。
+        // いずれも unicode61 は単語文字として保持するため、CJK prefix 昇格を入れないと
+        // #198 と同じ 0 件症状を再現する。U+16FE2 (Old Chinese hook mark) は Unicode カテゴリ
+        // Po で unicode61 が drop するため意図的に除外する。Yi Radicals (U+A490..U+A4CF) は
+        // Unicode カテゴリ So でこれも unicode61 が drop するため意図的に除外する。
+        if (value == 0x16FE0) return true;
+        if (value == 0x16FE1) return true;
+        if (value == 0x16FE3) return true;
+        if (value == 0x16FE4) return true;
+        if (value >= 0x16FF0 && value <= 0x16FF1) return true;
         if (value >= 0xA000 && value <= 0xA48F) return true;
-        if (value >= 0x17000 && value <= 0x18D8F) return true;
+        if (value >= 0x17000 && value <= 0x187FF) return true;
+        if (value >= 0x18800 && value <= 0x18AFF) return true;
+        if (value >= 0x18B00 && value <= 0x18CFF) return true;
+        if (value >= 0x18D00 && value <= 0x18D8F) return true;
         if (value >= 0x1B170 && value <= 0x1B2FF) return true;
 
         // Hangul Syllables, Jamo, Jamo Extended-A/B, Compatibility Jamo

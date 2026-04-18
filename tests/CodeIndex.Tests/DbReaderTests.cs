@@ -576,13 +576,15 @@ public class DbReaderTests : IDisposable
         // Regression guard for Tangut (U+17000..U+187FF), a non-BMP historical East Asian
         // logographic script used by the Western Xia empire (11th–13th century). Tangut is
         // Unicode category Lo and unicode61 keeps it as word characters, so the surrogate-pair
-        // aware rune walk AND the contiguous U+17000..U+18D8F CJK-prefix range are both required
-        // for `search '𗀀'` to match '𗀀abc'. Pinned as the lower bound of the merged
-        // Tangut / Tangut Components / Khitan / Tangut Supplement range.
+        // aware rune walk AND an explicit U+17000..U+187FF range entry are both required for
+        // `search '𗀀'` to match '𗀀abc'. Pinned as a dedicated Tangut-block test so a future
+        // rewrite that collapses Tangut into a different neighboring block breaks here, not
+        // silently on Chinese archaeological text.
         // 西夏文字（Tangut、U+17000..U+187FF、西夏帝国の非 BMP 表意文字）の回帰テスト。
-        // Unicode カテゴリ Lo で unicode61 が単語文字として扱うため、rune 走査と U+17000..U+18D8F
-        // 連続範囲の CJK prefix 包含の両方がないと `search '𗀀'` が '𗀀abc' を拾えない。
-        // 統合範囲（Tangut / Tangut Components / Khitan / Tangut Supplement）の下端を固定。
+        // Unicode カテゴリ Lo で unicode61 が単語文字として扱うため、rune 走査と U+17000..U+187FF
+        // 範囲の CJK prefix 包含の両方がないと `search '𗀀'` が '𗀀abc' を拾えない。Tangut ブロック
+        // 単独のテストとして固定し、将来別ブロックへ統合するような書き換えがあっても中国考古
+        // テキストで黙って回帰する前にここで壊れるようにする。
         var tangutChar = char.ConvertFromUtf32(0x17000);
         InsertIndexedFile("src/tangut.py", "python",
             $"def {tangutChar}abc(x):\n    return x\n");
@@ -593,17 +595,56 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void Search_FindsNonBmpTangutComponentsSubstringInsideLongerToken()
+    {
+        // Regression guard for Tangut Components (U+18800..U+18AFF), the non-BMP block of
+        // radical / stroke components used to build Tangut logographs. Separate Unicode block
+        // and separate predicate branch from Tangut itself, so this test exercises its own
+        // branch rather than aliasing to the Tangut test. Unicode category Lo; unicode61 keeps
+        // it as word characters; same #198 zero-hit shape without explicit prefix fallback.
+        // 西夏文字部品（Tangut Components、U+18800..U+18AFF、非 BMP の西夏文字構成要素）の
+        // 回帰テスト。Tangut 本体とは別の Unicode ブロック・別の分岐を踏むため、Tangut テストと
+        // エイリアス化せず専用分岐を検証する。Unicode カテゴリ Lo で unicode61 は単語文字として
+        // 扱うため、prefix fallback なしでは #198 と同じ 0 件症状になる。
+        var tangutComponentsChar = char.ConvertFromUtf32(0x18800);
+        InsertIndexedFile("src/tangut_components.py", "python",
+            $"def {tangutComponentsChar}abc(x):\n    return x\n");
+
+        var results = _reader.Search(tangutComponentsChar);
+
+        Assert.Contains(results, r => r.Path == "src/tangut_components.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpKhitanSmallScriptSubstringInsideLongerToken()
+    {
+        // Regression guard for Khitan Small Script (U+18B00..U+18CFF), the non-BMP script of
+        // the Liao dynasty's Khitan people (10th–13th century). Separate Unicode block and
+        // separate predicate branch from Tangut / Tangut Components / Tangut Supplement, so
+        // this test exercises its own branch. Unicode category Lo; unicode61 keeps it as
+        // word characters.
+        // 契丹小字（Khitan Small Script、U+18B00..U+18CFF、遼朝の非 BMP 表音文字）の回帰テスト。
+        // Tangut / Tangut Components / Tangut Supplement とは別の Unicode ブロック・別の分岐。
+        // Unicode カテゴリ Lo で unicode61 は単語文字として扱う。
+        var khitanChar = char.ConvertFromUtf32(0x18B00);
+        InsertIndexedFile("src/khitan_small.py", "python",
+            $"def {khitanChar}abc(x):\n    return x\n");
+
+        var results = _reader.Search(khitanChar);
+
+        Assert.Contains(results, r => r.Path == "src/khitan_small.py");
+    }
+
+    [Fact]
     public void Search_FindsNonBmpTangutSupplementSubstringInsideLongerToken()
     {
-        // Regression guard for the upper bound of the merged Tangut / Tangut Components / Khitan
-        // Small Script / Tangut Supplement block. U+18D00..U+18D8F is Tangut Supplement, added in
-        // Unicode 13.0 alongside Khitan Small Script (U+18B00..U+18CFF). Pinning both ends of the
-        // U+17000..U+18D8F range ensures a future narrowing of the CJK prefix fallback breaks
-        // here instead of silently regressing for Khitan / Tangut Supplement queries.
-        // 統合ブロック（Tangut / Tangut Components / 契丹小字 / 西夏文字補助）の上端の回帰テスト。
-        // U+18D00..U+18D8F が西夏文字補助（Unicode 13.0 で契丹小字と同時追加）。範囲の両端を
-        // 固定することで、将来 prefix fallback を狭めた場合に契丹小字 / 西夏文字補助で
-        // 黙って 0 件回帰するのを防ぐ。
+        // Regression guard for Tangut Supplement (U+18D00..U+18D8F), the small non-BMP block
+        // added in Unicode 13.0 alongside Khitan Small Script. Separate predicate branch from
+        // Tangut / Tangut Components / Khitan, so this test exercises its own branch. Unicode
+        // category Lo; unicode61 keeps it as word characters.
+        // 西夏文字補助（Tangut Supplement、U+18D00..U+18D8F、Unicode 13.0 で Khitan Small Script と
+        // 同時追加された小規模な非 BMP ブロック）の回帰テスト。Tangut / Tangut Components /
+        // Khitan とは別の分岐。Unicode カテゴリ Lo で unicode61 は単語文字として扱う。
         var tangutSupplementChar = char.ConvertFromUtf32(0x18D00);
         InsertIndexedFile("src/tangut_supplement.py", "python",
             $"def {tangutSupplementChar}abc(x):\n    return x\n");
@@ -611,6 +652,77 @@ public class DbReaderTests : IDisposable
         var results = _reader.Search(tangutSupplementChar);
 
         Assert.Contains(results, r => r.Path == "src/tangut_supplement.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpTangutIterationMarkInsideLongerToken()
+    {
+        // Regression guard for the Tangut Iteration Mark (U+16FE0), a non-BMP codepoint in the
+        // Ideographic Symbols and Punctuation block used to annotate repeated Tangut
+        // characters. Unicode category Lm (Modifier Letter) on the current runtime; unicode61
+        // keeps Lm codepoints as word characters, so `search '𖿠'` returned 0 against '𖿠abc'
+        // without explicit CJK prefix promotion. The Ideographic Symbols and Punctuation
+        // iteration / annotation codepoints (U+16FE0 Tangut iteration, U+16FE1 Nüshu iteration,
+        // U+16FE3 Old Chinese iteration, U+16FE4 Khitan filler, U+16FF0 / U+16FF1 Vietnamese
+        // reading marks) are listed individually in the predicate so U+16FE2 (Po, dropped by
+        // unicode61) does not ride along. Pinned separately so the Lm / ideographic-annotation
+        // branch cannot regress silently.
+        // Tangut 反復記号（U+16FE0、非 BMP の Ideographic Symbols and Punctuation ブロック）の
+        // 回帰テスト。現行ランタイムでは Unicode カテゴリ Lm で unicode61 は単語文字として扱う。
+        // そのため CJK prefix 昇格がなければ `search '𖿠'` は '𖿠abc' に対して 0 件を返す。
+        // Ideographic Symbols and Punctuation の反復 / 注釈記号（U+16FE0 / 16FE1 / 16FE3 / 16FE4
+        // / 16FF0 / 16FF1）は個別列挙にし、U+16FE2 (Po, unicode61 が drop) を巻き込まないように
+        // している。Lm / ideographic annotation 分岐の回帰をここで固定する。
+        var tangutIterationMark = char.ConvertFromUtf32(0x16FE0);
+        InsertIndexedFile("src/tangut_iter.py", "python",
+            $"def {tangutIterationMark}abc(x):\n    return x\n");
+
+        var results = _reader.Search(tangutIterationMark);
+
+        Assert.Contains(results, r => r.Path == "src/tangut_iter.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpKhitanSmallScriptFillerInsideLongerToken()
+    {
+        // Regression guard for U+16FE4 (Khitan Small Script Filler), a non-BMP codepoint in the
+        // Ideographic Symbols and Punctuation block. On the current runtime this is Unicode
+        // category Mn (Nonspacing Mark); unicode61 still keeps Mn codepoints as word
+        // characters, so `search '𖿤'` returned 0 against '𖿤abc' without explicit CJK prefix
+        // promotion. Pinned so the Mn / Khitan-annotation case is covered in addition to Lm.
+        // 契丹小字フィラー（U+16FE4、非 BMP の Ideographic Symbols and Punctuation ブロック）の
+        // 回帰テスト。現行ランタイムでは Unicode カテゴリ Mn。unicode61 は Mn も単語文字として
+        // 扱うため、CJK prefix 昇格がなければ `search '𖿤'` は '𖿤abc' に対して 0 件を返す。
+        // Lm だけでなく Mn / 契丹注釈のケースも別途固定する。
+        var khitanFiller = char.ConvertFromUtf32(0x16FE4);
+        InsertIndexedFile("src/khitan_filler.py", "python",
+            $"def {khitanFiller}abc(x):\n    return x\n");
+
+        var results = _reader.Search(khitanFiller);
+
+        Assert.Contains(results, r => r.Path == "src/khitan_filler.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpVietnameseReadingMarkInsideLongerToken()
+    {
+        // Regression guard for U+16FF0 (Vietnamese Alternate Reading Mark CA), a non-BMP
+        // codepoint in the Ideographic Symbols and Punctuation block used to annotate Chu Nom
+        // (Han-based Vietnamese) text. On the current runtime this is Unicode category Mc
+        // (Spacing Mark); unicode61 keeps Mc codepoints as word characters, so `search '𖿰'`
+        // returned 0 against '𖿰abc' without explicit CJK prefix promotion. Pinned so the Mc /
+        // Chu-Nom-annotation case is covered in addition to Lm / Mn.
+        // ベトナム語 Chu Nom 読み記号 CA（U+16FF0、非 BMP の Ideographic Symbols and Punctuation
+        // ブロック）の回帰テスト。現行ランタイムでは Unicode カテゴリ Mc。unicode61 は Mc も
+        // 単語文字として扱うため、CJK prefix 昇格がなければ `search '𖿰'` は '𖿰abc' に対して
+        // 0 件を返す。Lm / Mn だけでなく Mc / Chu Nom 注釈のケースも固定する。
+        var vietnameseReadingMark = char.ConvertFromUtf32(0x16FF0);
+        InsertIndexedFile("src/vietnamese_ca.py", "python",
+            $"def {vietnameseReadingMark}abc(x):\n    return x\n");
+
+        var results = _reader.Search(vietnameseReadingMark);
+
+        Assert.Contains(results, r => r.Path == "src/vietnamese_ca.py");
     }
 
     [Fact]
