@@ -11090,6 +11090,137 @@ public class QueryCommandRunnerTests
         Assert.Contains("Hint: create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.", stderr);
     }
 
+    [Fact]
+    public void ParseArgs_NormalizesLangAndKindToLowercase()
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            ["QueryCommandRunner", "--lang", "Python", "--kind", "FUNCTION"],
+            jsonDefault: false);
+
+        Assert.Equal("python", options.Lang);
+        Assert.Equal("function", options.Kind);
+    }
+
+    [Fact]
+    public void RunSymbols_AcceptsLangPythonCaseInsensitively()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_lang_case");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "a.py", "python", "def hello(): pass\n");
+
+            var (exitCodeUpper, stdoutUpper, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--lang", "Python"],
+                _jsonOptions));
+            var (exitCodeLower, stdoutLower, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--lang", "python"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCodeUpper);
+            Assert.Equal(CommandExitCodes.Success, exitCodeLower);
+            Assert.Contains("hello", stdoutUpper);
+            Assert.Equal(stdoutLower, stdoutUpper);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_AcceptsKindFunctionCaseInsensitively()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_kind_case");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "a.py", "python", "def hello(): pass\n");
+
+            var (exitCodeUpper, stdoutUpper, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--kind", "FUNCTION"],
+                _jsonOptions));
+            var (exitCodeLower, stdoutLower, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--kind", "function"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCodeUpper);
+            Assert.Equal(CommandExitCodes.Success, exitCodeLower);
+            Assert.Contains("hello", stdoutUpper);
+            Assert.Equal(stdoutLower, stdoutUpper);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_EmitsLangHintForUnknownLang()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_lang_hint");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "a.py", "python", "def hello(): pass\n");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--lang", "nonexistent"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Contains("'nonexistent' not found in index. Available: python", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDefinition_EmitsLangHintForUnknownLang()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_lang_hint");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "a.py", "python", "def hello(): pass\n");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["hello", "--db", dbPath, "--lang", "nonexistent"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Contains("'nonexistent' not found in index. Available: python", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDefinition_AcceptsLangPythonCaseInsensitively()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_lang_case");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "a.py", "python", "def hello(): pass\n");
+
+            var (exitCode, stdout, _) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["hello", "--db", dbPath, "--lang", "Python"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("hello", stdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     private static (T Result, string Stdout, string Stderr) CaptureConsole<T>(Func<T> action)
     {
         lock (TestConsoleLock.Gate)

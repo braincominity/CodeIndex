@@ -5057,6 +5057,96 @@ public class McpServerTests : IDisposable
         Assert.Contains("not allowed in batch_query", results[0]!["error"]!.GetValue<string>());
     }
 
+    // Regression pins for issue #199: MCP tool handlers must normalize mixed-case lang/kind.
+    // #199 回帰テスト: MCP ハンドラも --lang / --kind を大文字小文字なく扱うことを固定する。
+    [Fact]
+    public void ToolsCall_Symbols_AcceptsLangCsharpCaseInsensitively_Issue199()
+    {
+        var requestUpper = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"App","lang":"CSharp"}}}""")!;
+        var responseUpper = _server.HandleMessage(requestUpper)!;
+
+        var structuredUpper = responseUpper["result"]!["structuredContent"]!;
+        Assert.Equal("csharp", structuredUpper["lang"]!.GetValue<string>());
+        Assert.True(structuredUpper["count"]!.GetValue<int>() >= 1);
+
+        var requestLower = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"App","lang":"csharp"}}}""")!;
+        var responseLower = _server.HandleMessage(requestLower)!;
+        var structuredLower = responseLower["result"]!["structuredContent"]!;
+
+        Assert.Equal(structuredLower["count"]!.GetValue<int>(), structuredUpper["count"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_Symbols_AcceptsKindClassCaseInsensitively_Issue199()
+    {
+        var requestUpper = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"App","kind":"CLASS"}}}""")!;
+        var responseUpper = _server.HandleMessage(requestUpper)!;
+
+        var structuredUpper = responseUpper["result"]!["structuredContent"]!;
+        Assert.Equal("class", structuredUpper["kind"]!.GetValue<string>());
+        Assert.True(structuredUpper["count"]!.GetValue<int>() >= 1);
+
+        var requestLower = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"App","kind":"class"}}}""")!;
+        var responseLower = _server.HandleMessage(requestLower)!;
+        var structuredLower = responseLower["result"]!["structuredContent"]!;
+
+        Assert.Equal(structuredLower["count"]!.GetValue<int>(), structuredUpper["count"]!.GetValue<int>());
+
+        // Prove the kind filter is actually applied, not silently dropped: the seeded "App" symbol
+        // is a class, so querying it with kind=FUNCTION must return 0 regardless of casing.
+        // kind フィルタが実際に適用されていることを確認: seed した App は class なので、
+        // kind=FUNCTION での検索は大文字小文字に関わらず 0 件になるべき。
+        var requestWrongKind = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"App","kind":"FUNCTION"}}}""")!;
+        var responseWrongKind = _server.HandleMessage(requestWrongKind)!;
+        var structuredWrongKind = responseWrongKind["result"]!["structuredContent"]!;
+        Assert.Equal("function", structuredWrongKind["kind"]!.GetValue<string>());
+        Assert.Equal(0, structuredWrongKind["count"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_Definition_AcceptsLangCsharpCaseInsensitively_Issue199()
+    {
+        var requestUpper = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"App","lang":"CSharp"}}}""")!;
+        var responseUpper = _server.HandleMessage(requestUpper)!;
+
+        var structuredUpper = responseUpper["result"]!["structuredContent"]!;
+        Assert.Equal("csharp", structuredUpper["lang"]!.GetValue<string>());
+        Assert.True(structuredUpper["count"]!.GetValue<int>() >= 1);
+
+        var requestLower = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"App","lang":"csharp"}}}""")!;
+        var responseLower = _server.HandleMessage(requestLower)!;
+        var structuredLower = responseLower["result"]!["structuredContent"]!;
+
+        Assert.Equal(structuredLower["count"]!.GetValue<int>(), structuredUpper["count"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_Definition_AcceptsKindClassCaseInsensitively_Issue199()
+    {
+        var requestUpper = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"App","kind":"CLASS"}}}""")!;
+        var responseUpper = _server.HandleMessage(requestUpper)!;
+
+        var structuredUpper = responseUpper["result"]!["structuredContent"]!;
+        Assert.Equal("class", structuredUpper["kind"]!.GetValue<string>());
+        Assert.True(structuredUpper["count"]!.GetValue<int>() >= 1);
+
+        var requestLower = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"App","kind":"class"}}}""")!;
+        var responseLower = _server.HandleMessage(requestLower)!;
+        var structuredLower = responseLower["result"]!["structuredContent"]!;
+
+        Assert.Equal(structuredLower["count"]!.GetValue<int>(), structuredUpper["count"]!.GetValue<int>());
+
+        // Prove the kind filter is actually applied, not silently echoed.
+        // The shared fixture only seeds `App` as a class, so querying with kind:"FUNCTION"
+        // must return 0 if the normalized kind is threaded through to GetDefinitions().
+        // kind フィルタが捨てられずに実際に適用されていることを確認する。
+        var requestWrongKind = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"App","kind":"FUNCTION"}}}""")!;
+        var responseWrongKind = _server.HandleMessage(requestWrongKind)!;
+        var structuredWrongKind = responseWrongKind["result"]!["structuredContent"]!;
+        Assert.Equal("function", structuredWrongKind["kind"]!.GetValue<string>());
+        Assert.Equal(0, structuredWrongKind["count"]!.GetValue<int>());
+    }
+
     private static string CreateLegacyDbWithoutIndexedAt()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_legacy_{Guid.NewGuid():N}.db");
