@@ -8299,4 +8299,33 @@ public class SymbolExtractorTests
         Assert.Equal(7, ctors[0].Line);
         Assert.Contains("static D()", ctors[0].Signature);
     }
+
+    [Fact]
+    public void Extract_CSharp_MultiModifierWrappedConstructor_EmitsOnceAtNameLine()
+    {
+        // issue #348 の回帰: 複数のモディファイアが別々の物理行に折り返された wrapped ctor
+        // （例: `public\nstatic\nE()`）でも、名前行 1 件だけ emit し、signature には両方の
+        // モディファイアを保持する。単純 prefix 合成では constructor regex も static ctor
+        // regex も受け付けない合成行になるため、static / visibility の variant を試す候補
+        // 列挙ロジックが無いと無言で落ちていた。
+        const string content = """
+            namespace WrappedCtor;
+
+            public class E
+            {
+                public
+                static
+                E() { _w = 1; }
+
+                private static int _w;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var ctors = symbols.Where(s => s.Kind == "function" && s.Name == "E").ToList();
+        Assert.Single(ctors);
+        Assert.Equal(7, ctors[0].Line);
+        Assert.Contains("public static E()", ctors[0].Signature);
+    }
 }

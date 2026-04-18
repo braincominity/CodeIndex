@@ -1009,13 +1009,25 @@ public static class SymbolExtractor
                         var wrappedInfo = TryFindCSharpWrappedHeaderModifier(csharpMatchLines!, i);
                         if (wrappedInfo != null)
                         {
-                            var wrappedMatchLine = wrappedInfo.Value.Prefix + " " + patternMatchLine.TrimStart();
-                            var wrappedMatch = pattern.Regex.Match(wrappedMatchLine);
-                            if (wrappedMatch.Success)
+                            foreach (var candidatePrefix in EnumerateCSharpWrappedModifierCandidates(wrappedInfo.Value.Prefix))
                             {
-                                match = wrappedMatch;
-                                patternMatchLine = wrappedMatchLine;
-                                csharpWrappedModifierPrefix = wrappedInfo.Value.Prefix;
+                                var wrappedMatchLine = candidatePrefix + " " + patternMatchLine.TrimStart();
+                                var wrappedMatch = pattern.Regex.Match(wrappedMatchLine);
+                                if (wrappedMatch.Success)
+                                {
+                                    match = wrappedMatch;
+                                    patternMatchLine = wrappedMatchLine;
+                                    // Preserve the full prefix in the stored signature so
+                                    // declarations like `public\nstatic\nP1()` retain
+                                    // `public static P1()`, even when the matching regex
+                                    // variant only accepted `static P1()`. Closes #348.
+                                    // シグネチャには完全な prefix を残し、`public\nstatic\nP1()`
+                                    // のような宣言を `public static P1()` として保存する。
+                                    // マッチした regex 変種が `static P1()` 形だけを受け付けた
+                                    // 場合でも、保存シグネチャは完全な prefix を保持する。Closes #348.
+                                    csharpWrappedModifierPrefix = wrappedInfo.Value.Prefix;
+                                    break;
+                                }
                             }
                         }
                     }
@@ -7341,6 +7353,44 @@ public static class SymbolExtractor
             return null;
 
         return new CSharpWrappedHeaderModifierInfo(prefix);
+    }
+
+    // Enumerate candidate prefixes to retry against the C# function-kind regexes when the
+    // full wrapped-modifier prefix fails. Multi-modifier shapes like
+    // `public\nstatic\nP1()` synthesize `public static P1()` which neither the ctor regex
+    // (accepts only unsafe/extern between visibility and name) nor the static-ctor regex
+    // (requires static first) will match. Falling back to `static`-only and
+    // visibility-only variants lets the respective regex still fire so the wrapped ctor
+    // is not silently dropped. Closes #348.
+    // ラップされた先頭モディファイア prefix で C# function 系パターンに失敗した場合に
+    // 試す候補 prefix を列挙する。`public\nstatic\nP1()` のような複数モディファイア形は
+    // `public static P1()` と合成されるが、ctor regex は visibility と name の間に
+    // `unsafe` / `extern` しか許さず、静的 ctor regex は `static` 先頭を要求するため、
+    // このままではどちらもマッチしない。`static` 単独や visibility 単独の variant に
+    // フォールバックして、適合する regex を拾えるようにする。Closes #348.
+    private static IEnumerable<string> EnumerateCSharpWrappedModifierCandidates(string prefix)
+    {
+        yield return prefix;
+
+        var tokens = prefix.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length <= 1)
+            yield break;
+
+        var hasStatic = false;
+        string? visibility = null;
+        foreach (var token in tokens)
+        {
+            if (token == "static")
+                hasStatic = true;
+            else if (visibility == null
+                && token is "public" or "private" or "protected" or "internal" or "file")
+                visibility = token;
+        }
+
+        if (hasStatic)
+            yield return "static";
+        if (visibility != null)
+            yield return visibility;
     }
 
     private static CSharpPropertyMatchCandidate BuildCSharpPropertyMatchLine(string[] lines, string[] csharpMatchLines, int startLineIndex)
