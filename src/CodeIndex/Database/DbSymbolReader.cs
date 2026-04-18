@@ -1782,7 +1782,10 @@ public partial class DbReader
         // attributeBottom then starts with a continuation tail like `)]` before the
         // real declaration. LineContainsInlineAttributeAndDeclaration's leading-`[`
         // anchor cannot see that pattern, so we additionally check the sanitized
-        // line for trailing declaration content after the last `]`. Closes #409.
+        // line for trailing declaration content after the last `]`. Both checks
+        // run against the sanitized line so that a trailing `// comment` on the
+        // attribute row (e.g. `[JsonPropertyName("ok")] // note`) does not count
+        // as an inline declaration tail. Closes #409.
         // 直前の非 trivia 行がすでに `[attr] decl` のインライン宣言を持つ場合、
         // その属性はその行の宣言に属し、下の anchor 行には及ばない。
         // このガードが無いと `[JsonPropertyName("a[")] public string X { ... }` の属性が
@@ -1791,9 +1794,11 @@ public partial class DbReader
         // `[` と宣言が複数行 verbatim / raw / raw 補間文字列リテラルで分断されると、
         // attributeBottom の行は `)]` 等の継続末尾で始まり LineContainsInlineAttributeAndDeclaration の
         // 先頭 `[` アンカーでは捕らえられない。sanitize 済み行の最後の `]` 以降に
-        // 宣言本体が残っていないかを併せて確認する。#409 を修正。
+        // 宣言本体が残っていないかを併せて確認する。判定はいずれも sanitize 済み行に対して行う。
+        // これにより属性行末尾の `// コメント`（例: `[JsonPropertyName("ok")] // note`）が
+        // 宣言末尾と誤判定されることも防ぐ。#409 を修正。
         if (attributeBottom != anchorIndex
-            && (LineContainsInlineAttributeAndDeclaration(lines[attributeBottom])
+            && (LineContainsInlineAttributeAndDeclaration(sanitizedLines[attributeBottom])
                 || SanitizedLineHasInlineDeclarationTail(sanitizedLines[attributeBottom])))
             return [];
 

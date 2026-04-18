@@ -4278,6 +4278,80 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetUnusedSymbols_AttributeLineWithTrailingLineComment_KeepsReflectionContext()
+    {
+        // Regression for #409 follow-up — a trailing `// comment` after the closing
+        // `]` of an attribute must not flip the following property out of
+        // `reflection_or_config_suspect`. The guard that detects inline `[attr] decl`
+        // rows must run against sanitized lines so blanked comments do not pose as
+        // declaration bodies.
+        // #409 追加回帰: 属性行末尾の `// コメント` が、下のプロパティを
+        // `reflection_or_config_suspect` から外してはならない。インライン `[attr] decl`
+        // 判定は sanitize 済み行に対して行い、消されたコメントが宣言本体と誤認されないこと。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_trailing_comment_fixture.cs",
+            Lang = "csharp",
+            Size = 280,
+            Lines = 10,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 9,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class Target
+                {
+                    [JsonPropertyName("ok")] // trailing comment
+                    public string C { get; set; } = "";
+                }
+
+                """,
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "Target",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 7,
+                Signature = "public class Target",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "C",
+                Line = 6,
+                StartLine = 6,
+                EndLine = 6,
+                Signature = "public string C { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["reflection_trailing_comment_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        var c = Assert.Single(unused, symbol => symbol.Name == "C");
+        Assert.Equal("reflection_or_config_suspect", c.UnusedBucket);
+    }
+
+    [Fact]
     public void GetUnusedSymbols_CommentBetweenAttributeAndProperty_IsClassifiedAsSuspect()
     {
         var fileId = _writer.UpsertFile(new FileRecord
