@@ -8143,4 +8143,61 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "custom-tag");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "phantom");
     }
+
+    [Fact]
+    public void Extract_Html_CommentLiteralInsideScriptDoesNotSwallowFollowingTags()
+    {
+        // `<script>` bodies that literally contain `<!--` must not be treated
+        // as unclosed comments. The raw-text masker has to run before the
+        // comment masker or everything after the literal gets blanked out,
+        // dropping every real subsequent symbol. Closes #215 codex review finding.
+        // `<script>` 本文に `<!--` リテラルが入っているだけで未閉鎖コメント扱いに
+        // してはならない。body マスクをコメントマスクより先に動かさないと、リテラル
+        // 以降の本物のタグまで全滅する。#215 codex review 指摘への対応。
+        var content = "<script>const s = \"<!--\";</script>\n<section id=\"real\"></section>\n<my-widget></my-widget>\n<link href=\"/app.css\">";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "my-widget");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.css");
+    }
+
+    [Fact]
+    public void Extract_Html_CapturesUnquotedAttributeValues()
+    {
+        // HTML5 allows unquoted attribute values. Dropping these silently meant
+        // `<section id=real>`, `<script src=/app.js>`, `<link href=/app.css>`
+        // all produced zero symbols. Closes #215 codex review finding.
+        // HTML5 では引用符なし属性値も許される。黙って無視していた結果
+        // `<section id=real>` / `<script src=/app.js>` / `<link href=/app.css>` が
+        // いずれも 0 シンボルを返していた。#215 codex review 指摘への対応。
+        var content = "<section id=real></section>\n<script src=/app.js></script>\n<link rel=stylesheet href=/app.css>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.js");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.css");
+    }
+
+    [Fact]
+    public void Extract_Html_IgnoresSymbolsNestedInsideQuotedAttributeValues()
+    {
+        // Tag-looking text embedded inside a quoted attribute value (commonly in
+        // doc generators, Markdown-to-HTML output, or `title="..."` blurbs) must
+        // not produce phantom custom-element, id, src, or href symbols. Closes
+        // #215 codex review finding.
+        // 引用符付き属性値の中に入ったタグ風テキスト（ドキュメント生成器や
+        // `title="..."` の注釈によくある）から、phantom な custom element / id /
+        // src / href を拾ってはならない。#215 codex review 指摘への対応。
+        var content = "<div title=\"<fake-widget>\" data-doc=\"<section id=phantom></section>\" aria-label=\"<script src=/evil.js></script><link href=/evil.css>\"></div>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "fake-widget");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "phantom");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "/evil.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "/evil.css");
+    }
 }

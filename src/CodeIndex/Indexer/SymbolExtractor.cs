@@ -770,20 +770,29 @@ public static class SymbolExtractor
         ],
         ["html"] =
         [
-            // External <script src="..."> — treat as import so the referenced JS file is navigable
-            // 外部 <script src="..."> はインポート扱いにして参照先 JS を辿れるようにする
-            new("import",   new Regex(@"<script\b[^>]*?\bsrc\s*=\s*(?<q>[""'])(?<name>[^""'<>]+)\k<q>", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            // External <link href="..."> (stylesheet, icon, preload, etc.) / 外部リンクリソース
-            new("import",   new Regex(@"<link\b[^>]*?\bhref\s*=\s*(?<q>[""'])(?<name>[^""'<>]+)\k<q>", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            // id="foo" attribute — DOM anchor typically navigated by getElementById / CSS #selectors.
-            // The `<tag [^<>]*?` prefix scopes the match to opening-tag context so prose like
-            // `<p>docs say id="x"</p>` does not leak a phantom `id` property, and the
-            // `(?<![\w:-])` negative lookbehind keeps `data-id=` / `aria-*id=` / `xml:id=` out.
-            // id="foo" 属性 — getElementById や CSS #セレクタでたどる DOM アンカー。
+            // External <script src="..."> / <script src=foo.js> — treat as import so the
+            // referenced JS file is navigable.  HTML5 allows unquoted attribute values,
+            // so a single alternation covers both forms.  .NET regex exposes the last
+            // successful `name` capture on the Match, so either branch populates the
+            // symbol name correctly.
+            // 外部 <script src="..."> / <script src=foo.js> を import 扱いにして参照先を
+            // 辿れるようにする。HTML5 では引用符なし属性値も許されるため、ひとつの
+            // alternation で両形式を拾う。.NET では同名キャプチャの最後に成功した方が
+            // `match.Groups["name"]` に残るので name の取り扱いはそのまま。
+            new("import",   new Regex(@"<script\b[^>]*?\bsrc\s*=\s*(?:(?<q>[""'])(?<name>[^""'<>]+)\k<q>|(?<name>[^\s""'<>=`]+))", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // External <link href="..."> / <link href=foo.css> / 外部リンクリソース
+            new("import",   new Regex(@"<link\b[^>]*?\bhref\s*=\s*(?:(?<q>[""'])(?<name>[^""'<>]+)\k<q>|(?<name>[^\s""'<>=`]+))", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // id="foo" / id=foo attribute — DOM anchor typically navigated by getElementById
+            // / CSS #selectors.  The `<tag [^<>]*?` prefix scopes the match to opening-tag
+            // context so prose like `<p>docs say id="x"</p>` does not leak a phantom `id`
+            // property, and the `(?<![\w:-])` negative lookbehind keeps `data-id=` /
+            // `aria-*id=` / `xml:id=` out.  Unquoted values are accepted via alternation.
+            // id="foo" / id=foo 属性 — getElementById や CSS #セレクタでたどる DOM アンカー。
             // `<タグ名 [^<>]*?` プレフィックスで開始タグ内部だけに限定し、本文中の
             // `<p>docs say id="x"</p>` のような文字列が phantom id として漏れないようにする。
-            // negative lookbehind は引き続き `data-id=` / `aria-*id=` / `xml:id=` を除外する。
-            new("property", new Regex(@"<[A-Za-z][\w-]*\b[^<>]*?(?<![\w:-])id\s*=\s*(?<q>[""'])(?<name>[\w:.\-]+)\k<q>", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // negative lookbehind は引き続き `data-id=` / `aria-*id=` / `xml:id=` を除外し、
+            // 引用符なし属性値も alternation で拾う。
+            new("property", new Regex(@"<[A-Za-z][\w-]*\b[^<>]*?(?<![\w:-])id\s*=\s*(?:(?<q>[""'])(?<name>[\w:.\-]+)\k<q>|(?<name>[\w:.\-]+))", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // Custom Web Components — opening tag always contains a hyphen per the HTML spec.
             // Standard tags (<div>, <script>, <link>, etc.) never match because they have no hyphen.
             // カスタム Web Components — HTML 仕様上、開始タグ名には必ずハイフンが入る。
@@ -1553,7 +1562,12 @@ public static class SymbolExtractor
 
     private static string MaskHtmlRawTextRegions(string text)
     {
-        text = HtmlCommentRegex.Replace(text, m => BlankNonNewline(m.Value));
+        // Mask raw-text / RCDATA bodies first so that literal `<!--` inside
+        // `<script>`/`<style>` (e.g. `const s = "<!--";`) does not trick the
+        // unclosed-comment regex into swallowing the rest of the document.
+        // コメントマスクより先に raw-text / RCDATA 本体をマスクする。これをしないと
+        // `<script>const s = "<!--";</script>` の様なコード中リテラルで未閉鎖コメント
+        // regex が発動し、以降の本物のタグまで `\z` まで飲み込んでしまう。
         text = HtmlScriptBodyRegex.Replace(
             text,
             m => m.Groups["open"].Value + BlankNonNewline(m.Groups["body"].Value) + m.Groups["close"].Value);
@@ -1566,7 +1580,44 @@ public static class SymbolExtractor
         text = HtmlTitleBodyRegex.Replace(
             text,
             m => m.Groups["open"].Value + BlankNonNewline(m.Groups["body"].Value) + m.Groups["close"].Value);
+        text = HtmlCommentRegex.Replace(text, m => BlankNonNewline(m.Value));
         return text;
+    }
+
+    // Walk the masked text with a character state machine so we can tell the HTML
+    // pattern loop which positions are inside a quoted attribute value.  Without
+    // this, `<div title="<fake-widget>">` would emit a phantom `fake-widget`
+    // custom element, `<p>style="id=real"</p>` could leak a phantom id, etc.
+    // マスク済みテキストを文字単位で走査し、引用符付き属性値内の位置を bool 配列で返す。
+    // これがないと `<div title="<fake-widget>">` のような埋め込み文字列から phantom な
+    // カスタム要素や id が漏れてしまう。
+    private static bool[] ComputeQuotedAttributeMask(string text)
+    {
+        var mask = new bool[text.Length];
+        var inTag = false;
+        var quoteChar = '\0';
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (quoteChar != '\0')
+            {
+                mask[i] = true;
+                if (c == quoteChar)
+                    quoteChar = '\0';
+            }
+            else if (inTag)
+            {
+                if (c == '>')
+                    inTag = false;
+                else if (c == '"' || c == '\'')
+                    quoteChar = c;
+            }
+            else if (c == '<')
+            {
+                inTag = true;
+            }
+        }
+        return mask;
     }
 
     private static string BlankNonNewline(string value)
@@ -1595,6 +1646,18 @@ public static class SymbolExtractor
         var rawText = string.Join('\n', lines);
         var maskedText = MaskHtmlRawTextRegions(rawText);
 
+        // Filter out HTML symbol matches whose opening `<` sits inside a quoted
+        // attribute value (e.g. `<div title="<fake-widget>">`).  Without this,
+        // the custom-element regex would emit a phantom `fake-widget` class and
+        // nested `id=`/`src=`/`href=` literals inside prose attributes could also
+        // leak.  Scoped to the opening `<` of each match because every HTML
+        // pattern anchors there.
+        // 開始 `<` が引用符付き属性値の中にあるマッチを除外する。これがないと
+        // `<div title="<fake-widget>">` のような埋め込み文字列から phantom な
+        // カスタム要素が漏れ、属性値内の id=/src=/href= リテラルまで拾ってしまう。
+        // いずれの HTML パターンも `<` 起点なので、そのインデックスで判定する。
+        var quotedAttributeMask = ComputeQuotedAttributeMask(maskedText);
+
         // Precompute per-line absolute offsets for O(log n) line lookup via binary
         // search. Each lines[i] does not include the joining '\n', so lineStarts[i]
         // points at the first character of line i.
@@ -1614,6 +1677,9 @@ public static class SymbolExtractor
         {
             foreach (Match match in pattern.Regex.Matches(maskedText))
             {
+                if (match.Index < quotedAttributeMask.Length && quotedAttributeMask[match.Index])
+                    continue;
+
                 var nameGroup = match.Groups["name"];
                 var name = nameGroup.Success
                     ? nameGroup.Value.Trim()
