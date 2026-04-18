@@ -236,6 +236,7 @@ public partial class McpServer
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var lang = args?["lang"]?.GetValue<string>();
         var snippetLines = SearchSnippetFormatter.ClampSnippetLines(args?["snippetLines"]?.GetValue<int>() ?? SearchSnippetFormatter.DefaultSnippetLines);
+        var maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(args?["maxLineWidth"]?.GetValue<int>() ?? LineWidthFormatter.DefaultMaxLineWidth);
         var rawQuery = args?["rawQuery"]?.GetValue<bool>() ?? false;
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
@@ -263,6 +264,7 @@ public partial class McpServer
                     ["query"] = query,
                     ["rawQuery"] = rawQuery,
                     ["snippetLines"] = snippetLines,
+                    ["maxLineWidth"] = maxLineWidth,
                     ["path"] = PathEcho(pathPatterns),
                     ["excludeTests"] = excludeTests,
                     ["count"] = 0,
@@ -277,10 +279,11 @@ public partial class McpServer
                 ["query"] = query,
                 ["rawQuery"] = rawQuery,
                 ["snippetLines"] = snippetLines,
+                ["maxLineWidth"] = maxLineWidth,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
                 ["count"] = results.Count,
-                ["results"] = JsonSerializer.SerializeToNode(results.Select(result => SearchSnippetFormatter.ToCompactResult(result, query, snippetLines, exact)), _jsonOptions)
+                ["results"] = JsonSerializer.SerializeToNode(results.Select(result => SearchSnippetFormatter.ToCompactResult(result, query, snippetLines, exact, maxLineWidth)), _jsonOptions)
             };
             // Include top file paths in summary for quick AI orientation
             // AIが素早く位置把握できるよう、サマリにトップファイルパスを含める

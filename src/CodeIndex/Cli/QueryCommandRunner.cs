@@ -65,14 +65,14 @@ public static class QueryCommandRunner
     private const string FindUsage = "Usage: cdidx find <query> --path <pattern> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]\n       cdidx find --query <query> --path <pattern> [...]\n       cdidx find [options] -- <query>";
     public static int RunSearch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var previewOptionError = ValidatePreviewOptions("search", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        var previewOptionError = ValidatePreviewOptions("search", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
         if (previewOptionError != null)
         {
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (TryWriteUnsupportedOptionError("search", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--snippet-lines", "--fts", "--count", "--since", "--no-dedup", "--exact", "--exact-substring", "--exact-name"]))
+        if (TryWriteUnsupportedOptionError("search", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--snippet-lines", "--max-line-width", "--fts", "--count", "--since", "--no-dedup", "--exact", "--exact-substring", "--exact-name"]))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "search"))
             return CommandExitCodes.UsageError;
@@ -127,14 +127,14 @@ public static class QueryCommandRunner
             if (options.Json)
             {
                 foreach (var r in results)
-                    Console.WriteLine(JsonSerializer.Serialize(SearchSnippetFormatter.ToCompactResult(r, options.Query, options.SnippetLines, exact), jsonOptions));
+                    Console.WriteLine(JsonSerializer.Serialize(SearchSnippetFormatter.ToCompactResult(r, options.Query, options.SnippetLines, exact, options.MaxLineWidth), jsonOptions));
             }
             else
             {
                 foreach (var r in results)
                 {
                     Console.WriteLine($"{r.Path}:{r.StartLine}-{r.EndLine}");
-                    var snippetLines = SearchSnippetFormatter.Format(r.Content, options.Query, options.SnippetLines, exact);
+                    var snippetLines = SearchSnippetFormatter.Format(r.Content, options.Query, options.SnippetLines, exact, options.MaxLineWidth);
                     foreach (var line in snippetLines)
                         Console.WriteLine($"  {line}");
                     Console.WriteLine();

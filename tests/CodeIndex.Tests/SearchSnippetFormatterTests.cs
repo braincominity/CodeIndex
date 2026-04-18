@@ -112,4 +112,72 @@ public class SearchSnippetFormatterTests
         Assert.Equal("...", formatted[0]);
         Assert.NotEqual("...", formatted[^1]);
     }
+
+    [Fact]
+    public void Format_ClampsLongMatchLine_AroundFirstMatchToken()
+    {
+        // A single massive minified line with one match token — the clamped output
+        // must keep the match visible and must not return the entire raw line.
+        // 1 行巨大なミニファイ済み行に 1 つだけ match token を置いた場合、
+        // クランプ後でも match が見える状態で、生データ全量は返さない。
+        var huge = new string('a', 10_000) + "Target" + new string('b', 10_000);
+
+        var formatted = SearchSnippetFormatter.Format(huge, "Target", maxLines: 1, maxLineWidth: 200);
+
+        var joined = string.Join('\n', formatted);
+        Assert.Contains("Target", joined);
+        Assert.Contains("...(+", joined);
+        Assert.True(joined.Length <= 400, $"expected clamped output under 400 chars, got {joined.Length}");
+    }
+
+    [Fact]
+    public void Format_ClampsLongLines_EvenWhenMaxLineWidthExplicit()
+    {
+        // A non-match long line should still be clamped, bounded by maxLineWidth.
+        // match しない長い行も maxLineWidth でクランプされる。
+        var content = "Target appears here\n" + new string('x', 5_000);
+
+        var formatted = SearchSnippetFormatter.Format(content, "Target", maxLines: 2, maxLineWidth: 128);
+
+        var joined = string.Join('\n', formatted);
+        Assert.Contains("Target appears here", joined);
+        Assert.Contains("...(+", joined);
+        Assert.DoesNotContain(new string('x', 1_000), joined);
+    }
+
+    [Fact]
+    public void ToCompactResult_ReportsTruncationMetadata_WhenLineIsClamped()
+    {
+        var hugeLine = new string('a', 1_000) + "Target" + new string('b', 1_000);
+        var result = new SearchResult
+        {
+            Path = "dist/app.min.js",
+            Lang = "javascript",
+            StartLine = 1,
+            EndLine = 1,
+            Content = hugeLine,
+            Score = -1.0,
+        };
+
+        var compact = SearchSnippetFormatter.ToCompactResult(result, "Target", maxLines: 1, maxLineWidth: 256);
+
+        Assert.Contains("Target", compact.Snippet);
+        Assert.True(compact.Snippet.Length <= 512, $"clamped snippet should stay bounded, got {compact.Snippet.Length}");
+        Assert.Equal(1, compact.TruncatedLineCount);
+        Assert.Single(compact.Highlights);
+        Assert.True(compact.Highlights[0].Truncated);
+        Assert.Equal(hugeLine.Length, compact.Highlights[0].OriginalLineLength);
+    }
+
+    [Fact]
+    public void Format_DoesNotClamp_WhenLineFitsWithinMaxLineWidth()
+    {
+        const string content = "call Target()";
+
+        var formatted = SearchSnippetFormatter.Format(content, "Target", maxLines: 1, maxLineWidth: 64);
+
+        var joined = string.Join('\n', formatted);
+        Assert.Equal("call Target()", joined);
+        Assert.DoesNotContain("...(+", joined);
+    }
 }

@@ -15,7 +15,7 @@ public static class ConsoleUi
         ("backfill-fold", "cdidx backfill-fold [--db <path>] [--json]"),
         ("index-commits", "cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--dry-run] [--json]"),
         ("index-files", "cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json]"),
-        ("search", "cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts] [--exact|--exact-substring] [--count] [--since <datetime>] [--no-dedup]"),
+        ("search", "cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--count] [--since <datetime>] [--no-dedup]"),
         ("definition", "cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--since <datetime>]"),
         ("references", "cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
         ("callers", "cdidx callers <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name] [--count]"),
@@ -380,7 +380,7 @@ public static class ConsoleUi
         Console.WriteLine("  --exclude-path <pattern>   Exclude paths containing this text (repeatable)");
         Console.WriteLine("  --exclude-tests            Exclude likely test files");
         Console.WriteLine("  --snippet-lines <n>        Search snippet length (1-20, default: 8)");
-        Console.WriteLine($"  --max-line-width <n>       references/find/excerpt/inspect only: clamp very long single-line context/excerpt payloads (default: {LineWidthFormatter.DefaultMaxLineWidth})");
+        Console.WriteLine($"  --max-line-width <n>       search/references/find/excerpt/inspect only: clamp very long single-line snippet/context/excerpt payloads (default: {LineWidthFormatter.DefaultMaxLineWidth})");
         Console.WriteLine("  --focus-line <line>        excerpt: line whose focused column should stay visible (requires --focus-column)");
         Console.WriteLine("  --focus-column <n>         excerpt: column to keep centered when clamping (must be within the focused line)");
         Console.WriteLine("  --focus-length <n>         excerpt: width of the focused span (default: 1, requires --focus-column)");
@@ -583,7 +583,7 @@ public static class ConsoleUi
             elif [ ""$cmd"" = ""hotspots"" ]; then
                 COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --count --group-by-name --help"" -- ""$cur""))
             else
-                COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --body --count --fts --snippet-lines --since --depth --reverse --exact --exact-substring --exact-name --help"" -- ""$cur""))
+                COMPREPLY=($(compgen -W ""--db --json --limit --lang --kind --path --exclude-path --exclude-tests --body --count --fts --snippet-lines --max-line-width --since --depth --reverse --exact --exact-substring --exact-name --help"" -- ""$cur""))
             fi
             ;;
     esac
@@ -697,6 +697,7 @@ _cdidx() {{
                     '--count[Count only]' \
                     '--fts[Raw FTS5 syntax]' \
                     '--snippet-lines[Snippet length]:number' \
+                    '--max-line-width[Clamp long single-line snippets]:number' \
                     '--exact[Backward-compatible exact shorthand]' \
                     '--exact-substring[Search-only exact substring match]' \
                     '--exact-name[Exact symbol-name equality]' \
@@ -727,7 +728,7 @@ _cdidx");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from find' -l query -r -d 'Literal query'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from find excerpt' -l before -r -d 'Context lines before'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from find excerpt' -l after -r -d 'Context lines after'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from references excerpt find inspect' -l max-line-width -r -d 'Clamp long single-line payloads'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search references excerpt find inspect' -l max-line-width -r -d 'Clamp long single-line payloads'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l focus-line -r -d 'Focused line to keep visible when clamping'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l focus-column -r -d 'Focused column to keep visible when clamping'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l focus-length -r -d 'Focused span width when clamping'");
