@@ -235,6 +235,559 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void Search_FindsCjkSubstringInsideLongerToken()
+    {
+        // FTS5 default tokenizer (unicode61) treats an entire CJK run like "計算する" as one token.
+        // Without the CJK-only prefix-match fallback, `search 計算` would miss `def 計算する`.
+        // FTS5既定のunicode61トークナイザは「計算する」を単一トークンとして扱う。
+        // CJK 限定の prefix match fallback を付与しない限り、`search 計算` は `def 計算する` を取りこぼす。
+        InsertIndexedFile("src/cjk.py", "python",
+            "def 計算する(値):\n    return 値 * 2\n");
+
+        var results = _reader.Search("計算");
+
+        Assert.Contains(results, r => r.Path == "src/cjk.py");
+    }
+
+    [Fact]
+    public void Search_CjkFullTokenQueryStillFindsExactFullToken()
+    {
+        // Positive regression: the CJK prefix fallback must not break the case where the
+        // query already IS the full token. Searching '計算する' must still find content
+        // containing '計算する'. This pins the "CJK prefix fallback does not regress exact
+        // matches", NOT "CJK prefix fallback narrows to exact matches" — CJK tokens always
+        // take the prefix path, so '計算する' also matches '計算する追加' (that widening is
+        // intentional; users who want strict equality should use `--exact` / `instr`).
+        // 正の回帰テスト: クエリが既に完全トークンの場合でも CJK prefix fallback が壊していないこと。
+        // 「完全一致を保つ」ではなく「完全一致を取りこぼさない」ことを固定する点に注意 — CJK トークンは
+        // 常に prefix 経路を通るので '計算する' は '計算する追加' にもヒットする（意図的な挙動で、
+        // 厳密一致が必要なら `--exact` / `instr` 経路を使う）。
+        InsertIndexedFile("src/cjk_exact.py", "python",
+            "def 計算する(値):\n    return 値\n");
+
+        var results = _reader.Search("計算する");
+
+        Assert.Contains(results, r => r.Path == "src/cjk_exact.py");
+    }
+
+    [Fact]
+    public void Search_CjkFullTokenQueryAlsoWidensToLongerTokens()
+    {
+        // Pins the intentional widening: a CJK query ALWAYS takes the prefix fallback, so
+        // searching '計算する' also returns chunks containing '計算する追加'. This is the
+        // documented semantics — users who need strict equality must use the exact path.
+        // If a future change wants to narrow full-token CJK queries to non-prefix, this
+        // test should be the first to break and force an explicit decision, not a silent
+        // drift. Without this pin, issue #198 could be "fixed" by a revert that re-breaks
+        // the original reproduction (search 計算 → 0 hits) and no test would catch it.
+        // 意図的なワイドニングを固定する: CJK クエリは必ず prefix fallback を通るため、
+        // '計算する' の検索は '計算する追加' を含むチャンクも返す。厳密一致が必要な場合は
+        // exact 経路を使うのが仕様。将来この挙動を変更する場合にこのテストが最初に壊れ、
+        // 静かに #198 の元再現（search 計算 → 0 件）に戻されることを防ぐアンカー。
+        InsertIndexedFile("src/cjk_widen_short.py", "python",
+            "def 計算する(値):\n    return 値\n");
+        InsertIndexedFile("src/cjk_widen_long.py", "python",
+            "def 計算する追加(値):\n    return 値 + 1\n");
+
+        var results = _reader.Search("計算する");
+
+        Assert.Contains(results, r => r.Path == "src/cjk_widen_short.py");
+        Assert.Contains(results, r => r.Path == "src/cjk_widen_long.py");
+    }
+
+    [Fact]
+    public void Search_CjkPrefixDoesNotMatchUnrelatedCjkTokens()
+    {
+        // The CJK prefix fallback must widen only to tokens that literally start with the
+        // query codepoints. An unrelated CJK word like '検索' must not match '計算' even
+        // though both are CJK single-token runs under unicode61.
+        // CJK prefix fallback はクエリのコードポイントから始まるトークンにのみ拡張されるべき。
+        // '検索' のような無関係なCJK語は、同じくunicode61で単一トークン扱いされても '計算' にマッチしてはならない。
+        InsertIndexedFile("src/cjk_match.py", "python",
+            "def 計算する(値):\n    return 値\n");
+        InsertIndexedFile("src/cjk_unrelated.py", "python",
+            "def 検索する(値):\n    return 値\n");
+
+        var results = _reader.Search("計算");
+
+        Assert.Contains(results, r => r.Path == "src/cjk_match.py");
+        Assert.DoesNotContain(results, r => r.Path == "src/cjk_unrelated.py");
+    }
+
+    [Fact]
+    public void Search_EmojiMixedTokenDoesNotPrefixWidenToAsciiNeighbors()
+    {
+        // Regression guard for the most damaging over-widening case: if an emoji-mixed
+        // token was auto-upgraded to a prefix phrase (earlier in this fix's iterations it
+        // was), unicode61 would strip the emoji and the query would become a pure ASCII
+        // prefix search ('"foo"*') — sweeping in unrelated neighbors like 'foobar'. The
+        // sanitizer must therefore NOT add a prefix '*' to emoji-mixed tokens. Note: this
+        // only protects against PREFIX widening (neighbors that merely start with the
+        // ASCII fragment). It does NOT and cannot claim "exact-phrase semantics" against
+        // content where unicode61 indexes an identical ASCII token — see the companion
+        // `Search_EmojiMixedTokenFallsBackToAsciiToken_UseExactForStrict` pin.
+        // 最大の over-widening 回帰防止: emoji 混在トークンに prefix '*' が付くと、unicode61 が
+        // emoji を drop するため実質 '"foo"*' となり 'foobar' のような無関係な近傍を拾う。
+        // サニタイザは emoji 混在トークンに prefix を付与してはならない。ただしこれは
+        // 「prefix 拡張を防ぐ」までで、unicode61 が同じ ASCII トークンを indexing した内容に
+        // 対して完全一致を保証するものではない（下記の companion pin を参照）。
+        InsertIndexedFile("src/emoji_mixed.py", "python",
+            "def foo🎉():\n    return 1\n");
+        InsertIndexedFile("src/ascii_prefix_neighbor.py", "python",
+            "def foobar():\n    return 2\n");
+
+        var results = _reader.Search("foo🎉");
+
+        Assert.Contains(results, r => r.Path == "src/emoji_mixed.py");
+        Assert.DoesNotContain(results, r => r.Path == "src/ascii_prefix_neighbor.py");
+    }
+
+    [Fact]
+    public void Search_EmojiMixedTokenFallsBackToAsciiToken_UseExactForStrict()
+    {
+        // Known limitation pin: unicode61 drops emoji codepoints during BOTH indexing and
+        // query tokenization, so 'foo🎉' is indexed as the FTS token 'foo' and a literal
+        // query 'foo🎉' is tokenized as the FTS phrase '"foo"'. The FTS path therefore
+        // cannot distinguish between `def foo():` and `def foo🎉():` — both are FTS-equal.
+        // Users who need strict equality over emoji must route through the exact-substring
+        // path (`--exact` on the CLI, which uses SQLite `instr` against raw content and
+        // bypasses unicode61 tokenization entirely). This test pins that limitation so
+        // documentation and CHANGELOG cannot silently claim "exact-phrase semantics".
+        // 既知の制限の固定: unicode61 は indexing とクエリの両段階で emoji を drop するため、
+        // 'foo🎉' は FTS トークンとしては 'foo' と同じになる。FTS 経路では `def foo():` と
+        // `def foo🎉():` を区別できず、完全一致が必要なら `--exact` 経路（SQLite `instr`）を
+        // 使う必要がある。文書・CHANGELOG がこの制限を見落として「完全一致を保つ」と誤って
+        // 謳わないよう、挙動を明示的に固定する。
+        InsertIndexedFile("src/emoji_mixed_fallback.py", "python",
+            "def foo🎉():\n    return 1\n");
+        InsertIndexedFile("src/ascii_exact_twin.py", "python",
+            "def foo():\n    return 3\n");
+
+        var ftsResults = _reader.Search("foo🎉");
+
+        // FTS path cannot distinguish — both show up because unicode61 drops '🎉' on both sides.
+        // FTS 経路では区別できない — unicode61 が両側で '🎉' を drop するため。
+        Assert.Contains(ftsResults, r => r.Path == "src/emoji_mixed_fallback.py");
+        Assert.Contains(ftsResults, r => r.Path == "src/ascii_exact_twin.py");
+
+        // The exact path DOES distinguish via instr() on raw content.
+        // exact 経路は instr() により区別できる。
+        var exactResults = _reader.Search("foo🎉", exact: true);
+        Assert.Contains(exactResults, r => r.Path == "src/emoji_mixed_fallback.py");
+        Assert.DoesNotContain(exactResults, r => r.Path == "src/ascii_exact_twin.py");
+    }
+
+    [Fact]
+    public void Search_LatinDiacriticTokenDoesNotWidenToPrefixSearch()
+    {
+        // Latin-diacritic tokens (e.g. 'naïve') are tokenized normally by unicode61,
+        // so the CJK-only prefix fallback must NOT fire. Otherwise a literal 'naïve'
+        // query would silently widen to match 'naïvety', 'naïveness', etc.
+        // Latin系ダイアクリティカル付きトークン（例: 'naïve'）はunicode61で通常トークン化されるため、
+        // CJK限定のprefix fallbackが発動してはならない。発動すると 'naïve' が 'naïvety' 等まで広がる。
+        InsertIndexedFile("src/latin_exact.py", "python",
+            "def naïve():\n    return 1\n");
+        InsertIndexedFile("src/latin_longer.py", "python",
+            "def naïvety():\n    return 2\n");
+
+        var results = _reader.Search("naïve");
+
+        Assert.Contains(results, r => r.Path == "src/latin_exact.py");
+        Assert.DoesNotContain(results, r => r.Path == "src/latin_longer.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpCjkExtensionHSubstringInsideLongerToken()
+    {
+        // Regression guard for CJK Unified Ideographs Extension H (U+31350..U+323AF,
+        // added in Unicode 15.0). These codepoints are non-BMP (supplementary plane) so
+        // they surface in .NET strings as surrogate pairs. If the predicate only walks
+        // chars instead of runes, or forgets Extension H's range, `search '𱍐'` returns
+        // 0 results against content containing `𱍐abc` — the exact #198 zero-hit shape,
+        // reproduced on a newer Unicode block. Pin that a CJK Extension H query still
+        // takes the prefix path and finds longer-token content.
+        // CJK Extension H (U+31350..U+323AF, Unicode 15.0) の回帰テスト。
+        // これらは非 BMP（補助面）のコードポイントで、.NET の string ではサロゲートペアとして
+        // 現れる。述語が char 走査だったり Extension H を忘れていたりすると、`search '𱍐'` が
+        // `𱍐abc` を含む内容に対して 0 件を返す — #198 の元症状そのものが新ブロックで再発する。
+        // CJK Extension H クエリが prefix 経路を通り、長いトークンの内容も見つけることを固定する。
+        var extensionHChar = char.ConvertFromUtf32(0x31350);
+        InsertIndexedFile("src/ext_h.py", "python",
+            $"def {extensionHChar}abc(x):\n    return x\n");
+
+        var results = _reader.Search(extensionHChar);
+
+        Assert.Contains(results, r => r.Path == "src/ext_h.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpCjkExtensionISubstringInsideLongerToken()
+    {
+        // Regression guard for CJK Unified Ideographs Extension I (U+2EBF0..U+2EE5F,
+        // Unicode 15.1, added 2023). Same non-BMP / surrogate-pair concern as Extension H,
+        // pinned separately so that a later "cleanup" dropping either range would break
+        // its own dedicated test instead of silently regressing.
+        // CJK Extension I (U+2EBF0..U+2EE5F, Unicode 15.1) の回帰テスト。
+        // Extension H と同じく非 BMP だが、どちらかの範囲を「整理」で外すとそれぞれ固有の
+        // テストが壊れるよう、別テストとして固定する。
+        var extensionIChar = char.ConvertFromUtf32(0x2EBF0);
+        InsertIndexedFile("src/ext_i.py", "python",
+            $"def {extensionIChar}abc(x):\n    return x\n");
+
+        var results = _reader.Search(extensionIChar);
+
+        Assert.Contains(results, r => r.Path == "src/ext_i.py");
+    }
+
+    [Fact]
+    public void Search_FindsIdeographicIterationMarkInsideLongerToken()
+    {
+        // Regression guard for Han-script codepoints outside the CJK Unified Ideographs
+        // blocks. '々' (U+3005, ideographic iteration mark) is Unicode script=Han but lives
+        // in the CJK Symbols and Punctuation block. unicode61 keeps it as a word character,
+        // so without explicit inclusion in the CJK prefix fallback set, `search '々'` returns
+        // 0 results against content containing `々abc` — same shape as #198 on a different
+        // codepoint class.
+        // CJK Unified Ideographs 範囲外の Han script コードポイントの回帰テスト。'々' (U+3005) は
+        // Unicode script=Han だが CJK Symbols and Punctuation ブロックに属する。unicode61 では
+        // 単語文字扱いなので、CJK prefix fallback セットに明示的に含めないと `search '々'` が
+        // `々abc` を含むファイルに対し 0 件を返す — #198 の別コードポイント版。
+        InsertIndexedFile("src/iter_mark.py", "python",
+            "def 々abc(x):\n    return x\n");
+
+        var results = _reader.Search("々");
+
+        Assert.Contains(results, r => r.Path == "src/iter_mark.py");
+    }
+
+    [Fact]
+    public void Search_FindsIdeographicZeroInsideLongerToken()
+    {
+        // Same concern as 々 above but for '〇' (U+3007, ideographic number zero).
+        // 上の 々 と同様、'〇' (U+3007) についての回帰テスト。
+        InsertIndexedFile("src/ideograph_zero.py", "python",
+            "def 〇abc(x):\n    return x\n");
+
+        var results = _reader.Search("〇");
+
+        Assert.Contains(results, r => r.Path == "src/ideograph_zero.py");
+    }
+
+    [Fact]
+    public void Search_FindsHalfwidthHangulSubstringInsideLongerToken()
+    {
+        // Regression guard for halfwidth Hangul letters (U+FFA0..U+FFDC). unicode61 keeps
+        // them as word characters, so without including that range in the CJK prefix
+        // fallback, `search 'ﾱ'` returns 0 results against content containing 'ﾱﾲﾳabc'.
+        // This is the same 0-hit shape as #198 on the halfwidth Hangul block, which is
+        // why the halfwidth range extends past U+FF9F (halfwidth Katakana) to U+FFDC.
+        // 半角ハングル (U+FFA0..U+FFDC) の回帰テスト。unicode61 は単語文字として扱うため、
+        // CJK prefix fallback 範囲に含めないと `search 'ﾱ'` が 'ﾱﾲﾳabc' を含む内容に対して
+        // 0 件になる — 半角ハングル版の #198 再現。U+FF9F までではなく U+FFDC まで広げる
+        // 必要がある理由を固定する。
+        InsertIndexedFile("src/halfwidth_hangul.py", "python",
+            "def ﾱﾲﾳabc(x):\n    return x\n");
+
+        var results = _reader.Search("ﾱ");
+
+        Assert.Contains(results, r => r.Path == "src/halfwidth_hangul.py");
+    }
+
+    [Fact]
+    public void Search_FindsVerticalKanaRepeatMarkInsideLongerToken()
+    {
+        // Regression guard for the vertical kana repeat mark block (U+3031..U+3035), Unicode
+        // category Lm (Letter Modifier). These codepoints are used in vertical-text Japanese
+        // as iteration marks. unicode61 keeps them as word characters, so without explicit
+        // inclusion in the CJK prefix fallback set, `search '〱'` returns 0 results against
+        // content containing `〱abc` — same shape as #198 on another Japanese block.
+        // 縦書き仮名反復記号（U+3031..U+3035、Unicode カテゴリ Lm）の回帰テスト。unicode61 では
+        // 単語文字として扱われるため、CJK prefix fallback セットに明示的に含めないと
+        // `search '〱'` が `〱abc` に対して 0 件を返す — 別ブロック版の #198 再現。
+        InsertIndexedFile("src/vertical_kana.py", "python",
+            "def 〱abc(x):\n    return x\n");
+
+        var results = _reader.Search("〱");
+
+        Assert.Contains(results, r => r.Path == "src/vertical_kana.py");
+    }
+
+    [Fact]
+    public void Search_FindsBopomofoInsideLongerToken()
+    {
+        // Regression guard for Bopomofo (U+3100..U+312F), the Mandarin Chinese phonetic
+        // system ("zhuyin"). Bopomofo letters are Unicode category Lo and survive unicode61
+        // tokenization as regular word characters, so a bare phrase query like `search 'ㄅ'`
+        // used to return 0 against content containing `ㄅabc` — same shape as the original
+        // #198 repro but on a different script. Pin that Bopomofo queries take the prefix
+        // fallback path.
+        // 注音符号（ボポモフォ、U+3100..U+312F、中国語発音）の回帰テスト。Unicode カテゴリ Lo で
+        // unicode61 は単語文字として保つため、`search 'ㄅ'` が `ㄅabc` に対して 0 件を返す
+        // 状態を防ぐ — #198 を別スクリプトで再現した形。
+        InsertIndexedFile("src/bopomofo.py", "python",
+            "def ㄅabc(x):\n    return x\n");
+
+        var results = _reader.Search("ㄅ");
+
+        Assert.Contains(results, r => r.Path == "src/bopomofo.py");
+    }
+
+    [Fact]
+    public void Search_FindsBopomofoExtendedInsideLongerToken()
+    {
+        // Regression guard for Bopomofo Extended (U+31A0..U+31BF), which extends zhuyin with
+        // additional phonetic letters used for minority Chinese dialects (e.g. Min Nan, Hakka).
+        // Same category / tokenization concern as Bopomofo above; pinned separately so a later
+        // cleanup that drops either range breaks its own dedicated test.
+        // 拡張注音符号（U+31A0..U+31BF、閩南語や客家語等の発音）の回帰テスト。Bopomofo と同じく
+        // 単語文字扱いなので、それぞれの範囲を独立に固定する。
+        InsertIndexedFile("src/bopomofo_ext.py", "python",
+            "def ㆠabc(x):\n    return x\n");
+
+        var results = _reader.Search("ㆠ");
+
+        Assert.Contains(results, r => r.Path == "src/bopomofo_ext.py");
+    }
+
+    [Fact]
+    public void Search_FindsYiSyllableInsideLongerToken()
+    {
+        // Regression guard for Yi Syllables (U+A000..U+A48F), the syllabary used by the Nuosu
+        // (Yi) people in southwestern China. Yi syllables are Unicode category Lo, so unicode61
+        // keeps them as word characters; without CJK prefix promotion, `search 'ꀀ'` returns 0
+        // results against content containing 'ꀀabc' — same 0-hit shape as #198 on another
+        // Unicode-15-adjacent historical East Asian script. Yi Radicals (U+A490..U+A4CF) are
+        // intentionally excluded upstream because they are category So and dropped by unicode61.
+        // 彝文字音節（Yi Syllables、U+A000..U+A48F、中国南西部のノス族の文字体系）の回帰テスト。
+        // Unicode カテゴリ Lo で unicode61 は単語文字として扱うため、CJK prefix 昇格なしでは
+        // `search 'ꀀ'` が 'ꀀabc' を含む内容に対して 0 件を返す — #198 の別スクリプト版。
+        // 彝文字部首（Yi Radicals、U+A490..U+A4CF）は Unicode カテゴリ So のため上流で意図的に除外。
+        InsertIndexedFile("src/yi_syllables.py", "python",
+            "def ꀀabc(x):\n    return x\n");
+
+        var results = _reader.Search("ꀀ");
+
+        Assert.Contains(results, r => r.Path == "src/yi_syllables.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpTangutSubstringInsideLongerToken()
+    {
+        // Regression guard for Tangut (U+17000..U+187FF), a non-BMP historical East Asian
+        // logographic script used by the Western Xia empire (11th–13th century). Tangut is
+        // Unicode category Lo and unicode61 keeps it as word characters, so the surrogate-pair
+        // aware rune walk AND an explicit U+17000..U+187FF range entry are both required for
+        // `search '𗀀'` to match '𗀀abc'. Pinned as a dedicated Tangut-block test so a future
+        // rewrite that collapses Tangut into a different neighboring block breaks here, not
+        // silently on Chinese archaeological text.
+        // 西夏文字（Tangut、U+17000..U+187FF、西夏帝国の非 BMP 表意文字）の回帰テスト。
+        // Unicode カテゴリ Lo で unicode61 が単語文字として扱うため、rune 走査と U+17000..U+187FF
+        // 範囲の CJK prefix 包含の両方がないと `search '𗀀'` が '𗀀abc' を拾えない。Tangut ブロック
+        // 単独のテストとして固定し、将来別ブロックへ統合するような書き換えがあっても中国考古
+        // テキストで黙って回帰する前にここで壊れるようにする。
+        var tangutChar = char.ConvertFromUtf32(0x17000);
+        InsertIndexedFile("src/tangut.py", "python",
+            $"def {tangutChar}abc(x):\n    return x\n");
+
+        var results = _reader.Search(tangutChar);
+
+        Assert.Contains(results, r => r.Path == "src/tangut.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpTangutComponentsSubstringInsideLongerToken()
+    {
+        // Regression guard for Tangut Components (U+18800..U+18AFF), the non-BMP block of
+        // radical / stroke components used to build Tangut logographs. Separate Unicode block
+        // and separate predicate branch from Tangut itself, so this test exercises its own
+        // branch rather than aliasing to the Tangut test. Unicode category Lo; unicode61 keeps
+        // it as word characters; same #198 zero-hit shape without explicit prefix fallback.
+        // 西夏文字部品（Tangut Components、U+18800..U+18AFF、非 BMP の西夏文字構成要素）の
+        // 回帰テスト。Tangut 本体とは別の Unicode ブロック・別の分岐を踏むため、Tangut テストと
+        // エイリアス化せず専用分岐を検証する。Unicode カテゴリ Lo で unicode61 は単語文字として
+        // 扱うため、prefix fallback なしでは #198 と同じ 0 件症状になる。
+        var tangutComponentsChar = char.ConvertFromUtf32(0x18800);
+        InsertIndexedFile("src/tangut_components.py", "python",
+            $"def {tangutComponentsChar}abc(x):\n    return x\n");
+
+        var results = _reader.Search(tangutComponentsChar);
+
+        Assert.Contains(results, r => r.Path == "src/tangut_components.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpKhitanSmallScriptSubstringInsideLongerToken()
+    {
+        // Regression guard for Khitan Small Script (U+18B00..U+18CFF), the non-BMP script of
+        // the Liao dynasty's Khitan people (10th–13th century). Separate Unicode block and
+        // separate predicate branch from Tangut / Tangut Components / Tangut Supplement, so
+        // this test exercises its own branch. Unicode category Lo; unicode61 keeps it as
+        // word characters.
+        // 契丹小字（Khitan Small Script、U+18B00..U+18CFF、遼朝の非 BMP 表音文字）の回帰テスト。
+        // Tangut / Tangut Components / Tangut Supplement とは別の Unicode ブロック・別の分岐。
+        // Unicode カテゴリ Lo で unicode61 は単語文字として扱う。
+        var khitanChar = char.ConvertFromUtf32(0x18B00);
+        InsertIndexedFile("src/khitan_small.py", "python",
+            $"def {khitanChar}abc(x):\n    return x\n");
+
+        var results = _reader.Search(khitanChar);
+
+        Assert.Contains(results, r => r.Path == "src/khitan_small.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpTangutSupplementSubstringInsideLongerToken()
+    {
+        // Regression guard for Tangut Supplement (U+18D00..U+18D8F), the small non-BMP block
+        // added in Unicode 13.0 alongside Khitan Small Script. Separate predicate branch from
+        // Tangut / Tangut Components / Khitan, so this test exercises its own branch. Unicode
+        // category Lo; unicode61 keeps it as word characters.
+        // 西夏文字補助（Tangut Supplement、U+18D00..U+18D8F、Unicode 13.0 で Khitan Small Script と
+        // 同時追加された小規模な非 BMP ブロック）の回帰テスト。Tangut / Tangut Components /
+        // Khitan とは別の分岐。Unicode カテゴリ Lo で unicode61 は単語文字として扱う。
+        var tangutSupplementChar = char.ConvertFromUtf32(0x18D00);
+        InsertIndexedFile("src/tangut_supplement.py", "python",
+            $"def {tangutSupplementChar}abc(x):\n    return x\n");
+
+        var results = _reader.Search(tangutSupplementChar);
+
+        Assert.Contains(results, r => r.Path == "src/tangut_supplement.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpTangutIterationMarkInsideLongerToken()
+    {
+        // Regression guard for the Tangut Iteration Mark (U+16FE0), a non-BMP codepoint in the
+        // Ideographic Symbols and Punctuation block used to annotate repeated Tangut
+        // characters. Unicode category Lm (Modifier Letter) on the current runtime; unicode61
+        // keeps Lm codepoints as word characters, so `search '𖿠'` returned 0 against '𖿠abc'
+        // without explicit CJK prefix promotion. The Ideographic Symbols and Punctuation
+        // iteration / annotation codepoints (U+16FE0 Tangut iteration, U+16FE1 Nüshu iteration,
+        // U+16FE3 Old Chinese iteration, U+16FE4 Khitan filler, U+16FF0 / U+16FF1 Vietnamese
+        // reading marks) are listed individually in the predicate so U+16FE2 (Po, dropped by
+        // unicode61) does not ride along. Pinned separately so the Lm / ideographic-annotation
+        // branch cannot regress silently.
+        // Tangut 反復記号（U+16FE0、非 BMP の Ideographic Symbols and Punctuation ブロック）の
+        // 回帰テスト。現行ランタイムでは Unicode カテゴリ Lm で unicode61 は単語文字として扱う。
+        // そのため CJK prefix 昇格がなければ `search '𖿠'` は '𖿠abc' に対して 0 件を返す。
+        // Ideographic Symbols and Punctuation の反復 / 注釈記号（U+16FE0 / 16FE1 / 16FE3 / 16FE4
+        // / 16FF0 / 16FF1）は個別列挙にし、U+16FE2 (Po, unicode61 が drop) を巻き込まないように
+        // している。Lm / ideographic annotation 分岐の回帰をここで固定する。
+        var tangutIterationMark = char.ConvertFromUtf32(0x16FE0);
+        InsertIndexedFile("src/tangut_iter.py", "python",
+            $"def {tangutIterationMark}abc(x):\n    return x\n");
+
+        var results = _reader.Search(tangutIterationMark);
+
+        Assert.Contains(results, r => r.Path == "src/tangut_iter.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpKhitanSmallScriptFillerInsideLongerToken()
+    {
+        // Regression guard for U+16FE4 (Khitan Small Script Filler), a non-BMP codepoint in the
+        // Ideographic Symbols and Punctuation block. On the current runtime this is Unicode
+        // category Mn (Nonspacing Mark); unicode61 still keeps Mn codepoints as word
+        // characters, so `search '𖿤'` returned 0 against '𖿤abc' without explicit CJK prefix
+        // promotion. Pinned so the Mn / Khitan-annotation case is covered in addition to Lm.
+        // 契丹小字フィラー（U+16FE4、非 BMP の Ideographic Symbols and Punctuation ブロック）の
+        // 回帰テスト。現行ランタイムでは Unicode カテゴリ Mn。unicode61 は Mn も単語文字として
+        // 扱うため、CJK prefix 昇格がなければ `search '𖿤'` は '𖿤abc' に対して 0 件を返す。
+        // Lm だけでなく Mn / 契丹注釈のケースも別途固定する。
+        var khitanFiller = char.ConvertFromUtf32(0x16FE4);
+        InsertIndexedFile("src/khitan_filler.py", "python",
+            $"def {khitanFiller}abc(x):\n    return x\n");
+
+        var results = _reader.Search(khitanFiller);
+
+        Assert.Contains(results, r => r.Path == "src/khitan_filler.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpVietnameseReadingMarkInsideLongerToken()
+    {
+        // Regression guard for U+16FF0 (Vietnamese Alternate Reading Mark CA), a non-BMP
+        // codepoint in the Ideographic Symbols and Punctuation block used to annotate Chu Nom
+        // (Han-based Vietnamese) text. On the current runtime this is Unicode category Mc
+        // (Spacing Mark); unicode61 keeps Mc codepoints as word characters, so `search '𖿰'`
+        // returned 0 against '𖿰abc' without explicit CJK prefix promotion. Pinned so the Mc /
+        // Chu-Nom-annotation case is covered in addition to Lm / Mn.
+        // ベトナム語 Chu Nom 読み記号 CA（U+16FF0、非 BMP の Ideographic Symbols and Punctuation
+        // ブロック）の回帰テスト。現行ランタイムでは Unicode カテゴリ Mc。unicode61 は Mc も
+        // 単語文字として扱うため、CJK prefix 昇格がなければ `search '𖿰'` は '𖿰abc' に対して
+        // 0 件を返す。Lm / Mn だけでなく Mc / Chu Nom 注釈のケースも固定する。
+        var vietnameseReadingMark = char.ConvertFromUtf32(0x16FF0);
+        InsertIndexedFile("src/vietnamese_ca.py", "python",
+            $"def {vietnameseReadingMark}abc(x):\n    return x\n");
+
+        var results = _reader.Search(vietnameseReadingMark);
+
+        Assert.Contains(results, r => r.Path == "src/vietnamese_ca.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpNushuSubstringInsideLongerToken()
+    {
+        // Regression guard for Nüshu (U+1B170..U+1B2FF), a non-BMP syllabic script historically
+        // used by women in Jiangyong County, Hunan, China. Unicode category Lo; unicode61 keeps
+        // it as word characters. Non-BMP, so the same surrogate-pair-aware rune walk and explicit
+        // range inclusion required for Tangut also apply here. Without them, `search '𛅰'` returns
+        // 0 against '𛅰abc' — #198 repeated on another non-BMP historical East Asian script.
+        // 女書（Nüshu、U+1B170..U+1B2FF、中国湖南省江永県で女性たちが使った非 BMP 音節文字）の
+        // 回帰テスト。Unicode カテゴリ Lo で unicode61 は単語文字として扱う。非 BMP のため、
+        // Tangut と同じく rune 走査と範囲追加の両方が必要。抜けると `search '𛅰'` が '𛅰abc' に
+        // 対して 0 件を返す — #198 の非 BMP 歴史的東アジア文字版。
+        var nushuChar = char.ConvertFromUtf32(0x1B170);
+        InsertIndexedFile("src/nushu.py", "python",
+            $"def {nushuChar}abc(x):\n    return x\n");
+
+        var results = _reader.Search(nushuChar);
+
+        Assert.Contains(results, r => r.Path == "src/nushu.py");
+    }
+
+    [Fact]
+    public void Search_FindsNonBmpKanaExtendedBSubstringInsideLongerToken()
+    {
+        // Regression guard for Kana Extended-B (U+1AFF0..U+1AFFF, Unicode 15.0). Non-BMP
+        // kana codepoints are represented as surrogate pairs in .NET strings; the predicate
+        // must walk runes rather than chars AND must include this range in the fallback
+        // set. Without it, `search '𚿰'` returns 0 results against content containing
+        // '𚿰abc' — identical 0-hit shape to #198.
+        // Kana Extended-B (U+1AFF0..U+1AFFF, Unicode 15.0) の回帰テスト。非 BMP の仮名は
+        // .NET 文字列ではサロゲートペアとして現れるため、述語は rune を走査し、さらにこの
+        // 範囲を fallback セットに含める必要がある。抜けると `search '𚿰'` が '𚿰abc' を含む
+        // 内容に対して 0 件を返す — #198 と同じ症状が Kana Extended-B で再発する。
+        var kanaExtendedBChar = char.ConvertFromUtf32(0x1AFF0);
+        InsertIndexedFile("src/kana_ext_b.py", "python",
+            $"def {kanaExtendedBChar}abc(x):\n    return x\n");
+
+        var results = _reader.Search(kanaExtendedBChar);
+
+        Assert.Contains(results, r => r.Path == "src/kana_ext_b.py");
+    }
+
+    [Fact]
+    public void CountSearchResults_IncludesCjkSubstringMatches()
+    {
+        // Count path shares the sanitizer, so the CJK prefix fallback must apply there too.
+        // Pin the exact count/fileCount instead of a loose `>= 1` so drift that inflates
+        // the count (e.g. prefix promotion leaking into an unrelated file) is caught too.
+        // カウント経路も同じサニタイザを共有するため、CJKの prefix フォールバックが効く必要がある。
+        // 緩い `>= 1` ではなく厳密な count/fileCount を固定し、prefix 昇格が無関係なファイルに
+        // 漏れて count が膨らむようなドリフトも捕える。
+        InsertIndexedFile("src/cjk_count_hit.py", "python",
+            "def 計算する(値):\n    return 値\n");
+        InsertIndexedFile("src/cjk_count_miss.py", "python",
+            "def 検索する(値):\n    return 値\n");
+
+        var counts = _reader.CountSearchResults("計算");
+
+        Assert.Equal(1, counts.Count);
+        Assert.Equal(1, counts.FileCount);
+    }
+
+    [Fact]
     public void SearchSymbols_FindsByName()
     {
         var results = _reader.SearchSymbols("authenticate");
@@ -4778,6 +5331,31 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetExcerptAndOutline_RoundTripPathContainingBackslash()
+    {
+        // #191: POSIX filenames containing '\' must not be silently rewritten to '/'.
+        // The index should store the literal path, and excerpt/outline must find it
+        // when the user supplies the same literal path.
+        // #191: POSIX の '\' を含むファイル名は '/' に書き換えてはいけない。
+        // 保存と検索の両方でリテラルなパスをそのまま使い、excerpt/outline で見つかることを確認する。
+        InsertIndexedFile("back\\slash.py", "python", "def hu(): pass\n");
+
+        var excerpt = _reader.GetExcerpt("back\\slash.py", 1, 1);
+        Assert.NotNull(excerpt);
+        Assert.Equal("back\\slash.py", excerpt!.Path);
+        Assert.Contains("def hu(): pass", excerpt.Content);
+
+        var outline = _reader.GetOutline("back\\slash.py");
+        Assert.NotNull(outline);
+        Assert.Equal("back\\slash.py", outline!.Path);
+
+        // The mangled form must NOT match — otherwise the fix would be a no-op.
+        // 誤った書き換え形では見つからないことを確認する（no-op 化の検出）。
+        Assert.Null(_reader.GetExcerpt("back/slash.py", 1, 1));
+        Assert.Null(_reader.GetOutline("back/slash.py"));
+    }
+
+    [Fact]
     public void GetOutline_NullStartEndLine_FallsBackToLine()
     {
         // Insert a file with a symbol that has NULL start_line/end_line (#46)
@@ -5215,6 +5793,334 @@ public class DbReaderTests : IDisposable
 
         var property = Assert.Single(unused, symbol => symbol.Name == "FullName");
         Assert.Equal("reflection_or_config_suspect", property.UnusedBucket);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_InlineAttributeWithBracketInString_DoesNotLeakToAdjacentProperty()
+    {
+        // Regression for #375 — `[` or `]` inside an attribute string argument must not
+        // confuse the bracket-depth scanner. Without the fix, the adjacent plain property
+        // below inherited the reflection attribute and flipped into the wrong bucket.
+        // #375 回帰: 属性文字列引数内の `[` / `]` が bracket-depth スキャナを乱すと、
+        // 直下の属性なしプロパティが誤って reflection 属性を継承して分類が狂う。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_string_bracket_fixture.cs",
+            Lang = "csharp",
+            Size = 320,
+            Lines = 12,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 10,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class Target
+                {
+                    [JsonPropertyName("a[")] public string BuggyName { get; set; } = "";
+
+                    public string PlainName { get; set; } = "";
+                }
+                """,
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "Target",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 8,
+                Signature = "public class Target",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "BuggyName",
+                Line = 5,
+                StartLine = 5,
+                EndLine = 5,
+                Signature = "[JsonPropertyName(\"a[\")] public string BuggyName { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "PlainName",
+                Line = 7,
+                StartLine = 7,
+                EndLine = 7,
+                Signature = "public string PlainName { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["reflection_string_bracket_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        var buggy = Assert.Single(unused, symbol => symbol.Name == "BuggyName");
+        Assert.Equal("reflection_or_config_suspect", buggy.UnusedBucket);
+
+        var plain = Assert.Single(unused, symbol => symbol.Name == "PlainName");
+        Assert.Equal("public_or_exported_no_refs", plain.UnusedBucket);
+    }
+
+    [Theory]
+    [InlineData("[JsonPropertyName(\"a[\")] public string Name { get; set; } = \"\";")]
+    [InlineData("[JsonPropertyName(\"a]b\")] public string Name { get; set; } = \"\";")]
+    [InlineData("[JsonPropertyName(\"]\")] public string Name { get; set; } = \"\";")]
+    [InlineData("[JsonPropertyName(@\"a[\")] public string Name { get; set; } = \"\";")]
+    [InlineData("[JsonPropertyName(\"\"\"a[\"\"\")] public string Name { get; set; } = \"\";")]
+    [InlineData("[JsonPropertyName($\"\"\"a[\"\"\")] public string Name { get; set; } = \"\";")]
+    [InlineData("[JsonPropertyName($$\"\"\"a[\"\"\")] public string Name { get; set; } = \"\";")]
+    public void GetUnusedSymbols_InlineReflectionAttributeWithBracketInString_IsStillSuspect(string anchor)
+    {
+        // The inline-declaration line itself must still be recognized as having
+        // both an attribute and a declaration, regardless of `[` / `]` in string args.
+        // 属性文字列中の `[` / `]` によらず、インライン宣言行自身は
+        // 「属性 + 宣言が同じ行にある」と認識されねばならない。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = $"src/reflection_string_bracket_inline_{anchor.GetHashCode():x8}.cs",
+            Lang = "csharp",
+            Size = 200,
+            Lines = 8,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 7,
+                Content = $$"""
+                using System.Text.Json.Serialization;
+
+                public class Target
+                {
+                    {{anchor}}
+                }
+                """,
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "Target",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 6,
+                Signature = "public class Target",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "Name",
+                Line = 5,
+                StartLine = 5,
+                EndLine = 5,
+                Signature = anchor,
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: [$"reflection_string_bracket_inline_{anchor.GetHashCode():x8}.cs"],
+            excludePathPatterns: null, excludeTests: false);
+
+        var property = Assert.Single(unused, symbol => symbol.Name == "Name");
+        Assert.Equal("reflection_or_config_suspect", property.UnusedBucket);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_StandaloneAttributeWithBracketInString_DoesNotLeakToAdjacentDeclaration()
+    {
+        // Regression extension for #375 — when a standalone attribute line
+        // (attribute on its own line, declaration on the next line) contains `[`
+        // or `]` inside a string literal, the upward scan must not treat that as
+        // an extra bracket and swallow the previous member's attribute block.
+        // #375 の追加回帰: 属性単独行 (属性と宣言が別行) の文字列リテラル内の `[` / `]` が
+        // 上方スキャンで bracket depth として誤算されると、直前メンバーの属性ブロックまで
+        // 吸い込まれて無関係なシンボルに属性が漏れ出す。これを防ぐ。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_standalone_bracket_fixture.cs",
+            Lang = "csharp",
+            Size = 400,
+            Lines = 14,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 12,
+                Content = "using System;\nusing System.Text.Json.Serialization;\n\npublic class Target\n{\n    [JsonPropertyName(\"name\")]\n    public string A { get; set; } = \"\";\n\n    [Obsolete(\"]\")]\n    public string B { get; set; } = \"\";\n}\n",
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "Target",
+                Line = 4,
+                StartLine = 4,
+                EndLine = 11,
+                Signature = "public class Target",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "A",
+                Line = 7,
+                StartLine = 6,
+                EndLine = 7,
+                Signature = "public string A { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "B",
+                Line = 10,
+                StartLine = 9,
+                EndLine = 10,
+                Signature = "public string B { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["reflection_standalone_bracket_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        // A sits under a real reflection attribute → suspect.
+        // B sits under [Obsolete("]")], which is NOT a reflection attribute, so B
+        // must not inherit A's reflection attribute through the bracket-leak path.
+        // A は本物の reflection 属性の下なので suspect。
+        // B は reflection 属性ではない `[Obsolete("]")]` の下なので、bracket leak で
+        // A の reflection 属性を継承してはならない。
+        var a = Assert.Single(unused, symbol => symbol.Name == "A");
+        Assert.Equal("reflection_or_config_suspect", a.UnusedBucket);
+
+        var b = Assert.Single(unused, symbol => symbol.Name == "B");
+        Assert.Equal("public_or_exported_no_refs", b.UnusedBucket);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_InlineRawInterpolatedAttributeWithBracketInString_DoesNotLeakToAdjacentProperty()
+    {
+        // Regression extension for #375 — raw-interpolated string literals
+        // (`$"""..."""`) inside an inline attribute must not escape bracket-depth
+        // sanitization either, or the adjacent plain property re-inherits the
+        // reflection attribute context.
+        // #375 の追加回帰: raw 補間文字列 (`$"""..."""`) を含むインライン属性でも、
+        // 直下の属性なしプロパティに reflection 属性コンテキストが漏れ出さないこと。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_raw_interpolated_fixture.cs",
+            Lang = "csharp",
+            Size = 340,
+            Lines = 12,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 10,
+                Content = "using System.Text.Json.Serialization;\n\npublic class Target\n{\n    [JsonPropertyName($\"\"\"a[\"\"\")] public string BuggyName { get; set; } = \"\";\n\n    public string PlainName { get; set; } = \"\";\n}\n",
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "Target",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 8,
+                Signature = "public class Target",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "BuggyName",
+                Line = 5,
+                StartLine = 5,
+                EndLine = 5,
+                Signature = "[JsonPropertyName($\"\"\"a[\"\"\")] public string BuggyName { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "PlainName",
+                Line = 7,
+                StartLine = 7,
+                EndLine = 7,
+                Signature = "public string PlainName { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["reflection_raw_interpolated_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        var buggy = Assert.Single(unused, symbol => symbol.Name == "BuggyName");
+        Assert.Equal("reflection_or_config_suspect", buggy.UnusedBucket);
+
+        var plain = Assert.Single(unused, symbol => symbol.Name == "PlainName");
+        Assert.Equal("public_or_exported_no_refs", plain.UnusedBucket);
     }
 
     [Fact]
@@ -6250,5 +7156,201 @@ public class DbReaderTests : IDisposable
         Assert.True(result.SnippetTruncated);
         Assert.Contains("target", result.Snippet);
         Assert.True(result.Snippet.Length <= 96);
+    }
+
+    // Issue #203 regression: --since thresholds with a time-of-day component used to silently
+    // return zero rows because `@since` was bound via ToString("O") (yyyy-MM-ddTHH:mm:ss.fffffffZ)
+    // while files.modified is stored by Microsoft.Data.Sqlite as "yyyy-MM-dd HH:mm:ss.FFFFFFF"
+    // (space separator, no T, no Z). SQLite compares TEXT lexicographically, and "T" (0x54) is
+    // greater than " " (0x20) at position 10, so `f.modified >= @since` was always false for
+    // T-formatted thresholds regardless of actual temporal ordering. These tests bind DateTimes
+    // straight through AddWithValue so both sides share the same serialization.
+    // Issue #203 回帰: --since に時刻成分を渡すと無条件に0件だったバグの再発防止。
+    // `@since` は ToString("O") で T 区切り + Z 付きに整形されていた一方、`files.modified` は
+    // Microsoft.Data.Sqlite の既定 "yyyy-MM-dd HH:mm:ss.FFFFFFF"（空白区切り、T や Z なし）で
+    // 保存されており、位置10の文字比較（スペース 0x20 vs T 0x54）で必ず保存値 < @since に
+    // なっていた。DateTime をそのままバインドすれば書き込み側と完全に同じ文字列になる。
+
+    [Fact]
+    public void ListFiles_WithTimeOfDaySince_IncludesNewerFiles()
+    {
+        InsertIndexedFile(
+            "src/since203_new.py",
+            "python",
+            "def new_func():\n    return 1\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/since203_old.py",
+            "python",
+            "def old_func():\n    return 0\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        // Threshold 1h before the newer file; the newer file must be included.
+        // より新しいファイルの1時間前を閾値にした場合、その新しいファイルが含まれるはず。
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+        var results = _reader.ListFiles(
+            pathPatterns: new[] { "src/since203_" },
+            since: since);
+
+        Assert.Contains(results, r => r.Path == "src/since203_new.py");
+        Assert.DoesNotContain(results, r => r.Path == "src/since203_old.py");
+    }
+
+    [Fact]
+    public void CountListFiles_WithTimeOfDaySince_CountsOnlyNewerFiles()
+    {
+        InsertIndexedFile(
+            "src/count203_new.py",
+            "python",
+            "def new_func():\n    return 1\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/count203_old.py",
+            "python",
+            "def old_func():\n    return 0\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+        var summary = _reader.CountListFiles(
+            pathPatterns: new[] { "src/count203_" },
+            since: since);
+
+        Assert.Equal(1, summary.Count);
+    }
+
+    [Fact]
+    public void SearchSymbols_WithTimeOfDaySince_IncludesNewerFiles()
+    {
+        InsertIndexedFile(
+            "src/sym_new.py",
+            "python",
+            "def sym_only_new():\n    return 1\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/sym_old.py",
+            "python",
+            "def sym_only_old():\n    return 0\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+
+        var newHits = _reader.SearchSymbols("sym_only_new", since: since);
+        Assert.Single(newHits, s => s.Path == "src/sym_new.py");
+
+        var oldHits = _reader.SearchSymbols("sym_only_old", since: since);
+        Assert.Empty(oldHits);
+    }
+
+    [Fact]
+    public void Search_WithTimeOfDaySince_IncludesNewerFiles()
+    {
+        InsertIndexedFile(
+            "src/search_new.py",
+            "python",
+            "def search_only_new():\n    return 'needle_203'\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/search_old.py",
+            "python",
+            "def search_only_old():\n    return 'needle_203'\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+        var results = _reader.Search("needle_203", since: since);
+
+        Assert.Contains(results, r => r.Path == "src/search_new.py");
+        Assert.DoesNotContain(results, r => r.Path == "src/search_old.py");
+    }
+
+    [Fact]
+    public void ListFiles_WithTimeOfDaySince_ExcludesFilesBeforeThreshold()
+    {
+        InsertIndexedFile(
+            "src/excl_only.py",
+            "python",
+            "def excl():\n    return 1\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+
+        // Threshold 1h after the file; must exclude everything.
+        // ファイルより1時間後を閾値にした場合は除外されるはず。
+        var since = new DateTime(2025, 6, 20, 23, 0, 0, DateTimeKind.Utc);
+        var results = _reader.ListFiles(pathPatterns: new[] { "src/excl_only.py" }, since: since);
+
+        Assert.Empty(results);
+    }
+
+    // Count-only SQL paths (search --count / symbols --count / definition --count) are compiled
+    // independently from the list paths above, so they need their own regressions against the
+    // ToString("O") vs DateTimeSqliteDefaultFormat mismatch. Without these, a future refactor that
+    // reintroduces ToString("O") on any single count binding would pass the list-path tests.
+    // `--count` 経路の SQL は一覧経路とは別に組み立てられているため、`ToString("O")` と
+    // DateTimeSqliteDefaultFormat の非対称が再発しても一覧側テストだけでは検出できない。
+    // カウント経路専用の回帰テストで各 bind を独立に守る。
+
+    [Fact]
+    public void CountSearchResults_WithTimeOfDaySince_CountsOnlyNewerChunks()
+    {
+        InsertIndexedFile(
+            "src/countsearch_new.py",
+            "python",
+            "def countsearch_only_new():\n    return 'needle_203_count'\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/countsearch_old.py",
+            "python",
+            "def countsearch_only_old():\n    return 'needle_203_count'\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+        var summary = _reader.CountSearchResults("needle_203_count", since: since);
+
+        Assert.Equal(1, summary.FileCount);
+        Assert.True(summary.Count >= 1);
+    }
+
+    [Fact]
+    public void CountSearchSymbolsTotal_WithTimeOfDaySince_CountsOnlyNewerSymbols()
+    {
+        InsertIndexedFile(
+            "src/countsym_new.py",
+            "python",
+            "def countsym_only_new():\n    return 1\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/countsym_old.py",
+            "python",
+            "def countsym_only_old():\n    return 0\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+
+        var newSummary = _reader.CountSearchSymbolsTotal("countsym_only_new", since: since);
+        Assert.Equal(1, newSummary.Count);
+
+        var oldSummary = _reader.CountSearchSymbolsTotal("countsym_only_old", since: since);
+        Assert.Equal(0, oldSummary.Count);
+    }
+
+    [Fact]
+    public void CountDefinitionsTotal_WithTimeOfDaySince_CountsOnlyNewerDefinitions()
+    {
+        InsertIndexedFile(
+            "src/countdef_new.py",
+            "python",
+            "def countdef_only_new():\n    return 1\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/countdef_old.py",
+            "python",
+            "def countdef_only_old():\n    return 0\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+
+        var newSummary = _reader.CountDefinitionsTotal("countdef_only_new", since: since);
+        Assert.Equal(1, newSummary.Count);
+
+        var oldSummary = _reader.CountDefinitionsTotal("countdef_only_old", since: since);
+        Assert.Equal(0, oldSummary.Count);
     }
 }

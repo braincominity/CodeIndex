@@ -114,7 +114,13 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "maxLineWidth must be greater than or equal to 1");
         }
 
-        maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidthValue ?? LineWidthFormatter.DefaultMaxLineWidth);
+        if (maxLineWidthValue.HasValue && maxLineWidthValue.Value > LineWidthFormatter.MaxAllowedLineWidth)
+        {
+            maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth;
+            return CreateToolErrorResponse(id, $"maxLineWidth must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth}");
+        }
+
+        maxLineWidth = maxLineWidthValue ?? LineWidthFormatter.DefaultMaxLineWidth;
         return null;
     }
 
@@ -198,15 +204,46 @@ public partial class McpServer
         return arr;
     }
 
-    private static string BuildGraphSummary(string label, int count, string? lang, bool? graphSupported)
+    private static string BuildGraphSummary(string label, int count, string? lang, bool? graphSupported, string? graphSupportReason = null, string? unsupportedSymbolKind = null)
     {
         if (count > 0)
             return $"Found {count} {label}.";
+
+        if (string.Equals(unsupportedSymbolKind, "enum_member", StringComparison.Ordinal))
+            return $"No {label} found. C# enum-member access edges are not indexed yet.";
 
         if (graphSupported == false && lang != null)
             return $"No {label} found. Call-graph queries are not indexed for '{lang}'.";
 
         return $"No {label} found.";
+    }
+
+    private static (string? GraphLanguage, bool? GraphSupported, string? GraphSupportReason, string? UnsupportedSymbolKind, bool GraphDegraded)
+        ResolveExactEnumMemberGraphSupport(DbReader reader, bool exact, string query, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string> excludePaths, bool excludeTests)
+    {
+        var hasEnumMemberGap = exact
+            && reader.HasExactUnsupportedCSharpEnumMember(query, lang, pathPatterns, excludePaths, excludeTests);
+        var supportedGraphLanguage = hasEnumMemberGap
+            ? reader.GetExactGraphSupportedDefinitionLanguage(query, lang, pathPatterns, excludePaths, excludeTests)
+            : null;
+        var hasSupportedGraphDefinition = supportedGraphLanguage != null;
+        bool? graphSupported = hasEnumMemberGap
+            ? hasSupportedGraphDefinition
+            : (lang == null ? (bool?)null : ReferenceExtractor.SupportsLanguage(lang));
+        var graphLanguage = hasEnumMemberGap
+            ? supportedGraphLanguage ?? "csharp"
+            : lang;
+        var graphSupportReason = ReferenceExtractor.BuildGraphSupportReasonWithUnsupportedEnumMemberGap(
+            graphLanguage,
+            graphSupported,
+            hasEnumMemberGap,
+            hasSupportedGraphDefinition);
+        return (
+            GraphLanguage: graphLanguage,
+            GraphSupported: graphSupported,
+            GraphSupportReason: graphSupportReason,
+            UnsupportedSymbolKind: hasEnumMemberGap ? "enum_member" : null,
+            GraphDegraded: hasEnumMemberGap);
     }
 
     private JsonNode ExecuteSearch(JsonNode? id, JsonNode? args)
@@ -218,8 +255,10 @@ public partial class McpServer
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
 
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
-        var lang = args?["lang"]?.GetValue<string>();
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var snippetLines = SearchSnippetFormatter.ClampSnippetLines(args?["snippetLines"]?.GetValue<int>() ?? SearchSnippetFormatter.DefaultSnippetLines);
+        if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
+            return maxLineWidthError;
         var rawQuery = args?["rawQuery"]?.GetValue<bool>() ?? false;
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
@@ -247,6 +286,7 @@ public partial class McpServer
                     ["query"] = query,
                     ["rawQuery"] = rawQuery,
                     ["snippetLines"] = snippetLines,
+                    ["maxLineWidth"] = maxLineWidth,
                     ["path"] = PathEcho(pathPatterns),
                     ["excludeTests"] = excludeTests,
                     ["count"] = 0,
@@ -261,10 +301,11 @@ public partial class McpServer
                 ["query"] = query,
                 ["rawQuery"] = rawQuery,
                 ["snippetLines"] = snippetLines,
+                ["maxLineWidth"] = maxLineWidth,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
                 ["count"] = results.Count,
-                ["results"] = JsonSerializer.SerializeToNode(results.Select(result => SearchSnippetFormatter.ToCompactResult(result, query, snippetLines, exact)), _jsonOptions)
+                ["results"] = JsonSerializer.SerializeToNode(results.Select(result => SearchSnippetFormatter.ToCompactResult(result, query, snippetLines, exact, maxLineWidth)), _jsonOptions)
             };
             // Include top file paths in summary for quick AI orientation
             // AIが素早く位置把握できるよう、サマリにトップファイルパスを含める
@@ -298,8 +339,8 @@ public partial class McpServer
         }
         if (namesProvided && names.Count == 0)
             return CreateToolErrorResponse(id, "'names' is present but contains no usable entries (all were empty or whitespace).");
-        var kind = args?["kind"]?.GetValue<string>();
-        var lang = args?["lang"]?.GetValue<string>();
+        var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
@@ -392,8 +433,8 @@ public partial class McpServer
         if (query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
 
-        var kind = args?["kind"]?.GetValue<string>();
-        var lang = args?["lang"]?.GetValue<string>();
+        var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var includeBody = args?["includeBody"]?.GetValue<bool>() ?? false;
         var pathPatterns = ReadPathList(args, "path");
@@ -448,8 +489,8 @@ public partial class McpServer
         if (query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
 
-        var kind = args?["kind"]?.GetValue<string>();
-        var lang = args?["lang"]?.GetValue<string>();
+        var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
@@ -469,7 +510,7 @@ public partial class McpServer
                 () => reader.CountSearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 () => reader.SearchReferences(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 r => r.SymbolName);
-            bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
+            var graphSupport = ResolveExactEnumMemberGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var payload = new JsonObject
             {
                 ["query"] = query,
@@ -478,12 +519,17 @@ public partial class McpServer
                 ["maxLineWidth"] = maxLineWidth,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
-                ["graphLanguage"] = lang,
-                ["graphSupported"] = graphSupported,
-                ["graphSupportReason"] = ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported),
+                ["graphLanguage"] = graphSupport.GraphLanguage,
+                ["graphSupported"] = graphSupport.GraphSupported,
+                ["graphSupportReason"] = graphSupport.GraphSupportReason,
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (graphSupport.GraphDegraded)
+            {
+                payload["graphDegraded"] = true;
+                payload["unsupportedSymbolKind"] = "enum_member";
+            }
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             if (results.Count == 0)
@@ -492,7 +538,7 @@ public partial class McpServer
                 AddFreshnessHint(payload, reader);
             }
             return CreateToolResult(id,
-                BuildGraphSummary("references", results.Count, lang, graphSupported),
+                BuildGraphSummary("references", results.Count, graphSupport.GraphLanguage, graphSupport.GraphSupported, graphSupport.GraphSupportReason, graphSupport.UnsupportedSymbolKind),
                 payload);
         });
     }
@@ -505,10 +551,10 @@ public partial class McpServer
         if (query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
 
-        var kind = args?["kind"]?.GetValue<string>();
+        var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         if (IsMetadataReferenceKind(kind))
             return CreateToolErrorResponse(id, $"'kind: {kind}' is not supported on 'callers'. Metadata references are attributed to the enclosing body-range symbol, so `callers` cannot return accurate rows for kind '{kind}'. Use the 'references' tool with kind '{kind}' for metadata enumeration.");
-        var lang = args?["lang"]?.GetValue<string>();
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
@@ -526,7 +572,7 @@ public partial class McpServer
                 () => reader.CountCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 () => reader.GetCallers(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 r => r.CalleeName);
-            bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
+            var graphSupport = ResolveExactEnumMemberGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var payload = new JsonObject
             {
                 ["query"] = query,
@@ -534,12 +580,17 @@ public partial class McpServer
                 ["lang"] = lang,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
-                ["graphLanguage"] = lang,
-                ["graphSupported"] = graphSupported,
-                ["graphSupportReason"] = ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported),
+                ["graphLanguage"] = graphSupport.GraphLanguage,
+                ["graphSupported"] = graphSupport.GraphSupported,
+                ["graphSupportReason"] = graphSupport.GraphSupportReason,
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (graphSupport.GraphDegraded)
+            {
+                payload["graphDegraded"] = true;
+                payload["unsupportedSymbolKind"] = "enum_member";
+            }
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             if (results.Count == 0)
@@ -548,7 +599,7 @@ public partial class McpServer
                 AddFreshnessHint(payload, reader);
             }
             return CreateToolResult(id,
-                BuildGraphSummary("callers", results.Count, lang, graphSupported),
+                BuildGraphSummary("callers", results.Count, graphSupport.GraphLanguage, graphSupport.GraphSupported, graphSupport.GraphSupportReason, graphSupport.UnsupportedSymbolKind),
                 payload);
         });
     }
@@ -561,10 +612,10 @@ public partial class McpServer
         if (query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
 
-        var kind = args?["kind"]?.GetValue<string>();
+        var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         if (IsMetadataReferenceKind(kind))
             return CreateToolErrorResponse(id, $"'kind: {kind}' is not supported on 'callees'. Metadata references are attributed to the enclosing body-range symbol, so `callees` cannot return accurate rows for kind '{kind}'. Use the 'references' tool with kind '{kind}' for metadata enumeration.");
-        var lang = args?["lang"]?.GetValue<string>();
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
@@ -582,7 +633,7 @@ public partial class McpServer
                 () => reader.CountCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 () => reader.GetCallees(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 r => r.CallerName);
-            bool? graphSupported = lang == null ? null : ReferenceExtractor.SupportsLanguage(lang);
+            var graphSupport = ResolveExactEnumMemberGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var payload = new JsonObject
             {
                 ["query"] = query,
@@ -590,12 +641,17 @@ public partial class McpServer
                 ["lang"] = lang,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
-                ["graphLanguage"] = lang,
-                ["graphSupported"] = graphSupported,
-                ["graphSupportReason"] = ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported),
+                ["graphLanguage"] = graphSupport.GraphLanguage,
+                ["graphSupported"] = graphSupport.GraphSupported,
+                ["graphSupportReason"] = graphSupport.GraphSupportReason,
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (graphSupport.GraphDegraded)
+            {
+                payload["graphDegraded"] = true;
+                payload["unsupportedSymbolKind"] = "enum_member";
+            }
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
             if (results.Count == 0)
@@ -604,7 +660,7 @@ public partial class McpServer
                 AddFreshnessHint(payload, reader);
             }
             return CreateToolResult(id,
-                BuildGraphSummary("callees", results.Count, lang, graphSupported),
+                BuildGraphSummary("callees", results.Count, graphSupport.GraphLanguage, graphSupport.GraphSupported, graphSupport.GraphSupportReason, graphSupport.UnsupportedSymbolKind),
                 payload);
         });
     }
@@ -614,7 +670,7 @@ public partial class McpServer
         var query = args?["query"]?.GetValue<string>();
         if (query != null && query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
-        var lang = args?["lang"]?.GetValue<string>();
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
@@ -662,7 +718,7 @@ public partial class McpServer
 
     private JsonNode ExecuteMap(JsonNode? id, JsonNode? args)
     {
-        var lang = args?["lang"]?.GetValue<string>();
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 10);
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
@@ -696,7 +752,7 @@ public partial class McpServer
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
 
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 10);
-        var lang = args?["lang"]?.GetValue<string>();
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var includeBody = args?["includeBody"]?.GetValue<bool>() ?? false;
         if (TryGetValidatedMaxLineWidth(id, args, out var maxLineWidth) is JsonNode maxLineWidthError)
             return maxLineWidthError;
@@ -941,7 +997,7 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "Missing required parameter: path");
 
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
-        var lang = args?["lang"]?.GetValue<string>();
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var beforeValue = args?["before"]?.GetValue<int>();
@@ -1081,7 +1137,7 @@ public partial class McpServer
     private JsonNode ExecuteDeps(JsonNode? id, JsonNode? args)
     {
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 50);
-        var lang = args?["lang"]?.GetValue<string>();
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -1112,7 +1168,7 @@ public partial class McpServer
 
         var maxDepth = Math.Clamp(args?["maxDepth"]?.GetValue<int>() ?? 5, 1, 10);
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 50);
-        var lang = args?["lang"]?.GetValue<string>();
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -1184,7 +1240,7 @@ public partial class McpServer
 
     private JsonNode ExecuteValidate(JsonNode? id, JsonNode? args)
     {
-        var kind = args?["kind"]?.GetValue<string>();
+        var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         var pathPatterns = ReadPathList(args, "path");
 
         return WithDbReader(id, reader =>
@@ -1205,8 +1261,8 @@ public partial class McpServer
     private JsonNode ExecuteSymbolHotspots(JsonNode? id, JsonNode? args)
     {
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
-        var kind = args?["kind"]?.GetValue<string>();
-        var lang = args?["lang"]?.GetValue<string>();
+        var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
@@ -1248,20 +1304,21 @@ public partial class McpServer
     private JsonNode ExecuteUnusedSymbols(JsonNode? id, JsonNode? args)
     {
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 50);
-        var kind = args?["kind"]?.GetValue<string>();
-        var lang = args?["lang"]?.GetValue<string>();
+        var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
+        var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var pathPatterns = ReadPathList(args, "path");
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
 
         // Add graph-support metadata for AI trust decisions
         // AI の信頼判断のためにグラフ対応メタデータを追加
-        bool? graphSupported = lang != null ? ReferenceExtractor.SupportsLanguage(lang) : null;
-        var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported);
+            bool? graphSupported = lang != null ? ReferenceExtractor.SupportsLanguage(lang) : null;
+            var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(lang, graphSupported);
 
         return WithDbReader(id, reader =>
         {
             var results = reader.GetUnusedSymbols(limit, kind, lang, pathPatterns, excludePaths, excludeTests);
+            var hasEnumMemberGap = reader.HasFilteredCSharpEnumSymbols(kind, lang, pathPatterns, excludePaths, excludeTests);
             var bucketCounts = results
                 .GroupBy(result => result.UnusedBucket, StringComparer.Ordinal)
                 .OrderBy(group => Array.IndexOf(new[] { "likely_unused_private", "maybe_unused_nonpublic", "public_or_exported_no_refs", "reflection_or_config_suspect" }, group.Key))
@@ -1269,14 +1326,24 @@ public partial class McpServer
             var payload = new JsonObject
             {
                 ["count"] = results.Count,
-                ["graph_supported"] = graphSupported,
-                ["graph_support_reason"] = graphSupportReason,
+                ["graph_supported"] = hasEnumMemberGap ? true : graphSupported,
+                ["graph_support_reason"] = hasEnumMemberGap
+                    ? "Call-graph extraction is indexed for 'csharp', but enum-member access edges are not indexed yet. C# enum members are excluded from unused, and enum declarations may still be false positives until those edges exist."
+                    : graphSupportReason,
                 ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(bucketCounts, _jsonOptions),
                 ["symbols"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            if (hasEnumMemberGap)
+            {
+                payload["graph_language"] = "csharp";
+                payload["graph_degraded"] = true;
+                payload["unsupported_symbol_kind"] = "enum_member";
+            }
             var summary = results.Count > 0
                 ? $"Found {results.Count} potentially unused symbol(s) across {bucketCounts.Count} returned bucket(s). Private hits are ranked ahead of exported/config suspects, but not labeled high-confidence from indexed refs alone. Note: name-based matching — same-named symbols in different contexts may mask true unused symbols."
-                : "No unused symbols found.";
+                : hasEnumMemberGap
+                    ? "No unused symbols found, but C# enum members are excluded from unused and enum declarations may still be false positives until enum-member access edges are indexed."
+                    : "No unused symbols found.";
             if (graphSupported == false)
                 summary += $" Warning: '{lang}' does not support reference extraction. Unused results are unavailable for this language.";
             if (!reader._hasReferencesTable)

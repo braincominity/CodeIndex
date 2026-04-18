@@ -70,6 +70,16 @@ public partial class DbReader
     // のようなメタデータ kind は非呼び出しエッジなのでここから除外する (issue #293)。
     internal const string CallGraphReferenceKindsSql = "('call', 'instantiate', 'subscribe')";
 
+    // Reference kinds that represent compile-time type/member references (e.g. C# `nameof(X)`,
+    // `typeof(T)`, Java `T.class`). They are intentionally excluded from default `callers` /
+    // `callees` results because they are not invocation edges, but they remain discoverable
+    // via `references` and explicit `--kind type_reference` queries. See issue #253.
+    // コンパイル時の型・メンバ参照（C# の nameof/typeof、Java の `.class` 等）。
+    // 呼び出しエッジではないため既定の callers/callees からは除外するが、
+    // references や `--kind type_reference` 経由では引き続き参照できる。issue #253 参照。
+    private const string NonInvocationReferenceKindsExclusion =
+        " AND r.reference_kind != 'type_reference'";
+
     /// <summary>
     /// Visibility ranking: public symbols first, then protected, internal, private, unknown last.
     /// 可視性ランキング: public を最優先、次に protected、internal、private、不明は最後。
@@ -398,7 +408,7 @@ public partial class DbReader
 
         cmd.CommandText = sql;
         if (since != null && _fileColumns.Contains("modified"))
-            cmd.Parameters.AddWithValue("@since", since.Value.ToString("O"));
+            cmd.Parameters.AddWithValue("@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         return cmd.ExecuteScalar() != null;
     }
@@ -589,7 +599,7 @@ public partial class DbReader
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         if (since != null && _fileColumns.Contains("modified"))
-            cmd.Parameters.AddWithValue("@since", since.Value.ToString("O"));
+            cmd.Parameters.AddWithValue("@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         cmd.Parameters.AddWithValue("@limit", limit);
 
@@ -639,7 +649,7 @@ public partial class DbReader
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         if (since != null && _fileColumns.Contains("modified"))
-            cmd.Parameters.AddWithValue("@since", since.Value.ToString("O"));
+            cmd.Parameters.AddWithValue("@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         return ExecuteCountSummary(cmd);
@@ -966,6 +976,8 @@ public partial class DbReader
 
         if (referenceKind != null)
             sql += " AND r.reference_kind = @referenceKind";
+        else
+            sql += NonInvocationReferenceKindsExclusion;
         if (exact && _foldReady)
             sql += " AND r.symbol_name_folded = @query";
         else if (exact)
@@ -1157,6 +1169,8 @@ public partial class DbReader
 
         if (referenceKind != null)
             sql += " AND r.reference_kind = @referenceKind";
+        else
+            sql += NonInvocationReferenceKindsExclusion;
         if (exact && _foldReady)
             sql += " AND r.container_name_folded = @query";
         else if (exact)

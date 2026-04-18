@@ -21,6 +21,7 @@ public static class QueryCommandRunner
     internal const int ExactZeroHintProbeLimit = 1;
     internal const int ExactZeroHintSampleLimit = 5;
     private const string HotspotsGroupedByNameKind = "name_kind";
+    private const string CSharpEnumMemberUnusedGraphReason = "Call-graph extraction is indexed for 'csharp', but enum-member access edges are not indexed yet. C# enum members are excluded from unused, and enum declarations may still be false positives until those edges exist.";
     private static readonly HashSet<string> ValueTakingOptions =
     [
         "--db",
@@ -64,14 +65,14 @@ public static class QueryCommandRunner
     private const string FindUsage = "Usage: cdidx find <query> --path <pattern> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]\n       cdidx find --query <query> --path <pattern> [...]\n       cdidx find [options] -- <query>";
     public static int RunSearch(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
-        var previewOptionError = ValidatePreviewOptions("search", cmdArgs, allowMaxLineWidth: false, allowFocusOptions: false);
+        var previewOptionError = ValidatePreviewOptions("search", cmdArgs, allowMaxLineWidth: true, allowFocusOptions: false);
         if (previewOptionError != null)
         {
             Console.Error.WriteLine(previewOptionError);
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(cmdArgs, jsonDefault: false);
-        if (TryWriteUnsupportedOptionError("search", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--snippet-lines", "--fts", "--count", "--since", "--no-dedup", "--exact", "--exact-substring", "--exact-name"]))
+        if (TryWriteUnsupportedOptionError("search", cmdArgs, ["--db", "--json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--snippet-lines", "--max-line-width", "--fts", "--count", "--since", "--no-dedup", "--exact", "--exact-substring", "--exact-name"]))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "search"))
             return CommandExitCodes.UsageError;
@@ -126,14 +127,14 @@ public static class QueryCommandRunner
             if (options.Json)
             {
                 foreach (var r in results)
-                    Console.WriteLine(JsonSerializer.Serialize(SearchSnippetFormatter.ToCompactResult(r, options.Query, options.SnippetLines, exact), jsonOptions));
+                    Console.WriteLine(JsonSerializer.Serialize(SearchSnippetFormatter.ToCompactResult(r, options.Query, options.SnippetLines, exact, options.MaxLineWidth), jsonOptions));
             }
             else
             {
                 foreach (var r in results)
                 {
                     Console.WriteLine($"{r.Path}:{r.StartLine}-{r.EndLine}");
-                    var snippetLines = SearchSnippetFormatter.Format(r.Content, options.Query, options.SnippetLines, exact);
+                    var snippetLines = SearchSnippetFormatter.Format(r.Content, options.Query, options.SnippetLines, exact, options.MaxLineWidth);
                     foreach (var line in snippetLines)
                         Console.WriteLine($"  {line}");
                     Console.WriteLine();
@@ -229,6 +230,7 @@ public static class QueryCommandRunner
                     Console.Error.WriteLine("No definitions found.");
                     WriteExactZeroHint(exactZeroHint);
                     WriteKindHint(options.Kind, reader);
+                    WriteLangHint(options.Lang, reader);
                     WriteZeroResultHints(options, reader, "Try 'search' for full-text matches instead of symbol lookup.");
                 }
                 return CommandExitCodes.NotFound;
@@ -305,6 +307,7 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             WriteGraphReferenceKindHint("references", options.Kind, options.Json);
+            var graphSupportOverride = TryGetEnumMemberGraphSupportOverride(reader, options.Query!, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
             if (options.CountOnly)
             {
                 var counts = reader.CountSearchReferencesTotal(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
@@ -318,11 +321,11 @@ public static class QueryCommandRunner
                 WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignalForCount, reader, options);
                 if (counts.Count == 0)
                 {
-                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount);
+                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount, graphSupportOverride);
                     return CommandExitCodes.Success;
                 }
 
-                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount);
+                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, graphSupportOverride: graphSupportOverride);
                 return CommandExitCodes.Success;
             }
 
@@ -337,13 +340,14 @@ public static class QueryCommandRunner
             WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal, reader, options);
             if (results.Count == 0)
             {
-                if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult(reader, "references", json: true, graphAvailable: false, jsonOptions, exact ? exactSignal : (ExactQuerySignal?)null);
+                if (options.Json && (exact || !reader._hasReferencesTable || graphSupportOverride != null))
+                    WriteGraphZeroJsonResult(reader, "references", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, graphSupportOverride);
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No references found.");
                     WriteExactZeroHint(exactZeroHint);
                     WriteGraphSupportHint(options.Lang);
+                    WriteGraphSupportOverrideHint(graphSupportOverride);
                     WriteLangHint(options.Lang, reader);
                     WriteDegradedGraphZeroResult(reader, "references", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
@@ -355,7 +359,7 @@ public static class QueryCommandRunner
                 foreach (var r in results)
                 {
                     if (exact)
-                        WriteGraphJsonResult(r, exactSignal, jsonOptions);
+                        WriteGraphJsonResult(r, exactSignal, jsonOptions, graphSupportOverride);
                     else
                         Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
                 }
@@ -370,6 +374,7 @@ public static class QueryCommandRunner
                 }
                 var refFileCount = results.Select(r => r.Path).Distinct().Count();
                 Console.Error.WriteLine($"({results.Count} references in {refFileCount} files)");
+                WriteGraphSupportOverrideHint(graphSupportOverride);
             }
             return CommandExitCodes.Success;
         });
@@ -409,6 +414,7 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             WriteGraphReferenceKindHint("callers", options.Kind, options.Json);
+            var graphSupportOverride = TryGetEnumMemberGraphSupportOverride(reader, options.Query!, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
             if (options.CountOnly)
             {
                 var counts = reader.CountCallersTotal(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
@@ -422,11 +428,11 @@ public static class QueryCommandRunner
                 WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignalForCount, reader, options);
                 if (counts.Count == 0)
                 {
-                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount);
+                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount, graphSupportOverride);
                     return CommandExitCodes.Success;
                 }
 
-                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount);
+                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, graphSupportOverride: graphSupportOverride);
                 return CommandExitCodes.Success;
             }
 
@@ -441,13 +447,14 @@ public static class QueryCommandRunner
             WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal, reader, options);
             if (results.Count == 0)
             {
-                if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult(reader, "callers", json: true, graphAvailable: false, jsonOptions, exact ? exactSignal : (ExactQuerySignal?)null);
+                if (options.Json && (exact || !reader._hasReferencesTable || graphSupportOverride != null))
+                    WriteGraphZeroJsonResult(reader, "callers", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, graphSupportOverride);
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No callers found.");
                     WriteExactZeroHint(exactZeroHint);
                     WriteGraphSupportHint(options.Lang);
+                    WriteGraphSupportOverrideHint(graphSupportOverride);
                     WriteLangHint(options.Lang, reader);
                     WriteDegradedGraphZeroResult(reader, "callers", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
@@ -459,7 +466,7 @@ public static class QueryCommandRunner
                 foreach (var r in results)
                 {
                     if (exact)
-                        WriteGraphJsonResult(r, exactSignal, jsonOptions);
+                        WriteGraphJsonResult(r, exactSignal, jsonOptions, graphSupportOverride);
                     else
                         Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
                 }
@@ -470,6 +477,7 @@ public static class QueryCommandRunner
                     Console.WriteLine($"{r.CallerKind ?? "?",-10} {r.CallerName ?? "<top-level>",-32} {r.Path}:{r.FirstLine}  -> {r.CalleeName} ({r.ReferenceCount} refs)");
                 var callerFileCount = results.Select(r => r.Path).Distinct().Count();
                 Console.Error.WriteLine($"({results.Count} callers in {callerFileCount} files)");
+                WriteGraphSupportOverrideHint(graphSupportOverride);
             }
             return CommandExitCodes.Success;
         });
@@ -509,6 +517,7 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             WriteGraphReferenceKindHint("callees", options.Kind, options.Json);
+            var graphSupportOverride = TryGetEnumMemberGraphSupportOverride(reader, options.Query!, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
             if (options.CountOnly)
             {
                 var counts = reader.CountCalleesTotal(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
@@ -522,11 +531,11 @@ public static class QueryCommandRunner
                 WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignalForCount, reader, options);
                 if (counts.Count == 0)
                 {
-                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount);
+                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount, graphSupportOverride);
                     return CommandExitCodes.Success;
                 }
 
-                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount);
+                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, graphSupportOverride: graphSupportOverride);
                 return CommandExitCodes.Success;
             }
 
@@ -541,13 +550,14 @@ public static class QueryCommandRunner
             WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignal, reader, options);
             if (results.Count == 0)
             {
-                if (options.Json && !reader._hasReferencesTable)
-                    WriteDegradedGraphZeroResult(reader, "callees", json: true, graphAvailable: false, jsonOptions, exact ? exactSignal : (ExactQuerySignal?)null);
+                if (options.Json && (exact || !reader._hasReferencesTable || graphSupportOverride != null))
+                    WriteGraphZeroJsonResult(reader, "callees", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, graphSupportOverride);
                 else if (!options.Json)
                 {
                     Console.Error.WriteLine("No callees found.");
                     WriteExactZeroHint(exactZeroHint);
                     WriteGraphSupportHint(options.Lang);
+                    WriteGraphSupportOverrideHint(graphSupportOverride);
                     WriteLangHint(options.Lang, reader);
                     WriteDegradedGraphZeroResult(reader, "callees", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
@@ -559,7 +569,7 @@ public static class QueryCommandRunner
                 foreach (var r in results)
                 {
                     if (exact)
-                        WriteGraphJsonResult(r, exactSignal, jsonOptions);
+                        WriteGraphJsonResult(r, exactSignal, jsonOptions, graphSupportOverride);
                     else
                         Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
                 }
@@ -570,6 +580,7 @@ public static class QueryCommandRunner
                     Console.WriteLine($"{r.ReferenceKind,-12} {r.CalleeName,-32} {r.Path}:{r.FirstLine}  <- {r.CallerName ?? "<top-level>"} ({r.ReferenceCount} refs)");
                 var calleeFileCount = results.Select(r => r.Path).Distinct().Count();
                 Console.Error.WriteLine($"({results.Count} callees in {calleeFileCount} files)");
+                WriteGraphSupportOverrideHint(graphSupportOverride);
             }
             return CommandExitCodes.Success;
         });
@@ -699,6 +710,7 @@ public static class QueryCommandRunner
                     Console.Error.WriteLine("No symbols found.");
                     WriteExactZeroHint(exactZeroHint);
                     WriteKindHint(options.Kind, reader);
+                    WriteLangHint(options.Lang, reader);
                     WriteZeroResultHints(options, reader);
                 }
                 return CommandExitCodes.NotFound;
@@ -1030,14 +1042,44 @@ public static class QueryCommandRunner
         var queryCount = 0;
         for (int i = 0; i < args.Length; i++)
         {
-            var arg = args[i];
+            var rawArg = args[i];
+            // Accept both `--opt value` and `--opt=value` so ValidateFindArgs and ParseArgs
+            // agree on inline-`=` shape; splitting the token in PrepareFindArgs would
+            // destroy legitimate inline values that start with `--` (e.g. `--path=--literal.txt`).
+            // ParseArgs と同じく `--opt value` と `--opt=value` の両形を受け入れる。
+            // PrepareFindArgs でトークンを分解すると `--path=--literal.txt` のような `--` 始まりの合法な
+            // inline 値が壊れるため、validation 側で inline 値を解決する。
+            string arg;
+            string? inlineValue;
+            if (TrySplitInlineOptionValue(rawArg, out var inlineOptionName))
+            {
+                arg = inlineOptionName!;
+                inlineValue = rawArg[(inlineOptionName!.Length + 1)..];
+            }
+            else
+            {
+                arg = rawArg;
+                inlineValue = null;
+            }
+
             if (allowedWithValues.Contains(arg))
             {
-                if (i + 1 >= args.Length)
-                    return $"Error: {arg} requires a value";
-                var value = args[i + 1];
+                string value;
+                if (inlineValue != null)
+                {
+                    value = inlineValue;
+                }
+                else
+                {
+                    if (i + 1 >= args.Length)
+                        return $"Error: {arg} requires a value";
+                    value = args[i + 1];
+                    i++;
+                }
                 if ((arg == "--limit" || arg == "--top" || arg == "--max-line-width") && (!int.TryParse(value, out var limit) || limit <= 0))
                     return $"Error: {arg} requires a positive integer, got '{value}'";
+                if (arg == "--max-line-width" && int.TryParse(value, out var widthCeil) && widthCeil > LineWidthFormatter.MaxAllowedLineWidth)
+                    return $"Error: --max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth} (got '{value}').";
                 if ((arg == "--before" || arg == "--after") && (!int.TryParse(value, out var context) || context < 0))
                     return $"Error: {arg} requires a non-negative integer, got '{value}'";
                 if (arg == "--query")
@@ -1046,15 +1088,14 @@ public static class QueryCommandRunner
                     if (queryCount > 1)
                         return "Error: find accepts exactly one query argument";
                 }
-                i++;
                 continue;
             }
 
             if (allowedFlags.Contains(arg))
                 continue;
 
-            if (arg.StartsWith('-'))
-                return $"Error: unsupported option for find: {arg}";
+            if (rawArg.StartsWith('-'))
+                return $"Error: unsupported option for find: {rawArg}";
 
             queryCount++;
             if (queryCount > 1)
@@ -1236,6 +1277,8 @@ public static class QueryCommandRunner
                     Console.WriteLine($"Graph Supported      : {analysis.GraphSupported}");
                 if (analysis.GraphSupportReason != null)
                     Console.WriteLine($"Graph Note           : {analysis.GraphSupportReason}");
+                if (analysis.UnsupportedSymbolKind != null)
+                    Console.WriteLine($"Graph Limitation     : unsupported symbol kind '{analysis.UnsupportedSymbolKind}'");
                 if (!analysis.GraphTableAvailable)
                     Console.WriteLine("Graph Table          : MISSING — empty References/Callers/Callees are degraded, NOT real zero-hit results.");
                 if (exactSignal is ExactQuerySignal signal && !signal.ExactIndexAvailable && signal.DegradedReason != null)
@@ -1271,7 +1314,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
 
-        var filePath = cmdArgs[0].Replace('\\', '/');
+        var filePath = FileIndexer.NormalizePathSeparators(cmdArgs[0]);
         var previewOptionError = ValidatePreviewOptions("outline", cmdArgs[1..], allowMaxLineWidth: false, allowFocusOptions: false);
         if (previewOptionError != null)
         {
@@ -2008,25 +2051,29 @@ public static class QueryCommandRunner
 
             bool? graphSupported = options.Lang != null ? ReferenceExtractor.SupportsLanguage(options.Lang) : null;
             var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(options.Lang, graphSupported);
+            var graphSupportOverride = BuildUnusedEnumMemberGraphSupportOverride(reader, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             if (options.CountOnly)
             {
                 var countSummary = reader.CountUnusedSymbols(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
                 if (options.Json)
                 {
-                    Console.WriteLine(JsonSerializer.Serialize(new
+                    var payload = new JsonObject
                     {
-                        count = countSummary.Count,
-                        files = countSummary.FileCount,
-                        returned_bucket_counts = new Dictionary<string, int>(),
-                        graph_supported = graphSupported,
-                        graph_support_reason = graphSupportReason,
-                        graph_table_available = reader._hasReferencesTable,
-                        degraded = !reader._hasReferencesTable
-                    }, jsonOptions));
+                        ["count"] = countSummary.Count,
+                        ["files"] = countSummary.FileCount,
+                        ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(new Dictionary<string, int>(), jsonOptions),
+                        ["graph_supported"] = graphSupportOverride?.GraphSupported ?? graphSupported,
+                        ["graph_support_reason"] = graphSupportOverride?.GraphSupportReason ?? graphSupportReason,
+                        ["graph_table_available"] = reader._hasReferencesTable,
+                        ["degraded"] = !reader._hasReferencesTable
+                    };
+                    AddGraphSupportOverrideFields(payload, graphSupportOverride);
+                    Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
                 {
                     Console.WriteLine($"{countSummary.Count}");
+                    WriteGraphSupportOverrideHint(graphSupportOverride);
                     WriteDegradedGraphZeroResult(reader, "unused", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
                 return CommandExitCodes.Success;
@@ -2042,7 +2089,8 @@ public static class QueryCommandRunner
                         graphSupported,
                         graphSupportReason,
                         reader._hasReferencesTable,
-                        jsonOptions));
+                        jsonOptions,
+                        graphSupportOverride));
                 }
                 else
                 {
@@ -2050,6 +2098,7 @@ public static class QueryCommandRunner
                     WriteZeroResultHints(options, reader);
                     WriteKindHint(options.Kind, reader);
                     WriteLangHint(options.Lang, reader);
+                    WriteGraphSupportOverrideHint(graphSupportOverride);
                     WriteDegradedGraphZeroResult(reader, "symbols", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
                 return options.Json ? CommandExitCodes.Success : CommandExitCodes.NotFound;
@@ -2057,7 +2106,7 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(BuildUnusedJsonPayload(results, graphSupported, graphSupportReason, reader._hasReferencesTable, jsonOptions));
+                Console.WriteLine(BuildUnusedJsonPayload(results, graphSupported, graphSupportReason, reader._hasReferencesTable, jsonOptions, graphSupportOverride));
             }
             else
             {
@@ -2082,6 +2131,7 @@ public static class QueryCommandRunner
                     .Where(bucketCounts.ContainsKey)
                     .Select(bucket => $"{GetUnusedBucketHeading(bucket)}: {bucketCounts[bucket]}");
                 Console.Error.WriteLine($"({results.Count} returned potentially unused symbols; returned buckets: {string.Join(", ", summaryBuckets)})");
+                WriteGraphSupportOverrideHint(graphSupportOverride);
             }
             return CommandExitCodes.Success;
         });
@@ -2109,17 +2159,18 @@ public static class QueryCommandRunner
         return ordered;
     }
 
-    private static string BuildUnusedJsonPayload(IEnumerable<UnusedSymbolResult> results, bool? graphSupported, string? graphSupportReason, bool hasReferencesTable, JsonSerializerOptions jsonOptions)
+    private static string BuildUnusedJsonPayload(IEnumerable<UnusedSymbolResult> results, bool? graphSupported, string? graphSupportReason, bool hasReferencesTable, JsonSerializerOptions jsonOptions, GraphSupportOverride? graphSupportOverride = null)
     {
         var resultList = results as IReadOnlyCollection<UnusedSymbolResult> ?? results.ToArray();
         var payload = new JsonObject
         {
             ["count"] = resultList.Count,
-            ["graph_supported"] = graphSupported,
-            ["graph_support_reason"] = graphSupportReason,
+            ["graph_supported"] = graphSupportOverride?.GraphSupported ?? graphSupported,
+            ["graph_support_reason"] = graphSupportOverride?.GraphSupportReason ?? graphSupportReason,
             ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(BuildUnusedBucketCounts(resultList), jsonOptions),
             ["symbols"] = JsonSerializer.SerializeToNode(resultList, jsonOptions)
         };
+        AddGraphSupportOverrideFields(payload, graphSupportOverride);
 
         if (!hasReferencesTable)
         {
@@ -2234,6 +2285,11 @@ public static class QueryCommandRunner
         }
         else
         {
+            // Fixed-width Extensions column for short lists; spill long lists onto a continuation
+            // line so the Symbols / Graph columns are never swallowed by a wide extension string.
+            // 拡張子が短い場合は固定幅テーブル、長い場合は継続行に退避させることで、
+            // Symbols / Graph 列が拡張子文字列に埋もれないようにする。
+            const int ExtensionColumnWidth = 36;
             Console.WriteLine($"{"Language",-14} {"Extensions",-36} {"Symbols",-9} {"Graph",-7}");
             Console.WriteLine(new string('-', 66));
             foreach (var (lang, info) in sorted)
@@ -2241,7 +2297,15 @@ public static class QueryCommandRunner
                 var exts = string.Join(" ", info.Extensions.OrderBy(e => e));
                 var sym = info.Symbols ? "yes" : "-";
                 var graph = info.Graph ? "yes" : "-";
-                Console.WriteLine($"{lang,-14} {exts,-36} {sym,-9} {graph,-7}");
+                if (exts.Length <= ExtensionColumnWidth)
+                {
+                    Console.WriteLine($"{lang,-14} {exts,-36} {sym,-9} {graph,-7}");
+                }
+                else
+                {
+                    Console.WriteLine($"{lang,-14} {"",-36} {sym,-9} {graph,-7}");
+                    Console.WriteLine($"  Extensions: {exts}");
+                }
             }
             Console.Error.WriteLine($"\n({sorted.Count} languages)");
         }
@@ -2319,7 +2383,11 @@ public static class QueryCommandRunner
                     break;
                 case "--lang":
                     if (TryReadStringOptionValue(args, ref i, "--lang", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var langValue, out var langError))
-                        lang = langValue;
+                        // Normalize to lowercase so '--lang Python' == '--lang python' — every LangMap key and
+                        // every DB 'files.lang' row is lowercase, so the SQL filter and WriteLangHint match.
+                        // '--lang Python' と '--lang python' を同一視するため lowercase 正規化する。LangMap の key と
+                        // DB の `files.lang` はすべて lowercase なので、SQL filter と WriteLangHint が一致する。
+                        lang = langValue?.ToLowerInvariant();
                     else
                         AddParseError(langError!);
                     break;
@@ -2337,7 +2405,11 @@ public static class QueryCommandRunner
                     break;
                 case "--kind":
                     if (TryReadStringOptionValue(args, ref i, "--kind", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var kindValue, out var kindError))
-                        kind = kindValue;
+                        // Normalize to lowercase so '--kind FUNCTION' == '--kind function'. AllValidKinds entries
+                        // and every DB 'symbols.kind' row are lowercase.
+                        // '--kind FUNCTION' と '--kind function' を同一視するため lowercase 正規化する。AllValidKinds
+                        // と DB の `symbols.kind` はすべて lowercase。
+                        kind = kindValue?.ToLowerInvariant();
                     else
                         AddParseError(kindError!);
                     break;
@@ -2471,7 +2543,12 @@ public static class QueryCommandRunner
                     if (!TryReadRawOptionValue(args, ref i, "--max-line-width", inlineValue, out var maxLineWidthValue, out var missingMaxLineWidthError))
                         AddParseError(missingMaxLineWidthError!);
                     else if (TryParsePositiveInt(maxLineWidthValue!, "--max-line-width", out var parsedMaxLineWidth, out var maxLineWidthError))
-                        maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(parsedMaxLineWidth);
+                    {
+                        if (parsedMaxLineWidth > LineWidthFormatter.MaxAllowedLineWidth)
+                            AddParseError($"--max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth} (got '{maxLineWidthValue}').");
+                        else
+                            maxLineWidth = parsedMaxLineWidth;
+                    }
                     else
                         AddParseError(maxLineWidthError!);
                     break;
@@ -3121,11 +3198,12 @@ public static class QueryCommandRunner
     }
 
     private static void WriteGraphCountResult(DbReader reader, int count, int files, QueryCommandOptions options, JsonSerializerOptions jsonOptions,
-        bool graphAvailable, ExactQuerySignal exactSignal, ExactZeroHintResult? exactZeroHint = null)
+        bool graphAvailable, ExactQuerySignal exactSignal, ExactZeroHintResult? exactZeroHint = null, GraphSupportOverride? graphSupportOverride = null)
     {
         if (!options.Json)
         {
             Console.WriteLine($"{count}");
+            WriteGraphSupportOverrideHint(graphSupportOverride);
             if (!graphAvailable)
                 Console.Error.WriteLine("WARN: symbol_references table missing — this count result is degraded, not authoritative.");
             return;
@@ -3139,6 +3217,7 @@ public static class QueryCommandRunner
         };
         if (!graphAvailable)
             payload["degraded"] = true;
+        AddGraphSupportOverrideFields(payload, graphSupportOverride);
         if (options.Exact || options.ExactName)
             AddExactGraphJsonFields(payload, exactSignal);
         if (exactZeroHint != null)
@@ -3149,9 +3228,15 @@ public static class QueryCommandRunner
     }
 
     private static void WriteGraphZeroJsonResult(DbReader reader, string resultsKey, JsonSerializerOptions jsonOptions, bool graphAvailable,
-        ExactQuerySignal? exactSignal, ExactZeroHintResult? exactZeroHint = null)
+        ExactQuerySignal? exactSignal, ExactZeroHintResult? exactZeroHint = null, GraphSupportOverride? graphSupportOverride = null)
     {
         var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: resultsKey, graphTableAvailable: graphAvailable);
+        if (!graphAvailable)
+        {
+            payload["degraded"] = true;
+            payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
+        }
+        AddGraphSupportOverrideFields(payload, graphSupportOverride);
         if (exactSignal != null)
             AddExactGraphJsonFields(payload, exactSignal.Value);
         if (exactZeroHint != null)
@@ -3159,10 +3244,11 @@ public static class QueryCommandRunner
         Console.WriteLine(payload.ToJsonString(jsonOptions));
     }
 
-    private static void WriteGraphJsonResult<T>(T result, ExactQuerySignal exactSignal, JsonSerializerOptions jsonOptions)
+    private static void WriteGraphJsonResult<T>(T result, ExactQuerySignal exactSignal, JsonSerializerOptions jsonOptions, GraphSupportOverride? graphSupportOverride = null)
     {
         var payload = JsonSerializer.SerializeToNode(result, jsonOptions)!.AsObject();
         AddExactGraphJsonFields(payload, exactSignal);
+        AddGraphSupportOverrideFields(payload, graphSupportOverride);
         Console.WriteLine(payload.ToJsonString(jsonOptions));
     }
 
@@ -3184,6 +3270,95 @@ public static class QueryCommandRunner
         if (exactSignal.DegradedReason != null)
             payload["degraded_reason"] = exactSignal.DegradedReason;
     }
+
+    private static void AddGraphSupportOverrideFields(JsonObject payload, GraphSupportOverride? graphSupportOverride)
+    {
+        if (graphSupportOverride == null)
+            return;
+
+        if (graphSupportOverride.GraphLanguage != null)
+            payload["graph_language"] = graphSupportOverride.GraphLanguage;
+        if (graphSupportOverride.GraphSupported.HasValue)
+            payload["graph_supported"] = graphSupportOverride.GraphSupported.Value;
+        if (graphSupportOverride.GraphSupportReason != null)
+            payload["graph_support_reason"] = graphSupportOverride.GraphSupportReason;
+        if (graphSupportOverride.GraphDegraded)
+            payload["graph_degraded"] = true;
+        if (graphSupportOverride.UnsupportedSymbolKind != null)
+            payload["unsupported_symbol_kind"] = graphSupportOverride.UnsupportedSymbolKind;
+    }
+
+    private static void WriteGraphSupportOverrideHint(GraphSupportOverride? graphSupportOverride)
+    {
+        if (graphSupportOverride == null)
+            return;
+
+        Console.Error.WriteLine($"Note: {graphSupportOverride.GraphSupportReason}");
+    }
+
+    private static GraphSupportOverride? TryGetEnumMemberGraphSupportOverride(
+        DbReader reader,
+        string query,
+        string? lang,
+        IReadOnlyList<string> pathPatterns,
+        IReadOnlyList<string> excludePaths,
+        bool excludeTests,
+        bool exact)
+    {
+        if (!exact)
+            return null;
+
+        if (!reader.HasExactUnsupportedCSharpEnumMember(query, lang, pathPatterns, excludePaths, excludeTests))
+            return null;
+
+        var supportedGraphLanguage = reader.GetExactGraphSupportedDefinitionLanguage(query, lang, pathPatterns, excludePaths, excludeTests);
+        var hasSupportedGraphDefinition = supportedGraphLanguage != null;
+        var graphLanguage = supportedGraphLanguage ?? "csharp";
+        var graphSupported = hasSupportedGraphDefinition ? true : false;
+        var graphSupportReason = ReferenceExtractor.BuildGraphSupportReasonWithUnsupportedEnumMemberGap(
+            graphLanguage,
+            graphSupported,
+            hasUnsupportedEnumMember: true,
+            hasSupportedGraphDefinition);
+
+        return new GraphSupportOverride(
+            graphLanguage,
+            GraphSupported: graphSupported,
+            graphSupportReason
+                ?? "Call-graph extraction is indexed for 'csharp', but enum-member access edges are not indexed yet.",
+            "enum_member",
+            GraphDegraded: true);
+    }
+
+    private static GraphSupportOverride? BuildUnusedEnumMemberGraphSupportOverride(
+        DbReader reader,
+        string? lang,
+        string? kind,
+        IReadOnlyList<string> pathPatterns,
+        IReadOnlyList<string> excludePaths,
+        bool excludeTests)
+    {
+        if (lang != null && !string.Equals(lang, "csharp", StringComparison.Ordinal))
+            return null;
+        if (kind != null && !string.Equals(kind, "enum", StringComparison.Ordinal))
+            return null;
+        if (!reader.HasFilteredCSharpEnumSymbols(kind, lang, pathPatterns, excludePaths, excludeTests))
+            return null;
+
+        return new GraphSupportOverride(
+            "csharp",
+            GraphSupported: true,
+            CSharpEnumMemberUnusedGraphReason,
+            UnsupportedSymbolKind: "enum_member",
+            GraphDegraded: true);
+    }
+
+    private sealed record GraphSupportOverride(
+        string? GraphLanguage,
+        bool? GraphSupported,
+        string GraphSupportReason,
+        string? UnsupportedSymbolKind,
+        bool GraphDegraded);
 
     private static void AddHotspotFamilyJsonFields(JsonObject payload, HotspotFamilySignal signal)
     {

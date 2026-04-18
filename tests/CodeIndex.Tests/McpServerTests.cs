@@ -35,6 +35,7 @@ public class McpServerTests : IDisposable
         // seed したデータを完了 index と同等に扱うため readiness を stamp しておく。
         writer.MarkGraphReady();
         writer.MarkIssuesReady();
+        writer.MarkCSharpSymbolNameContractReady();
         var fileId = writer.UpsertFile(new FileRecord
         {
             Path = "src/app.cs",
@@ -110,6 +111,7 @@ public class McpServerTests : IDisposable
     {
         var writer = new DbWriter(_db.Connection);
         writer.MarkFoldReady();
+        writer.MarkCSharpSymbolNameContractReady();
     }
 
     // --- Protocol tests / プロトコルテスト ---
@@ -508,6 +510,26 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Search_MaxLineWidthZeroReturnsError()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"App","maxLineWidth":0}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("maxLineWidth must be greater than or equal to 1", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Search_MaxLineWidthAboveCeilingReturnsError()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"App","maxLineWidth":4097}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal("maxLineWidth must be less than or equal to 4096", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_Search_ExcludeTests_ReturnsOnlySourceMatches()
     {
         InsertIndexedFile("tests/app_test.cs", "csharp", "public class AppTests { public void RunScenario() { var app = new App(); } }");
@@ -644,6 +666,86 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_AnalyzeSymbol_NonExactEnumMemberMarksGraphAsDegraded()
+    {
+        InsertIndexedFile("src/colors.cs", "csharp",
+            """
+            namespace Demo;
+
+            public enum Color
+            {
+                Red,
+                Green
+            }
+
+            public class UsesColor
+            {
+                public Color Shade => Color.Red;
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Red","lang":"csharp"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var definition = structured["definitions"]![0]!;
+
+        Assert.Equal("Red", definition["name"]!.GetValue<string>());
+        Assert.Equal("enum", definition["containerKind"]!.GetValue<string>());
+        Assert.Equal("Color", definition["containerName"]!.GetValue<string>());
+        Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
+        Assert.False(structured["graphSupported"]!.GetValue<bool>());
+        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
+        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
+        Assert.Contains("enum-member access edges are not indexed yet", structured["graphSupportReason"]!.GetValue<string>());
+        Assert.DoesNotContain("not indexed for 'csharp'", structured["graphSupportReason"]!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_NonExactCrossLanguageMixedHitPrefersGraphCapablePrimaryDefinition()
+    {
+        InsertIndexedFile("web/app.js", "javascript",
+            """
+            function Ready() {}
+
+            function Helper() {}
+
+            Ready();
+            """);
+        InsertIndexedFile("src/status.cs", "csharp",
+            """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Ready"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var nearbyPaths = structured["nearbySymbols"]!
+            .AsArray()
+            .Select(symbol => symbol?["path"]?.GetValue<string>())
+            .Where(path => path != null)
+            .Cast<string>()
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Equal("web/app.js", structured["file"]!["path"]!.GetValue<string>());
+        Assert.Equal("javascript", structured["graphLanguage"]!.GetValue<string>());
+        Assert.True(structured["graphSupported"]!.GetValue<bool>());
+        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
+        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
+        Assert.Contains("web/app.js", nearbyPaths);
+        Assert.DoesNotContain("src/status.cs", nearbyPaths);
+        Assert.Contains(structured["nearbySymbols"]!.AsArray(),
+            symbol => symbol?["name"]?.GetValue<string>() == "Helper");
+        Assert.All(structured["references"]!.AsArray(),
+            reference => Assert.Equal("javascript", reference?["lang"]?.GetValue<string>()));
+    }
+
+    [Fact]
     public void ToolsCall_Callers_DefaultQueryKeepsSubscribeRowsVisible()
     {
         InsertIndexedFile("src/Publisher.cs", "csharp",
@@ -767,6 +869,104 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_References_ExactEnumMember_UsesSymbolKindGapSummary()
+    {
+        InsertIndexedFile("src/colors.cs", "csharp",
+            """
+            namespace Demo;
+
+            public enum Color
+            {
+                Red,
+                Green
+            }
+
+            public class UsesColor
+            {
+                public Color Shade => Color.Red;
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"Red","lang":"csharp","exact":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("No references found. C# enum-member access edges are not indexed yet.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.False(structured["graphSupported"]!.GetValue<bool>());
+        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
+        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
+        Assert.Contains("enum-member access edges are not indexed yet", structured["graphSupportReason"]!.GetValue<string>());
+        Assert.DoesNotContain("not indexed for 'csharp'", structured["graphSupportReason"]!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ToolsCall_References_ExactMixedCallableAndEnumMemberKeepsGraphSupported()
+    {
+        InsertIndexedFile("src/cases.cs", "csharp",
+            """
+            namespace Demo;
+
+            public class Worker
+            {
+                public void Ready() { }
+
+                public void Use()
+                {
+                    Ready();
+                }
+            }
+
+            public enum Status
+            {
+                Ready
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"Ready","lang":"csharp","exact":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.True(structured["graphSupported"]!.GetValue<bool>());
+        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
+        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
+        Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
+        Assert.Contains("Call-graph extraction is indexed for 'csharp'.", structured["graphSupportReason"]!.GetValue<string>());
+        Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", structured["graphSupportReason"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_References_ExactCrossLanguageMixedHitDoesNotForceCSharpGraphLanguage()
+    {
+        InsertIndexedFile("web/app.js", "javascript",
+            """
+            export function Ready() {}
+
+            Ready();
+            """);
+        InsertIndexedFile("src/status.cs", "csharp",
+            """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"Ready","exact":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
+        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
+        Assert.Equal("javascript", structured["graphLanguage"]!.GetValue<string>());
+        Assert.True(structured["graphSupported"]!.GetValue<bool>());
+        Assert.Contains("Call-graph extraction is indexed for 'javascript'.", structured["graphSupportReason"]!.GetValue<string>());
+        Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", structured["graphSupportReason"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_Callers_ReturnsCallerSummary()
     {
         InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
@@ -777,6 +977,73 @@ public class McpServerTests : IDisposable
         Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
         Assert.Equal("login", response["result"]!["structuredContent"]!["results"]![0]!["callerName"]!.GetValue<string>());
         Assert.Equal("Run", response["result"]!["structuredContent"]!["results"]![0]!["calleeName"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Callers_ExactEnumMember_ReturnsUnsupportedGraphMetadata()
+    {
+        InsertIndexedFile("src/cases.cs", "csharp",
+            """
+            namespace Demo;
+
+            public enum Nested
+            {
+                A = 1,
+                B = A
+            }
+
+            public class UsesEnum
+            {
+                public Nested Value => Nested.A;
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"A","lang":"csharp","exact":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
+        Assert.False(structured["graphSupported"]!.GetValue<bool>());
+        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
+        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
+        Assert.Contains("enum-member access edges are not indexed yet", structured["graphSupportReason"]!.GetValue<string>());
+        Assert.Equal("No callers found. C# enum-member access edges are not indexed yet.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Callers_ExactMixedCallableAndEnumMemberKeepsGraphSupported()
+    {
+        InsertIndexedFile("src/cases.cs", "csharp",
+            """
+            namespace Demo;
+
+            public class Worker
+            {
+                public void Ready() { }
+
+                public void Use()
+                {
+                    Ready();
+                }
+            }
+
+            public enum Status
+            {
+                Ready
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Ready","lang":"csharp","exact":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.True(structured["graphSupported"]!.GetValue<bool>());
+        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
+        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
+        Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
+        Assert.Contains("Call-graph extraction is indexed for 'csharp'.", structured["graphSupportReason"]!.GetValue<string>());
+        Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", structured["graphSupportReason"]!.GetValue<string>());
     }
 
     [Fact]
@@ -801,6 +1068,73 @@ public class McpServerTests : IDisposable
         Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
         Assert.Equal("login", response["result"]!["structuredContent"]!["results"]![0]!["callerName"]!.GetValue<string>());
         Assert.Equal("Run", response["result"]!["structuredContent"]!["results"]![0]!["calleeName"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Callees_ExactEnumMember_ReturnsUnsupportedGraphMetadata()
+    {
+        InsertIndexedFile("src/cases.cs", "csharp",
+            """
+            namespace Demo;
+
+            public enum Nested
+            {
+                A = 1,
+                B = A
+            }
+
+            public class UsesEnum
+            {
+                public Nested Value => Nested.A;
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callees","arguments":{"query":"A","lang":"csharp","exact":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
+        Assert.False(structured["graphSupported"]!.GetValue<bool>());
+        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
+        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
+        Assert.Contains("enum-member access edges are not indexed yet", structured["graphSupportReason"]!.GetValue<string>());
+        Assert.Equal("No callees found. C# enum-member access edges are not indexed yet.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_Callees_ExactMixedCallableAndEnumMemberKeepsGraphSupported()
+    {
+        InsertIndexedFile("src/cases.cs", "csharp",
+            """
+            namespace Demo;
+
+            public class Worker
+            {
+                public void Ready()
+                {
+                    Next();
+                }
+
+                public void Next() { }
+            }
+
+            public enum Status
+            {
+                Ready
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callees","arguments":{"query":"Ready","lang":"csharp","exact":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.True(structured["graphSupported"]!.GetValue<bool>());
+        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
+        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
+        Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
+        Assert.Contains("Call-graph extraction is indexed for 'csharp'.", structured["graphSupportReason"]!.GetValue<string>());
+        Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", structured["graphSupportReason"]!.GetValue<string>());
     }
 
     [Fact]
@@ -3669,6 +4003,115 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_UnusedSymbols_KeepsCSharpEnumDeclarationsWhileSkippingEnumMembers()
+    {
+        InsertIndexedFile("src/cases.cs", "csharp",
+            """
+            namespace Demo;
+
+            public enum Color
+            {
+                Red,
+                Blue
+            }
+
+            public enum TrulyUnused
+            {
+                Green
+            }
+
+            public class UsesColor
+            {
+                public Color Shade => Color.Red;
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        var structured = response["result"]!["structuredContent"]!;
+        var names = structured["symbols"]!
+            .AsArray()
+            .Select(symbol => symbol?["name"]?.GetValue<string>())
+            .Where(name => name != null)
+            .Cast<string>()
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.True(structured["graph_supported"]!.GetValue<bool>());
+        Assert.True(structured["graph_degraded"]!.GetValue<bool>());
+        Assert.Equal("enum_member", structured["unsupported_symbol_kind"]!.GetValue<string>());
+        Assert.Contains("enum members are excluded from unused", structured["graph_support_reason"]!.GetValue<string>());
+        Assert.Contains("Color", names);
+        Assert.Contains("TrulyUnused", names);
+        Assert.DoesNotContain("Red", names);
+        Assert.DoesNotContain("Blue", names);
+        Assert.DoesNotContain("Green", names);
+    }
+
+    [Fact]
+    public void ToolsCall_UnusedSymbols_EnumDeclarationsStillReturnDegradedSummary()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_unused_enum_gap_summary");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Color
+                {
+                    Red,
+                    Blue
+                }
+
+                public enum TrulyUnused
+                {
+                    Green
+                }
+
+                public class UsesColor
+                {
+                    public Color Shade => Color.Red;
+                }
+                """);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+            }
+
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"lang":"csharp"}}}""")!;
+            var response = server.HandleMessage(request)!;
+
+            Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+            var structured = response["result"]!["structuredContent"]!;
+            var names = structured["symbols"]!
+                .AsArray()
+                .Select(symbol => symbol?["name"]?.GetValue<string>())
+                .Where(name => name != null)
+                .Cast<string>()
+                .ToHashSet(StringComparer.Ordinal);
+
+            Assert.True(structured["count"]!.GetValue<int>() >= 2);
+            Assert.True(structured["graph_degraded"]!.GetValue<bool>());
+            Assert.Equal("enum_member", structured["unsupported_symbol_kind"]!.GetValue<string>());
+            Assert.Contains("enum members are excluded from unused", structured["graph_support_reason"]!.GetValue<string>());
+            Assert.Contains("Color", names);
+            Assert.Contains("TrulyUnused", names);
+            Assert.Contains(
+                "Found",
+                response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_UnusedSymbols_ClassifiesReflectionAttributedPropertyAsSuspect()
     {
         var writer = new DbWriter(_db.Connection);
@@ -4666,6 +5109,96 @@ public class McpServerTests : IDisposable
         var results = response["result"]!["structuredContent"]!["results"]!.AsArray();
         Assert.Single(results);
         Assert.Contains("not allowed in batch_query", results[0]!["error"]!.GetValue<string>());
+    }
+
+    // Regression pins for issue #199: MCP tool handlers must normalize mixed-case lang/kind.
+    // #199 回帰テスト: MCP ハンドラも --lang / --kind を大文字小文字なく扱うことを固定する。
+    [Fact]
+    public void ToolsCall_Symbols_AcceptsLangCsharpCaseInsensitively_Issue199()
+    {
+        var requestUpper = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"App","lang":"CSharp"}}}""")!;
+        var responseUpper = _server.HandleMessage(requestUpper)!;
+
+        var structuredUpper = responseUpper["result"]!["structuredContent"]!;
+        Assert.Equal("csharp", structuredUpper["lang"]!.GetValue<string>());
+        Assert.True(structuredUpper["count"]!.GetValue<int>() >= 1);
+
+        var requestLower = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"App","lang":"csharp"}}}""")!;
+        var responseLower = _server.HandleMessage(requestLower)!;
+        var structuredLower = responseLower["result"]!["structuredContent"]!;
+
+        Assert.Equal(structuredLower["count"]!.GetValue<int>(), structuredUpper["count"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_Symbols_AcceptsKindClassCaseInsensitively_Issue199()
+    {
+        var requestUpper = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"App","kind":"CLASS"}}}""")!;
+        var responseUpper = _server.HandleMessage(requestUpper)!;
+
+        var structuredUpper = responseUpper["result"]!["structuredContent"]!;
+        Assert.Equal("class", structuredUpper["kind"]!.GetValue<string>());
+        Assert.True(structuredUpper["count"]!.GetValue<int>() >= 1);
+
+        var requestLower = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"App","kind":"class"}}}""")!;
+        var responseLower = _server.HandleMessage(requestLower)!;
+        var structuredLower = responseLower["result"]!["structuredContent"]!;
+
+        Assert.Equal(structuredLower["count"]!.GetValue<int>(), structuredUpper["count"]!.GetValue<int>());
+
+        // Prove the kind filter is actually applied, not silently dropped: the seeded "App" symbol
+        // is a class, so querying it with kind=FUNCTION must return 0 regardless of casing.
+        // kind フィルタが実際に適用されていることを確認: seed した App は class なので、
+        // kind=FUNCTION での検索は大文字小文字に関わらず 0 件になるべき。
+        var requestWrongKind = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbols","arguments":{"query":"App","kind":"FUNCTION"}}}""")!;
+        var responseWrongKind = _server.HandleMessage(requestWrongKind)!;
+        var structuredWrongKind = responseWrongKind["result"]!["structuredContent"]!;
+        Assert.Equal("function", structuredWrongKind["kind"]!.GetValue<string>());
+        Assert.Equal(0, structuredWrongKind["count"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_Definition_AcceptsLangCsharpCaseInsensitively_Issue199()
+    {
+        var requestUpper = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"App","lang":"CSharp"}}}""")!;
+        var responseUpper = _server.HandleMessage(requestUpper)!;
+
+        var structuredUpper = responseUpper["result"]!["structuredContent"]!;
+        Assert.Equal("csharp", structuredUpper["lang"]!.GetValue<string>());
+        Assert.True(structuredUpper["count"]!.GetValue<int>() >= 1);
+
+        var requestLower = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"App","lang":"csharp"}}}""")!;
+        var responseLower = _server.HandleMessage(requestLower)!;
+        var structuredLower = responseLower["result"]!["structuredContent"]!;
+
+        Assert.Equal(structuredLower["count"]!.GetValue<int>(), structuredUpper["count"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_Definition_AcceptsKindClassCaseInsensitively_Issue199()
+    {
+        var requestUpper = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"App","kind":"CLASS"}}}""")!;
+        var responseUpper = _server.HandleMessage(requestUpper)!;
+
+        var structuredUpper = responseUpper["result"]!["structuredContent"]!;
+        Assert.Equal("class", structuredUpper["kind"]!.GetValue<string>());
+        Assert.True(structuredUpper["count"]!.GetValue<int>() >= 1);
+
+        var requestLower = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"App","kind":"class"}}}""")!;
+        var responseLower = _server.HandleMessage(requestLower)!;
+        var structuredLower = responseLower["result"]!["structuredContent"]!;
+
+        Assert.Equal(structuredLower["count"]!.GetValue<int>(), structuredUpper["count"]!.GetValue<int>());
+
+        // Prove the kind filter is actually applied, not silently echoed.
+        // The shared fixture only seeds `App` as a class, so querying with kind:"FUNCTION"
+        // must return 0 if the normalized kind is threaded through to GetDefinitions().
+        // kind フィルタが捨てられずに実際に適用されていることを確認する。
+        var requestWrongKind = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"App","kind":"FUNCTION"}}}""")!;
+        var responseWrongKind = _server.HandleMessage(requestWrongKind)!;
+        var structuredWrongKind = responseWrongKind["result"]!["structuredContent"]!;
+        Assert.Equal("function", structuredWrongKind["kind"]!.GetValue<string>());
+        Assert.Equal(0, structuredWrongKind["count"]!.GetValue<int>());
     }
 
     private static string CreateLegacyDbWithoutIndexedAt()
