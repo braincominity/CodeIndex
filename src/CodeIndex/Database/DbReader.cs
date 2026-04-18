@@ -1945,6 +1945,22 @@ public partial class DbReader
         // (例: `namespace A { class MyAuditAttribute { } } namespace B { class
         // MyAuditAttribute { } }`) でも ambiguity を 2 として検出できる。DISTINCT
         // f.path のままだと 1 に潰れ、metadata bypass が誤って有効化される。
+        // For C# specifically, only count class-like definitions that are actually
+        // eligible as attribute metadata targets — i.e. signatures that contain
+        // `: ...Attribute` inheritance (e.g. `: Attribute`, `: System.Attribute`,
+        // `: BaseLogAttribute`). A plain `class MyAuditAttribute { }` without the
+        // Attribute-suffixed base class is not a valid target for `[MyAudit]` at
+        // compile time, so counting it as an ambiguity candidate would falsely
+        // suppress the metadata bypass and under-report `impact`. Other languages
+        // (Java `@interface`, Kotlin `annotation class`, etc.) still count every
+        // class-like definition because their metadata-target markers are not as
+        // easily captured by a single signature pattern.
+        // C# に限り、曖昧性候補は「Attribute を継承している」class-like 定義だけに絞る。
+        // シグネチャに `: ...Attribute` を含むもの (`: Attribute`, `: System.Attribute`,
+        // `: BaseLogAttribute` 等) のみが `[MyAudit]` の実 target になり得るため、
+        // `class MyAuditAttribute { }` のように継承を書いていない plain クラスを数える
+        // と `impact` が過少報告になる。他言語 (Java `@interface`, Kotlin `annotation
+        // class` 等) は単一 LIKE でマーカーを書きにくいので従来どおり class-like 全体を候補にする。
         var sql = $@"
             SELECT COUNT(*) FROM (
                 SELECT DISTINCT f.path, s.line, s.name
@@ -1952,6 +1968,7 @@ public partial class DbReader
                 JOIN files f ON s.file_id = f.id
                 WHERE s.name = @metadataAmbigName COLLATE NOCASE
                   AND s.kind IN ('class','struct','interface')
+                  AND (f.lang != 'csharp' OR (s.signature IS NOT NULL AND s.signature LIKE '%: %Attribute%'))
                   AND {supportedLangFilter}";
         if (lang != null)
         {
@@ -2666,10 +2683,26 @@ public partial class DbReader
                 -- いずれかが class 系であるかを MAX で覚える。kind を DISTINCT に含めると、
                 -- 同じ (path, lang, name) でも class と同名 function (C# のコンストラクタ等)
                 -- が別行として残り、deps の参照カウントが膨らんでしまう。
+                -- has_metadata_target_kind further narrows the class-like set to targets
+                -- that can legitimately be referenced as [Attribute] metadata. For C#
+                -- that additionally requires the class to inherit from something ending
+                -- in `Attribute` (signature LIKE '%: %Attribute%'); a plain
+                -- `class FooAttribute { }` without that inheritance is not a valid
+                -- [Foo] target at compile time and should not count as an ambiguity
+                -- candidate. Other languages keep the original class-like breadth.
+                -- has_metadata_target_kind は `[Attribute]` metadata target として
+                -- 有効な class-like のみを数える。C# に限り signature に
+                -- `: ...Attribute` を含むクラスだけを対象にする (`class FooAttribute { }`
+                -- のように Attribute 継承を書いていない plain クラスは `[Foo]` の target
+                -- にならないため)。Java/Kotlin 等は従来どおり class-like 全体を候補に残す。
                 SELECT dst.path AS target_path,
                        dst.lang AS target_lang,
                        s.name AS symbol_name,
-                       MAX(CASE WHEN s.kind IN ('class','struct','interface') THEN 1 ELSE 0 END) AS has_class_like_kind
+                       MAX(CASE WHEN s.kind IN ('class','struct','interface') THEN 1 ELSE 0 END) AS has_class_like_kind,
+                       MAX(CASE WHEN s.kind IN ('class','struct','interface')
+                                 AND (dst.lang != 'csharp'
+                                      OR (s.signature IS NOT NULL AND s.signature LIKE '%: %Attribute%'))
+                                THEN 1 ELSE 0 END) AS has_metadata_target_kind
                 FROM symbols s
                 JOIN files dst ON s.file_id = dst.id
                 WHERE 1 = 1";
@@ -2708,7 +2741,7 @@ public partial class DbReader
                 JOIN target_files tf_alias
                   ON tf_alias.target_lang = lrp.source_lang
                  AND tf_alias.symbol_name = lrp.symbol_name || 'Attribute'
-                 AND tf_alias.has_class_like_kind = 1
+                 AND tf_alias.has_metadata_target_kind = 1
                 WHERE lrp.source_lang = 'csharp'
                   AND lrp.logical_reference_kind = 'attribute'
                   AND lrp.symbol_name NOT LIKE '%Attribute'
@@ -2743,7 +2776,16 @@ public partial class DbReader
                   ON s.file_id = dst.id
                  AND s.name = tf.symbol_name
                  AND s.kind IN ('class','struct','interface')
-                WHERE tf.has_class_like_kind = 1
+                 -- Same C# metadata-eligibility filter as target_files: only count
+                 -- attribute-derived classes for C#. Otherwise two same-named plain
+                 -- classes (only one of which inherits from Attribute) would still
+                 -- look ambiguous and suppress the metadata bypass.
+                 -- target_files と同じ metadata 適格性フィルタ。C# では Attribute を
+                 -- 継承している class のみを数え、plain 同名クラスが混在していても
+                 -- ambiguity と誤判定しない。
+                 AND (dst.lang != 'csharp'
+                      OR (s.signature IS NOT NULL AND s.signature LIKE '%: %Attribute%'))
+                WHERE tf.has_metadata_target_kind = 1
                 GROUP BY tf.target_lang, tf.symbol_name
             ),
             edges AS (
@@ -2773,7 +2815,7 @@ public partial class DbReader
                   -- 関数/プロパティ/変数を持つだけのファイルまで誤って依存してしまう。
                   -- 非 metadata の call-graph 参照は任意の kind に一致させて構わない
                   -- (コンストラクタ呼び出しがクラス定義に結び付くケースなど)。
-                  AND (snc.is_metadata = 0 OR tf.has_class_like_kind = 1)
+                  AND (snc.is_metadata = 0 OR tf.has_metadata_target_kind = 1)
                   -- Drop raw C# '[Foo]' rows when the suffix alias already resolves
                   -- to a class-like 'FooAttribute' target in the same source file.
                   -- 同じ source file で suffix alias が class 系 'FooAttribute' に

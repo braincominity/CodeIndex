@@ -1960,6 +1960,41 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpNestedGenericNoArgAttribute_ClassifiedAsAttribute()
+    {
+        // Regression (issue #293 round-16 follow-up): nested generic no-arg C#
+        // attributes such as `[MyAttr<Dictionary<string, int>>]` and
+        // `[MyAttr<ValueTuple<int, List<string>>>]` must still classify as
+        // `attribute`. The previous `<[^>\n]+>` generic segment stopped at the
+        // first `>` and left the outer `>` dangling, so nested-generic
+        // attributes were silently dropped from the index.
+        // リグレッション (issue #293 round-16 補足): `[MyAttr<Dictionary<string, int>>]`
+        // のような入れ子ジェネリック引数を持つ引数なし属性も `attribute` として
+        // 取り込まれること。`<...>` 内部で `>` を除外する以前の実装では最初の `>`
+        // で止まってしまい、nested generic 属性が黙って脱落していた。
+        const string content = """
+            [MyAttr<Dictionary<string, int>>]
+            [MyOther<ValueTuple<int, List<string>>>]
+            [
+                MyMulti<Dictionary<string, List<int>>>
+            ]
+            public class C
+            {
+            }
+            """;
+
+        var references = ReferenceExtractor.Extract(1, "csharp", content, []);
+
+        var a = Assert.Single(references.Where(r => r.SymbolName == "MyAttr"));
+        Assert.Equal("attribute", a.ReferenceKind);
+        var b = Assert.Single(references.Where(r => r.SymbolName == "MyOther"));
+        Assert.Equal("attribute", b.ReferenceKind);
+        var c = Assert.Single(references.Where(r => r.SymbolName == "MyMulti"));
+        Assert.Equal("attribute", c.ReferenceKind);
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_CsharpNoArgParameterAttribute_ClassifiedAsAttribute()
     {
         // Regression (issue #293 follow-up): no-arg parameter attributes such as

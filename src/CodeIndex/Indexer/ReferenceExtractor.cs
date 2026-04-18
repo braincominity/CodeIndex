@@ -149,7 +149,7 @@ public static class ReferenceExtractor
     // （CallRegex 経路）や `.` / `::`（qualifier 継続）なら名前を確定させず、行末（`$`）・`]`・`,`
     // のいずれかで初めて採用する。
     private static readonly Regex CSharpNoArgAttributeRegex = new(
-        @"(?<!\w)(?:[A-Za-z_]\w*\s*:\s*)?(?:[A-Za-z_]\w*\s*(?:\.|::)\s*)*(?<name>[A-Za-z_]\w*)(?:\s*<[^>\n]+>)?\s*(?=[\],]|$)",
+        @"(?<!\w)(?:[A-Za-z_]\w*\s*:\s*)?(?:[A-Za-z_]\w*\s*(?:\.|::)\s*)*(?<name>[A-Za-z_]\w*)(?:\s*<[^\n]+?>)?\s*(?=[\],]|$)",
         RegexOptions.Compiled);
 
     // No-arg Java-family annotation (`@Deprecated`, `@Override`, `@org.junit.Test`, `@field:Deprecated`).

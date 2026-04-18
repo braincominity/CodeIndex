@@ -3183,6 +3183,95 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetFileDependencies_CSharp_PlainClassWithAttributeSuffixName_DoesNotCountAsAmbiguity()
+    {
+        // issue #293 round-16: same metadata-eligibility filter must apply to
+        // the `deps` command. target_files.has_metadata_target_kind and the
+        // target_ambiguity JOIN both require C# class-like targets to inherit
+        // from an Attribute-suffixed base, so a plain `MyAuditAttribute`
+        // cannot ambiguate the edge from `Svc.cs` to the real attribute class.
+        // issue #293 round-16: 同じ適格性フィルタを deps にも適用する。
+        // target_files.has_metadata_target_kind と target_ambiguity JOIN は
+        // C# では Attribute suffix 継承を要求するため、plain `MyAuditAttribute` が
+        // 存在しても実 attribute クラスへのエッジは残る。
+        InsertIndexedFile("src/Real/MyAuditAttribute.cs", "csharp",
+            """
+            namespace Real;
+
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Unrelated/MyAuditAttribute.cs", "csharp",
+            """
+            namespace Unrelated;
+
+            public sealed class MyAuditAttribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Real/Svc.cs", "csharp",
+            """
+            namespace Real;
+
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var deps = _reader.GetFileDependencies(
+            limit: 50,
+            lang: "csharp");
+
+        Assert.Contains(deps, d =>
+            d.SourcePath == "src/Real/Svc.cs" &&
+            d.TargetPath == "src/Real/MyAuditAttribute.cs");
+        Assert.DoesNotContain(deps, d =>
+            d.SourcePath == "src/Real/Svc.cs" &&
+            d.TargetPath == "src/Unrelated/MyAuditAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpNestedGenericNoArgAttribute_ResolvesToAttributeClass()
+    {
+        // issue #293 round-16: the no-arg C# attribute regex must handle
+        // nested generic type arguments (e.g. `[MyAttr<Dictionary<string, int>>]`).
+        // Previously the inner `<...>` segment excluded `>`, which broke on the
+        // first inner `>` and classified the reference as a call.
+        // issue #293 round-16: 引数なし C# 属性 regex が
+        // `[MyAttr<Dictionary<string, int>>]` のようなネスト generic を
+        // 扱えること。以前は内側の `<...>` セグメントが `>` を除外していて、
+        // 最初の内側 `>` で崩れて call として誤分類されていた。
+        InsertIndexedFile("src/MyAttrAttribute.cs", "csharp",
+            """
+            using System;
+            using System.Collections.Generic;
+
+            public sealed class MyAttrAttribute : Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            using System.Collections.Generic;
+
+            [MyAttr<Dictionary<string, int>>]
+            public class Svc
+            {
+            }
+            """);
+
+        var deps = _reader.GetFileDependencies(
+            limit: 50,
+            lang: "csharp");
+
+        Assert.Contains(deps, d =>
+            d.SourcePath == "src/Svc.cs" &&
+            d.TargetPath == "src/MyAttrAttribute.cs");
+    }
+
+    [Fact]
     public void GetFileDependencyHints_MetadataBypassAmbiguityGuard_RespectsExcludeTests()
     {
         // issue #293 round-11 follow-up: ambiguity guard must honor
