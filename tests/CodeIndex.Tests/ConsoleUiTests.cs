@@ -32,7 +32,7 @@ public class ConsoleUiTests
         Assert.Contains("cdidx references <query>", output);
         Assert.Contains("cdidx callers <query>", output);
         Assert.Contains("cdidx callees <query>", output);
-        Assert.Contains("cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts] [--exact|--exact-substring] [--count] [--since <datetime>] [--no-dedup]", output);
+        Assert.Contains("cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--count] [--since <datetime>] [--no-dedup]", output);
         Assert.Contains("cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--since <datetime>]", output);
         Assert.Contains("cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--max-line-width <n>] [--exact|--exact-name] [--count]", output);
         Assert.Contains("cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--max-line-width <n>] [--exact|--exact-name]", output);
@@ -40,12 +40,12 @@ public class ConsoleUiTests
         Assert.Contains("cdidx find <query> --path <pattern>", output);
         Assert.Contains("--exact-substring          Search only: case-sensitive exact substring (no FTS5)", output);
         Assert.Contains("--exact-name               symbols/definition/references/callers/callees/inspect: NFKC + Unicode CaseFold exact name match", output);
-        Assert.Contains("--kind <kind>              definition/symbols/hotspots/unused: symbol kind; references/callers/callees: reference kind (call/instantiate/subscribe); validate: issue kind", output);
+        Assert.Contains("--kind <kind>              definition/symbols/hotspots/unused: symbol kind; references: reference kind (call/instantiate/subscribe/attribute/annotation); callers/callees: call-graph kinds only (call/instantiate/subscribe — metadata kinds rejected, use references instead); validate: issue kind", output);
         Assert.Contains("--count                    Count only; search/definition/references/callers/callees/symbols/files/find/unused ignore --limit, impact/hotspots still use visible page counts", output);
         Assert.Contains("--commits <id> [id ...]    Update only files changed in the specified git commits (preferred after commits)", output);
         Assert.Contains("--files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed", output);
         Assert.Contains("cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json]", output);
-        Assert.Contains("--max-line-width <n>       references/find/excerpt/inspect only: clamp very long single-line context/excerpt payloads", output);
+        Assert.Contains("--max-line-width <n>       search/references/find/excerpt/inspect only: clamp very long single-line snippet/context/excerpt payloads", output);
         Assert.Contains("--focus-column <n>         excerpt: column to keep centered when clamping (must be within the focused line)", output);
         Assert.Contains("--focus-line <line>        excerpt: line whose focused column should stay visible", output);
         Assert.Contains("cdidx map [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]", output);
@@ -92,7 +92,7 @@ public class ConsoleUiTests
     {
         var output = CaptureUsageOutput(showBanner: false);
 
-        Assert.Contains("cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--fts] [--exact|--exact-substring] [--count] [--since <datetime>] [--no-dedup]", output);
+        Assert.Contains("cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--count] [--since <datetime>] [--no-dedup]", output);
         Assert.Contains("cdidx symbols [query] [--name <name>] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]", output);
         Assert.Contains("cdidx files [query] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--count] [--since <datetime>]", output);
         Assert.Contains("cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--count]", output);
@@ -253,6 +253,51 @@ public class ConsoleUiTests
                     var excerptBranch = ExtractBetween(output, "elif [[ $subcmd == excerpt ]]; then", "elif [[ $subcmd == references ]]; then");
                     Assert.DoesNotContain("focus-column", findBranch);
                     Assert.Contains("focus-column", excerptBranch);
+                }
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("bash")]
+    [InlineData("zsh")]
+    public void PrintCompletions_BashAndZshScopeMaxLineWidthToSearchBranch(string shell)
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            using var writer = new StringWriter();
+            try
+            {
+                Console.SetOut(writer);
+                Assert.True(ConsoleUi.PrintCompletions(shell));
+                // Normalize line endings / 改行を正規化 — Windows Console.WriteLine emits \r\n
+                var output = writer.ToString().Replace("\r\n", "\n");
+                if (shell == "bash")
+                {
+                    Assert.Contains("elif [ \"$cmd\" = \"search\" ]; then", output);
+                    var searchBranch = ExtractBetween(output, "elif [ \"$cmd\" = \"search\" ]; then", "else\n");
+                    var genericBranch = ExtractBetween(output, "else\n                COMPREPLY=($(compgen -W \"", "\" -- \"$cur\"))\n            fi");
+                    Assert.Contains("--max-line-width", searchBranch);
+                    Assert.Contains("--top", searchBranch);
+                    Assert.Contains("--no-dedup", searchBranch);
+                    Assert.DoesNotContain("--exact-name", searchBranch);
+                    Assert.DoesNotContain("--max-line-width", genericBranch);
+                }
+                else
+                {
+                    Assert.Contains("elif [[ $subcmd == search ]]; then", output);
+                    var searchBranch = ExtractBetween(output, "elif [[ $subcmd == search ]]; then", "else\n");
+                    var genericBranch = ExtractBetween(output, "else\n                _arguments", "fi\n            ;;");
+                    Assert.Contains("--max-line-width", searchBranch);
+                    Assert.Contains("'--top", searchBranch);
+                    Assert.Contains("'--no-dedup", searchBranch);
+                    Assert.DoesNotContain("--exact-name", searchBranch);
+                    Assert.DoesNotContain("--max-line-width", genericBranch);
                 }
             }
             finally

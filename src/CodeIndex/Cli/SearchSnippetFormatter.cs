@@ -11,9 +11,9 @@ public static class SearchSnippetFormatter
     public const int DefaultSnippetLines = 8;
     public const int MaxSnippetLines = 20;
 
-    public static IReadOnlyList<string> Format(string content, string query, int maxLines = DefaultSnippetLines, bool caseSensitive = false)
+    public static IReadOnlyList<string> Format(string content, string query, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth)
     {
-        var excerpt = BuildExcerpt(content, query, absoluteStartLine: 1, maxLines, caseSensitive);
+        var excerpt = BuildExcerpt(content, query, absoluteStartLine: 1, maxLines, caseSensitive, maxLineWidth);
         if (excerpt.Lines.Count == 0)
             return [];
 
@@ -29,9 +29,9 @@ public static class SearchSnippetFormatter
         return snippet;
     }
 
-    public static CompactSearchResult ToCompactResult(SearchResult result, string query, int maxLines = DefaultSnippetLines, bool caseSensitive = false)
+    public static CompactSearchResult ToCompactResult(SearchResult result, string query, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth)
     {
-        var excerpt = BuildExcerpt(result.Content, query, result.StartLine, maxLines, caseSensitive);
+        var excerpt = BuildExcerpt(result.Content, query, result.StartLine, maxLines, caseSensitive, maxLineWidth);
         return new CompactSearchResult
         {
             Path = result.Path,
@@ -45,13 +45,15 @@ public static class SearchSnippetFormatter
             Highlights = excerpt.Highlights,
             ContextBefore = excerpt.ContextBefore,
             ContextAfter = excerpt.ContextAfter,
+            TruncatedLineCount = excerpt.TruncatedLineCount,
             Score = result.Score,
         };
     }
 
-    public static SearchSnippetExcerpt BuildExcerpt(string content, string query, int absoluteStartLine, int maxLines = DefaultSnippetLines, bool caseSensitive = false)
+    public static SearchSnippetExcerpt BuildExcerpt(string content, string query, int absoluteStartLine, int maxLines = DefaultSnippetLines, bool caseSensitive = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth)
     {
         maxLines = ClampSnippetLines(maxLines);
+        maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidth);
 
         var lines = content.Replace("\r\n", "\n").Split('\n');
         if (lines.Length == 0)
@@ -110,9 +112,17 @@ public static class SearchSnippetFormatter
         var matchSet = matchIndexes.ToHashSet();
         var matchLines = new List<int>();
         var highlights = new List<SearchHighlight>();
+        var clampedLines = new List<string>((end - start) + 1);
+        var truncatedLineCount = 0;
 
         for (int i = start; i <= end; i++)
         {
+            var originalLine = lines[i];
+            var clamped = ClampSnippetLine(originalLine, maxLineWidth, matchSet.Contains(i) ? normalizedQuery : null, tokens, caseSensitive);
+            clampedLines.Add(clamped.Text);
+            if (clamped.Truncated)
+                truncatedLineCount++;
+
             if (!matchSet.Contains(i))
                 continue;
 
@@ -121,8 +131,10 @@ public static class SearchSnippetFormatter
             highlights.Add(new SearchHighlight
             {
                 Line = absoluteLine,
-                Text = lines[i],
-                Terms = GetMatchedTerms(lines[i], normalizedQuery, tokens, caseSensitive),
+                Text = clamped.Text,
+                OriginalLineLength = originalLine.Length,
+                Truncated = clamped.Truncated,
+                Terms = GetMatchedTerms(originalLine, normalizedQuery, tokens, caseSensitive),
             });
         }
 
@@ -130,14 +142,70 @@ public static class SearchSnippetFormatter
         {
             StartLine = absoluteStartLine + start,
             EndLine = absoluteStartLine + end,
-            Lines = lines.Skip(start).Take((end - start) + 1).ToList(),
+            Lines = clampedLines,
             MatchLines = matchLines,
             Highlights = highlights,
             ContextBefore = focusStart - start,
             ContextAfter = end - focusEnd,
             TruncatedBefore = start > 0,
             TruncatedAfter = end < lines.Length - 1,
+            TruncatedLineCount = truncatedLineCount,
         };
+    }
+
+    // Clamp one snippet line, keeping the first match token visible on match lines.
+    // 一致行では最初の一致トークンを残して幅を切り詰める。
+    private static ClampedTextResult ClampSnippetLine(string line, int maxLineWidth, string? normalizedQuery, string[] tokens, bool caseSensitive)
+    {
+        if (line.Length <= maxLineWidth)
+            return new ClampedTextResult(line, false);
+
+        if (normalizedQuery == null)
+            return LineWidthFormatter.ClampLine(line, maxLineWidth);
+
+        var (matchColumn, matchLength) = FindFirstMatchColumn(line, normalizedQuery, tokens, caseSensitive);
+        if (matchColumn <= 0)
+            return LineWidthFormatter.ClampLine(line, maxLineWidth);
+
+        return LineWidthFormatter.ClampLine(line, maxLineWidth, matchColumn, matchLength);
+    }
+
+    private static (int Column, int Length) FindFirstMatchColumn(string line, string normalizedQuery, string[] tokens, bool caseSensitive)
+    {
+        var comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+
+        int bestIndex = -1;
+        int bestLength = 0;
+        if (!string.IsNullOrEmpty(normalizedQuery))
+        {
+            var idx = line.IndexOf(normalizedQuery, comparison);
+            if (idx >= 0)
+            {
+                bestIndex = idx;
+                bestLength = normalizedQuery.Length;
+            }
+        }
+
+        foreach (var token in tokens)
+        {
+            if (token.Length == 0)
+                continue;
+            var idx = line.IndexOf(token, comparison);
+            if (idx < 0)
+                continue;
+            if (bestIndex < 0 || idx < bestIndex)
+            {
+                bestIndex = idx;
+                bestLength = token.Length;
+            }
+        }
+
+        if (bestIndex < 0)
+            return (0, 0);
+
+        // LineWidthFormatter.ClampLine accepts a 1-based focusColumn.
+        // LineWidthFormatter.ClampLine は 1-based の focusColumn を受け取る。
+        return (bestIndex + 1, Math.Max(1, bestLength));
     }
 
     public static int ClampSnippetLines(int maxLines) =>
@@ -216,6 +284,7 @@ public sealed class CompactSearchResult
     public List<SearchHighlight> Highlights { get; set; } = [];
     public int ContextBefore { get; set; }
     public int ContextAfter { get; set; }
+    public int TruncatedLineCount { get; set; }
     public double Score { get; set; }
 }
 
@@ -223,6 +292,8 @@ public sealed class SearchHighlight
 {
     public int Line { get; set; }
     public string Text { get; set; } = string.Empty;
+    public int OriginalLineLength { get; set; }
+    public bool Truncated { get; set; }
     public List<string> Terms { get; set; } = [];
 }
 
@@ -237,4 +308,5 @@ public sealed class SearchSnippetExcerpt
     public int ContextAfter { get; set; }
     public bool TruncatedBefore { get; set; }
     public bool TruncatedAfter { get; set; }
+    public int TruncatedLineCount { get; set; }
 }
