@@ -7,6 +7,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/v1.5.0/install.sh | bash -s -- v1.5.0
 #   export CDIDX_INSTALL_DIR=/usr/local/bin; curl -fsSL ... | bash
 #   bash ./install.sh --self-test-local-mirror [--self-test-allow-overwrite] [vX.Y.Z]
+#   bash ./install.sh --reinstall-real vX.Y.Z
 #
 # Optional env vars / 任意環境変数:
 #   CDIDX_GITHUB_BASE_URL       Release download base URL override
@@ -24,6 +25,21 @@
 #   CDIDX_INSTALL_DIR が既知のシステム/ユーザー install 先や、既に cdidx を
 #   持つディレクトリを指しているときは、--self-test-allow-overwrite を明示
 #   しない限り self-test を中断して real install の上書きを防ぐ。
+#
+# Real reinstall validation / 実リリースの再インストール検証:
+#   --reinstall-real vX.Y.Z downloads the real published release (no mock)
+#   into an **isolated temp dir** — it never touches the user's real install
+#   — and verifies the binary end-to-end: `cdidx --version` plus a real
+#   `cdidx . --db <tmp>` indexing run against a minimal scratch project.
+#   Catches regressions that --self-test-local-mirror cannot (symbol
+#   extraction, SQLite loading, FTS, etc.) because the mock only handles
+#   --version. CDIDX_INSTALL_DIR is intentionally ignored for this mode.
+#   --reinstall-real vX.Y.Z は、公開済みリリースを **隔離された temp dir** に
+#   実ダウンロードし（ユーザーの実インストールには触らない）、`cdidx --version`
+#   だけでなく最小スクラッチプロジェクトに対する `cdidx . --db <tmp>` 実行まで
+#   含めた end-to-end 検証を行う。--self-test-local-mirror の mock は --version
+#   しか返さないため拾えない、シンボル抽出・SQLite ロード・FTS 等のリグレッション
+#   を検出できる。このモードでは CDIDX_INSTALL_DIR は意図的に無視する。
 
 set -euo pipefail
 
@@ -42,6 +58,7 @@ BACKUP_DIR_CLEANUP=""
 LOCAL_MIRROR_DIR_CLEANUP=""
 LOCAL_MIRROR_PID=""
 SELF_TEST_INSTALL_DIR_CLEANUP=""
+REINSTALL_SCRATCH_CLEANUP=""
 SELF_TEST_LOCAL_MIRROR=0
 # Only set via the --self-test-allow-overwrite CLI flag. We intentionally do
 # NOT inherit this from the environment so that a stale SELF_TEST_ALLOW_OVERWRITE=1
@@ -79,6 +96,9 @@ cleanup() {
     fi
     if [ -n "$SELF_TEST_INSTALL_DIR_CLEANUP" ]; then
         rm -rf "$SELF_TEST_INSTALL_DIR_CLEANUP"
+    fi
+    if [ -n "$REINSTALL_SCRATCH_CLEANUP" ]; then
+        rm -rf "$REINSTALL_SCRATCH_CLEANUP"
     fi
 }
 trap cleanup EXIT
@@ -980,6 +1000,100 @@ EOF
     info "Local mirror self-test passed."
 }
 
+# Download the real release for the requested version into an isolated temp
+# dir and exercise the installed binary end-to-end (--version + cdidx . --db).
+# Never writes to the user's real install location, even if CDIDX_INSTALL_DIR
+# is set — validation must not carry the risk of clobbering a working install.
+# 実リリースを隔離された temp dir にダウンロードし、`cdidx --version` と
+# 最小プロジェクトに対する `cdidx . --db <tmp>` 実行まで行う。CDIDX_INSTALL_DIR
+# が設定されていても、ユーザーの実インストールには絶対に書き込まない。
+run_reinstall_real() {
+    local version="${1:-}"
+    if [ -z "$version" ]; then
+        error "--reinstall-real requires a version argument (e.g. v1.5.0)."
+    fi
+    case "$version" in
+        v*) ;;
+        *)  version="v${version}" ;;
+    esac
+
+    need_cmd curl
+    need_cmd tar
+    need_cmd mktemp
+
+    detect_platform
+
+    # Always install to an isolated temp dir. CDIDX_INSTALL_DIR is ignored
+    # here on purpose: a validation mode must never risk replacing a working
+    # real install with a freshly-downloaded build that turns out to be broken.
+    # CDIDX_INSTALL_DIR は無視する。検証モードは実インストールを上書きしない。
+    local reinstall_dir
+    if ! reinstall_dir="$(mktemp -d /tmp/cdidx-reinstall-real.XXXXXX)"; then
+        error "Failed to create isolated install directory for --reinstall-real."
+    fi
+    SELF_TEST_INSTALL_DIR_CLEANUP="$reinstall_dir"
+    INSTALL_DIR="$reinstall_dir"
+
+    info "Real reinstall validation: installing ${version} into isolated dir ${INSTALL_DIR}"
+
+    # Signal main() to skip the trailing "quick start" banner; this is a
+    # validation run, not a user-facing install.
+    # main() の "quick start" バナーを抑止する。
+    SELF_TEST_LOCAL_MIRROR=1
+    main "$version"
+
+    local reinstall_cdidx="${INSTALL_DIR}/${BINARY_NAME}"
+    if [ ! -x "$reinstall_cdidx" ]; then
+        error "Real reinstall validation: installed binary not found at ${reinstall_cdidx}."
+    fi
+
+    info "Verifying ${BINARY_NAME} --version"
+    if ! "$reinstall_cdidx" --version; then
+        error "Real reinstall validation: ${BINARY_NAME} --version failed."
+    fi
+
+    # Build a tiny scratch project and exercise `cdidx . --db <tmp>` so that
+    # the validation covers the real indexing path (symbol extraction, SQLite
+    # FTS5, version.json load, native SQLite lib load). --self-test-local-mirror's
+    # mock only handles --version, so regressions in those paths are invisible there.
+    # 最小プロジェクトで `cdidx . --db <tmp>` を走らせ、シンボル抽出・FTS5・
+    # version.json ロード・ネイティブ SQLite ロードまで通ることを確認する。
+    local scratch_project
+    if ! scratch_project="$(mktemp -d /tmp/cdidx-reinstall-scratch.XXXXXX)"; then
+        error "Failed to create scratch project for --reinstall-real."
+    fi
+    REINSTALL_SCRATCH_CLEANUP="$scratch_project"
+
+    cat > "${scratch_project}/sample.py" <<'PY'
+def greet(name):
+    return f"hello {name}"
+
+
+def main():
+    print(greet("world"))
+
+
+if __name__ == "__main__":
+    main()
+PY
+
+    local scratch_db="${scratch_project}/.cdidx/codeindex.db"
+    info "Running ${BINARY_NAME} . --db ${scratch_db} against scratch project"
+    if ! "$reinstall_cdidx" "$scratch_project" --db "$scratch_db"; then
+        error "Real reinstall validation: ${BINARY_NAME} could not index a scratch project."
+    fi
+    if [ ! -s "$scratch_db" ]; then
+        error "Real reinstall validation: ${BINARY_NAME} did not produce a populated index DB at ${scratch_db}."
+    fi
+
+    info "Running ${BINARY_NAME} search greet --db ${scratch_db} --json to verify FTS"
+    if ! "$reinstall_cdidx" search greet --db "$scratch_db" --json > /dev/null; then
+        error "Real reinstall validation: ${BINARY_NAME} search returned a non-zero exit code."
+    fi
+
+    info "Real reinstall validation passed for ${version}."
+}
+
 # --- Main / メイン ---
 
 main() {
@@ -1027,6 +1141,13 @@ if [ "${CDIDX_INSTALL_SH_LIB_ONLY:-0}" != "1" ]; then
                 esac
             done
             run_local_mirror_self_test "${1:-}"
+            ;;
+        --reinstall-real)
+            shift
+            if [ $# -eq 0 ]; then
+                error "--reinstall-real requires a version argument (e.g. v1.5.0)."
+            fi
+            run_reinstall_real "$1"
             ;;
         *)
             main "$@"

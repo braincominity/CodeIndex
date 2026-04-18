@@ -2547,6 +2547,225 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("https://mirror.example/releases/Widthdom/CodeIndex/releases/download/v1.2.3/sha256sums.txt", stdout);
     }
 
+    [Fact]
+    public void ReinstallReal_WithoutVersionArgument_FailsWithUsageError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            run_reinstall_real
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("--reinstall-real requires a version argument", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_PrefixesBareVersionWithV()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, _) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                echo "MAIN_VERSION_ARG:$1"
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)    echo '{"path":"sample.py"}' ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real 1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("MAIN_VERSION_ARG:v1.2.3", stdout);
+    }
+
+    [Fact]
+    public void ReinstallReal_IgnoresCdidxInstallDirAndUsesIsolatedTempDir()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var homeDir = Path.Combine(_tempRoot, "reinstall_real_home");
+        var realInstallDir = Path.Combine(homeDir, ".local", "bin");
+        Directory.CreateDirectory(realInstallDir);
+        var realBinaryPath = Path.Combine(realInstallDir, "cdidx");
+        File.WriteAllText(realBinaryPath, "#!/usr/bin/env bash\necho REAL_EXISTING_BINARY\n");
+        File.SetUnixFileMode(realBinaryPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        var (exitCode, stdout, _) = RunInstallerSnippet(
+            $$"""
+            export HOME="{{homeDir}}"
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                echo "MAIN_INSTALL_DIR:$INSTALL_DIR"
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)    echo '{"path":"sample.py"}' ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            grep -q 'REAL_EXISTING_BINARY' "{{realBinaryPath}}" && echo "REAL_INSTALL_PRESERVED"
+            [ "$INSTALL_DIR" = "{{realInstallDir}}" ] && echo "USED_REAL_INSTALL_DIR"
+            case "$INSTALL_DIR" in
+                /tmp/cdidx-reinstall-real.*) echo "USED_ISOLATED_TMPDIR" ;;
+                *) echo "DID_NOT_USE_ISOLATED_TMPDIR:$INSTALL_DIR" ;;
+            esac
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = realInstallDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("REAL_INSTALL_PRESERVED", stdout);
+        Assert.Contains("USED_ISOLATED_TMPDIR", stdout);
+        Assert.DoesNotContain("USED_REAL_INSTALL_DIR", stdout);
+        Assert.DoesNotContain($"MAIN_INSTALL_DIR:{realInstallDir}", stdout);
+    }
+
+    [Fact]
+    public void ReinstallReal_ExercisesVersionIndexAndSearch()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var searchSentinel = Path.Combine(_tempRoot, "reinstall_real_search_invoked");
+
+        var (exitCode, stdout, _) = RunInstallerSnippet(
+            $$"""
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<SH
+            #!/usr/bin/env bash
+            case "\$1" in
+                --version)
+                    echo "INVOKED_VERSION"
+                    echo "cdidx v1.2.3"
+                    ;;
+                search)
+                    printf 'invoked' > "{{searchSentinel}}"
+                    echo '{"path":"sample.py"}'
+                    ;;
+                *)
+                    echo "INVOKED_INDEX"
+                    if [ "\$2" = "--db" ] && [ -n "\$3" ]; then
+                        mkdir -p "\$(dirname "\$3")"
+                        printf 'mock-db' > "\$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("INVOKED_VERSION", stdout);
+        Assert.Contains("INVOKED_INDEX", stdout);
+        Assert.True(File.Exists(searchSentinel), "cdidx search stub was not invoked by run_reinstall_real / run_reinstall_real が cdidx search を呼んでいない");
+        Assert.Contains("Real reinstall validation passed", stdout);
+    }
+
+    [Fact]
+    public void ReinstallReal_BinaryMissingAfterInstall_FailsLoudly()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                # Intentionally do not create the binary to simulate a broken install.
+                # バイナリを作らないことで壊れたインストールを模す。
+                :
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("installed binary not found", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_SearchFails_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)    exit 3 ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("search returned a non-zero exit code", stderr);
+    }
+
     [UnsupportedOSPlatform("windows")]
     private static (int ExitCode, string StdOut, string StdErr) RunInstallerSnippet(string snippet, IReadOnlyDictionary<string, string?>? extraEnvironment = null, bool enforceStrictMode = true)
     {

@@ -120,6 +120,24 @@ selection, checksum verification, extraction, placement). It is not a
 replacement for validating official release artifacts in a network-open
 environment.
 
+To validate a real release end-to-end (download + install + indexing + FTS5
+search) without touching the user's real install, use `--reinstall-real
+<version>`:
+
+```bash
+bash ./install.sh --reinstall-real v1.11.0
+```
+
+This installs the requested tag into an isolated `/tmp/cdidx-reinstall-real.XXXXXX`
+dir, runs `cdidx --version`, then builds a tiny scratch Python project and runs
+`cdidx . --db <scratch>/.cdidx/codeindex.db` followed by
+`cdidx search greet --db <...> --json` against it. `--self-test-local-mirror`
+only stubs `--version`, so regressions in indexing, native SQLite load, or
+FTS5 search paths would slip past it; `--reinstall-real` closes that gap.
+`CDIDX_INSTALL_DIR` is intentionally ignored by this mode so a broken build
+can never clobber a working real install, and both temp dirs are cleaned up
+on exit via `trap`.
+
 The installer downloads the latest release tarball, verifies SHA256, and
 copies the binary **plus the adjacent runtime assets** (`version.json` and
 `libe_sqlite3.so` on Linux / `libe_sqlite3.dylib` on macOS) into
@@ -356,6 +374,24 @@ bash ./install.sh --self-test-local-mirror
 このモードは installer の処理経路（取得URL選択・checksum 検証・展開・配置）
 を確認するための mock payload を使います。ネットワークが開いた環境での
 公式 release artifact 検証の代替ではありません。
+
+ユーザーの実インストールを触らずに実リリースを end-to-end 検証
+（ダウンロード＋インストール＋インデックス＋FTS5 検索）したい場合は
+`--reinstall-real <version>` を使ってください:
+
+```bash
+bash ./install.sh --reinstall-real v1.11.0
+```
+
+このモードは指定タグを隔離された `/tmp/cdidx-reinstall-real.XXXXXX` に
+インストールし、`cdidx --version` を走らせたうえで、極小の Python
+プロジェクトを生成して `cdidx . --db <scratch>/.cdidx/codeindex.db` と
+`cdidx search greet --db <...> --json` を通します。
+`--self-test-local-mirror` のモックは `--version` しかスタブしないため、
+インデックス・ネイティブ SQLite ロード・FTS5 検索の回帰は素通りしますが、
+`--reinstall-real` でその穴を埋められます。このモードは
+`CDIDX_INSTALL_DIR` を意図的に無視するので、壊れたビルドが実インストール
+を上書きすることはありません。temp ディレクトリは `trap` で必ず片付けます。
 
 インストーラは最新リリースの tarball をダウンロードし、SHA256 を検証して、
 バイナリに加え**隣接ランタイム資産**（`version.json`、Linux は
