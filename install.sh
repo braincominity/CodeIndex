@@ -29,6 +29,8 @@ STAGE_DIR_CLEANUP=""
 BACKUP_DIR_CLEANUP=""
 LOCAL_MIRROR_DIR_CLEANUP=""
 LOCAL_MIRROR_PID=""
+SELF_TEST_INSTALL_DIR_CLEANUP=""
+SELF_TEST_LOCAL_MIRROR=0
 EXISTING_BIN=""
 EXISTING_VERSION=""
 EXPLICIT_VERSION_REQUESTED=0
@@ -55,6 +57,9 @@ cleanup() {
     fi
     if [ -n "$LOCAL_MIRROR_DIR_CLEANUP" ]; then
         rm -rf "$LOCAL_MIRROR_DIR_CLEANUP"
+    fi
+    if [ -n "$SELF_TEST_INSTALL_DIR_CLEANUP" ]; then
+        rm -rf "$SELF_TEST_INSTALL_DIR_CLEANUP"
     fi
 }
 trap cleanup EXIT
@@ -608,6 +613,10 @@ download_and_install() {
 # --- PATH guidance / PATHガイダンス ---
 
 check_path() {
+    if [ "${SELF_TEST_LOCAL_MIRROR:-0}" = "1" ]; then
+        return 0
+    fi
+
     case ":${PATH}:" in
         *":${INSTALL_DIR}:"*) ;;
         *)
@@ -638,7 +647,49 @@ check_path() {
     esac
 }
 
+report_local_mirror_start_failure() {
+    local local_mirror_port="$1"
+    local local_mirror_log="$2"
+
+    report_error "Local mirror self-test could not start a loopback HTTP server on 127.0.0.1:${local_mirror_port}."
+    report_error "This is a self-test harness failure, not an external network/proxy problem."
+    if [ -f "$local_mirror_log" ]; then
+        report_error "Local mirror log tail (${local_mirror_log}):"
+        if command -v tail > /dev/null 2>&1; then
+            tail -n 20 "$local_mirror_log" >&2 || true
+        else
+            cat "$local_mirror_log" >&2 || true
+        fi
+    fi
+    error "Local mirror self-test aborted before download. Check the local mirror error above, or set CDIDX_LOCAL_MIRROR_PORT to a free port."
+}
+
+wait_for_local_mirror_ready() {
+    local ready_url="$1"
+    local local_mirror_port="$2"
+    local local_mirror_log="$3"
+    local attempt=0
+    local http_code=""
+
+    while [ "$attempt" -lt 5 ]; do
+        if ! kill -0 "$LOCAL_MIRROR_PID" > /dev/null 2>&1; then
+            report_local_mirror_start_failure "$local_mirror_port" "$local_mirror_log"
+        fi
+
+        http_code="$(curl -sS -o /dev/null -w '%{http_code}' "$ready_url" 2>/dev/null || true)"
+        if [ "$http_code" = "200" ]; then
+            return 0
+        fi
+
+        attempt=$((attempt + 1))
+        sleep 1
+    done
+
+    report_local_mirror_start_failure "$local_mirror_port" "$local_mirror_log"
+}
+
 run_local_mirror_self_test() {
+    need_cmd curl
     need_cmd python3
     need_cmd tar
     need_cmd mktemp
@@ -657,6 +708,9 @@ run_local_mirror_self_test() {
     local local_mirror_root
     local local_release_base
     local local_payload_dir
+    local local_mirror_log
+    local local_mirror_base_url
+    local self_test_install_dir=""
     local archive_name="CodeIndex-${RID}.tar.gz"
     local runtime_asset
     local checksum
@@ -671,6 +725,7 @@ run_local_mirror_self_test() {
         error "Failed to create local mirror directory for self-test."
     fi
     LOCAL_MIRROR_DIR_CLEANUP="$local_mirror_root"
+    local_mirror_log="${local_mirror_root}/local-mirror.log"
 
     local_release_base="${local_mirror_root}/${REPO}/releases/download/${rehearsal_version}"
     local_payload_dir="${local_release_base}/payload"
@@ -705,14 +760,30 @@ EOF
     fi
     printf '%s  %s\n' "$checksum" "$archive_name" > "${local_release_base}/sha256sums.txt"
 
-    python3 -m http.server "$local_mirror_port" --directory "$local_mirror_root" > /tmp/cdidx-local-mirror-http.log 2>&1 &
-    LOCAL_MIRROR_PID=$!
-    sleep 1
+    if [ -z "${CDIDX_INSTALL_DIR+x}" ]; then
+        if ! self_test_install_dir="$(mktemp -d /tmp/cdidx-self-test-install.XXXXXX)"; then
+            error "Failed to create isolated install directory for local mirror self-test."
+        fi
+        SELF_TEST_INSTALL_DIR_CLEANUP="$self_test_install_dir"
+        INSTALL_DIR="$self_test_install_dir"
+    fi
 
-    info "Running local mirror self-test against http://127.0.0.1:${local_mirror_port}/"
-    GITHUB_BASE_URL="http://127.0.0.1:${local_mirror_port}"
+    python3 -m http.server "$local_mirror_port" --bind 127.0.0.1 --directory "$local_mirror_root" > "$local_mirror_log" 2>&1 &
+    LOCAL_MIRROR_PID=$!
+    local_mirror_base_url="http://127.0.0.1:${local_mirror_port}"
+    wait_for_local_mirror_ready "${local_mirror_base_url}/${REPO}/releases/download/${rehearsal_version}/${archive_name}" "$local_mirror_port" "$local_mirror_log"
+
+    info "Running local mirror self-test against ${local_mirror_base_url}/"
+    if [ -n "${CDIDX_INSTALL_DIR+x}" ]; then
+        info "Using explicit self-test install dir: ${INSTALL_DIR}"
+    else
+        info "Using isolated self-test install dir: ${INSTALL_DIR}"
+    fi
+    SELF_TEST_LOCAL_MIRROR=1
+    GITHUB_BASE_URL="${local_mirror_base_url}"
     main "$rehearsal_version"
     "${INSTALL_DIR}/${BINARY_NAME}" --version
+    info "Local mirror self-test passed."
 }
 
 # --- Main / メイン ---
@@ -728,6 +799,10 @@ main() {
     check_existing
     download_and_install
     check_path
+
+    if [ "${SELF_TEST_LOCAL_MIRROR:-0}" = "1" ]; then
+        return 0
+    fi
 
     echo ""
     info "Done! Run 'cdidx --version' to verify."

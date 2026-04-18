@@ -1448,6 +1448,123 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("Version: v9.9.9", stdout);
     }
 
+    [Fact]
+    public void SelfTestLocalMirror_WithoutExplicitInstallDir_UsesIsolatedTempInstallDir()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var homeDir = Path.Combine(_tempRoot, "self_test_home");
+        var realInstallDir = Path.Combine(homeDir, ".local", "bin");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            export HOME="{{homeDir}}"
+            mkdir -p "{{realInstallDir}}"
+            printf '%s\n' '#!/usr/bin/env bash' 'echo "REAL_EXISTING_BINARY"' > "{{Path.Combine(realInstallDir, "cdidx")}}"
+            chmod +x "{{Path.Combine(realInstallDir, "cdidx")}}"
+            printf '{"version":"9.9.9"}' > "{{Path.Combine(realInstallDir, "version.json")}}"
+            printf 'real-lib' > "{{Path.Combine(realInstallDir, "libe_sqlite3.so")}}"
+
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            wait_for_local_mirror_ready() { :; }
+            python3() { sleep 30; }
+            curl() { :; }
+            main() {
+                echo "MAIN_INSTALL_DIR:$INSTALL_DIR"
+                mkdir -p "$INSTALL_DIR"
+                printf '%s\n' '#!/usr/bin/env bash' 'echo "cdidx v1.2.3"' > "$INSTALL_DIR/cdidx"
+                chmod +x "$INSTALL_DIR/cdidx"
+                printf '{"version":"1.2.3"}' > "$INSTALL_DIR/version.json"
+                printf 'self-test-lib' > "$INSTALL_DIR/libe_sqlite3.so"
+            }
+
+            run_local_mirror_self_test v1.2.3
+            grep -q 'REAL_EXISTING_BINARY' "{{Path.Combine(realInstallDir, "cdidx")}}" && echo "REAL_INSTALL_PRESERVED"
+            [ "$INSTALL_DIR" = "{{realInstallDir}}" ] && echo "USED_REAL_INSTALL_DIR"
+            [ -f "$INSTALL_DIR/cdidx" ] && echo "SELF_TEST_INSTALL_PRESENT"
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Using isolated self-test install dir:", stdout);
+        Assert.Contains("REAL_INSTALL_PRESERVED", stdout);
+        Assert.Contains("SELF_TEST_INSTALL_PRESENT", stdout);
+        Assert.DoesNotContain($"MAIN_INSTALL_DIR:{realInstallDir}", stdout);
+        Assert.DoesNotContain("USED_REAL_INSTALL_DIR", stdout);
+        Assert.DoesNotContain("ERROR:", stderr);
+    }
+
+    [Fact]
+    public void SelfTestLocalMirror_WithExplicitInstallDir_UsesRequestedInstallDir()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "self_test_explicit_install");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            wait_for_local_mirror_ready() { :; }
+            python3() { sleep 30; }
+            curl() { :; }
+            main() {
+                echo "MAIN_INSTALL_DIR:$INSTALL_DIR"
+                mkdir -p "$INSTALL_DIR"
+                printf '%s\n' '#!/usr/bin/env bash' 'echo "cdidx v1.2.3"' > "$INSTALL_DIR/cdidx"
+                chmod +x "$INSTALL_DIR/cdidx"
+                printf '{"version":"1.2.3"}' > "$INSTALL_DIR/version.json"
+                printf 'self-test-lib' > "$INSTALL_DIR/libe_sqlite3.so"
+            }
+
+            run_local_mirror_self_test v1.2.3
+            [ -f "$INSTALL_DIR/cdidx" ] && echo "EXPLICIT_INSTALL_PRESENT"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains($"MAIN_INSTALL_DIR:{installDir}", stdout);
+        Assert.Contains("Using explicit self-test install dir:", stdout);
+        Assert.Contains("EXPLICIT_INSTALL_PRESENT", stdout);
+        Assert.DoesNotContain("ERROR:", stderr);
+    }
+
+    [Fact]
+    public void SelfTestLocalMirror_LocalMirrorStartFailure_PrintsSelfTestSpecificError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "self_test_start_failure");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            python3() {
+                echo "SELF_TEST_BIND_FAILED" >&2
+                return 1
+            }
+            curl() { :; }
+            main() { echo "MAIN_SHOULD_NOT_RUN"; }
+
+            run_local_mirror_self_test v1.2.3
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(1, exitCode);
+        Assert.DoesNotContain("MAIN_SHOULD_NOT_RUN", stdout);
+        Assert.Contains("Local mirror self-test could not start a loopback HTTP server", stderr);
+        Assert.Contains("This is a self-test harness failure, not an external network/proxy problem.", stderr);
+        Assert.Contains("SELF_TEST_BIND_FAILED", stderr);
+        Assert.DoesNotContain("Check your connection or corporate proxy", stderr);
+    }
+
     [UnsupportedOSPlatform("windows")]
     private static (int ExitCode, string StdOut, string StdErr) RunInstallerSnippet(string snippet, IReadOnlyDictionary<string, string?>? extraEnvironment = null, bool enforceStrictMode = true)
     {
