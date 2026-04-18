@@ -230,6 +230,7 @@ public static class QueryCommandRunner
                     Console.Error.WriteLine("No definitions found.");
                     WriteExactZeroHint(exactZeroHint);
                     WriteKindHint(options.Kind, reader);
+                    WriteLangHint(options.Lang, reader);
                     WriteZeroResultHints(options, reader, "Try 'search' for full-text matches instead of symbol lookup.");
                 }
                 return CommandExitCodes.NotFound;
@@ -705,6 +706,7 @@ public static class QueryCommandRunner
                     Console.Error.WriteLine("No symbols found.");
                     WriteExactZeroHint(exactZeroHint);
                     WriteKindHint(options.Kind, reader);
+                    WriteLangHint(options.Lang, reader);
                     WriteZeroResultHints(options, reader);
                 }
                 return CommandExitCodes.NotFound;
@@ -2377,7 +2379,11 @@ public static class QueryCommandRunner
                     break;
                 case "--lang":
                     if (TryReadStringOptionValue(args, ref i, "--lang", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var langValue, out var langError))
-                        lang = langValue;
+                        // Normalize to lowercase so '--lang Python' == '--lang python' — every LangMap key and
+                        // every DB 'files.lang' row is lowercase, so the SQL filter and WriteLangHint match.
+                        // '--lang Python' と '--lang python' を同一視するため lowercase 正規化する。LangMap の key と
+                        // DB の `files.lang` はすべて lowercase なので、SQL filter と WriteLangHint が一致する。
+                        lang = langValue?.ToLowerInvariant();
                     else
                         AddParseError(langError!);
                     break;
@@ -2395,7 +2401,11 @@ public static class QueryCommandRunner
                     break;
                 case "--kind":
                     if (TryReadStringOptionValue(args, ref i, "--kind", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var kindValue, out var kindError))
-                        kind = kindValue;
+                        // Normalize to lowercase so '--kind FUNCTION' == '--kind function'. AllValidKinds entries
+                        // and every DB 'symbols.kind' row are lowercase.
+                        // '--kind FUNCTION' と '--kind function' を同一視するため lowercase 正規化する。AllValidKinds
+                        // と DB の `symbols.kind` はすべて lowercase。
+                        kind = kindValue?.ToLowerInvariant();
                     else
                         AddParseError(kindError!);
                     break;
