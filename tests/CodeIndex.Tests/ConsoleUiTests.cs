@@ -275,7 +275,8 @@ public class ConsoleUiTests
             {
                 Console.SetOut(writer);
                 Assert.True(ConsoleUi.PrintCompletions(shell));
-                var output = writer.ToString();
+                // Normalize line endings / 改行を正規化 — Windows Console.WriteLine emits \r\n
+                var output = writer.ToString().Replace("\r\n", "\n");
                 if (shell == "bash")
                 {
                     Assert.Contains("elif [ \"$cmd\" = \"search\" ]; then", output);
