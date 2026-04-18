@@ -677,18 +677,33 @@ public partial class DbReader
         if (referenceKind != null)
             sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
+        var referencesSuffixAlias = ComputeCSharpAttributeSuffixAlias(query, lang);
         if (query != null)
         {
             // --exact: Unicode-aware equality when FoldReady (#86), else ASCII COLLATE NOCASE.
             // Fold path: r.symbol_name_folded = @qFolded (indexed), query pre-folded in .NET.
             // Fallback: r.symbol_name = @q COLLATE NOCASE (indexed by idx_symbol_refs_name_nocase).
+            // When the query ends with C# attribute suffix `Attribute`, also OR against the
+            // suffix-stripped alias so `references FooAttribute --exact` reaches the idiomatic
+            // `[Foo]` reference site stored with `symbol_name = "Foo"`. In substring mode we
+            // still LIKE-match `%FooAttribute%` and add only the exact stripped alias to avoid
+            // overmatching unrelated names (e.g. `FooAuditLog`) that share the stripped prefix.
             // --exact: FoldReady なら Unicode 折り畳み経路、未 ready なら ASCII NOCASE へ fallback。
+            // C# の `Attribute` suffix が付いたクエリは、suffix を外した別名とも照合する。
+            // 部分一致モードでは `%FooAttribute%` をそのまま使い、別名側は exact 照合だけを OR
+            // することで `FooAuditLog` など無関係な名前を巻き込まないようにする。
             if (exact && _foldReady)
-                sql += " AND r.symbol_name_folded = @query";
+                sql += referencesSuffixAlias != null
+                    ? " AND (r.symbol_name_folded = @query OR r.symbol_name_folded = @queryAttributeAlias)"
+                    : " AND r.symbol_name_folded = @query";
             else if (exact)
-                sql += " AND r.symbol_name = @query COLLATE NOCASE";
+                sql += referencesSuffixAlias != null
+                    ? " AND (r.symbol_name = @query COLLATE NOCASE OR r.symbol_name = @queryAttributeAlias COLLATE NOCASE)"
+                    : " AND r.symbol_name = @query COLLATE NOCASE";
             else
-                sql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+                sql += referencesSuffixAlias != null
+                    ? " AND (r.symbol_name LIKE @query ESCAPE '\\' OR r.symbol_name = @queryAttributeAlias COLLATE NOCASE)"
+                    : " AND r.symbol_name LIKE @query ESCAPE '\\'";
         }
         if (referenceKind != null)
             sql += " AND r.reference_kind = @referenceKind";
@@ -717,6 +732,20 @@ public partial class DbReader
             else
                 queryParam = query;
             cmd.Parameters.AddWithValue("@query", queryParam);
+            if (referencesSuffixAlias != null)
+            {
+                // Exact-match alias value is used both in --exact paths (folded / NOCASE)
+                // and in the substring path (COLLATE NOCASE exact OR to bypass LIKE noise).
+                // In the folded --exact branch the alias is pre-folded; the substring branch
+                // uses the raw stripped form because the OR clause is a literal `=` comparison.
+                // exact 用の別名値は --exact 経路（folded / NOCASE）と部分一致経路（LIKE ノイズを
+                // 避けるための COLLATE NOCASE の等値 OR）の両方で使う。folded 経路だけは事前に
+                // 折りたたみ、部分一致経路は生の stripped 形をそのまま使う。
+                var aliasParam = exact && _foldReady
+                    ? NameFold.Fold(referencesSuffixAlias) ?? referencesSuffixAlias
+                    : referencesSuffixAlias;
+                cmd.Parameters.AddWithValue("@queryAttributeAlias", aliasParam);
+            }
             cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
             cmd.Parameters.AddWithValue("@rankingQueryPrefix", $"{EscapeLikeQuery(query.Trim())}%");
         }
@@ -770,14 +799,21 @@ public partial class DbReader
             WHERE 1=1";
         innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
+        var countSuffixAlias = ComputeCSharpAttributeSuffixAlias(query, lang);
         if (query != null)
         {
             if (exact && _foldReady)
-                innerSql += " AND r.symbol_name_folded = @query";
+                innerSql += countSuffixAlias != null
+                    ? " AND (r.symbol_name_folded = @query OR r.symbol_name_folded = @queryAttributeAlias)"
+                    : " AND r.symbol_name_folded = @query";
             else if (exact)
-                innerSql += " AND r.symbol_name = @query COLLATE NOCASE";
+                innerSql += countSuffixAlias != null
+                    ? " AND (r.symbol_name = @query COLLATE NOCASE OR r.symbol_name = @queryAttributeAlias COLLATE NOCASE)"
+                    : " AND r.symbol_name = @query COLLATE NOCASE";
             else
-                innerSql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+                innerSql += countSuffixAlias != null
+                    ? " AND (r.symbol_name LIKE @query ESCAPE '\\' OR r.symbol_name = @queryAttributeAlias COLLATE NOCASE)"
+                    : " AND r.symbol_name LIKE @query ESCAPE '\\'";
         }
         if (referenceKind != null)
             innerSql += " AND r.reference_kind = @referenceKind";
@@ -797,6 +833,13 @@ public partial class DbReader
                     ? NameFold.Fold(query) ?? query
                     : query;
             cmd.Parameters.AddWithValue("@query", value);
+            if (countSuffixAlias != null)
+            {
+                var aliasParam = exact && _foldReady
+                    ? NameFold.Fold(countSuffixAlias) ?? countSuffixAlias
+                    : countSuffixAlias;
+                cmd.Parameters.AddWithValue("@queryAttributeAlias", aliasParam);
+            }
         }
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
@@ -825,14 +868,21 @@ public partial class DbReader
                 WHERE 1=1";
         innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
+        var totalSuffixAlias = ComputeCSharpAttributeSuffixAlias(query, lang);
         if (query != null)
         {
             if (exact && _foldReady)
-                innerSql += " AND r.symbol_name_folded = @query";
+                innerSql += totalSuffixAlias != null
+                    ? " AND (r.symbol_name_folded = @query OR r.symbol_name_folded = @queryAttributeAlias)"
+                    : " AND r.symbol_name_folded = @query";
             else if (exact)
-                innerSql += " AND r.symbol_name = @query COLLATE NOCASE";
+                innerSql += totalSuffixAlias != null
+                    ? " AND (r.symbol_name = @query COLLATE NOCASE OR r.symbol_name = @queryAttributeAlias COLLATE NOCASE)"
+                    : " AND r.symbol_name = @query COLLATE NOCASE";
             else
-                innerSql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+                innerSql += totalSuffixAlias != null
+                    ? " AND (r.symbol_name LIKE @query ESCAPE '\\' OR r.symbol_name = @queryAttributeAlias COLLATE NOCASE)"
+                    : " AND r.symbol_name LIKE @query ESCAPE '\\'";
         }
         if (referenceKind != null)
             innerSql += " AND r.reference_kind = @referenceKind";
@@ -852,6 +902,13 @@ public partial class DbReader
                     ? NameFold.Fold(query) ?? query
                     : query;
             cmd.Parameters.AddWithValue("@query", value);
+            if (totalSuffixAlias != null)
+            {
+                var aliasParam = exact && _foldReady
+                    ? NameFold.Fold(totalSuffixAlias) ?? totalSuffixAlias
+                    : totalSuffixAlias;
+                cmd.Parameters.AddWithValue("@queryAttributeAlias", aliasParam);
+            }
         }
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
@@ -1621,6 +1678,25 @@ public partial class DbReader
         }
 
         return results;
+    }
+
+    // C# convention: a class `FooAttribute` is used in source as `[Foo]`, so the reference
+    // site is stored with `symbol_name = "Foo"`. When a user queries with the class name
+    // (`references FooAttribute`, `inspect FooAttribute`, `analyze_symbol("FooAttribute")`),
+    // return the suffix-stripped form as an alias so the query still reaches the idiomatic
+    // use site. Only applies for C# scope — other languages do not share the convention.
+    // C# の規約: クラス `FooAttribute` はソース中で `[Foo]` として使われるため、参照サイトは
+    // `symbol_name = "Foo"` で保存される。ユーザーがクラス名で問い合わせたとき
+    // (`references FooAttribute` 等) でも慣用的な利用サイトに到達できるよう、
+    // suffix を外した別名を返す。C# 以外の言語ではこの規約を持たないので適用しない。
+    private static string? ComputeCSharpAttributeSuffixAlias(string? query, string? lang)
+    {
+        if (string.IsNullOrEmpty(query)) return null;
+        if (lang != null && !lang.Equals("csharp", StringComparison.OrdinalIgnoreCase)) return null;
+        const string suffix = "Attribute";
+        if (!query!.EndsWith(suffix, StringComparison.Ordinal)) return null;
+        if (query.Length <= suffix.Length) return null;
+        return query.Substring(0, query.Length - suffix.Length);
     }
 
     private List<string> ResolveImpactFallbackNames(SymbolResult definition)

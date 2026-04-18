@@ -2349,6 +2349,88 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchReferences_MatchesCSharpAttributeSuffixConvention_Substring()
+    {
+        // issue #293 follow-up: `references MyAuditAttribute` (substring mode) must
+        // find `[MyAudit]` call sites so `references` / `inspect` / `analyze_symbol`
+        // stay consistent with `deps` / `impact` canonicalization.
+        // issue #293 補足: `references MyAuditAttribute`（部分一致モード）が `[MyAudit]`
+        // 参照サイトを見つけられなければならず、`references` / `inspect` /
+        // `analyze_symbol` が `deps` / `impact` の正規化と整合する必要がある。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            using System;
+
+            [AttributeUsage(AttributeTargets.Class)]
+            public sealed class MyAuditAttribute : Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var results = _reader.SearchReferences("MyAuditAttribute", lang: "csharp");
+
+        Assert.Contains(results, r => r.Path == "src/Svc.cs" && r.ReferenceKind == "attribute");
+    }
+
+    [Fact]
+    public void SearchReferences_MatchesCSharpAttributeSuffixConvention_Exact()
+    {
+        // Same scenario under `--exact` — the suffix alias must be applied even when
+        // exact-name matching is requested, otherwise `references MyAuditAttribute
+        // --exact` loses the attribute call site.
+        // `--exact` 指定下でも同様 — exact match の場合でも suffix alias を適用しない
+        // と、`references MyAuditAttribute --exact` は attribute 参照サイトを取りこぼす。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            using System;
+
+            [AttributeUsage(AttributeTargets.Class)]
+            public sealed class MyAuditAttribute : Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var results = _reader.SearchReferences("MyAuditAttribute", lang: "csharp", exact: true);
+
+        Assert.Contains(results, r => r.Path == "src/Svc.cs" && r.ReferenceKind == "attribute");
+    }
+
+    [Fact]
+    public void SearchReferences_CSharpAttributeSuffixAliasDoesNotBleedToOtherLanguages()
+    {
+        // Alias must be C# only — a Java `@MyAudit(...)` annotation using the
+        // suffix convention is not part of the Java ecosystem, so querying for
+        // `MyAuditAttribute` under Java scope must not spuriously match `MyAudit`.
+        // alias は C# 限定 — Java の `@MyAudit(...)` annotation は suffix 規約を使わない
+        // ので、Java スコープで `MyAuditAttribute` を指定したときに `MyAudit` に
+        // 誤って match してはならない。
+        InsertIndexedFile("src/Svc.java", "java",
+            """
+            @MyAudit
+            public class Svc {
+            }
+            """);
+
+        var results = _reader.SearchReferences("MyAuditAttribute", lang: "java");
+
+        Assert.Empty(results);
+    }
+
+    [Fact]
     public void GetGroupedSymbolHotspots_CollapsesDuplicateNamesWithoutBareJoinInflation()
     {
         InsertIndexedFile("src/Alpha.cs", "csharp",
