@@ -5661,6 +5661,52 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsStaticAbstractInterfaceOperators()
+    {
+        // Issue #244: C# 11 `static abstract` / `abstract static` interface operator members
+        // (the foundation of `System.Numerics.INumber<TSelf>` generic math) were silently
+        // dropped because the conversion and binary/unary operator regexes only accepted
+        // `static|unsafe|extern` in their modifier slot. Both modifier orders and both
+        // regular operators and implicit/explicit conversion operators must now be captured
+        // the same way the struct-level counterparts are.
+        // Issue #244: C# 11 の `static abstract` / `abstract static` interface operator
+        // （`System.Numerics.INumber<TSelf>` などの generic math 基盤）は、変換演算子と
+        // 二項/単項演算子の正規表現が modifier スロットで `static|unsafe|extern` しか
+        // 受け付けていなかったため黙って取りこぼされていた。両方の修飾子順序と、
+        // 通常演算子・implicit/explicit 変換演算子の両方を struct 側と同様に捕捉する。
+        var content = """
+            namespace Demo;
+
+            public interface IMath<T> where T : IMath<T>
+            {
+                static abstract T operator +(T a, T b);
+                abstract static T operator -(T a, T b);
+                static abstract T operator *(T a, T b);
+                abstract static T Zero { get; }
+                static abstract implicit operator T(int x);
+                abstract static explicit operator int(T t);
+                abstract static int Compare(T a, T b);
+            }
+
+            public struct N
+            {
+                public static N operator +(N a, N b) => a;
+                public static N operator -(N a, N b) => a;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "IMath");
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "operator +"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "operator -"));
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator *");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "implicit operator T");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator int");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Zero");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Compare");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsPointerReturnTypes()
     {
         // Issue #234: methods with pointer / function-pointer return types must still be indexed.
