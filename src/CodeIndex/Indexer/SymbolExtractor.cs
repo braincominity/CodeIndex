@@ -1580,6 +1580,61 @@ public static class SymbolExtractor
                 continue;
             }
 
+            // `<![CDATA[ ... ]]>` section. In XHTML / SVG / MathML these are
+            // valid and must not leak their content as phantom tags. The
+            // terminator is specifically `]]>`, not the first `>`, so a naive
+            // `IndexOf('>', ...)` would stop early on inner markup and let the
+            // remaining CDATA body be parsed as real HTML. Unterminated CDATA
+            // masks through EOF, matching the comment-branch behavior.
+            // `<![CDATA[ ... ]]>` は XHTML / SVG / MathML で有効。終端は
+            // `]]>` のみであり、単純な `>` 検索では内部のタグで早期終了して
+            // 残り本体が phantom として抽出される。未閉鎖は EOF までマスクする。
+            if (i + 8 < chars.Length && chars[i + 1] == '!' && chars[i + 2] == '[' &&
+                chars[i + 3] == 'C' && chars[i + 4] == 'D' && chars[i + 5] == 'A' &&
+                chars[i + 6] == 'T' && chars[i + 7] == 'A' && chars[i + 8] == '[')
+            {
+                var cdataClose = text.IndexOf("]]>", i + 9, StringComparison.Ordinal);
+                var cdataEnd = cdataClose < 0 ? chars.Length : cdataClose + 3;
+                BlankPreservingNewlines(chars, i, cdataEnd);
+                i = cdataEnd;
+                continue;
+            }
+
+            // Other `<!...>` declarations (DOCTYPE and similar). Content
+            // between `<!` and the first unquoted `>` is a declaration, not a
+            // tag body, so mask it to prevent attribute-lookalike tokens from
+            // being emitted as symbols. Quoted values inside DOCTYPE PUBLIC /
+            // SYSTEM are walked via FindHtmlQuoteClose so embedded `>` does
+            // not terminate the declaration early.
+            // DOCTYPE などの `<!...>` 宣言は `FindHtmlTagOpenerEnd` で閉じ `>` を
+            // 探して丸ごとマスクする。引用符内の `>` で早期終了しないようにする。
+            if (i + 1 < chars.Length && chars[i + 1] == '!')
+            {
+                var declEnd = FindHtmlTagOpenerEnd(text, i);
+                if (declEnd < 0)
+                {
+                    BlankPreservingNewlines(chars, i, chars.Length);
+                    i = chars.Length;
+                    continue;
+                }
+                BlankPreservingNewlines(chars, i, declEnd + 1);
+                i = declEnd + 1;
+                continue;
+            }
+
+            // Processing instructions `<?...?>` (XML prolog, XSLT PIs, PHP
+            // short tags embedded in XHTML). Terminator is `?>`, not bare `>`.
+            // Content between can include tag-like markup that must not leak.
+            // `<?...?>` 処理命令。終端は `?>` で、内部のタグ様テキストは漏らさない。
+            if (i + 1 < chars.Length && chars[i + 1] == '?')
+            {
+                var piClose = text.IndexOf("?>", i + 2, StringComparison.Ordinal);
+                var piEnd = piClose < 0 ? chars.Length : piClose + 2;
+                BlankPreservingNewlines(chars, i, piEnd);
+                i = piEnd;
+                continue;
+            }
+
             var rawName = TryMatchHtmlRawTextOpenerName(text, i);
             if (rawName != null)
             {
@@ -1728,7 +1783,10 @@ public static class SymbolExtractor
         // path-like attribute (`href="/app.css"`). Accepting bare `/` would
         // let an earlier unterminated `title="...` silently steal the opening
         // quote of `href="/app.css"` and swallow every sibling tag between
-        // them.
+        // them. The self-closing form `"/>` IS accepted (ambiguity gone —
+        // the `/` is followed by `>`), so void-element tags like
+        // `<link href="/app.css"/>` still close cleanly without triggering
+        // the nested-attribute fallback on the following sibling tag.
         //
         // When a non-strong `"` is encountered and it matches an "attribute-
         // start" pattern (preceded by `[attr-name-chars]+=` with whitespace
@@ -1781,6 +1839,13 @@ public static class SymbolExtractor
                     return i;
                 var nextCh = text[after];
                 if (nextCh == '>' || char.IsWhiteSpace(nextCh))
+                    return i;
+                // Accept the XML-style self-closing marker `"/>` as strong
+                // post-context. Bare `/` is still rejected because it cannot
+                // be distinguished from a path-like `href="/app.css"` opener.
+                // 自己閉鎖タグの `"/>` は strong として受理する。bare `/` は
+                // `href="/app.css"` の開きとの区別が付かないため受理しない。
+                if (nextCh == '/' && after + 1 < text.Length && text[after + 1] == '>')
                     return i;
 
                 if (IsPrecededByHtmlAttributeStart(text, i, start))

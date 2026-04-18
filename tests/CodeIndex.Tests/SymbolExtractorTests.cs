@@ -8325,6 +8325,67 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Html_SelfClosingVoidElementDoesNotDropSiblingAttributes()
+    {
+        // XHTML / formatter-wrapped HTML often writes void elements as
+        // `<link href="/app.css"/>`. Previously the closing `"` of the path-
+        // like attribute had post-context `/` which was NOT accepted as a
+        // strong close, and the nested-attribute fallback then mis-identified
+        // `id="real"` on the following sibling tag as a nested opener, causing
+        // FindHtmlQuoteClose to return -1 and the attribute parser to bail,
+        // dropping BOTH the `href` import and the sibling `id`. The self-
+        // closing shape `"/>` is now accepted as a strong post-context.
+        // Closes #215 codex review #11 Blocker 1.
+        // XHTML / フォーマッタ折り返しの HTML では `<link href="/app.css"/>` の
+        // 形を採ることがある。以前は閉じ `"` 直後が `/` のため strong でなく、
+        // 後続の `id="real"` を nested 属性と誤認して -1 → 行末 bail となり、
+        // `href` import も兄弟 `id` も落としていた。`"/>` を strong として
+        // 受理することで self-closing void 要素も後続も正しく拾う。
+        // #215 codex review #11 Blocker 1 対応。
+        var content = "<link href=\"/app.css\"/><section id=\"real\"></section>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.css");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+    }
+
+    [Fact]
+    public void Extract_Html_CdataAndProcessingInstructionContentsAreNotLeakedAsSymbols()
+    {
+        // XHTML / SVG / MathML content can contain `<![CDATA[...]]>` sections
+        // whose body is text, not markup. The old `<!`-branch in the extractor
+        // stopped at the first `>` which is often inside an inner element of
+        // the CDATA body, so the remainder was parsed as real HTML and leaked
+        // phantom tags / properties. Processing instructions `<?...?>` and
+        // DOCTYPE declarations have the same shape. Pin that CDATA / PI /
+        // DOCTYPE bodies do NOT emit symbols and that siblings after them
+        // still do. Closes #215 codex review #11 Blocker 2.
+        // XHTML / SVG / MathML の `<![CDATA[...]]>` 本体はマークアップではなく
+        // テキスト。旧実装は最初の `>` で終端扱いしたため、内部要素の `>` で
+        // 早期終了して残り本体が real HTML として抽出され phantom を漏らして
+        // いた。`<?...?>` や `<!DOCTYPE...>` も同様。CDATA / PI / DOCTYPE 本体
+        // は emit せず、それらの後続兄弟が emit されることを固定する。
+        // #215 codex review #11 Blocker 2 対応。
+        var cdata = "<![CDATA[ <two-widget id=\"phantom\"></two-widget><three-widget id=\"ghost\"></three-widget> ]]><section id=\"real\"></section>";
+        var symbolsCdata = SymbolExtractor.Extract(1, "html", cdata);
+        Assert.DoesNotContain(symbolsCdata, s => s.Name == "two-widget");
+        Assert.DoesNotContain(symbolsCdata, s => s.Name == "three-widget");
+        Assert.DoesNotContain(symbolsCdata, s => s.Name == "phantom");
+        Assert.DoesNotContain(symbolsCdata, s => s.Name == "ghost");
+        Assert.Contains(symbolsCdata, s => s.Kind == "property" && s.Name == "real");
+
+        var pi = "<?xml version=\"1.0\"?><?xml-stylesheet href=\"/evil.css\"?><section id=\"realpi\"></section>";
+        var symbolsPi = SymbolExtractor.Extract(1, "html", pi);
+        Assert.DoesNotContain(symbolsPi, s => s.Kind == "import" && s.Name == "/evil.css");
+        Assert.Contains(symbolsPi, s => s.Kind == "property" && s.Name == "realpi");
+
+        var doctype = "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\"><section id=\"realdt\"></section>";
+        var symbolsDt = SymbolExtractor.Extract(1, "html", doctype);
+        Assert.Contains(symbolsDt, s => s.Kind == "property" && s.Name == "realdt");
+    }
+
+    [Fact]
     public void Extract_Html_UnterminatedOuterTagWithEmbeddedRawTextOpenerDoesNotMaskToEof()
     {
         // codex review #10 Blocker B: when the outer non-raw-text tag is itself
