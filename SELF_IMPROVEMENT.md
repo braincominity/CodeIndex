@@ -245,7 +245,7 @@ When enhancing symbol extraction, reference extraction, or language-specific heu
 
 ## Design Decision — C# Extraction Ceiling (Issue #384)
 
-Context: `src/CodeIndex/Indexer/ReferenceExtractor.cs` has accumulated a long tail of single-construct fixes (#200, #220, #233, #253, #257, #264, #274, #288, #291, #293, #301, #330, #338, #342, #343, #344, #349, #355, #356, #357, #361, #362, #363, #364, #367, #372, #374, #375, #376, #382 and siblings). The line-oriented regex layer keeps running into the same four failure modes: wrapped declarations, string/comment bleed, nested bracket tracking, and scope attribution. Issue #384 asked for a recorded decision instead of one more per-construct fix.
+Context: the C# extraction layer — both `src/CodeIndex/Indexer/ReferenceExtractor.cs` (call / reference edges) and `src/CodeIndex/Indexer/SymbolExtractor.cs` (symbol rows, for example the #376 modifier-list case where `new interface` was silently dropped) — has accumulated a long tail of single-construct fixes (#200, #220, #233, #253, #257, #264, #274, #288, #291, #293, #301, #330, #338, #342, #343, #344, #349, #355, #356, #357, #361, #362, #363, #364, #367, #372, #374, #375, #376, #382 and siblings). The line-oriented regex layer in both extractors keeps running into the same four failure modes: wrapped declarations, string/comment bleed, nested bracket tracking, and scope attribution. Issue #384 asked for a recorded decision instead of one more per-construct fix.
 
 **Decision: Hybrid, with Option B as the primary direction.** We already maintain a hand-written `StructuralLineMasker` (C# / Python / Rust / JS-TS) and a JS/TS lexer-driven class-body pass inside `SymbolExtractor` — the codebase is already on the Option B path for string/comment framing. The next step is to extend that lightweight scanner for C# (and Java where syntax overlaps) so the regex consumers in `SymbolExtractor` / `ReferenceExtractor` can query scope state instead of re-parsing it ad-hoc.
 
@@ -576,7 +576,7 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --json
 
 ## 設計判断 — C# 抽出の天井（Issue #384）
 
-背景: `src/CodeIndex/Indexer/ReferenceExtractor.cs` には単一構文に対する修正が長く積み上がっている（#200、#220、#233、#253、#257、#264、#274、#288、#291、#293、#301、#330、#338、#342、#343、#344、#349、#355、#356、#357、#361、#362、#363、#364、#367、#372、#374、#375、#376、#382 など）。行指向の正規表現層は、常に同じ 4 つの失敗モードにぶつかっている: 折り返し宣言、文字列/コメント混入、ネストした括弧追跡、スコープ帰属。Issue #384 は「これ以上の個別修正ではなく、方針を明文化せよ」という依頼だった。
+背景: C# 抽出層は `src/CodeIndex/Indexer/ReferenceExtractor.cs`（call / reference エッジ）と `src/CodeIndex/Indexer/SymbolExtractor.cs`（シンボル行、例えば #376 は interface 正規表現の修飾子リストから `new` が抜けていたため `new interface` が黙って落ちていた事案）の両方を指し、両者合わせて単一構文に対する修正が長く積み上がっている（#200、#220、#233、#253、#257、#264、#274、#288、#291、#293、#301、#330、#338、#342、#343、#344、#349、#355、#356、#357、#361、#362、#363、#364、#367、#372、#374、#375、#376、#382 など）。両抽出器の行指向正規表現層は、常に同じ 4 つの失敗モードにぶつかっている: 折り返し宣言、文字列／コメント混入、ネストした括弧追跡、スコープ帰属。Issue #384 は「これ以上の個別修正ではなく、方針を明文化せよ」という依頼だった。
 
 **結論: ハイブリッド。主軸は Option B とする。** 手書きの `StructuralLineMasker`（C# / Python / Rust / JS-TS 対応）と、`SymbolExtractor` 内の JS/TS lexer ベースのクラス本体処理は、すでに Option B への地ならしになっている。次の一歩は、この軽量 scanner を C#（構文が重なる範囲で Java も）向けに拡張し、`SymbolExtractor` / `ReferenceExtractor` の regex 消費側が scope 状態を毎回再解析するのではなく問い合わせられるようにすることだ。
 
