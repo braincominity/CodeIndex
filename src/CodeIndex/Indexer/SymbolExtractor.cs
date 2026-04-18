@@ -798,32 +798,48 @@ public static class SymbolExtractor
         ],
         ["sql"] =
         [
-            // Identifier shape accepts PG double-quoted ("name"), T-SQL bracketed ([name]), or bare (\w+),
-            // optionally qualified with dots (schema.name, [dbo].[sp_X], "s"."n").
-            // 識別子形式は PG の "name"、T-SQL の [name]、裸 (\w+) を受け入れ、ドットで修飾可能
+            // Identifier shape accepts PG double-quoted ("name"), T-SQL bracketed ([name]), or bare
+            // ([\w$#]+) to cover Oracle identifiers such as SYS$LINK / USER#1, optionally qualified
+            // with dots (schema.name, [dbo].[sp_X], "s"."n").
+            // 識別子形式は PG の "name"、T-SQL の [name]、裸 ([\w$#]+) を受け入れる。裸 ID は
+            // SYS$LINK / USER#1 のような Oracle 識別子も拾える。ドットで修飾可能
             //（schema.name、[dbo].[sp_X]、"s"."n"）。
             // CREATE TABLE / VIEW — Postgres TEMP/UNLOGGED + MATERIALIZED VIEW, T-SQL `CREATE OR ALTER` (2016+)
             // CREATE TABLE / VIEW — Postgres の TEMP/UNLOGGED や MATERIALIZED VIEW、T-SQL の `CREATE OR ALTER`（2016+）に対応
-            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:(?:(?:GLOBAL|LOCAL)\s+)?(?:TEMP|TEMPORARY)\s+|UNLOGGED\s+)?(?:TABLE|(?:MATERIALIZED\s+)?VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:(?:(?:GLOBAL|LOCAL)\s+)?(?:TEMP|TEMPORARY)\s+|UNLOGGED\s+)?(?:TABLE|(?:MATERIALIZED\s+)?VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // CREATE PROCEDURE / PROC / FUNCTION / TRIGGER — Postgres `OR REPLACE` and T-SQL `OR ALTER` / `PROC` short form
             // CREATE PROCEDURE / PROC / FUNCTION / TRIGGER — Postgres の `OR REPLACE` と T-SQL の `OR ALTER` / 短縮形 `PROC` に対応
-            new("function", new Regex(@"^\s*CREATE\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:PROCEDURE|PROC|FUNCTION|TRIGGER)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("enum",     new Regex(@"^\s*CREATE\s+TYPE\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)\s+AS\s+ENUM\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*CREATE\s+TYPE\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("namespace", new Regex(@"^\s*CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:(?<name>(?!AUTHORIZATION\b)(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)|AUTHORIZATION\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*))", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*CREATE\s+(?:SEQUENCE|DOMAIN)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("import",   new Regex(@"^\s*CREATE\s+EXTENSION\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            // T-SQL SYNONYM
-            new("class",    new Regex(@"^\s*CREATE\s+SYNONYM\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            // T-SQL server-level / database-level principals and objects
-            // T-SQL のサーバ/データベースレベルのプリンシパル・オブジェクト
-            new("class",    new Regex(@"^\s*CREATE\s+(?:DATABASE|LOGIN|USER|ROLE|CERTIFICATE)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("function", new Regex(@"^\s*CREATE\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:PROCEDURE|PROC|FUNCTION|TRIGGER)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("enum",     new Regex(@"^\s*CREATE\s+TYPE\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)\s+AS\s+ENUM\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // Oracle: CREATE [OR REPLACE] TYPE BODY <name> and CREATE [OR REPLACE] PACKAGE [BODY] <name>.
+            // These must precede the bare CREATE TYPE / CREATE PACKAGE rows so the `BODY` keyword is
+            // not absorbed as the object name.
+            // Oracle: CREATE [OR REPLACE] TYPE BODY <name> と CREATE [OR REPLACE] PACKAGE [BODY] <name>。
+            // 裸の CREATE TYPE / CREATE PACKAGE 行より前に置き、`BODY` キーワードを name として
+            // 飲み込まないようにする。
+            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?TYPE\s+BODY\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:EDITIONABLE\s+|NONEDITIONABLE\s+)?PACKAGE\s+BODY\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:EDITIONABLE\s+|NONEDITIONABLE\s+)?PACKAGE\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?TYPE\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("namespace", new Regex(@"^\s*CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:(?<name>(?!AUTHORIZATION\b)(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)|AUTHORIZATION\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*))", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*CREATE\s+(?:SEQUENCE|DOMAIN)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("import",   new Regex(@"^\s*CREATE\s+EXTENSION\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // T-SQL SYNONYM (also Oracle / DB2)
+            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:PUBLIC\s+)?SYNONYM\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // Oracle: CREATE [SHARED|PUBLIC] DATABASE LINK <name> — must precede the bare CREATE DATABASE row
+            // so the `LINK` token is not taken as a name.
+            // Oracle: CREATE [SHARED|PUBLIC] DATABASE LINK <name> — 裸の CREATE DATABASE 行より前に置き、
+            // `LINK` を name として飲み込まないようにする。
+            new("class",    new Regex(@"^\s*CREATE\s+(?:(?:PUBLIC|SHARED)\s+)?DATABASE\s+LINK\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // T-SQL server-level / database-level principals and objects, plus Oracle-only DIRECTORY / CONTEXT / PROFILE.
+            // T-SQL のサーバ/データベースレベルのプリンシパル・オブジェクトと、Oracle 固有の DIRECTORY / CONTEXT / PROFILE。
+            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:DATABASE|LOGIN|USER|ROLE|CERTIFICATE|DIRECTORY|CONTEXT|PROFILE)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // T-SQL partitioning and full-text catalogs
             // T-SQL のパーティション関連と全文検索カタログ
-            new("function", new Regex(@"^\s*CREATE\s+PARTITION\s+FUNCTION\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*CREATE\s+PARTITION\s+SCHEME\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*CREATE\s+FULLTEXT\s+CATALOG\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(?!ON\b)(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("function", new Regex(@"^\s*CREATE\s+PARTITION\s+FUNCTION\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*CREATE\s+PARTITION\s+SCHEME\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*CREATE\s+FULLTEXT\s+CATALOG\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(?!ON\b)(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // ALTER covers the same object kinds we create above, so migration scripts remain visible.
             // Kinds are split to match the CREATE side (procedure-like → function, schema → namespace,
             // extension → import, everything else → class) so `symbols --kind` / `definition` / `inspect`
@@ -832,10 +848,18 @@ public static class SymbolExtractor
             // CREATE 側に合わせて kind を分割し（プロシージャ類 → function、SCHEMA → namespace、
             // EXTENSION → import、その他 → class）、同じオブジェクトに対する CREATE と ALTER で
             // `symbols --kind` / `definition` / `inspect` の種別が揃うようにする。
-            new("function", new Regex(@"^\s*ALTER\s+(?:PROCEDURE|PROC|FUNCTION|TRIGGER|PARTITION\s+FUNCTION)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("namespace", new Regex(@"^\s*ALTER\s+SCHEMA\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("import",   new Regex(@"^\s*ALTER\s+EXTENSION\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*ALTER\s+(?:TABLE|(?:MATERIALIZED\s+)?VIEW|SEQUENCE|SYNONYM|LOGIN|USER|ROLE|DATABASE|CERTIFICATE|INDEX|TYPE|DOMAIN|PARTITION\s+SCHEME|FULLTEXT\s+CATALOG)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("function", new Regex(@"^\s*ALTER\s+(?:PROCEDURE|PROC|FUNCTION|TRIGGER|PARTITION\s+FUNCTION)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("namespace", new Regex(@"^\s*ALTER\s+SCHEMA\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("import",   new Regex(@"^\s*ALTER\s+EXTENSION\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // Oracle: ALTER TYPE BODY / PACKAGE BODY / PACKAGE / DATABASE LINK — must precede the bare
+            // ALTER row so the trailing keyword is not absorbed as the name.
+            // Oracle: ALTER TYPE BODY / PACKAGE BODY / PACKAGE / DATABASE LINK — 裸の ALTER 行より
+            // 前に置き、末尾キーワードを name として飲み込まないようにする。
+            new("class",    new Regex(@"^\s*ALTER\s+TYPE\s+BODY\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*ALTER\s+PACKAGE\s+BODY\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*ALTER\s+PACKAGE\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*ALTER\s+DATABASE\s+LINK\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*ALTER\s+(?:TABLE|(?:MATERIALIZED\s+)?VIEW|SEQUENCE|SYNONYM|LOGIN|USER|ROLE|DATABASE|CERTIFICATE|INDEX|TYPE|DOMAIN|DIRECTORY|PROFILE|PARTITION\s+SCHEME|FULLTEXT\s+CATALOG)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
         ],
         ["terraform"] =
         [

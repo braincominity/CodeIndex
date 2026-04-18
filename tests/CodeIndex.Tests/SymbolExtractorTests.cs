@@ -6518,6 +6518,82 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_DetectsOraclePlSqlDdlKinds()
+    {
+        // Oracle PL/SQL — PACKAGE / PACKAGE BODY / TYPE / TYPE BODY / DATABASE LINK / DIRECTORY /
+        // CONTEXT / PROFILE must all be captured, and object names may contain `$` / `#`.
+        // Oracle PL/SQL — PACKAGE / PACKAGE BODY / TYPE / TYPE BODY / DATABASE LINK / DIRECTORY /
+        // CONTEXT / PROFILE を全て捕捉し、オブジェクト名に `$` / `#` を含められる。
+        var content =
+            "CREATE OR REPLACE PACKAGE orders_pkg IS\n" +
+            "  PROCEDURE insert_order(p_id IN NUMBER);\n" +
+            "END orders_pkg;\n" +
+            "/\n" +
+            "CREATE OR REPLACE PACKAGE BODY orders_pkg IS\n" +
+            "  PROCEDURE insert_order(p_id IN NUMBER) IS BEGIN NULL; END;\n" +
+            "END orders_pkg;\n" +
+            "/\n" +
+            "CREATE OR REPLACE TYPE address_t AS OBJECT (street VARCHAR2(100));\n" +
+            "/\n" +
+            "CREATE OR REPLACE TYPE BODY address_t AS\n" +
+            "END;\n" +
+            "/\n" +
+            "CREATE SEQUENCE hr.order_seq START WITH 1 INCREMENT BY 1;\n" +
+            "CREATE PUBLIC SYNONYM customer_v FOR schema1.customers;\n" +
+            "CREATE PUBLIC DATABASE LINK remote_db CONNECT TO app IDENTIFIED BY \"x\" USING 'REMOTE';\n" +
+            "CREATE DIRECTORY data_dir AS '/var/oracle/data';\n" +
+            "CREATE CONTEXT app_ctx USING app_pkg;\n" +
+            "CREATE PROFILE app_profile LIMIT SESSIONS_PER_USER 5;\n" +
+            "CREATE TABLE SYS$ITEMS#1 (id NUMBER);\n" +
+            "ALTER PACKAGE orders_pkg COMPILE;\n" +
+            "ALTER PACKAGE BODY orders_pkg COMPILE;\n" +
+            "ALTER TYPE BODY address_t COMPILE;\n" +
+            "ALTER DATABASE LINK remote_db;\n" +
+            "ALTER DIRECTORY data_dir AS '/var/oracle/data2';\n" +
+            "ALTER PROFILE app_profile LIMIT SESSIONS_PER_USER 10;\n";
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        // PACKAGE spec/body both captured (BODY is not absorbed as the package name)
+        // PACKAGE spec / body の両方が取れ、`BODY` が package name に吸い込まれない
+        Assert.Equal(2, symbols.Count(s => s.Kind == "class" && s.Name == "orders_pkg" && s.Signature != null && s.Signature.StartsWith("CREATE", StringComparison.OrdinalIgnoreCase)));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "orders_pkg" && s.Signature != null && s.Signature.Contains("PACKAGE BODY", StringComparison.OrdinalIgnoreCase));
+
+        // TYPE + TYPE BODY
+        Assert.Equal(2, symbols.Count(s => s.Kind == "class" && s.Name == "address_t" && s.Signature != null && s.Signature.StartsWith("CREATE", StringComparison.OrdinalIgnoreCase)));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "address_t" && s.Signature != null && s.Signature.Contains("TYPE BODY", StringComparison.OrdinalIgnoreCase));
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "hr.order_seq");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "customer_v");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "remote_db" && s.Signature != null && s.Signature.Contains("DATABASE LINK", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "data_dir" && s.Signature != null && s.Signature.StartsWith("CREATE DIRECTORY", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "app_ctx" && s.Signature != null && s.Signature.StartsWith("CREATE CONTEXT", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "app_profile" && s.Signature != null && s.Signature.StartsWith("CREATE PROFILE", StringComparison.OrdinalIgnoreCase));
+
+        // Oracle identifiers may contain `$` / `#`
+        // Oracle 識別子は `$` / `#` を含められる
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "SYS$ITEMS#1");
+
+        // `BODY` keyword is NOT treated as the object name — these assertions would fail if the
+        // generic PACKAGE / TYPE rows absorbed the `BODY` token.
+        // `BODY` キーワードは name として取られない — generic な PACKAGE / TYPE 行が `BODY` を
+        // 飲み込んでしまうと以下の Assert が失敗する
+        Assert.DoesNotContain(symbols, s => s.Name == "BODY");
+
+        // `LINK` keyword must not be eaten by the generic CREATE DATABASE row.
+        // `LINK` が generic な CREATE DATABASE 行に食われないこと
+        Assert.DoesNotContain(symbols, s => s.Name == "LINK");
+
+        // ALTER counterparts
+        // ALTER 側
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "orders_pkg" && s.Signature != null && s.Signature.StartsWith("ALTER PACKAGE BODY", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "orders_pkg" && s.Signature != null && s.Signature.StartsWith("ALTER PACKAGE ", StringComparison.OrdinalIgnoreCase) && !s.Signature.StartsWith("ALTER PACKAGE BODY", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "address_t" && s.Signature != null && s.Signature.StartsWith("ALTER TYPE BODY", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "remote_db" && s.Signature != null && s.Signature.StartsWith("ALTER DATABASE LINK", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "data_dir" && s.Signature != null && s.Signature.StartsWith("ALTER DIRECTORY", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "app_profile" && s.Signature != null && s.Signature.StartsWith("ALTER PROFILE", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void Extract_Terraform_DetectsResources()
     {
         var content = "resource \"aws_s3_bucket\" \"my_bucket\" {\n  bucket = \"my-bucket\"\n}\n\nvariable \"region\" {\n  default = \"us-east-1\"\n}\n\noutput \"bucket_arn\" {\n  value = aws_s3_bucket.my_bucket.arn\n}\n\nmodule \"vpc\" {\n  source = \"./modules/vpc\"\n}";

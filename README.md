@@ -545,7 +545,7 @@ The database reflects the working tree at the time of the last index. After swit
 | PowerShell | `.ps1`, `.psm1`, `.psd1` | yes |
 | Batch | `.bat`, `.cmd` | -- |
 | CMake | `.cmake`, `CMakeLists.txt` | -- |
-| SQL | `.sql`, `.pgsql`, `.tsql`, `.plsql`, `.psql` | yes |
+| SQL | `.sql`, `.pgsql`, `.tsql`, `.plsql`, `.pks`, `.pkb`, `.pls`, `.plb`, `.psql` | yes |
 | Markdown | `.md` | -- |
 | YAML | `.yaml`, `.yml` | -- |
 | JSON | `.json` | -- |
@@ -1430,7 +1430,7 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 | PowerShell | `.ps1`, `.psm1`, `.psd1` | yes |
 | Batch | `.bat`, `.cmd` | -- |
 | CMake | `.cmake`, `CMakeLists.txt` | -- |
-| SQL | `.sql`, `.pgsql`, `.tsql`, `.plsql`, `.psql` | yes |
+| SQL | `.sql`, `.pgsql`, `.tsql`, `.plsql`, `.pks`, `.pkb`, `.pls`, `.plb`, `.psql` | yes |
 | Markdown | `.md` | -- |
 | YAML | `.yaml`, `.yml` | -- |
 | JSON | `.json` | -- |
