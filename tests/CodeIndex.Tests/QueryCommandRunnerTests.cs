@@ -724,16 +724,28 @@ public class QueryCommandRunnerTests
     // LineWidthFormatter.ClampMaxLineWidth で黙って丸めて成功していたため、MCP は 4097 を拒否する
     // 一方で CLI は通るという不整合があり、fail-close 前提の自動化を壊していた。
     [Theory]
-    [InlineData("search", "4097")]
-    [InlineData("search", "8192")]
-    [InlineData("references", "4097")]
-    [InlineData("inspect", "4097")]
-    [InlineData("find", "4097")]
-    [InlineData("excerpt", "4097")]
-    public void QueryEntrypoints_MaxLineWidthAboveCeilingFailClosed_Issue196(string command, string value)
+    [InlineData("search", "4097", false)]
+    [InlineData("search", "8192", false)]
+    [InlineData("references", "4097", false)]
+    [InlineData("inspect", "4097", false)]
+    [InlineData("find", "4097", false)]
+    [InlineData("excerpt", "4097", false)]
+    // Inline `--max-line-width=<value>` form: catches the silent-clamp regression on
+    // the `=`-attached path too. `find` historically rejected every inline `=` form at
+    // ValidateFindArgs with `unsupported option for find: --max-line-width=4097`, so
+    // this row also pins the `PrepareFindArgs` inline-`=` normalization.
+    // インライン `--max-line-width=<value>` 形式の回帰ロック。`find` は歴史的に
+    // ValidateFindArgs の段階で inline `=` を全拒否していたため、`PrepareFindArgs` の
+    // inline-`=` 正規化もここで固定する。
+    [InlineData("search", "4097", true)]
+    [InlineData("references", "4097", true)]
+    [InlineData("inspect", "4097", true)]
+    [InlineData("find", "4097", true)]
+    [InlineData("excerpt", "4097", true)]
+    public void QueryEntrypoints_MaxLineWidthAboveCeilingFailClosed_Issue196(string command, string value, bool useInlineEquals)
     {
         var projectRoot = TestProjectHelper.CreateTempProject(
-            $"cdidx_issue196_maxlinewidth_{command}_{value}");
+            $"cdidx_issue196_maxlinewidth_{command}_{value}_{(useInlineEquals ? "inline" : "space")}");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
@@ -765,13 +777,16 @@ public class QueryCommandRunnerTests
                 excerptFilePath,
                 "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\n");
 
+            string[] maxLineWidthArgs = useInlineEquals
+                ? [$"--max-line-width={value}"]
+                : ["--max-line-width", value];
             string[] args = command switch
             {
-                "search" => ["Issue196", "--db", dbPath, "--json", "--max-line-width", value],
-                "references" => ["Issue196Callee", "--db", dbPath, "--json", "--max-line-width", value],
-                "inspect" => ["Issue196Target", "--db", dbPath, "--json", "--max-line-width", value],
-                "find" => ["Issue196", "--path", excerptFilePath, "--db", dbPath, "--json", "--max-line-width", value],
-                "excerpt" => [excerptFilePath, "--db", dbPath, "--start", "1", "--end", "1", "--json", "--max-line-width", value],
+                "search" => ["Issue196", "--db", dbPath, "--json", .. maxLineWidthArgs],
+                "references" => ["Issue196Callee", "--db", dbPath, "--json", .. maxLineWidthArgs],
+                "inspect" => ["Issue196Target", "--db", dbPath, "--json", .. maxLineWidthArgs],
+                "find" => ["Issue196", "--path", excerptFilePath, "--db", dbPath, "--json", .. maxLineWidthArgs],
+                "excerpt" => [excerptFilePath, "--db", dbPath, "--start", "1", "--end", "1", "--json", .. maxLineWidthArgs],
                 _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
             };
 

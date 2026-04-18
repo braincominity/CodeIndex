@@ -1097,6 +1097,16 @@ public static class QueryCommandRunner
                 return [.. normalized];
             }
 
+            // Normalize `--opt=value` into `--opt` `value` so ValidateFindArgs and ParseArgs
+            // see the same shape regardless of whether the caller wrote the inline `=` form.
+            // インライン `--opt=value` を `--opt` `value` に展開し、ValidateFindArgs と ParseArgs の挙動を揃える。
+            if (TrySplitInlineOptionValue(args[i], out var inlineOptionName))
+            {
+                normalized.Add(inlineOptionName!);
+                normalized.Add(args[i][(inlineOptionName!.Length + 1)..]);
+                continue;
+            }
+
             normalized.Add(args[i]);
         }
 
