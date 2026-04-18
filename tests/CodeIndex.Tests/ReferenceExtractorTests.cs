@@ -4359,4 +4359,428 @@ public class ReferenceExtractorTests
             r.SymbolName == "Root" && r.ReferenceKind == "call"
             && r.ContainerKind == "function" && r.ContainerName == "Leaf");
     }
+
+    [Fact]
+    public void Extract_SqlExecNoParens_CapturesStoredProcedureCall()
+    {
+        // issue #232: T-SQL `EXEC <proc>;` (no parentheses) is the dominant stored-procedure
+        // call form. CallRegex requires a trailing `(`, so without SqlProcCallRegex the
+        // reference graph misses every `EXEC`/`EXECUTE`/`CALL` site that does not use parens.
+        // issue #232: T-SQL の `EXEC <proc>;` (括弧なし) がストアド呼び出しの主要形。
+        const string content = """
+            EXEC dbo.sp_Target;
+            EXECUTE sp_Target;
+            EXEC dbo.sp_Target @x = 1, @y = 2;
+            EXEC dbo.sp_Target 1, 2;
+            EXEC dbo.sp_Target();
+            EXEC [dbo].[sp_Target];
+            CALL sp_Target();
+            CALL sp_Target;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRefs = references.Where(r => r.SymbolName == "sp_Target").ToList();
+        Assert.Equal(8, targetRefs.Count);
+        Assert.All(targetRefs, r => Assert.Equal("call", r.ReferenceKind));
+    }
+
+    [Fact]
+    public void Extract_SqlExecWithReturnAssignment_CapturesStoredProcedureCall()
+    {
+        // T-SQL return-value assignment: `EXEC @retval = dbo.sp_Target ...`. The call target
+        // is still `sp_Target`, not `@retval`.
+        // T-SQL の戻り値代入形式。呼び出し対象はあくまで `sp_Target`。
+        const string content = """
+            DECLARE @r int;
+            EXEC @r = dbo.sp_Target @x = 1;
+            EXECUTE @r = sp_Target;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRefs = references.Where(r => r.SymbolName == "sp_Target").ToList();
+        Assert.Equal(2, targetRefs.Count);
+        Assert.All(targetRefs, r => Assert.Equal("call", r.ReferenceKind));
+    }
+
+    [Fact]
+    public void Extract_SqlExecuteAs_NotExtractedAsReference()
+    {
+        // `EXECUTE AS '<user>'` is a context switch, not a stored-procedure call. `AS` must not
+        // leak into the reference graph as `call AS`. Same for lowercase `as`.
+        // `EXECUTE AS` はコンテキスト切替でありプロシージャ呼び出しではない。大文字小文字どちらでも参照化しない。
+        const string content = """
+            EXECUTE AS 'dbo';
+            execute as user = 'admin';
+            EXECUTE IMMEDIATE 'SELECT 1';
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName.Equals("AS", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(references, r => r.SymbolName.Equals("IMMEDIATE", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Extract_SqlExecInsideStringLiteral_NotExtractedAsReference()
+    {
+        // `EXEC` text inside a SQL string literal must not produce a reference — the literal is
+        // dynamic SQL stored as data, not a call site.
+        // SQL 文字列リテラル内の `EXEC` は動的 SQL の中身であり呼び出し箇所ではない。
+        const string content = """
+            DECLARE @sql nvarchar(max) = 'EXEC dbo.sp_InsideString;';
+            EXEC sp_executesql @sql;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "sp_InsideString");
+        // The outer EXEC of sp_executesql still becomes a reference.
+        // 外側の EXEC による sp_executesql の参照は残る。
+        Assert.Contains(references, r => r.SymbolName == "sp_executesql" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SqlExecCallDedup_DoesNotEmitDuplicateForParenForm()
+    {
+        // When a call already has a trailing `(`, the shared CallRegex and SqlProcCallRegex both
+        // match the same name at the same column. Dedup must collapse them into one reference row.
+        // `(` 付きの形は CallRegex と SqlProcCallRegex の両方がヒットするが、dedup で 1 件に収まる。
+        const string content = """
+            EXEC dbo.sp_Target();
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRefs = references.Where(r => r.SymbolName == "sp_Target").ToList();
+        Assert.Single(targetRefs);
+    }
+
+    [Fact]
+    public void Extract_SqlExecDynamicSql_DoesNotEmitPhantomKeywordReference()
+    {
+        // T-SQL dynamic-SQL execution `EXEC(@sql)` / `EXEC('...')` / `EXECUTE(@sql)` pass a string or
+        // variable argument, not an identifier. SqlProcCallRegex requires whitespace after the keyword
+        // so it does not match, and the generic CallRegex used to emit a phantom `call EXEC` /
+        // `call EXECUTE` edge. The SQL ignore list now blocks EXEC / EXECUTE / CALL keyword captures.
+        // `EXEC(@sql)` / `EXEC('...')` / `EXECUTE(@sql)` は識別子ではなく動的 SQL 実行。汎用 CallRegex が
+        // キーワード自身を call として拾って幽霊エッジを作るのを ignore list で封じる。
+        const string content = """
+            CREATE PROCEDURE dbo.sp_Host AS
+            BEGIN
+                DECLARE @sql NVARCHAR(MAX) = 'SELECT 1';
+                EXEC(@sql);
+                EXEC('SELECT 2');
+                EXECUTE(@sql);
+                CALL(@sql);
+            END
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "EXEC");
+        Assert.DoesNotContain(references, r => r.SymbolName == "EXECUTE");
+        Assert.DoesNotContain(references, r => r.SymbolName == "CALL");
+    }
+
+    [Fact]
+    public void Extract_SqlExecBracketedKeywordIdentifier_IsCapturedNotFilteredAsKeyword()
+    {
+        // Bracketed identifiers in T-SQL are the canonical way to use reserved words as real object
+        // names (`[ORDER]`, `[USER]`, `[AS]`, `[IMMEDIATE]`). The bracket-stripping path must bypass
+        // the keyword ignore list so the wrapped name surfaces as a legitimate call reference.
+        // T-SQL の角括弧付き識別子は予約語を名前として使うための引用形。bracket を外したあと keyword
+        // 無視リストで落とさないことを固定する（`EXEC [ORDER]` など正当な呼び出しを落とさないため）。
+        const string content = """
+            EXEC [dbo].[ORDER];
+            EXEC [AS];
+            EXEC [IMMEDIATE];
+            CALL [USER];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "ORDER" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "AS" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "IMMEDIATE" && r.ReferenceKind == "call" && r.Line == 3);
+        Assert.Contains(references, r => r.SymbolName == "USER" && r.ReferenceKind == "call" && r.Line == 4);
+    }
+
+    [Fact]
+    public void Extract_SqlExecBracketedDedup_DoesNotEmitDuplicateForParenForm()
+    {
+        // Bracketed `EXEC [dbo].[sp_Target]()` hits both regexes but SqlProcCallRegex emits at the
+        // bracket-inner column while CallRegex emits at the raw column (the `[`). The dedup key uses
+        // the post-adjustment column, so both paths must converge on the same key and collapse to one row.
+        // ブラケット付き `[dbo].[sp_Target]()` は両 regex が異なる列で発火するが、bracket 除去後の列で
+        // dedup キーが揃うことを固定する（1 件に収まる）。
+        const string content = """
+            EXEC [dbo].[sp_Target]();
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRefs = references.Where(r => r.SymbolName == "sp_Target").ToList();
+        Assert.Single(targetRefs);
+    }
+
+    [Fact]
+    public void Extract_SqlExecUnicodeBracketedIdentifier_IsCaptured()
+    {
+        // Non-ASCII identifiers inside brackets (Japanese, accented Latin, Cyrillic) should survive the
+        // bracket-stripping path. SqlProcCallRegex allows `[\w ]+` which in .NET default regex matches
+        // Unicode word chars, so Japanese / Cyrillic / accented names are preserved.
+        // ブラケット内の非 ASCII 識別子（日本語・アクセント付き・キリル文字）も通常の識別子として
+        // 取り扱えることを固定する。
+        const string content = """
+            EXEC [dbo].[名前];
+            CALL [Ñoño];
+            EXEC [Процедура];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "名前" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Ñoño" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Процедура" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SqlCallWithArguments_CapturesProcedureName()
+    {
+        // MySQL / MariaDB stored procedures are invoked as `CALL proc(arg1, arg2)`. The generic
+        // CallRegex already captures this because of the trailing `(`, but the SqlProcCallRegex path
+        // should also stay out of the way (no duplicates, no misattribution to keywords).
+        // MySQL / MariaDB の `CALL proc(args)` は既存 CallRegex で捕捉される。SQL 新経路と重複しない
+        // ことと、`CALL` キーワード自体を call として拾わないことを固定する。
+        const string content = """
+            CALL db.my_proc(1, 2);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var procRefs = references.Where(r => r.SymbolName == "my_proc").ToList();
+        Assert.Single(procRefs);
+        Assert.Equal("call", procRefs[0].ReferenceKind);
+        Assert.DoesNotContain(references, r => r.SymbolName == "CALL");
+    }
+
+    [Fact]
+    public void Extract_SqlExecBracketedNonWordIdentifier_IsCapturedAndDoesNotMisattributeQualifier()
+    {
+        // T-SQL bracket quoting accepts any character except `[` / `]` / newline inside the brackets,
+        // so `[#tempProc]` (temp stored procedure), `[proc-name]` (hyphenated name), and `[proc.v2]`
+        // are all legitimate identifiers. A narrower `[\w ]+` quantifier would skip the bracketed
+        // name entirely and — worse — misattribute the preceding qualifier segment `[dbo]` as the
+        // proc name when only the trailing bracket has non-word characters.
+        // T-SQL のブラケット識別子は `[` / `]` / 改行以外の任意文字を含められるため、`[#tempProc]`
+        // （一時プロシージャ）、`[proc-name]`（ハイフン）、`[proc.v2]` は合法。`[\w ]+` では末端
+        // が取りこぼされ、直前の修飾子 `[dbo]` を誤って proc 名として emit してしまう。
+        const string content = """
+            EXEC [#tempProc];
+            EXEC [dbo].[proc-name];
+            EXEC [dbo].[proc.v2];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "#tempProc" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "proc-name" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "proc.v2" && r.ReferenceKind == "call" && r.Line == 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "dbo" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SqlExecBracketedExecKeyword_IsCapturedAsProcedureName()
+    {
+        // A user who genuinely names a procedure `[EXEC]` uses bracket quoting to bypass the reserved
+        // word. SqlProcCallRegex captures it, bracket stripping yields `EXEC`, and the bracketed branch
+        // skips the keyword ignore list so `EXEC` surfaces as a proc-name call reference — distinct
+        // from the dynamic-SQL path where the keyword is suppressed because there is no identifier.
+        // ユーザが本当に `[EXEC]` という proc 名を使った場合は、SqlProcCallRegex → bracket 除去後に
+        // `EXEC` が残り、bracketed 分岐で keyword ignore list を通過して call エッジとして残ることを固定する。
+        const string content = """
+            EXEC [dbo].[EXEC];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "EXEC" && r.ReferenceKind == "call" && r.Line == 1);
+    }
+
+    [Fact]
+    public void Extract_SqlExecVariableProcName_DoesNotEmitReference()
+    {
+        // `EXEC @spName @param = 1` invokes a procedure whose name lives in a variable at runtime.
+        // There is no static identifier to index, so no call edge should be emitted for the variable
+        // and no phantom EXEC / `@spName` reference should surface.
+        // `EXEC @spName @param` は実行時決定の変数名呼び出し。静的な識別子がないため edge は出さないし、
+        // `EXEC` / `@spName` の幽霊エッジも出ないことを固定する。
+        const string content = """
+            EXEC @spName @param = 1;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Empty(references.Where(r => r.ReferenceKind == "call"));
+    }
+
+    [Fact]
+    public void Extract_SqlExecLinkedServerFourPartName_CapturesTerminalIdentifier()
+    {
+        // Linked-server / four-part names like `EXEC server.db.schema.proc` should surface the final
+        // identifier as the reference target; intermediate segments are part of the qualifier.
+        // 4 パート名 `server.db.schema.proc` は末端の識別子のみを参照対象として拾うことを固定する。
+        const string content = """
+            EXEC server1.AdventureWorks.dbo.sp_GetCustomer;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "sp_GetCustomer" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "server1");
+        Assert.DoesNotContain(references, r => r.SymbolName == "AdventureWorks");
+    }
+
+    [Fact]
+    public void Extract_SqlExecOmittedQualifierSegments_CapturesTerminalIdentifier()
+    {
+        // SQL Server's four-part naming permits any middle segment to be omitted (e.g. using the
+        // default database / schema), producing literal `..` in the qualifier chain. The previous
+        // pattern accepted only non-empty qualifier segments, so `EXEC AdventureWorks..sp_GetCustomer;`
+        // and `EXEC [AdventureWorks]..[proc-name];` terminated at the first segment and mis-emitted
+        // the qualifier (`AdventureWorks`) as the proc name.
+        // SQL Server の 4 パート名は中間セグメント（既定データベース／スキーマ）を省略でき、
+        // `..` が残る。以前は空セグメントを許さなかったため、末端ではなく先頭修飾子を proc 名と
+        // して誤発行していた。省略形でも必ず末端識別子を取ることを固定する。
+        const string content = """
+            EXEC AdventureWorks..sp_GetCustomer;
+            EXEC [AdventureWorks]..[proc-name];
+            EXEC srv.db..sp_with_omitted_schema;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "sp_GetCustomer" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "proc-name" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "sp_with_omitted_schema" && r.ReferenceKind == "call" && r.Line == 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "AdventureWorks" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "srv" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "db" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SqlCallBacktickQuotedIdentifier_IsCapturedAndDoesNotMisattributeQualifier()
+    {
+        // MySQL / MariaDB use backticks to quote identifiers. The shared PrepareLine
+        // would strip backtick content as a string literal, so the SQL path uses a SQL-aware
+        // sanitizer that preserves backticks. Bare backticks (`` CALL `proc-name` ``), qualified
+        // backticks (`` CALL db.`proc-name` ``), and fully-quoted qualifier chains
+        // (`` CALL `mydb`.`do_stuff` ``) should surface the terminal identifier without emitting
+        // the qualifier as a phantom call edge.
+        // MySQL / MariaDB はバッククォートで識別子を引用する。共有 PrepareLine は
+        // バッククォート内容を文字列として除去するため、SQL 経路では専用サニタイザで保持する。
+        // 単独のバッククォート、修飾子付き、完全引用 (`` `mydb`.`do_stuff` ``) のいずれも末端
+        // 識別子だけを拾い、修飾子の幽霊エッジが出ないことを固定する。
+        const string content = """
+            CALL `proc-name`;
+            CALL db.`proc-name`;
+            CALL `mydb`.`do_stuff`;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "proc-name" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "proc-name" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "do_stuff" && r.ReferenceKind == "call" && r.Line == 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "db" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "mydb" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SqlCallBacktickReservedWord_SurvivesQuoteStripping()
+    {
+        // A MySQL user may legitimately name a procedure after a reserved word by backtick-quoting
+        // it (`` CALL `order`; ``). After quote stripping, the resulting `order` should still surface
+        // as a call edge rather than being silently dropped by the SQL keyword ignore list —
+        // mirroring the T-SQL `[ORDER]` / `[AS]` behavior pinned by
+        // `Extract_SqlExecBracketedReservedWord_IsCapturedAfterBracketStripping` / bracketed-EXEC tests.
+        // MySQL ではバッククォート引用で予約語を proc 名として使える。引用除去後の `order` を
+        // keyword ignore list で黙って落とさず、T-SQL の `[ORDER]` / `[AS]` と同じく call エッジが
+        // 残ることを固定する。
+        const string content = """
+            CALL `order`;
+            CALL `select`;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "order" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "select" && r.ReferenceKind == "call" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SqlHashCommentedCall_DoesNotEmitReference()
+    {
+        // MySQL / MariaDB accept `#` as a line comment in addition to ANSI `--`. The SQL-aware
+        // sanitizer must strip content after `#` so commented-out EXEC / CALL statements do not
+        // surface as phantom call edges. This mirrors the `--` comment behavior already pinned by
+        // other SQL tests.
+        // MySQL / MariaDB は ANSI の `--` に加えて `#` も行コメントとして扱う。SQL 用サニタイザは
+        // `#` 以降を除去し、コメントアウトされた EXEC / CALL が幽霊エッジとして浮き上がらないように
+        // する。`--` コメントの扱いと対にして固定する。
+        const string content = """
+            # CALL commented_out;
+            CALL real_proc;
+            -- EXEC dashed_out;
+            EXEC real_exec;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "commented_out" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "dashed_out" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "real_proc" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "real_exec" && r.ReferenceKind == "call" && r.Line == 4);
+    }
+
+    [Fact]
+    public void Extract_SqlCallBacktickIdentifierContainingHash_IsCaptured()
+    {
+        // A `#` inside a backtick-quoted identifier is part of the identifier, not a comment marker.
+        // The SQL-aware sanitizer must respect backtick boundaries before treating `#` as a comment,
+        // otherwise `` CALL `proc#1`; `` would be truncated to `` CALL `proc `` and lost.
+        // バッククォート内の `#` は識別子の一部であり、コメント開始記号ではない。SQL 用サニタイザは
+        // `#` をコメントとして扱う前にバッククォート境界を考慮する必要があり、さもなくば
+        // `` CALL `proc#1`; `` が `` CALL `proc `` に切れて call エッジが失われる。
+        const string content = """
+            CALL `proc#1`;
+            EXEC [proc#sqlserver];
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "proc#1" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "proc#sqlserver" && r.ReferenceKind == "call" && r.Line == 2);
+    }
 }
