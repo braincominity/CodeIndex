@@ -8703,4 +8703,200 @@ public class SymbolExtractorTests
         Assert.Contains(tsSymbols, s => s.Kind == "function" && s.Name == "realFunction");
         Assert.Contains(tsSymbols, s => s.Kind == "class" && s.Name == "RealClass");
     }
+
+    [Fact]
+    public void Extract_CSharp_WrappedStaticConstructor_EmitsOnceAtNameLine()
+    {
+        // Regression for issue #348: when `static` sits on its own physical line above
+        // the constructor name, the extractor must still emit the ctor exactly once,
+        // anchored at the name line, with a signature that reflects the full declaration.
+        // issue #348 の回帰: `static` が constructor 名の物理行の一つ上に単独で置かれた
+        // 場合でも、名前行を起点に重複なく 1 件だけ emit し、signature には宣言全体が
+        // 含まれる必要がある。
+        const string content = """
+            namespace WrappedCtor;
+
+            public class A
+            {
+                static
+                A() { _x = 1; }
+
+                private static int _x;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var ctors = symbols.Where(s => s.Kind == "function" && s.Name == "A").ToList();
+        Assert.Single(ctors);
+        Assert.Equal(6, ctors[0].Line);
+        Assert.Contains("static A()", ctors[0].Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedInstanceConstructor_EmitsOnceAtNameLine()
+    {
+        // issue #348 の回帰: `public` 等の可視性モディファイアが単独行に置かれた
+        // non-static constructor も同じく名前行で 1 件だけ emit する。
+        const string content = """
+            namespace WrappedCtor;
+
+            public class B
+            {
+                public
+                B() { _y = 1; }
+
+                private int _y;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var ctors = symbols.Where(s => s.Kind == "function" && s.Name == "B").ToList();
+        Assert.Single(ctors);
+        Assert.Equal(6, ctors[0].Line);
+        Assert.Contains("public B()", ctors[0].Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedAllmanStaticConstructor_CapturesBody()
+    {
+        // issue #348 の回帰: Allman スタイル（`static` 単独行 → 名前行 → `{` 単独行）の
+        // static constructor も 1 件だけ emit し、本体の閉じ brace まで range を追跡する。
+        const string content = """
+            namespace WrappedCtor;
+
+            public class F
+            {
+                static
+                F()
+                {
+                    _u = 1;
+                }
+
+                private static int _u;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var ctors = symbols.Where(s => s.Kind == "function" && s.Name == "F").ToList();
+        Assert.Single(ctors);
+        Assert.Equal(6, ctors[0].Line);
+        Assert.Contains("static F()", ctors[0].Signature);
+        Assert.True(ctors[0].BodyEndLine >= 9, $"expected body to reach closing brace on line 9 or later, got {ctors[0].BodyEndLine}");
+    }
+
+    [Fact]
+    public void Extract_CSharp_AttributedWrappedStaticConstructor_EmitsOnceAtNameLine()
+    {
+        // issue #348 の回帰: 属性行が挟まった wrapped static ctor でも、attribute 行は
+        // モディファイア連結に混入せず、名前行 1 件だけに集約される。
+        const string content = """
+            namespace WrappedCtor;
+
+            public class D
+            {
+                [System.Obsolete]
+                static
+                D() { _z = 1; }
+
+                private static int _z;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var ctors = symbols.Where(s => s.Kind == "function" && s.Name == "D").ToList();
+        Assert.Single(ctors);
+        Assert.Equal(7, ctors[0].Line);
+        Assert.Contains("static D()", ctors[0].Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultiModifierWrappedConstructor_EmitsOnceAtNameLine()
+    {
+        // issue #348 の回帰: 複数のモディファイアが別々の物理行に折り返された wrapped ctor
+        // （例: `public\nstatic\nE()`）でも、名前行 1 件だけ emit し、signature には両方の
+        // モディファイアを保持する。単純 prefix 合成では constructor regex も static ctor
+        // regex も受け付けない合成行になるため、static / visibility の variant を試す候補
+        // 列挙ロジックが無いと無言で落ちていた。
+        const string content = """
+            namespace WrappedCtor;
+
+            public class E
+            {
+                public
+                static
+                E() { _w = 1; }
+
+                private static int _w;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var ctors = symbols.Where(s => s.Kind == "function" && s.Name == "E").ToList();
+        Assert.Single(ctors);
+        Assert.Equal(7, ctors[0].Line);
+        Assert.Contains("public static E()", ctors[0].Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_CompositeVisibilityWrappedConstructor_EmitsOnceAtNameLine()
+    {
+        // issue #348 の回帰: 複合 visibility (`protected internal` / `private protected`) が
+        // 2 行に分割されて折り返された wrapped ctor でも、名前行 1 件だけ emit し、signature
+        // には複合 visibility を保持する。candidate 列挙の先頭に full prefix (`protected internal`)
+        // を yield するため、constructor regex の `protected\s+internal` 選択肢でそのまま一致する。
+        const string content = """
+            namespace WrappedCtor;
+
+            public class F
+            {
+                protected
+                internal
+                F() { _v = 1; }
+
+                private static int _v;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var ctors = symbols.Where(s => s.Kind == "function" && s.Name == "F").ToList();
+        Assert.Single(ctors);
+        Assert.Equal(7, ctors[0].Line);
+        Assert.Contains("protected internal F()", ctors[0].Signature);
+        Assert.Equal("protected internal", ctors[0].Visibility);
+    }
+
+    [Fact]
+    public void Extract_CSharp_VisibilityStaticExternWrappedConstructor_EmitsOnceAtNameLine()
+    {
+        // issue #348 の回帰: visibility + static + extern の 3 modifier が全て別行に折り返された
+        // wrapped ctor でも、名前行 1 件だけ emit し、signature には 3 modifier 全てを保持する。
+        // full prefix (`public static extern`) は constructor regex の visibility スロット後に
+        // static を置けないため単体では通らず、static variant も `()` 要求で引数付きを弾くので
+        // 通らないが、visibility-only variant (`public`) が constructor regex にヒットし、signature
+        // は full prefix 側から補完される。
+        const string content = """
+            namespace WrappedCtor;
+
+            public class G
+            {
+                public
+                static
+                extern
+                G(string s);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var ctors = symbols.Where(s => s.Kind == "function" && s.Name == "G").ToList();
+        Assert.Single(ctors);
+        Assert.Equal(8, ctors[0].Line);
+        Assert.Contains("public static extern G(string s)", ctors[0].Signature);
+    }
 }
