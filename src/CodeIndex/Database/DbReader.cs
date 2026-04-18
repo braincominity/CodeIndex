@@ -1958,13 +1958,26 @@ public partial class DbReader
             sql += " AND f.lang = @metadataAmbigLangFilter";
             cmd.Parameters.AddWithValue("@metadataAmbigLangFilter", lang);
         }
+        // Path / exclude-path parameters must be wrapped with `%...%` and escaped
+        // through EscapeLikeQuery so the LIKE semantics match the rest of the
+        // reader (search / references / callers / deps etc.). Passing the raw
+        // CLI value would require an anchored path like `%src/A/%` to match, so
+        // normal `--path src/A/` invocations would see zero in-scope definitions,
+        // the ambiguity count would underflow to 1, and the metadata bypass
+        // would falsely fire on what are actually ambiguous targets.
+        // path / exclude-path のパラメータは他の読み取り経路 (search / references /
+        // callers / deps 等) と同じ LIKE セマンティクスに合わせるため、
+        // EscapeLikeQuery でエスケープした上で `%...%` で包んでバインドする。生値の
+        // まま渡すと、通常の `--path src/A/` のような呼び出しでは LIKE が一致せず、
+        // 曖昧性カウントが 1 に過小化され、本来抑止すべき metadata bypass が
+        // 誤って発動してしまう。
         if (pathPatterns is { Count: > 0 })
         {
             var ors = new List<string>(pathPatterns.Count);
             for (int i = 0; i < pathPatterns.Count; i++)
             {
                 ors.Add($"f.path LIKE @metadataAmbigPath{i} ESCAPE '\\'");
-                cmd.Parameters.AddWithValue($"@metadataAmbigPath{i}", pathPatterns[i]);
+                cmd.Parameters.AddWithValue($"@metadataAmbigPath{i}", $"%{EscapeLikeQuery(pathPatterns[i])}%");
             }
             sql += " AND (" + string.Join(" OR ", ors) + ")";
         }
@@ -1973,7 +1986,7 @@ public partial class DbReader
             for (int i = 0; i < excludePathPatterns.Count; i++)
             {
                 sql += $" AND f.path NOT LIKE @metadataAmbigExcludePath{i} ESCAPE '\\'";
-                cmd.Parameters.AddWithValue($"@metadataAmbigExcludePath{i}", excludePathPatterns[i]);
+                cmd.Parameters.AddWithValue($"@metadataAmbigExcludePath{i}", $"%{EscapeLikeQuery(excludePathPatterns[i])}%");
             }
         }
         if (excludeTests)

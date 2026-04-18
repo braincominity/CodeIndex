@@ -1931,6 +1931,35 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpGenericNoArgAttribute_ClassifiedAsAttribute()
+    {
+        // Regression (issue #293 follow-up): generic no-arg C# attributes such as
+        // `[MyAudit<int>]`, `[assembly: MyAttr<string>]`, and multi-line `[\n MyAttr<int>\n]`
+        // must still classify as `attribute`. The no-arg attribute regex must accept an
+        // optional generic argument list after the name so these references are indexed.
+        // リグレッション (issue #293 補足): `[MyAudit<int>]` などのジェネリック引数なし属性、
+        // `[assembly: MyAttr<string>]` のような assembly targeted 形、そして複数行の
+        // `[\n MyAttr<int>\n]` も `attribute` として取り込まれること。
+        const string content = """
+            [assembly: MyAttr<string>]
+            [MyAudit<int>]
+            [
+                MyAttr<int>
+            ]
+            public class C
+            {
+            }
+            """;
+
+        var references = ReferenceExtractor.Extract(1, "csharp", content, []);
+
+        var myAudit = Assert.Single(references.Where(r => r.SymbolName == "MyAudit"));
+        Assert.Equal("attribute", myAudit.ReferenceKind);
+        Assert.Equal(2, references.Count(r => r.SymbolName == "MyAttr" && r.ReferenceKind == "attribute"));
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_CsharpNoArgParameterAttribute_ClassifiedAsAttribute()
     {
         // Regression (issue #293 follow-up): no-arg parameter attributes such as

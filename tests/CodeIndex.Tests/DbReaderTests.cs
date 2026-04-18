@@ -2349,6 +2349,79 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetFileDependencies_CSharpGenericNoArgAttribute_StillIndexedAndResolvesToAttributeClass()
+    {
+        // issue #293 round-15 follow-up: generic no-arg C# attributes like
+        // `[MyAudit<int>]` and multi-line `[\n MyAttr<int>\n]` must still be
+        // indexed as `attribute` references so `deps` can route them through
+        // the suffix-alias synthesizer to the real attribute class file.
+        // Before the regex was widened these forms fell through both CallRegex
+        // (no `(`) and the no-arg regex (generic `<...>` after the name broke
+        // the `(?=[\],]|$)` anchor), producing zero edges.
+        // issue #293 round-15 補足: `[MyAudit<int>]` や複数行の `[\n MyAttr<int>\n]`
+        // のようなジェネリック引数なし属性も `attribute` として取り込まれ、
+        // suffix alias を経由して実属性クラスへの依存エッジに正規化される
+        // こと。正規表現の拡張前は両 regex とも拾えず、エッジが 0 件だった。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            using System;
+
+            public sealed class MyAuditAttribute<T> : Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/MyAttrAttribute.cs", "csharp",
+            """
+            using System;
+
+            public sealed class MyAttrAttribute<T> : Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit<int>]
+            [
+                MyAttr<int>
+            ]
+            public class Svc
+            {
+            }
+            """);
+
+        var dependencies = _reader.GetFileDependencies(limit: 20, lang: "csharp");
+
+        Assert.Contains(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/MyAuditAttribute.cs");
+        Assert.Contains(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/MyAttrAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpGenericNoArgAttribute_AssemblyTarget_IsIndexed()
+    {
+        // issue #293 round-15 follow-up: `[assembly: MyAttr<string>]` — assembly
+        // targeted generic no-arg attribute must also reach the attribute class.
+        // issue #293 round-15 補足: `[assembly: MyAttr<string>]` のような
+        // assembly targeted ジェネリック引数なし属性も同様にインデックスされ、
+        // attribute クラスに解決されること。
+        InsertIndexedFile("src/MyAttrAttribute.cs", "csharp",
+            """
+            using System;
+
+            public sealed class MyAttrAttribute<T> : Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/AssemblyInfo.cs", "csharp",
+            """
+            [assembly: MyAttr<string>]
+            """);
+
+        var dependencies = _reader.GetFileDependencies(limit: 20, lang: "csharp");
+
+        Assert.Contains(dependencies, d => d.SourcePath == "src/AssemblyInfo.cs" && d.TargetPath == "src/MyAttrAttribute.cs");
+    }
+
+    [Fact]
     public void GetFileDependencies_CSharpAttributeRawDoesNotLeakToBareNameClass_WhenSuffixTargetExists()
     {
         // issue #293 follow-up: `[MyAudit]` in C# is stored as symbol_name='MyAudit'.
@@ -3055,6 +3128,58 @@ public class DbReaderTests : IDisposable
             pathPatterns: new[] { "src/A/" });
 
         Assert.Contains(result.FileImpacts, f => f.SourcePath == "src/A/Svc.cs" && f.TargetPath == "src/A/MyAuditAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencyHints_MetadataBypassAmbiguityGuard_CliPathPatternEscaping_SuppressesWhenInScopeIsAmbiguous()
+    {
+        // issue #293 round-15 follow-up: path / exclude-path parameters must be
+        // wrapped with `%...%` and routed through EscapeLikeQuery so the LIKE
+        // predicate accepts CLI-style prefixes like `src/A/`. Without the wrap
+        // the ambiguity count would underflow to 1 (unambiguous), and the
+        // metadata bypass would falsely fire even though two MyAuditAttribute
+        // classes exist side-by-side in the requested subtree.
+        // issue #293 round-15 補足: path / exclude-path のバインドは他の reader
+        // 経路と同じ `%...%` + EscapeLikeQuery に揃える必要がある。生値で渡すと
+        // `src/A/` のような CLI 形では LIKE が一致せず、要求したサブツリーに
+        // 同名 MyAuditAttribute が 2 件存在しても曖昧性カウントが 1 に落ち、
+        // 本来抑止すべき metadata bypass が誤発火してしまう。
+        InsertIndexedFile("src/A/Inner1/MyAuditAttribute.cs", "csharp",
+            """
+            namespace A.Inner1;
+
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/A/Inner2/MyAuditAttribute.cs", "csharp",
+            """
+            namespace A.Inner2;
+
+            public sealed class MyAuditAttribute : System.Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/A/Svc.cs", "csharp",
+            """
+            namespace A;
+
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var result = _reader.AnalyzeImpact(
+            "MyAuditAttribute",
+            maxDepth: 3,
+            limit: 20,
+            lang: "csharp",
+            pathPatterns: new[] { "src/A/" });
+
+        Assert.DoesNotContain(result.FileImpacts, f =>
+            f.SourcePath == "src/A/Svc.cs" &&
+            (f.TargetPath == "src/A/Inner1/MyAuditAttribute.cs" || f.TargetPath == "src/A/Inner2/MyAuditAttribute.cs"));
     }
 
     [Fact]
