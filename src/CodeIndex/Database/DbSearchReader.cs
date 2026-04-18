@@ -32,17 +32,29 @@ public partial class DbReader
     /// Katakana, Hangul, and their fullwidth/halfwidth variants) get an appended '*'
     /// prefix-match operator because FTS5's default unicode61 tokenizer treats a run
     /// of adjacent CJK codepoints as a single token, so a bare '計算' query would never
-    /// match content containing '計算する'.
+    /// match content containing '計算する'. The CJK prefix promotion is unconditional,
+    /// so a full-token CJK query also widens to longer tokens (e.g. '計算する' also
+    /// matches '計算する追加'); callers who need strict equality on CJK substrings must
+    /// route through the `exact` / `instr` path.
     /// FTS5フレーズトークンを構築。FTS5既定のunicode61トークナイザはCJK連続を単一トークンとして扱うため、
     /// CJK文字を含むトークンには prefix match の '*' を付け、'計算' で '計算する' にマッチさせる。
+    /// prefix 昇格は CJK トークンに対して無条件なので、完全トークンのクエリでも長いトークンへ広がる
+    /// （'計算する' は '計算する追加' もマッチ）。CJK 部分文字列の厳密一致が必要な呼び出し側は
+    /// `exact` / `instr` 経路を使う。
     ///
-    /// Non-CJK non-ASCII tokens (Latin-diacritic like 'café', Greek, Cyrillic, emoji, etc.)
-    /// intentionally keep exact-phrase semantics. unicode61 tokenizes Latin-diacritic
-    /// normally, and drops symbol codepoints (emoji) entirely — promoting them to prefix
-    /// would over-widen to unrelated neighbors (e.g. 'foo🎉' → 'foo*' matching 'foobar').
-    /// CJK以外の非ASCII（Latin-diacritic、Greek、Cyrillic、emoji等）は意図的に完全一致のまま。
-    /// unicode61はLatin-diacriticを通常トークン化し、symbol系はドロップするため、prefix化は
-    /// 無関係な近傍（'foo🎉' → 'foo*'で 'foobar' まで拾う）への意味拡張になってしまう。
+    /// Non-CJK tokens (Latin-diacritic like 'café', Greek, Cyrillic, emoji-mixed, etc.)
+    /// skip the CJK prefix path. This prevents prefix over-widening (e.g. 'foo🎉' →
+    /// 'foo*' matching 'foobar'), but it does NOT make those tokens "exact-phrase" at
+    /// the FTS layer: unicode61 tokenizes Latin-diacritic normally and drops symbol
+    /// codepoints entirely, so 'foo🎉' is indexed and queried as the token 'foo' and
+    /// therefore cannot be distinguished from a bare `def foo():` in FTS. Callers who
+    /// need strict equality with emoji must route through the `exact` / `instr` path.
+    /// CJK 以外のトークン（Latin-diacritic、Greek、Cyrillic、絵文字混在等）は CJK prefix 経路を
+    /// 通さない。これは prefix の過度な拡張（'foo🎉' → 'foo*' で 'foobar' まで拾う）を防ぐが、
+    /// FTS 層で「完全一致」を保証するものではない。unicode61 は Latin-diacritic を通常どおり
+    /// トークン化し、symbol コードポイントは完全に drop するため、'foo🎉' は両側で 'foo' と
+    /// トークン化され素の `def foo():` と区別できない。emoji の厳密一致が必要な場合は
+    /// `exact` / `instr` 経路を使う。
     /// </summary>
     private static string FormatFtsToken(string token)
     {
@@ -82,19 +94,21 @@ public partial class DbReader
         if (value >= 0x31F0 && value <= 0x31FF) return true;
         if (value >= 0x1B000 && value <= 0x1B16F) return true;
 
-        // CJK Unified Ideographs + Extensions A-G, Compatibility Ideographs.
+        // CJK Unified Ideographs + Extensions A-I, Compatibility Ideographs.
         // CJK Radicals Supplement (U+2E80..U+2EFF) and Kangxi Radicals (U+2F00..U+2FDF)
         // are intentionally excluded: every codepoint in those blocks is Unicode
         // category OtherSymbol (So) and gets dropped by unicode61 during tokenization,
         // so prefix fallback cannot help anyway.
-        // CJK統合漢字および拡張、互換漢字。CJK Radicals Supplement と Kangxi Radicals は
+        // CJK統合漢字および拡張 A-I、互換漢字。CJK Radicals Supplement と Kangxi Radicals は
         // Unicodeカテゴリが OtherSymbol (So) で unicode61 が drop するため、prefix fallback を
         // かけても意味がなく、意図的に除外する。
         if (value >= 0x4E00 && value <= 0x9FFF) return true;
         if (value >= 0x3400 && value <= 0x4DBF) return true;
         if (value >= 0x20000 && value <= 0x2A6DF) return true;
         if (value >= 0x2A700 && value <= 0x2EBEF) return true;
-        if (value >= 0x30000 && value <= 0x3134F) return true;
+        if (value >= 0x2EBF0 && value <= 0x2EE5F) return true; // Extension I (Unicode 15.1)
+        if (value >= 0x30000 && value <= 0x3134F) return true; // Extension G
+        if (value >= 0x31350 && value <= 0x323AF) return true; // Extension H (Unicode 15.0)
         if (value >= 0xF900 && value <= 0xFAFF) return true;
         if (value >= 0x2F800 && value <= 0x2FA1F) return true;
 

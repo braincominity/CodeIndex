@@ -397,16 +397,47 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void Search_FindsNonBmpCjkExtensionHSubstringInsideLongerToken()
+    {
+        // Regression guard for CJK Unified Ideographs Extension H (U+31350..U+323AF,
+        // added in Unicode 15.0). These codepoints are non-BMP (supplementary plane) so
+        // they surface in .NET strings as surrogate pairs. If the predicate only walks
+        // chars instead of runes, or forgets Extension H's range, `search '𱍐'` returns
+        // 0 results against content containing `𱍐abc` — the exact #198 zero-hit shape,
+        // reproduced on a newer Unicode block. Pin that a CJK Extension H query still
+        // takes the prefix path and finds longer-token content.
+        // CJK Extension H (U+31350..U+323AF, Unicode 15.0) の回帰テスト。
+        // これらは非 BMP（補助面）のコードポイントで、.NET の string ではサロゲートペアとして
+        // 現れる。述語が char 走査だったり Extension H を忘れていたりすると、`search '𱍐'` が
+        // `𱍐abc` を含む内容に対して 0 件を返す — #198 の元症状そのものが新ブロックで再発する。
+        // CJK Extension H クエリが prefix 経路を通り、長いトークンの内容も見つけることを固定する。
+        var extensionHChar = char.ConvertFromUtf32(0x31350);
+        InsertIndexedFile("src/ext_h.py", "python",
+            $"def {extensionHChar}abc(x):\n    return x\n");
+
+        var results = _reader.Search(extensionHChar);
+
+        Assert.Contains(results, r => r.Path == "src/ext_h.py");
+    }
+
+    [Fact]
     public void CountSearchResults_IncludesCjkSubstringMatches()
     {
         // Count path shares the sanitizer, so the CJK prefix fallback must apply there too.
+        // Pin the exact count/fileCount instead of a loose `>= 1` so drift that inflates
+        // the count (e.g. prefix promotion leaking into an unrelated file) is caught too.
         // カウント経路も同じサニタイザを共有するため、CJKの prefix フォールバックが効く必要がある。
-        InsertIndexedFile("src/cjk_count.py", "python",
+        // 緩い `>= 1` ではなく厳密な count/fileCount を固定し、prefix 昇格が無関係なファイルに
+        // 漏れて count が膨らむようなドリフトも捕える。
+        InsertIndexedFile("src/cjk_count_hit.py", "python",
             "def 計算する(値):\n    return 値\n");
+        InsertIndexedFile("src/cjk_count_miss.py", "python",
+            "def 検索する(値):\n    return 値\n");
 
         var counts = _reader.CountSearchResults("計算");
 
-        Assert.True(counts.Count >= 1, $"expected at least one CJK substring match, got {counts.Count}");
+        Assert.Equal(1, counts.Count);
+        Assert.Equal(1, counts.FileCount);
     }
 
     [Fact]
