@@ -976,6 +976,20 @@ public static class SymbolExtractor
                 matchLine = csharpMatchLines![i];
             }
 
+            // Batch `rem` / `@rem` / `::` comment lines contain the same `&` / `(` / `else` /
+            // `do` boundary tokens that the property regex now accepts for inline `set`
+            // capture, so `REM & set FAKE=1` or `:: else set FAKE=2` would otherwise leak a
+            // phantom property. Short-circuit those lines before any pattern fires — batch
+            // labels never match on `::` / `rem` lines anyway because the label regex
+            // requires `:<name-char>`, not `::` or `r`.
+            // batch の `rem` / `@rem` / `::` コメント行は、inline `set` 捕捉のために property 正規表現が
+            // 受け付ける `&` / `(` / `else` / `do` の境界トークンを含みうるため、`REM & set FAKE=1` や
+            // `:: else set FAKE=2` が偽 property を出す恐れがある。パターン適用前に当該行ごと
+            // 早期スキップする — batch ラベル側は `::` / `rem` 行ではそもそも `:<名前文字>` の要件を
+            // 満たさないため影響を受けない。
+            if (lang == "batch" && IsBatchCommentLine(line))
+                continue;
+
             var stopAfterFirstPatternMatch = false;
             foreach (var pattern in patterns)
             {
@@ -7176,6 +7190,67 @@ public static class SymbolExtractor
         return insideEnumBody
             && attributeParenDepth == 0
             && CSharpEnumMemberNameRegex.IsMatch(line);
+    }
+
+    /// <summary>
+    /// Return true when a batch (.bat / .cmd) line is a comment, i.e. `::` / `:::` / `rem` /
+    /// `@rem` (with optional leading whitespace and case-insensitive `rem`). Comment lines
+    /// must not contribute `set` property symbols even when they contain the boundary tokens
+    /// (`&`, `(`, `else`, `do`) that the new inline-set-capture regex accepts.
+    /// batch (.bat / .cmd) のコメント行 (`::` / `:::` / `rem` / `@rem`、先頭空白可、`rem` は大小文字不問) のときに
+    /// true を返す。新しい inline `set` 捕捉正規表現が受け付ける境界トークン (`&` / `(` / `else` / `do`) を
+    /// 含んでいても、コメント行からは `set` property を拾わない。
+    /// </summary>
+    private static bool IsBatchCommentLine(string line)
+    {
+        var i = 0;
+        while (i < line.Length && (line[i] == ' ' || line[i] == '\t'))
+            i++;
+
+        if (i >= line.Length)
+            return false;
+
+        // `::` (and therefore also `:::`, `::: ...`) opens a batch comment that consumes the
+        // rest of the line. The label regex does not match these because it requires a name
+        // char after the first `:`, but the property regex could match their inline tokens.
+        // `::` 以降はコメント (`:::`、`::: ...` も同様)。ラベル正規表現は `:` の後ろに名前文字を
+        // 要求するため影響を受けないが、property 正規表現は inline トークンを拾ってしまう。
+        if (line[i] == ':' && i + 1 < line.Length && line[i + 1] == ':')
+            return true;
+
+        // `@rem` (echo-suppression prefix + rem). Accept optional whitespace between `@` and
+        // `rem` to mirror how the property regex tolerates `@ set`.
+        // `@rem` (echo 抑止プレフィクス + rem) 。property 正規表現が `@ set` を許すのに合わせて
+        // `@` と `rem` の間の空白も許容する。
+        if (line[i] == '@')
+        {
+            var j = i + 1;
+            while (j < line.Length && (line[j] == ' ' || line[j] == '\t'))
+                j++;
+            return IsBatchRemKeyword(line, j);
+        }
+
+        return IsBatchRemKeyword(line, i);
+    }
+
+    private static bool IsBatchRemKeyword(string line, int start)
+    {
+        // A bare `rem` or `rem` followed by whitespace / end-of-line is a comment.
+        // Case-insensitive: `REM`, `rem`, `Rem`, `rEM`, etc. are all comments.
+        // 単独の `rem` または `rem` の直後が空白か行末ならコメント扱い。
+        // 大小文字不問 — `REM` / `rem` / `Rem` / `rEM` などすべてコメント。
+        if (start + 3 > line.Length)
+            return false;
+        if ((line[start] | 0x20) != 'r')
+            return false;
+        if ((line[start + 1] | 0x20) != 'e')
+            return false;
+        if ((line[start + 2] | 0x20) != 'm')
+            return false;
+        if (start + 3 == line.Length)
+            return true;
+        var next = line[start + 3];
+        return next == ' ' || next == '\t' || next == '\r' || next == '\n';
     }
 
     private static bool CanContinueScanningSameLineBraceBody(
