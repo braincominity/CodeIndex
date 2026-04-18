@@ -1379,6 +1379,67 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_RustNestedBlockCommentBody_DoesNotLeakPhantomReferences()
+    {
+        // Regression for issue #291 follow-up: Rust block comments nest, but the
+        // downstream reference-extraction comment stripper treats `/* ... */` as
+        // non-nesting. If the masker only tracks depth without blanking body
+        // characters, identifiers inside a nested `/* ... */` survive to the
+        // regex stage as phantom call references.
+        // issue #291 続編: Rust の `/* ... */` はネストするが、下流の参照抽出側の
+        // コメント除去はネスト非対応。マスカが深度追跡だけで本文を空白化しないと、
+        // ネスト内の識別子が regex 段階まで残り、疑似呼び出しとして拾われてしまう。
+        const string content = """
+            fn caller() {
+                /* outer
+                 /* inner
+                    fake_in_nested_comment();
+                 */
+                 still in outer
+                 */
+                real_call();
+            }
+
+            fn real_call() {}
+            fn fake_in_nested_comment() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "rust", content);
+        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "fake_in_nested_comment");
+        Assert.Contains(references, r => r.SymbolName == "real_call" && r.ContainerName == "caller");
+    }
+
+    [Fact]
+    public void Extract_JsTemplateHoleBlockCommentBody_DoesNotLeakPhantomReferences()
+    {
+        // Regression for issue #291 follow-up: identifiers inside a `/* ... */`
+        // block comment nested in a template-literal hole must not leak as
+        // references. The masker must blank the comment body so the downstream
+        // extractor sees only whitespace inside the comment span.
+        // issue #291 続編: テンプレート hole 内の `/* ... */` ブロックコメントに
+        // 書かれた識別子を参照としてリークさせないこと。マスカがコメント本体を
+        // 空白化し、下流抽出にはコメント範囲が空白として見えるようにする。
+        const string content = """
+            function wrap(value) {
+                return `${/*
+                fake_in_comment();
+                */ realCall()}`;
+            }
+
+            function realCall() {}
+            function fake_in_comment() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "fake_in_comment");
+        Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "wrap");
+    }
+
+    [Fact]
     public void Extract_JsTemplateHoleMultilineDivisionContinuation_PreservesCallAttribution()
     {
         // Regression for issue #291 follow-up: when a template-literal `${...}` hole

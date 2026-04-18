@@ -937,6 +937,11 @@ internal static class StructuralLineMasker
                 {
                     if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '*')
                     {
+                        // Blank the nested `/*` opener so downstream reference
+                        // extraction cannot mistake it for real tokens.
+                        // ネストされた `/*` 自体も空白化し、後段の参照抽出が
+                        // 実トークンと誤認しないようにする。
+                        ReplaceWithSpaces(masked, pos, 2);
                         blockCommentDepth++;
                         pos += 2;
                         continue;
@@ -944,11 +949,25 @@ internal static class StructuralLineMasker
 
                     if (pos + 1 < line.Length && line[pos] == '*' && line[pos + 1] == '/')
                     {
+                        // Blank the `*/` closer alongside the body so pseudo
+                        // references inside nested comments never reach the
+                        // downstream simple comment stripper.
+                        // `*/` の閉じも本文と同様に空白化し、ネストされた
+                        // コメント内の疑似参照が下流の単純な comment stripper
+                        // をすり抜けないようにする。
+                        ReplaceWithSpaces(masked, pos, 2);
                         blockCommentDepth--;
                         pos += 2;
                         continue;
                     }
 
+                    // Rust block comments nest, but downstream comment stripping
+                    // is non-nesting. Blank the body so identifiers inside an
+                    // outer-closed comment do not leak as phantom references.
+                    // Rust の block comment はネスト可能だが下流の comment
+                    // 除去はネスト非対応。本文を空白化し、外側閉じに
+                    // 巻き込まれた識別子が疑似参照として残らないようにする。
+                    masked[pos] = ' ';
                     pos++;
                     continue;
                 }
@@ -975,10 +994,13 @@ internal static class StructuralLineMasker
                 {
                     // Must enter block-comment state before `TryOpenRustRawString`, otherwise
                     // `/* r#" */` would be mis-parsed as a real raw string opener and swallow
-                    // subsequent source until the next `"#`.
+                    // subsequent source until the next `"#`. Blank the opener so nested-comment
+                    // body blanking stays contiguous.
                     // `TryOpenRustRawString` の前に block comment 状態へ入る。そうしないと
                     // `/* r#" */` が本物の raw string 開始と誤認され、次の `"#` まで
-                    // 以降のソースを丸ごとマスクしてしまう。
+                    // 以降のソースを丸ごとマスクしてしまう。ネストコメント本文の空白化と
+                    // 連続させるため `/*` 自体も空白化する。
+                    ReplaceWithSpaces(masked, pos, 2);
                     blockCommentDepth = 1;
                     pos += 2;
                     continue;
@@ -1247,11 +1269,23 @@ internal static class StructuralLineMasker
                     {
                         if (pos + 1 < line.Length && line[pos] == '*' && line[pos + 1] == '/')
                         {
+                            // Blank the `*/` closer together with the body so
+                            // template-hole block comments like `${/* f(); */ g()}`
+                            // never leak `f` as a phantom reference.
+                            // テンプレートホール内の `${/* f(); */ g()}` のような
+                            // block comment で `f` が疑似参照として残らないよう、
+                            // `*/` 自体も本文と同様に空白化する。
+                            ReplaceWithSpaces(masked, pos, 2);
                             frames.Pop();
                             pos += 2;
                             continue;
                         }
 
+                        // Blank the body so identifiers inside a template-hole
+                        // block comment do not survive into reference extraction.
+                        // ホール内 block comment 本文は空白化し、内部の識別子が
+                        // 参照抽出まで残らないようにする。
+                        masked[pos] = ' ';
                         pos++;
                         continue;
                     }
@@ -1303,6 +1337,11 @@ internal static class StructuralLineMasker
 
                         if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '*')
                         {
+                            // Blank the `/*` opener so the hole's block comment
+                            // span is fully whitespace for downstream extraction.
+                            // ホールの block comment 開始 `/*` を空白化し、
+                            // 下流抽出から見えるスパン全体を空白化する。
+                            ReplaceWithSpaces(masked, pos, 2);
                             frames.Push(new BlockCommentFrame());
                             pos += 2;
                             continue;
@@ -1409,6 +1448,10 @@ internal static class StructuralLineMasker
 
                 if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '*')
                 {
+                    // Blank the top-level `/*` opener to match the hole-side
+                    // behavior and keep downstream extraction consistent.
+                    // 先頭レベルでも `/*` 開始を空白化し、ホール側と挙動を揃える。
+                    ReplaceWithSpaces(masked, pos, 2);
                     frames.Push(new BlockCommentFrame());
                     pos += 2;
                     continue;
