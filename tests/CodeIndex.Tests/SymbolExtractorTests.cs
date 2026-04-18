@@ -8605,6 +8605,682 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Html_CapturesIdAttributesAsProperties()
+    {
+        var content = """
+            <!DOCTYPE html>
+            <html>
+              <body>
+                <header id="main-header" class="site-header"><h1>Welcome</h1></header>
+                <main id='content'><article></article></main>
+                <section id="side-panel">legacy</section>
+              </body>
+            </html>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "main-header");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "content");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "side-panel");
+    }
+
+    [Fact]
+    public void Extract_Html_IgnoresDataIdAndAriaIdAndXmlIdAttributes()
+    {
+        // `data-id`, `aria-*id`, and `xml:id` must not be captured as plain id attributes.
+        // data-id / aria-*id / xml:id を通常の id として拾わない。
+        var content = """
+            <article data-id="1"></article>
+            <div aria-labelledby="x" aria-hiddenid="bogus"></div>
+            <span xml:id="ns"></span>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "1");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "bogus");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "ns");
+    }
+
+    [Fact]
+    public void Extract_Html_CapturesExternalScriptAndLinkAsImports()
+    {
+        var content = """
+            <link rel="stylesheet" href="style.css">
+            <link rel="icon" href='/favicon.ico'>
+            <script src="main.js"></script>
+            <script type="module" src='/static/app.mjs'></script>
+            <script>inline(); // no src — no import</script>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "style.css");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/favicon.ico");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "main.js");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/static/app.mjs");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "inline()");
+    }
+
+    [Fact]
+    public void Extract_Html_CapturesCustomWebComponentTagsAsClasses()
+    {
+        // Custom element tag names always contain a hyphen per the HTML spec.
+        // HTML 仕様上、カスタム要素名には必ずハイフンが含まれる。
+        var content = """
+            <my-button>ok</my-button>
+            <app-sidebar></app-sidebar>
+            <div>plain</div>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "my-button");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "app-sidebar");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "div");
+    }
+
+    [Fact]
+    public void Extract_Html_CapturesAllSymbolsOnSameLine()
+    {
+        // Minified HTML or a single line with multiple landmark-bearing tags must
+        // produce one symbol per match, not only the winning pattern's first hit.
+        // Closes #215 codex review blocker.
+        // ミニファイされた HTML や 1 行に複数の landmark タグが入るケースでも、
+        // 勝ちパターンの 1 件ではなく各マッチごとにシンボルが出る必要がある。
+        var content = "<alpha-card id=\"first\"></alpha-card><beta-card id=\"second\"></beta-card>" +
+            "<script src=\"a.js\"></script><link rel=\"stylesheet\" href=\"b.css\">";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "alpha-card");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "beta-card");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "first");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "second");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "a.js");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "b.css");
+    }
+
+    [Fact]
+    public void Extract_Html_IgnoresSymbolsInsideComments()
+    {
+        // HTML comments must not produce phantom imports / classes / properties,
+        // including multi-line comments. Closes #215 codex review blocker.
+        // HTML コメント内のタグ類を phantom シンボルとして拾わないこと。複数行に
+        // またがるコメントでも同様。
+        var content = """
+            <!-- <script src="commented.js"></script> -->
+            <article id="real"></article>
+            <!--
+              <my-widget id="fake"></my-widget>
+              <link rel="stylesheet" href="also-commented.css">
+            -->
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "commented.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "also-commented.css");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "my-widget");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "fake");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+    }
+
+    [Fact]
+    public void Extract_Html_IgnoresSymbolsInsideScriptAndStyleBodies()
+    {
+        // Inline <script> body content is raw text per the HTML spec and must not
+        // leak symbols from template strings. <style> body text follows the same
+        // raw-text rule. Closes #215 codex review blocker.
+        // HTML 仕様上、<script> 本体は raw text であり、テンプレート文字列から
+        // 疑似シンボルを漏らしてはいけない。<style> 本体も同じ raw text 規則。
+        var content = """
+            <script>
+              const tpl = '<inline-card id="inline-id"></inline-card>';
+            </script>
+            <style>
+              .rule { background: url('<bg-tag id="bg">'); }
+            </style>
+            <section id="visible"></section>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "inline-card");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "inline-id");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "bg-tag");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "bg");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "visible");
+    }
+
+    [Fact]
+    public void Extract_Html_StillCapturesExternalScriptSrcEvenWhenBodyHasRawText()
+    {
+        // The masker must preserve the <script src="..."> opening tag so external
+        // scripts are still indexed, while raw-text children stay masked.
+        // raw-text の子要素はマスクしつつ、<script src="..."> 開始タグは保ち、
+        // 外部 script が引き続き import として索引されることを固定する。
+        var content = "<script src=\"app.js\">const x = '<evil-tag id=\"evil\"></evil-tag>';</script>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "app.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "evil-tag");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "evil");
+    }
+
+    [Fact]
+    public void Extract_Html_CapturesMultiLineScriptAndLinkOpeningTags()
+    {
+        // Formatter-split opening tags must still match across lines so imports
+        // are not silently dropped. Closes #215 codex review finding.
+        // フォーマッタによって開始タグが改行されても、import を黙って落とさない
+        // ようクロス行で一致する必要がある。#215 codex review 指摘への対応。
+        var content = """
+            <script
+              type="module"
+              src="/app.js"></script>
+            <link
+              rel="stylesheet"
+              href="/app.css">
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.js");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.css");
+    }
+
+    [Fact]
+    public void Extract_Html_IgnoresSymbolsInsideTextareaAndTitleBodies()
+    {
+        // <textarea> / <title> bodies are RCDATA per the HTML spec and their
+        // contents must not leak phantom symbols. Closes #215 codex review finding.
+        // <textarea> / <title> の本体は HTML 仕様上 RCDATA であり、疑似シンボルを
+        // 漏らしてはならない。#215 codex review 指摘への対応。
+        var content = """
+            <textarea><my-widget id="fake"></my-widget></textarea>
+            <title><bogus-tag id="phantom"></bogus-tag></title>
+            <section id="real"></section>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "my-widget");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "fake");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "bogus-tag");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "phantom");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+    }
+
+    [Fact]
+    public void Extract_Html_MasksUnclosedRawTextAndRcdataBodies()
+    {
+        // cdidx indexes the working tree, so unclosed <script> / <style> /
+        // <textarea> / <title> are common mid-edit. Phantom symbols from those
+        // unclosed bodies must not leak. Closes #215 codex review finding.
+        // cdidx は working tree を対象にするため、編集途中で <script> / <style> /
+        // <textarea> / <title> が未閉鎖な状態は普通に起きる。未閉鎖でも本体から
+        // phantom シンボルを漏らしてはならない。#215 codex review 指摘への対応。
+        var unclosedScript = "<script>const tpl = '<evil-card id=\"phantom\"></evil-card>';";
+        var unclosedSymbols = SymbolExtractor.Extract(1, "html", unclosedScript);
+        Assert.DoesNotContain(unclosedSymbols, s => s.Kind == "class" && s.Name == "evil-card");
+        Assert.DoesNotContain(unclosedSymbols, s => s.Kind == "property" && s.Name == "phantom");
+
+        var unclosedStyle = "<style>\n  .r { content: '<rogue-tag id=\"styleid\"></rogue-tag>'; }";
+        var unclosedStyleSymbols = SymbolExtractor.Extract(1, "html", unclosedStyle);
+        Assert.DoesNotContain(unclosedStyleSymbols, s => s.Kind == "class" && s.Name == "rogue-tag");
+        Assert.DoesNotContain(unclosedStyleSymbols, s => s.Kind == "property" && s.Name == "styleid");
+
+        var unclosedTextarea = "<textarea><my-widget id=\"taid\"></my-widget>";
+        var unclosedTextareaSymbols = SymbolExtractor.Extract(1, "html", unclosedTextarea);
+        Assert.DoesNotContain(unclosedTextareaSymbols, s => s.Kind == "class" && s.Name == "my-widget");
+        Assert.DoesNotContain(unclosedTextareaSymbols, s => s.Kind == "property" && s.Name == "taid");
+
+        var unclosedTitle = "<title><bogus-tag id=\"titleid\"></bogus-tag>";
+        var unclosedTitleSymbols = SymbolExtractor.Extract(1, "html", unclosedTitle);
+        Assert.DoesNotContain(unclosedTitleSymbols, s => s.Kind == "class" && s.Name == "bogus-tag");
+        Assert.DoesNotContain(unclosedTitleSymbols, s => s.Kind == "property" && s.Name == "titleid");
+    }
+
+    [Fact]
+    public void Extract_Html_MultiLineOpeningTagReportsAttributeValueLine()
+    {
+        // When a `<script>` / `<link>` opening tag wraps across lines, the symbol's
+        // line must point at the line that actually carries the attribute value,
+        // not the opening `<`, so `definition` / `excerpt` jump to the right place.
+        // Closes #215 codex review finding.
+        // 開始タグが折り返された場合、symbol の行は開始 `<` の行ではなく属性値が
+        // 実在する行を指す必要がある。こうしないと `definition` / `excerpt` の
+        // ジャンプ先が先頭行にずれる。#215 codex review 指摘への対応。
+        var content = """
+            <script
+              type="module"
+              src="/app.js"></script>
+            <link
+              rel="stylesheet"
+              href="/app.css">
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        var scriptImport = Assert.Single(symbols, s => s.Kind == "import" && s.Name == "/app.js");
+        Assert.Equal(3, scriptImport.Line);
+        Assert.Equal(3, scriptImport.StartLine);
+
+        var linkImport = Assert.Single(symbols, s => s.Kind == "import" && s.Name == "/app.css");
+        Assert.Equal(6, linkImport.Line);
+        Assert.Equal(6, linkImport.StartLine);
+    }
+
+    [Fact]
+    public void Extract_Html_IgnoresIdLiteralsInDocumentText()
+    {
+        // Prose like `<p>documentation says id="fake" here</p>` must not be
+        // harvested as a DOM id — the `id=` pattern only matters inside an
+        // opening tag. Real `<section id="real">` still captures.
+        // Closes #215 codex review finding.
+        // 本文中の `id="..."` を DOM id として誤抽出してはならない。id 属性は開始タグ
+        // の内部でのみ意味を持つ。実在する `<section id="real">` は引き続き抽出する。
+        // #215 codex review 指摘への対応。
+        var content = """
+            <p>documentation says id="fake" here</p>
+            <article>inline prose id='phantom' mentioned</article>
+            <section id="real"></section>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "fake");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "phantom");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+    }
+
+    [Fact]
+    public void Extract_Html_MasksUnclosedComments()
+    {
+        // Unclosed `<!--` must also mask its suffix to EOF, matching the
+        // raw-text / RCDATA `|\z` policy. Without this, editing a comment
+        // live leaked every tag inside the unclosed comment as phantom
+        // symbols. Closes #215 codex review finding.
+        // `<!--` 未閉鎖でも EOF まで本体をマスクする必要がある。raw-text / RCDATA と
+        // 同じく編集途中の未閉鎖コメントから phantom シンボルを漏らさないためのもの。
+        // #215 codex review 指摘への対応。
+        var content = "<!--\n<script src=\"commented.js\"></script>\n<custom-tag id=\"phantom\"></custom-tag>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "commented.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "custom-tag");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "phantom");
+    }
+
+    [Fact]
+    public void Extract_Html_CommentLiteralInsideScriptDoesNotSwallowFollowingTags()
+    {
+        // `<script>` bodies that literally contain `<!--` must not be treated
+        // as unclosed comments. The raw-text masker has to run before the
+        // comment masker or everything after the literal gets blanked out,
+        // dropping every real subsequent symbol. Closes #215 codex review finding.
+        // `<script>` 本文に `<!--` リテラルが入っているだけで未閉鎖コメント扱いに
+        // してはならない。body マスクをコメントマスクより先に動かさないと、リテラル
+        // 以降の本物のタグまで全滅する。#215 codex review 指摘への対応。
+        var content = "<script>const s = \"<!--\";</script>\n<section id=\"real\"></section>\n<my-widget></my-widget>\n<link href=\"/app.css\">";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "my-widget");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.css");
+    }
+
+    [Fact]
+    public void Extract_Html_CapturesUnquotedAttributeValues()
+    {
+        // HTML5 allows unquoted attribute values. Dropping these silently meant
+        // `<section id=real>`, `<script src=/app.js>`, `<link href=/app.css>`
+        // all produced zero symbols. Closes #215 codex review finding.
+        // HTML5 では引用符なし属性値も許される。黙って無視していた結果
+        // `<section id=real>` / `<script src=/app.js>` / `<link href=/app.css>` が
+        // いずれも 0 シンボルを返していた。#215 codex review 指摘への対応。
+        var content = "<section id=real></section>\n<script src=/app.js></script>\n<link rel=stylesheet href=/app.css>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.js");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.css");
+    }
+
+    [Fact]
+    public void Extract_Html_IgnoresAttributeLookAlikesInsideSameTagQuotedValues()
+    {
+        // The `<script src=...>` / `<link href=...>` / `id=...` regexes anchor at the real
+        // outer tag so their `[^>]*?` prefix can reach forward into the same opening tag's
+        // other attribute values. Without checking the name capture position, literals like
+        // `data-note="src=evil.js"` on a real `<script>` leaked phantom imports. Pin that
+        // the name-capture mask catches these same-tag leaks. Closes #215 codex review finding.
+        // `<script src=...>` / `<link href=...>` / `id=...` の regex は実在する外側タグ
+        // 起点で走り、`[^>]*?` が同じ開始タグ内の別属性値へ進めてしまう。開始 `<` だけで
+        // 判定すると `<script data-note="src=evil.js">` のような同一タグ内の属性リテラル
+        // から phantom import が漏れるので、name capture 位置で mask をかけ直し、それが
+        // 同一タグ内の src=/href=/id= 文字列にも効くことを固定する。#215 codex review
+        // 指摘への対応。
+        var content = "<script data-note=\"src=evil.js\"></script>\n<link title=\"href=evil.css\" rel=stylesheet href=\"/real.css\">\n<div title=\"docs id=phantom\"></div>\n<section id=\"real\"></section>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "evil.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "evil.css");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "phantom");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/real.css");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+    }
+
+    [Fact]
+    public void Extract_Html_CapturesIdValuesWithPunctuation()
+    {
+        // Quoted id values can legally contain any non-whitespace character per the HTML5
+        // id attribute spec. The previous `[\w:.\-]+` class silently dropped real DOM
+        // anchors like `id="user@top"` and `id="group/main"`, so `definition` / `outline`
+        // couldn't jump to them. Pin the broadened quoted class while keeping
+        // unquoted values conservative (they still collide with CSS selector syntax).
+        // Closes #215 codex review finding.
+        // HTML5 では引用符付き id 値に任意の non-whitespace 文字が使える。従来の
+        // `[\w:.\-]+` クラスだと `id="user@top"` / `id="group/main"` のような実在の
+        // DOM アンカーを黙って落としていた。引用符付きは受け入れを広げつつ、
+        // 引用符なしは CSS セレクタ構文との衝突を避けて保守的なままにする。
+        // #215 codex review 指摘への対応。
+        var content = "<section id=\"user@top\"></section>\n<section id=\"group/main\"></section>\n<section id=\"plain.id\"></section>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "user@top");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "group/main");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "plain.id");
+    }
+
+    [Fact]
+    public void Extract_Html_QuotedGtInsideScriptOpenTagPreservesSiblingSymbols()
+    {
+        // A `>` character is legal inside a quoted attribute value, so the raw-text
+        // body masker must parse the `<script>` opening tag with quote awareness.
+        // The earlier `[^>]*>` class terminated at the first quoted `>` and blanked
+        // every following real attribute and sibling tag as masked body content,
+        // which dropped both the intended `src="/app.js"` import and the sibling
+        // `<section id="real">`. Closes #215 codex review blocker.
+        // 引用符付き属性値内の `>` でも raw-text 本体マスクの開始タグ解析が終端しない
+        // ことを固定する。以前の `[^>]*>` は先頭の引用符内 `>` でタグを切ってしまい、
+        // 後続の実属性と兄弟タグを body としてマスクしていたため、本来 emit すべき
+        // `src="/app.js"` の import と `<section id="real">` の両方を落としていた。
+        // #215 codex review blocker 対応。
+        var content = "<script data-note=\"a > b\" src=\"/app.js\"></script>\n<section id=\"real\"></section>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.js");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+    }
+
+    [Fact]
+    public void Extract_Html_UnterminatedQuotedAttributeDoesNotSwallowRestOfFile()
+    {
+        // Mid-edit working-tree content commonly leaves a quoted attribute unterminated
+        // (e.g. user is still typing `title="...`). When no valid-looking close exists
+        // to EOF, the parser must bound damage by bailing at the current line rather
+        // than scanning through every subsequent sibling tag looking for a matching
+        // quote. Otherwise every `<my-widget>` / `<link href=...>` after the broken
+        // tag drops out of `symbols` / `definition` / `outline` until the user types
+        // the matching quote. Closes #215 codex review finding.
+        // 編集中の working tree では `title="...` のような未閉鎖引用符が頻発する。
+        // EOF まで妥当な閉じ候補が無い真の未終端では、行末で止めて以降の
+        // `<my-widget>` / `<link href=...>` を symbols / definition / outline から
+        // 消さないこと。#215 codex review 指摘対応。
+        var content = "<div title=\"oops\n<my-widget></my-widget>\n<link href=/app.css>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "my-widget");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.css");
+    }
+
+    [Fact]
+    public void Extract_Html_MultiLineQuotedAttributeValueWithEmbeddedTagsPreservesSiblingAttributes()
+    {
+        // HTML5 allows newlines AND tag-like content inside quoted attribute values
+        // (`<div title="line1\n<section></section>\nline3" id="real">`). The earlier
+        // `\n<tagstart>` bail heuristic treated any `\n<` inside a quoted value as an
+        // unterminated-quote signal, which silently prematurely terminated valid
+        // multi-line title / data-note / alt values and either (1) leaked embedded
+        // `<section id=phantom>` as a phantom `property phantom` symbol, or (2)
+        // dropped the genuine `id="real"` attribute that followed the value. Pin
+        // that valid multi-line quoted values containing tag-like content are
+        // treated as single attribute values, and the following `id="real"` is
+        // emitted. Closes #215 codex review #9 blocker 2.
+        // HTML5 は引用符付き属性値の中に改行もタグ様テキストも許容する
+        // (`<div title="line1\n<section></section>\nline3" id="real">`)。以前の
+        // `\n<tagstart>` 早期中断ヒューリスティクスは、これを未終端と誤認して
+        // (1) 埋め込まれた `<section id=phantom>` を phantom な property として拾ったり、
+        // (2) 後続する本物の `id="real"` を落としたりしていた。妥当な複数行引用属性値を
+        // 正しく 1 つの値として扱い、後続の `id="real"` を emit することを固定する。
+        // #215 codex review #9 blocker 2 対応。
+        var content = "<div title=\"line1\n<section id=phantom></section>\nline3\" id=\"real\"></div>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "phantom");
+    }
+
+    [Fact]
+    public void Extract_Html_RawTextOpenerInsideQuotedAttributeValueDoesNotMaskFollowingContent()
+    {
+        // `<script>` / `<style>` / `<textarea>` / `<title>` embedded inside another
+        // tag's quoted attribute value is NOT a real raw-text opener. The mask pass
+        // must walk past the outer tag's quoted value rather than re-encountering
+        // `<script>` / `<!--` inside the value and masking through EOF. Pin that
+        // quoted `<script>` / `<!--` does not swallow sibling tags on following lines.
+        // Closes #215 codex review #9 blocker 1.
+        // 引用符付き属性値内に出てくる `<script>` / `<style>` / `<textarea>` / `<title>`
+        // や `<!--` は raw-text 開始でもコメント開始でもない。マスク処理は外側タグの
+        // 引用符付き値を飛ばして進まなければならず、さもないと値内の `<script>` を
+        // raw-text 開始と誤認して EOF までマスクし、後続の兄弟タグを全部落とす。
+        // #215 codex review #9 blocker 1 対応。
+        var scriptInAttr = "<div title=\"<script>\">ok</div>\n<section id=\"real\"></section>";
+        var symbols1 = SymbolExtractor.Extract(1, "html", scriptInAttr);
+        Assert.Contains(symbols1, s => s.Kind == "property" && s.Name == "real");
+
+        var commentInAttr = "<div title=\"<!--\">ok</div>\n<section id=\"realc\"></section>";
+        var symbols2 = SymbolExtractor.Extract(1, "html", commentInAttr);
+        Assert.Contains(symbols2, s => s.Kind == "property" && s.Name == "realc");
+    }
+
+    [Fact]
+    public void Extract_Html_SelfClosingVoidElementDoesNotDropSiblingAttributes()
+    {
+        // XHTML / formatter-wrapped HTML often writes void elements as
+        // `<link href="/app.css"/>`. Previously the closing `"` of the path-
+        // like attribute had post-context `/` which was NOT accepted as a
+        // strong close, and the nested-attribute fallback then mis-identified
+        // `id="real"` on the following sibling tag as a nested opener, causing
+        // FindHtmlQuoteClose to return -1 and the attribute parser to bail,
+        // dropping BOTH the `href` import and the sibling `id`. The self-
+        // closing shape `"/>` is now accepted as a strong post-context.
+        // Closes #215 codex review #11 Blocker 1.
+        // XHTML / フォーマッタ折り返しの HTML では `<link href="/app.css"/>` の
+        // 形を採ることがある。以前は閉じ `"` 直後が `/` のため strong でなく、
+        // 後続の `id="real"` を nested 属性と誤認して -1 → 行末 bail となり、
+        // `href` import も兄弟 `id` も落としていた。`"/>` を strong として
+        // 受理することで self-closing void 要素も後続も正しく拾う。
+        // #215 codex review #11 Blocker 1 対応。
+        var content = "<link href=\"/app.css\"/><section id=\"real\"></section>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.css");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+    }
+
+    [Fact]
+    public void Extract_Html_CdataAndProcessingInstructionContentsAreNotLeakedAsSymbols()
+    {
+        // XHTML / SVG / MathML content can contain `<![CDATA[...]]>` sections
+        // whose body is text, not markup. The old `<!`-branch in the extractor
+        // stopped at the first `>` which is often inside an inner element of
+        // the CDATA body, so the remainder was parsed as real HTML and leaked
+        // phantom tags / properties. Processing instructions `<?...?>` and
+        // DOCTYPE declarations have the same shape. Pin that CDATA / PI /
+        // DOCTYPE bodies do NOT emit symbols and that siblings after them
+        // still do. Closes #215 codex review #11 Blocker 2.
+        // XHTML / SVG / MathML の `<![CDATA[...]]>` 本体はマークアップではなく
+        // テキスト。旧実装は最初の `>` で終端扱いしたため、内部要素の `>` で
+        // 早期終了して残り本体が real HTML として抽出され phantom を漏らして
+        // いた。`<?...?>` や `<!DOCTYPE...>` も同様。CDATA / PI / DOCTYPE 本体
+        // は emit せず、それらの後続兄弟が emit されることを固定する。
+        // #215 codex review #11 Blocker 2 対応。
+        var cdata = "<![CDATA[ <two-widget id=\"phantom\"></two-widget><three-widget id=\"ghost\"></three-widget> ]]><section id=\"real\"></section>";
+        var symbolsCdata = SymbolExtractor.Extract(1, "html", cdata);
+        Assert.DoesNotContain(symbolsCdata, s => s.Name == "two-widget");
+        Assert.DoesNotContain(symbolsCdata, s => s.Name == "three-widget");
+        Assert.DoesNotContain(symbolsCdata, s => s.Name == "phantom");
+        Assert.DoesNotContain(symbolsCdata, s => s.Name == "ghost");
+        Assert.Contains(symbolsCdata, s => s.Kind == "property" && s.Name == "real");
+
+        var pi = "<?xml version=\"1.0\"?><?xml-stylesheet href=\"/evil.css\"?><section id=\"realpi\"></section>";
+        var symbolsPi = SymbolExtractor.Extract(1, "html", pi);
+        Assert.DoesNotContain(symbolsPi, s => s.Kind == "import" && s.Name == "/evil.css");
+        Assert.Contains(symbolsPi, s => s.Kind == "property" && s.Name == "realpi");
+
+        var doctype = "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\"><section id=\"realdt\"></section>";
+        var symbolsDt = SymbolExtractor.Extract(1, "html", doctype);
+        Assert.Contains(symbolsDt, s => s.Kind == "property" && s.Name == "realdt");
+    }
+
+    [Fact]
+    public void Extract_Html_UnterminatedOuterTagWithEmbeddedRawTextOpenerDoesNotMaskToEof()
+    {
+        // codex review #10 Blocker B: when the outer non-raw-text tag is itself
+        // mid-edit and never closes (no matching `"` anywhere), the mask pass
+        // must NOT re-enter the raw-text / comment branch at the `<!--` /
+        // `<script>` sitting inside the broken quoted value, because doing so
+        // masks through EOF and drops every sibling tag on the following lines.
+        // Advancing past the current line when a non-raw-text opener cannot be
+        // closed lets the later sibling tags still be walked. Closes #215 codex
+        // review #10 Blocker B.
+        // 外側の non-raw-text タグ自体が編集途中で EOF まで `"` が現れない場合、
+        // 破損した引用値の中の `<!--` / `<script>` を comment / raw-text 開始と
+        // 再解釈して EOF までマスクしてはならない。未終端 opener は現在行で
+        // 止めて次行以降の兄弟タグを拾う。#215 codex review #10 Blocker B 対応。
+        var commentOpenerInBrokenTag = "<div title=\"<!--\n<my-widget></my-widget>\n<link href=/app.css>";
+        var symbols1 = SymbolExtractor.Extract(1, "html", commentOpenerInBrokenTag);
+        Assert.Contains(symbols1, s => s.Kind == "class" && s.Name == "my-widget");
+        Assert.Contains(symbols1, s => s.Kind == "import" && s.Name == "/app.css");
+
+        var scriptOpenerInBrokenTag = "<div title=\"<script>\n<my-widget></my-widget>\n<link href=/app.css>";
+        var symbols2 = SymbolExtractor.Extract(1, "html", scriptOpenerInBrokenTag);
+        Assert.Contains(symbols2, s => s.Kind == "class" && s.Name == "my-widget");
+        Assert.Contains(symbols2, s => s.Kind == "import" && s.Name == "/app.css");
+    }
+
+    [Fact]
+    public void Extract_Html_IgnoresNativeHyphenatedSvgAndMathmlTags()
+    {
+        // HTML/SVG/MathML have a small set of native hyphenated tag names
+        // (`<font-face>`, `<color-profile>`, `<missing-glyph>`, `<annotation-xml>`).
+        // Per the HTML spec these are reserved and must NOT be treated as custom
+        // elements; otherwise any project with inline SVG / MathML gets phantom
+        // `class` symbols. Pin that genuine custom elements next to reserved tags
+        // are still captured. Closes #215 codex review finding.
+        // HTML / SVG / MathML にはハイフン付きだが仕様で予約された標準タグ（`<font-face>`
+        // / `<color-profile>` / `<missing-glyph>` / `<annotation-xml>`）が存在する。
+        // これらを custom element 扱いしないこと、および同居する本物のカスタム要素は
+        // 引き続き class として拾うことを固定する。#215 codex review 指摘対応。
+        var content = "<svg><font-face></font-face><color-profile></color-profile><missing-glyph></missing-glyph><my-widget></my-widget></svg>\n<math><annotation-xml></annotation-xml></math>\n<app-sidebar></app-sidebar>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "font-face");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "color-profile");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "missing-glyph");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "annotation-xml");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "my-widget");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "app-sidebar");
+    }
+
+    [Fact]
+    public void Extract_Html_MultiLineQuotedAttributeValuePreservesFollowingAttributes()
+    {
+        // HTML5 allows newlines inside quoted attribute values. Formatter-wrapped
+        // tags and verbose `title` / `alt` / `data-note` copy often span multiple
+        // lines. The state machine must NOT abort tag parsing at the first
+        // newline inside a quoted value — otherwise it silently drops sibling
+        // `src=` / `href=` / `id=` attributes on the same tag. Closes #215
+        // codex review #8 blocker.
+        // HTML5 は引用符付き属性値の中に改行を許容する。フォーマッタによる折り返し
+        // タグや長文の `title` / `alt` / `data-note` 等は複数行に跨ることがある。
+        // state machine は改行で属性解析を中断してはならない — さもないと同一タグ内の
+        // `src=` / `href=` / `id=` が兄弟属性として silent に落ちる。#215 codex
+        // review #8 blocker 対応。
+        var content = "<div title=\"line1\nline2\" id=\"real\">text</div>\n<link data-note=\"line1\nline2\" href=\"/app.css\">\n<script data-note=\"line1\nline2\" src=\"/app.js\"></script>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.css");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/app.js");
+    }
+
+    [Fact]
+    public void Extract_Html_UnterminatedQuoteInRawTextOpenerDoesNotLeakScriptBodySymbols()
+    {
+        // Mid-edit `<script>` / `<style>` / `<textarea>` / `<title>` openers with
+        // an unterminated quoted attribute MUST still have their body masked,
+        // otherwise the state machine walks into what should be raw-text /
+        // RCDATA content and emits phantom `class` / `property` / `import`
+        // symbols from embedded template-string markup. The mask falls back to
+        // EOF when the opener cannot be closed, matching HTML's raw-text spec
+        // behavior. Closes #215 codex review #8 blocker.
+        // 編集中の `<script>` 等の開始タグで引用符が未終端の場合も、本体は必ず
+        // マスクされなければならない。さもないと state machine が raw-text / RCDATA
+        // 本体に入り込み、埋め込まれたテンプレート文字列のタグ風テキストから phantom
+        // シンボルを漏らす。未終端時は仕様どおり EOF までマスクする。#215 codex
+        // review #8 blocker 対応。
+        var content = "<script data-note=\"oops\nconst tpl = '<evil-card id=\"phantom\"></evil-card>';\n<section id=\"real\"></section>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "evil-card");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "phantom");
+        // The `<section id="real">` after the unterminated `<script>` is inside
+        // the unclosed raw-text body per spec, so it is intentionally NOT
+        // emitted — this matches how a browser would treat the content.
+        // 仕様上 `<section id="real">` も未閉鎖 raw-text の中なので、ブラウザと同じく
+        // emit しないのが正しい。
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "real");
+    }
+
+    [Fact]
+    public void Extract_Html_IgnoresSymbolsNestedInsideQuotedAttributeValues()
+    {
+        // Tag-looking text embedded inside a quoted attribute value (commonly in
+        // doc generators, Markdown-to-HTML output, or `title="..."` blurbs) must
+        // not produce phantom custom-element, id, src, or href symbols. Closes
+        // #215 codex review finding.
+        // 引用符付き属性値の中に入ったタグ風テキスト（ドキュメント生成器や
+        // `title="..."` の注釈によくある）から、phantom な custom element / id /
+        // src / href を拾ってはならない。#215 codex review 指摘への対応。
+        var content = "<div title=\"<fake-widget>\" data-doc=\"<section id=phantom></section>\" aria-label=\"<script src=/evil.js></script><link href=/evil.css>\"></div>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "fake-widget");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "phantom");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "/evil.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "/evil.css");
+    }
+
+    [Fact]
     public void Extract_PythonTripleQuotedString_DoesNotLeakPhantomSymbols()
     {
         // Regression for issue #291: code-shaped fixture text inside """...""" /

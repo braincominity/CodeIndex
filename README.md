@@ -541,7 +541,7 @@ The database reflects the working tree at the time of the last index. After swit
 | YAML | `.yaml`, `.yml` | -- |
 | JSON | `.json` | -- |
 | TOML | `.toml` | -- |
-| HTML | `.html`, `.htm` | -- |
+| HTML | `.html`, `.htm`, `.xhtml`, `.shtml` | yes |
 | CSS | `.css`, `.scss`, `.less`, `.pcss` | yes |
 | Sass (indented) | `.sass` | -- |
 | Stylus | `.styl` | -- |
@@ -1417,7 +1417,7 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 | YAML | `.yaml`, `.yml` | -- |
 | JSON | `.json` | -- |
 | TOML | `.toml` | -- |
-| HTML | `.html`, `.htm` | -- |
+| HTML | `.html`, `.htm`, `.xhtml`, `.shtml` | yes |
 | CSS | `.css`, `.scss`, `.less`, `.pcss` | yes |
 | Sass（インデント構文） | `.sass` | -- |
 | Stylus | `.styl` | -- |

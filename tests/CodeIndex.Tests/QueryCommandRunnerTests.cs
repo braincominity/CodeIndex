@@ -551,6 +551,32 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunLanguages_JsonListsHtmlWithSymbolExtractionAndAllExtensions()
+    {
+        // Pin the #215 surface: `cdidx languages --json` must report html with
+        // symbol_extraction=true and list all four extensions (.html, .htm, .xhtml, .shtml)
+        // so AI tools can discover HTML symbol support without indexing first.
+        // #215 の表面契約を pin: `cdidx languages --json` は html を symbol_extraction=true で
+        // 返し、`.html` / `.htm` / `.xhtml` / `.shtml` の 4 拡張子を列挙する必要がある。
+        // AI ツールがインデックス前でも HTML のシンボル対応を検出できるようにするため。
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var languages = document.RootElement.GetProperty("languages");
+        var html = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "html");
+
+        Assert.True(html.GetProperty("symbol_extraction").GetBoolean());
+        var extensions = html.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()).ToList();
+        Assert.Contains(".html", extensions);
+        Assert.Contains(".htm", extensions);
+        Assert.Contains(".xhtml", extensions);
+        Assert.Contains(".shtml", extensions);
+    }
+
+    [Fact]
     public void RunLanguages_Json_SearchOnlyBucketsAdvertiseZeroSymbolAndGraphSupport()
     {
         // Search-only languages that intentionally live outside the Python / CSS extractors

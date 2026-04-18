@@ -368,9 +368,9 @@ The step size is `80 - 10 = 70` lines. A file with N lines produces `ceil((N - 8
 
 ## Symbol extraction
 
-Most languages still use **compiled regex patterns**, matched one line at a time for functions, classes, and sometimes imports. JavaScript and TypeScript now add a lightweight lexer/state machine on top of the regex pass for cases that line-oriented regex cannot handle reliably, such as class-body bare methods, computed and modifier-prefixed methods, scope-aware synthetic class expressions, and JS/TS-specific range resolution. Named capture groups still extract identifiers for the regex-driven paths.
+Most languages still use **compiled regex patterns**, matched one line at a time for functions, classes, and sometimes imports. JavaScript and TypeScript add a lightweight lexer/state machine on top of the regex pass for cases that line-oriented regex cannot handle reliably, such as class-body bare methods, computed and modifier-prefixed methods, scope-aware synthetic class expressions, and JS/TS-specific range resolution. HTML uses a dedicated character-level state machine instead of the regex pattern loop — it walks tag openers, quoted/unquoted attribute values (including multi-line values), and masks `<script>`/`<style>`/`<textarea>`/`<title>` bodies plus `<!-- ... -->` comments so attribute-lookalike strings inside those regions do not leak phantom symbols. Named capture groups still extract identifiers for the regex-driven paths.
 
-Supported symbol kinds by language (32 languages with symbol extraction):
+Supported symbol kinds by language (33 languages with symbol extraction):
 
 | Language | function | class | struct | interface | enum | property | event/delegate | import | Graph |
 |---|---|---|---|---|---|---|---|---|:---:|
@@ -407,12 +407,13 @@ Supported symbol kinds by language (32 languages with symbol extraction):
 | Zig | fn, pub fn, test | union, error | struct | -- | enum | -- | -- | @import | -- |
 | PowerShell | function, filter | class | -- | -- | enum | -- | -- | Import-Module, using module | -- |
 | CSS/SCSS | @mixin, @keyframes, `@font-face` (`font-family`), #id | `.class`, `:root`, pseudo/attribute selectors, `%placeholder` | -- | -- | -- | `$variable`, `--custom-property` | -- | `@import`, `@use` | -- |
+| HTML | -- | custom Web Component tag names from a dedicated tag-structure state machine (opening tags containing a hyphen, e.g. `<my-button>` / `<app-sidebar>`; reserved SVG/MathML hyphenated tags like `font-face` / `color-profile` / `annotation-xml` are excluded) | -- | -- | -- | `id="..."` / `id='...'` attributes (state machine walks tag openers, quoted/unquoted values, multi-line quoted values, and only accepts the `id` attribute — so `data-id=` / `aria-*id=` / `xml:id=` are ignored structurally rather than by regex lookbehind) | -- | external `<script src="...">` and `<link href="...">` (raw-text bodies of `<script>` / `<style>` / `<textarea>` / `<title>` and `<!-- ... -->` comments are masked so attribute-lookalike strings inside them do not leak phantom symbols) | -- |
 
 For C#, the `Graph = yes` column applies to callable/reference extraction and event subscriptions. Enum members are indexed as symbols, but enum-member access edges such as `Nested.A` are not indexed yet; when the active scope includes those enum-member candidates, `inspect` keeps `graph_supported` aligned with any callable candidates while exposing `graph_degraded=true` / `unsupported_symbol_kind=enum_member`, exact `references` / `callers` / `callees` surface the same gap on zero/count payloads plus successful JSON rows, and `unused` marks the active scope as degraded because C# enum members are excluded while enum declarations may still be false positives until those edges exist.
 
 SQL also emits `namespace` symbols for `CREATE SCHEMA`, but the summary table above does not have a dedicated namespace column.
 
-Additionally, 14 languages are detected and indexed as raw text without symbol extraction: batch, cmake, dockerignore, editorconfig, gitignore, html, json, justfile, markdown, svelte, toml, vue, xml, yaml.
+Additionally, 13 languages are detected and indexed as raw text without symbol extraction: batch, cmake, dockerignore, editorconfig, gitignore, json, justfile, markdown, svelte, toml, vue, xml, yaml.
 
 VB.NET container patterns use `RegexOptions.IgnoreCase` plus `VisualBasicEnd`-based range tracking, so `Partial` spelling differences and multi-file type families still receive stable definition ranges and hotspot-family metadata.
 
@@ -1057,7 +1058,7 @@ src/CodeIndex/
   Indexer/
     FileIndexer.cs            — ディレクトリ走査、フル/更新で共有されるパスフィルタ、組み込みスキップと `.gitignore` / `.cdidxignore`、拡張子・ファイル名・shebang による言語検出、FileRecord構築
     ChunkSplitter.cs          — 80行チャンク（10行重複）
-    SymbolExtractor.cs        — ハイブリッドなシンボル抽出（大半はコンパイル済み正規表現、JS/TS は class body method・scope filtering・range 解決向けの軽量 lexer / state machine を追加）
+    SymbolExtractor.cs        — ハイブリッドなシンボル抽出（大半はコンパイル済み正規表現、JS/TS は class body method・scope filtering・range 解決向けの軽量 lexer / state machine を追加、HTML はタグ構造を理解した文字単位 state machine で属性値・raw-text 本体・コメントをマスク）
     ReferenceExtractor.cs     — 対応言語向けの正規表現ベース参照抽出
   Mcp/
     McpServer.cs              — MCPサーバー（AIツール向けstdin/stdout JSON-RPC 2.0）
@@ -1390,9 +1391,9 @@ LIMIT 20;
 
 ## シンボル抽出
 
-大半の言語では、今も **コンパイル済み正規表現パターン**を1行ずつ適用して関数、クラス、場合によってはインポートを抽出します。一方で JavaScript / TypeScript には、行単位の正規表現だけでは安定して扱えない class body の bare method、computed / modifier 付き method、scope-aware な synthetic class expression、JS/TS 専用の range 解決を補うため、軽量な lexer / state machine を追加しています。正規表現ベースの経路では引き続き名前付きキャプチャグループで識別子を取得します。
+大半の言語では、今も **コンパイル済み正規表現パターン**を1行ずつ適用して関数、クラス、場合によってはインポートを抽出します。一方で JavaScript / TypeScript には、行単位の正規表現だけでは安定して扱えない class body の bare method、computed / modifier 付き method、scope-aware な synthetic class expression、JS/TS 専用の range 解決を補うため、軽量な lexer / state machine を追加しています。HTML は汎用の正規表現ループを使わず、専用の文字単位 state machine でタグ構造を走査し、引用符付き/なし属性値（複数行の引用符付き値を含む）と `<script>` / `<style>` / `<textarea>` / `<title>` の raw-text 本体、`<!-- ... -->` コメントをマスクして、属性名に似た本体内文字列から phantom シンボルが漏れないようにしています。正規表現ベースの経路では引き続き名前付きキャプチャグループで識別子を取得します。
 
-言語別対応シンボル種別（シンボル抽出対応32言語）:
+言語別対応シンボル種別（シンボル抽出対応33言語）:
 
 | 言語 | function | class | struct | interface | enum | property | event/delegate | import | Graph |
 |---|---|---|---|---|---|---|---|---|:---:|
@@ -1429,12 +1430,13 @@ LIMIT 20;
 | Zig | fn, pub fn, test | union, error | struct | -- | enum | -- | -- | @import | -- |
 | PowerShell | function, filter | class | -- | -- | enum | -- | -- | Import-Module, using module | -- |
 | CSS/SCSS | @mixin, @keyframes, `@font-face` (`font-family`), #id | `.class`, `:root`, 疑似/属性セレクタ, `%placeholder` | -- | -- | -- | `$variable`, `--custom-property` | -- | `@import`, `@use` | -- |
+| HTML | -- | 専用のタグ構造 state machine で抽出するカスタム Web Component のタグ名（ハイフンを含む開始タグ、例: `<my-button>` / `<app-sidebar>`。`font-face` / `color-profile` / `annotation-xml` のような予約済み SVG / MathML のハイフン入りタグは除外） | -- | -- | -- | `id="..."` / `id='...'` 属性（state machine がタグの開始、引用符付き/なし値、複数行の引用符付き値を走査し、`id` 属性のみ採用するため、`data-id=` / `aria-*id=` / `xml:id=` は正規表現の lookbehind ではなく構造的に除外される） | -- | 外部 `<script src="...">` と `<link href="...">`（`<script>` / `<style>` / `<textarea>` / `<title>` の raw-text 本体と `<!-- ... -->` コメントはマスクされ、本体内の属性名に似た文字列から phantom シンボルが漏れない） | -- |
 
 C# の `Graph = yes` は callable/reference extraction と event subscription を指します。enum member 自体は symbol として索引されますが、`Nested.A` のような enum-member access edge はまだ索引していません。そのため active scope にその enum member 候補が含まれる場合、`inspect` は callable 候補があれば `graph_supported` を維持したまま `graph_degraded=true` / `unsupported_symbol_kind=enum_member` を返し、exact `references` / `callers` / `callees` も zero/count payload と成功した JSON row の両方で同じ制約を示します。`unused` もその理由で active scope を degraded として扱い、C# enum member は除外しつつ enum declaration は偽陽性になりうるものとして残します。
 
 SQL は `CREATE SCHEMA` から `namespace` シンボルも出力しますが、上の要約表には namespace 専用の列がありません。
 
-他に14言語がテキスト検索用に検出されるがシンボル抽出パターンは未対応: batch, cmake, dockerignore, editorconfig, gitignore, html, json, justfile, markdown, svelte, toml, vue, xml, yaml。
+他に13言語がテキスト検索用に検出されるがシンボル抽出パターンは未対応: batch, cmake, dockerignore, editorconfig, gitignore, json, justfile, markdown, svelte, toml, vue, xml, yaml。
 
 正規表現ベースの抽出は意図的にシンプルです。AST精度よりも速度とポータビリティを優先しています。
 

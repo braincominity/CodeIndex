@@ -2981,6 +2981,18 @@ public class McpServerTests : IDisposable
         var markdown = languages.First(l => l!["lang"]!.GetValue<string>() == "markdown")!;
         Assert.False(markdown["symbol_extraction"]!.GetValue<bool>());
         Assert.False(markdown["graph_queries"]!.GetValue<bool>());
+
+        // Pin #215: HTML must report symbol_extraction=true and list all four
+        // extensions so AI tools discover HTML support via the MCP languages tool.
+        // #215 を pin: HTML は symbol_extraction=true で、.html / .htm / .xhtml / .shtml
+        // の 4 拡張子を MCP languages ツールから返すこと。
+        var html = languages.First(l => l!["lang"]!.GetValue<string>() == "html")!;
+        Assert.True(html["symbol_extraction"]!.GetValue<bool>());
+        var htmlExtensions = html["extensions"]!.AsArray().Select(e => e!.GetValue<string>()).ToList();
+        Assert.Contains(".html", htmlExtensions);
+        Assert.Contains(".htm", htmlExtensions);
+        Assert.Contains(".xhtml", htmlExtensions);
+        Assert.Contains(".shtml", htmlExtensions);
     }
 
     [Fact]
