@@ -8182,6 +8182,54 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Html_IgnoresAttributeLookAlikesInsideSameTagQuotedValues()
+    {
+        // The `<script src=...>` / `<link href=...>` / `id=...` regexes anchor at the real
+        // outer tag so their `[^>]*?` prefix can reach forward into the same opening tag's
+        // other attribute values. Without checking the name capture position, literals like
+        // `data-note="src=evil.js"` on a real `<script>` leaked phantom imports. Pin that
+        // the name-capture mask catches these same-tag leaks. Closes #215 codex review finding.
+        // `<script src=...>` / `<link href=...>` / `id=...` の regex は実在する外側タグ
+        // 起点で走り、`[^>]*?` が同じ開始タグ内の別属性値へ進めてしまう。開始 `<` だけで
+        // 判定すると `<script data-note="src=evil.js">` のような同一タグ内の属性リテラル
+        // から phantom import が漏れるので、name capture 位置で mask をかけ直し、それが
+        // 同一タグ内の src=/href=/id= 文字列にも効くことを固定する。#215 codex review
+        // 指摘への対応。
+        var content = "<script data-note=\"src=evil.js\"></script>\n<link title=\"href=evil.css\" rel=stylesheet href=\"/real.css\">\n<div title=\"docs id=phantom\"></div>\n<section id=\"real\"></section>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "evil.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "evil.css");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "phantom");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "/real.css");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+    }
+
+    [Fact]
+    public void Extract_Html_CapturesIdValuesWithPunctuation()
+    {
+        // Quoted id values can legally contain any non-whitespace character per the HTML5
+        // id attribute spec. The previous `[\w:.\-]+` class silently dropped real DOM
+        // anchors like `id="user@top"` and `id="group/main"`, so `definition` / `outline`
+        // couldn't jump to them. Pin the broadened quoted class while keeping
+        // unquoted values conservative (they still collide with CSS selector syntax).
+        // Closes #215 codex review finding.
+        // HTML5 では引用符付き id 値に任意の non-whitespace 文字が使える。従来の
+        // `[\w:.\-]+` クラスだと `id="user@top"` / `id="group/main"` のような実在の
+        // DOM アンカーを黙って落としていた。引用符付きは受け入れを広げつつ、
+        // 引用符なしは CSS セレクタ構文との衝突を避けて保守的なままにする。
+        // #215 codex review 指摘への対応。
+        var content = "<section id=\"user@top\"></section>\n<section id=\"group/main\"></section>\n<section id=\"plain.id\"></section>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "user@top");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "group/main");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "plain.id");
+    }
+
+    [Fact]
     public void Extract_Html_IgnoresSymbolsNestedInsideQuotedAttributeValues()
     {
         // Tag-looking text embedded inside a quoted attribute value (commonly in

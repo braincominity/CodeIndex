@@ -768,37 +768,19 @@ public static class SymbolExtractor
             // SCSS placeholder selector / SCSS プレースホルダーセレクタ
             new("class",    new Regex(@"^\s*(?<name>%[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
         ],
-        ["html"] =
-        [
-            // External <script src="..."> / <script src=foo.js> — treat as import so the
-            // referenced JS file is navigable.  HTML5 allows unquoted attribute values,
-            // so a single alternation covers both forms.  .NET regex exposes the last
-            // successful `name` capture on the Match, so either branch populates the
-            // symbol name correctly.
-            // 外部 <script src="..."> / <script src=foo.js> を import 扱いにして参照先を
-            // 辿れるようにする。HTML5 では引用符なし属性値も許されるため、ひとつの
-            // alternation で両形式を拾う。.NET では同名キャプチャの最後に成功した方が
-            // `match.Groups["name"]` に残るので name の取り扱いはそのまま。
-            new("import",   new Regex(@"<script\b[^>]*?\bsrc\s*=\s*(?:(?<q>[""'])(?<name>[^""'<>]+)\k<q>|(?<name>[^\s""'<>=`]+))", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            // External <link href="..."> / <link href=foo.css> / 外部リンクリソース
-            new("import",   new Regex(@"<link\b[^>]*?\bhref\s*=\s*(?:(?<q>[""'])(?<name>[^""'<>]+)\k<q>|(?<name>[^\s""'<>=`]+))", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            // id="foo" / id=foo attribute — DOM anchor typically navigated by getElementById
-            // / CSS #selectors.  The `<tag [^<>]*?` prefix scopes the match to opening-tag
-            // context so prose like `<p>docs say id="x"</p>` does not leak a phantom `id`
-            // property, and the `(?<![\w:-])` negative lookbehind keeps `data-id=` /
-            // `aria-*id=` / `xml:id=` out.  Unquoted values are accepted via alternation.
-            // id="foo" / id=foo 属性 — getElementById や CSS #セレクタでたどる DOM アンカー。
-            // `<タグ名 [^<>]*?` プレフィックスで開始タグ内部だけに限定し、本文中の
-            // `<p>docs say id="x"</p>` のような文字列が phantom id として漏れないようにする。
-            // negative lookbehind は引き続き `data-id=` / `aria-*id=` / `xml:id=` を除外し、
-            // 引用符なし属性値も alternation で拾う。
-            new("property", new Regex(@"<[A-Za-z][\w-]*\b[^<>]*?(?<![\w:-])id\s*=\s*(?:(?<q>[""'])(?<name>[\w:.\-]+)\k<q>|(?<name>[\w:.\-]+))", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            // Custom Web Components — opening tag always contains a hyphen per the HTML spec.
-            // Standard tags (<div>, <script>, <link>, etc.) never match because they have no hyphen.
-            // カスタム Web Components — HTML 仕様上、開始タグ名には必ずハイフンが入る。
-            // 標準タグ（<div> / <script> / <link> など）はハイフンを含まないのでマッチしない。
-            new("class",    new Regex(@"<(?<name>[A-Za-z][A-Za-z0-9]*-[\w-]+)\b", RegexOptions.Compiled), BodyStyle.None),
-        ],
+        // HTML does not use the regex pattern loop — it needs true tag-structure
+        // awareness (attribute enumeration, quoted-value handling, custom-element
+        // detection) that regex alone can't express without losing outer-tag
+        // context. `Extract` dispatches to `ExtractHtmlSymbols`, which drives a
+        // character state machine. The empty list here keeps "html" listed as a
+        // supported language via `GetSupportedLanguages()` without pretending to
+        // offer regex-based extraction.
+        // HTML は汎用の regex パターンループではなく、タグ構造を理解した走査（属性列挙、
+        // 引用符付き値の処理、カスタム要素検出）を必要とするため、`Extract` は
+        // `ExtractHtmlSymbols` に分岐して文字単位の state machine で抽出する。空リストは
+        // `GetSupportedLanguages()` で "html" を対応言語として残すための置き場であり、
+        // regex 抽出を模したものではない。
+        ["html"] = [],
         ["powershell"] =
         [
             // Function/filter declarations / 関数・フィルタ宣言
@@ -909,7 +891,7 @@ public static class SymbolExtractor
         // 文字列から phantom な import / class / property が漏れる。#215 の codex
         // レビュー blocker 対応としてここで専用抽出に分岐する。
         if (lang == "html")
-            return ExtractHtmlSymbols(fileId, lines, patterns);
+            return ExtractHtmlSymbols(fileId, lines);
 
         var structuralLines = StructuralLineMasker.MaskLines(lang, lines);
         var cssScannerLines = lang == "css"
@@ -1584,42 +1566,6 @@ public static class SymbolExtractor
         return text;
     }
 
-    // Walk the masked text with a character state machine so we can tell the HTML
-    // pattern loop which positions are inside a quoted attribute value.  Without
-    // this, `<div title="<fake-widget>">` would emit a phantom `fake-widget`
-    // custom element, `<p>style="id=real"</p>` could leak a phantom id, etc.
-    // マスク済みテキストを文字単位で走査し、引用符付き属性値内の位置を bool 配列で返す。
-    // これがないと `<div title="<fake-widget>">` のような埋め込み文字列から phantom な
-    // カスタム要素や id が漏れてしまう。
-    private static bool[] ComputeQuotedAttributeMask(string text)
-    {
-        var mask = new bool[text.Length];
-        var inTag = false;
-        var quoteChar = '\0';
-        for (var i = 0; i < text.Length; i++)
-        {
-            var c = text[i];
-            if (quoteChar != '\0')
-            {
-                mask[i] = true;
-                if (c == quoteChar)
-                    quoteChar = '\0';
-            }
-            else if (inTag)
-            {
-                if (c == '>')
-                    inTag = false;
-                else if (c == '"' || c == '\'')
-                    quoteChar = c;
-            }
-            else if (c == '<')
-            {
-                inTag = true;
-            }
-        }
-        return mask;
-    }
-
     private static string BlankNonNewline(string value)
     {
         if (value.Length == 0)
@@ -1633,91 +1579,227 @@ public static class SymbolExtractor
         return new string(chars);
     }
 
-    private static List<SymbolRecord> ExtractHtmlSymbols(long fileId, string[] lines, IReadOnlyList<SymbolPattern> patterns)
+    private static List<SymbolRecord> ExtractHtmlSymbols(long fileId, string[] lines)
     {
-        // Join into a single text so cross-line matches (e.g. attribute-wrapped
-        // `<script\n  src="...">`) succeed; the per-line loop used to miss these.
-        // The HTML import regexes use `[^>]*?` which matches newlines by default in
-        // .NET regex, so the cross-line opening tag is one match against the full
-        // masked text.
-        // `<script\n  src="...">` のように属性が折り返されたタグを跨ぎ行で拾うため、
-        // 行ごとではなく全文をそのままマッチ対象にする。.NET の `[^>]*?` は既定で改行も
-        // マッチするため、折り返し開始タグも 1 マッチで拾える。
+        // HTML needs proper tag-structure awareness so attribute lookalikes inside
+        // other attributes' quoted values (e.g. `<link title="href=evil.css" href="/real.css">`)
+        // don't leak phantom imports AND real attributes on the same tag aren't
+        // skipped. Regex alone can't do this — the outer tag context is lost once
+        // an attribute inside it is rejected — so walk the masked text with a
+        // character state machine that enumerates each tag's attributes in order.
+        // HTML は同一タグ内で別属性の引用符付き値に書かれた attribute 名の文字列（例:
+        // `<link title="href=evil.css" href="/real.css">`）から phantom な import を
+        // 漏らさず、かつ本物の属性を飛ばさないために、タグ構造を理解した走査が必要。
+        // regex だけでは、タグ内のある属性を mask で落とした瞬間に外側タグのコンテキスト
+        // を失うため不可能。マスク済みテキストを文字単位の state machine で走査し、タグ
+        // ごとに属性を列挙していく。
         var rawText = string.Join('\n', lines);
         var maskedText = MaskHtmlRawTextRegions(rawText);
-
-        // Filter out HTML symbol matches whose opening `<` sits inside a quoted
-        // attribute value (e.g. `<div title="<fake-widget>">`).  Without this,
-        // the custom-element regex would emit a phantom `fake-widget` class and
-        // nested `id=`/`src=`/`href=` literals inside prose attributes could also
-        // leak.  Scoped to the opening `<` of each match because every HTML
-        // pattern anchors there.
-        // 開始 `<` が引用符付き属性値の中にあるマッチを除外する。これがないと
-        // `<div title="<fake-widget>">` のような埋め込み文字列から phantom な
-        // カスタム要素が漏れ、属性値内の id=/src=/href= リテラルまで拾ってしまう。
-        // いずれの HTML パターンも `<` 起点なので、そのインデックスで判定する。
-        var quotedAttributeMask = ComputeQuotedAttributeMask(maskedText);
 
         // Precompute per-line absolute offsets for O(log n) line lookup via binary
         // search. Each lines[i] does not include the joining '\n', so lineStarts[i]
         // points at the first character of line i.
-        // 各マッチの行番号を O(log n) で引けるように行ごとの絶対 offset を事前計算。
+        // 各シンボルの行番号を O(log n) で引けるように行ごとの絶対 offset を事前計算。
         // lines[i] 自体は連結に使う '\n' を含まないため、lineStarts[i] は i 行目の
         // 先頭文字位置を指す。
         var lineStarts = new int[lines.Length];
-        var cursor = 0;
+        var lineCursor = 0;
         for (var i = 0; i < lines.Length; i++)
         {
-            lineStarts[i] = cursor;
-            cursor += lines[i].Length + 1;
+            lineStarts[i] = lineCursor;
+            lineCursor += lines[i].Length + 1;
         }
 
         var symbols = new List<SymbolRecord>();
-        foreach (var pattern in patterns)
+        var pos = 0;
+        while (pos < maskedText.Length)
         {
-            foreach (Match match in pattern.Regex.Matches(maskedText))
+            if (maskedText[pos] != '<')
             {
-                if (match.Index < quotedAttributeMask.Length && quotedAttributeMask[match.Index])
-                    continue;
+                pos++;
+                continue;
+            }
 
-                var nameGroup = match.Groups["name"];
-                var name = nameGroup.Success
-                    ? nameGroup.Value.Trim()
-                    : match.Value.Trim();
-                if (name.Length == 0)
-                    continue;
+            // Skip closing tags, comments/doctypes/CDATA, and processing instructions.
+            // Raw-text bodies (<script>/<style>) and comments have already been masked
+            // by MaskHtmlRawTextRegions, but the opening/closing tags themselves remain.
+            // 閉じタグ / コメント / doctype / 処理命令はここで読み飛ばす。raw-text 本文と
+            // HTML コメントは MaskHtmlRawTextRegions で既に空白化されているが、開始タグ
+            // 自体はそのまま残っているため通常の属性走査対象になる。
+            if (pos + 1 < maskedText.Length && (maskedText[pos + 1] == '/' || maskedText[pos + 1] == '!' || maskedText[pos + 1] == '?'))
+            {
+                pos = IndexOfOrEnd(maskedText, '>', pos + 1) + 1;
+                continue;
+            }
 
-                // Anchor the symbol to the captured name (e.g. the `src="..."` value)
-                // rather than the opening `<` so cross-line tags like
-                // `<script\n  type="module"\n  src="/app.js">` report the line that
-                // actually carries the attribute value, keeping `definition` /
-                // `excerpt` jump targets accurate.
-                // 属性値が折り返されたタグでもジャンプ先が正しくなるよう、symbol の
-                // 位置は開始 `<` ではなく name capture（例: `src="..."` の値）の
-                // オフセットを基準にする。
-                var symbolOffset = nameGroup.Success ? nameGroup.Index : match.Index;
-                var startLine = FindHtmlLineNumber(lineStarts, symbolOffset);
-                var endOffset = match.Index + Math.Max(0, match.Length - 1);
-                var endLine = FindHtmlLineNumber(lineStarts, endOffset);
+            var tagNameStart = pos + 1;
+            if (tagNameStart >= maskedText.Length || !IsHtmlTagNameStart(maskedText[tagNameStart]))
+            {
+                pos++;
+                continue;
+            }
+
+            var tagNameEnd = tagNameStart;
+            while (tagNameEnd < maskedText.Length && IsHtmlTagNameChar(maskedText[tagNameEnd]))
+                tagNameEnd++;
+
+            var tagName = maskedText[tagNameStart..tagNameEnd];
+            var tagNameLower = tagName.ToLowerInvariant();
+
+            // Emit custom Web Components (hyphenated opening tag) at the `<` position.
+            // 開始タグ名にハイフンを含むカスタム Web Components を `<` の位置で emit する。
+            if (tagName.Contains('-'))
+            {
+                var startLine = FindHtmlLineNumber(lineStarts, pos);
                 var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
-                var signature = lines[signatureIndex].Trim();
-
                 symbols.Add(new SymbolRecord
                 {
                     FileId = fileId,
-                    Kind = pattern.Kind,
+                    Kind = "class",
+                    Name = tagName,
+                    Line = startLine,
+                    StartLine = startLine,
+                    EndLine = startLine,
+                    Signature = lines[signatureIndex].Trim(),
+                });
+            }
+
+            // Walk the tag body, enumerating attribute name/value pairs until `>` or EOF.
+            // タグ本体を走査し、`>` か EOF まで属性 name/value を順に列挙する。
+            var cursor = tagNameEnd;
+            while (cursor < maskedText.Length && maskedText[cursor] != '>')
+            {
+                // Skip whitespace and stray '/' (self-closing marker).
+                // 空白文字と self-closing の `/` を読み飛ばす。
+                if (char.IsWhiteSpace(maskedText[cursor]) || maskedText[cursor] == '/')
+                {
+                    cursor++;
+                    continue;
+                }
+
+                // Read attribute name. HTML5 allows broad attribute-name charsets, but for
+                // our emit rules we only need to recognize ASCII names plus `:` / `-` / `.`
+                // (xml:id, data-*, aria-*, etc.). Anything else aborts the parse of this tag
+                // gracefully by treating it as a non-matching attribute start.
+                // 属性名を読む。HTML5 の属性名は広いが、emit 対象の判定には ASCII の名前と
+                // `:` / `-` / `.` が拾えれば十分（xml:id, data-*, aria-* 等を含めるため）。
+                // それ以外の文字が来たら、このタグのパースは壊さずに 1 文字進めるだけで抜ける。
+                if (!IsHtmlAttrNameStart(maskedText[cursor]))
+                {
+                    cursor++;
+                    continue;
+                }
+                var attrNameStart = cursor;
+                while (cursor < maskedText.Length && IsHtmlAttrNameChar(maskedText[cursor]))
+                    cursor++;
+                var attrName = maskedText[attrNameStart..cursor];
+                var attrNameLower = attrName.ToLowerInvariant();
+
+                // Skip whitespace between name and `=`.
+                while (cursor < maskedText.Length && char.IsWhiteSpace(maskedText[cursor]))
+                    cursor++;
+
+                string? attrValue = null;
+                int attrValueStart = -1;
+                if (cursor < maskedText.Length && maskedText[cursor] == '=')
+                {
+                    cursor++;
+                    while (cursor < maskedText.Length && char.IsWhiteSpace(maskedText[cursor]))
+                        cursor++;
+                    if (cursor < maskedText.Length && (maskedText[cursor] == '"' || maskedText[cursor] == '\''))
+                    {
+                        var quote = maskedText[cursor];
+                        cursor++;
+                        attrValueStart = cursor;
+                        var valueEnd = maskedText.IndexOf(quote, cursor);
+                        if (valueEnd < 0)
+                        {
+                            // Unterminated quoted value: consume to EOF to avoid looping forever.
+                            // 引用符が閉じないままの属性値は EOF まで飲む（無限ループ回避）。
+                            attrValue = maskedText[cursor..];
+                            cursor = maskedText.Length;
+                        }
+                        else
+                        {
+                            attrValue = maskedText[cursor..valueEnd];
+                            cursor = valueEnd + 1;
+                        }
+                    }
+                    else if (cursor < maskedText.Length && maskedText[cursor] != '>')
+                    {
+                        // Unquoted value: HTML5 excludes space, `"`, `'`, `=`, `<`, `>`, backtick.
+                        // 引用符なし値: HTML5 では空白、`"`、`'`、`=`、`<`、`>`、バッククォートを除外。
+                        attrValueStart = cursor;
+                        while (cursor < maskedText.Length && !IsHtmlUnquotedValueTerminator(maskedText[cursor]))
+                            cursor++;
+                        attrValue = maskedText[attrValueStart..cursor];
+                    }
+                }
+
+                if (attrValue == null || attrValue.Length == 0)
+                    continue;
+
+                string? emitKind = null;
+                if (attrNameLower == "src" && tagNameLower == "script")
+                    emitKind = "import";
+                else if (attrNameLower == "href" && tagNameLower == "link")
+                    emitKind = "import";
+                else if (attrNameLower == "id" && !attrName.Contains(':') && !attrName.Contains('-') && !attrName.Contains('.'))
+                    emitKind = "property";
+
+                if (emitKind == null)
+                    continue;
+
+                var name = attrValue.Trim();
+                if (name.Length == 0)
+                    continue;
+
+                // Anchor the symbol at the attribute value so cross-line tags like
+                // `<script\n  type="module"\n  src="/app.js">` land on the line that
+                // actually carries the value.
+                // 属性値の位置でシンボルを固定し、属性が折り返されたタグでも値が書かれた
+                // 行にジャンプできるようにする。
+                var anchor = attrValueStart >= 0 ? attrValueStart : pos;
+                var startLine = FindHtmlLineNumber(lineStarts, anchor);
+                var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = emitKind,
                     Name = name,
                     Line = startLine,
                     StartLine = startLine,
-                    EndLine = Math.Max(startLine, endLine),
-                    Signature = signature,
+                    EndLine = startLine,
+                    Signature = lines[signatureIndex].Trim(),
                 });
             }
+
+            pos = cursor < maskedText.Length ? cursor + 1 : cursor;
         }
 
         AssignContainers(symbols);
         PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
+    }
+
+    private static bool IsHtmlTagNameStart(char c) => (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+
+    private static bool IsHtmlTagNameChar(char c) =>
+        (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
+
+    private static bool IsHtmlAttrNameStart(char c) =>
+        (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_' || c == ':';
+
+    private static bool IsHtmlAttrNameChar(char c) =>
+        IsHtmlAttrNameStart(c) || (c >= '0' && c <= '9') || c == '-' || c == '.';
+
+    private static bool IsHtmlUnquotedValueTerminator(char c) =>
+        char.IsWhiteSpace(c) || c == '"' || c == '\'' || c == '=' || c == '<' || c == '>' || c == '`';
+
+    private static int IndexOfOrEnd(string text, char needle, int start)
+    {
+        var idx = text.IndexOf(needle, start);
+        return idx < 0 ? text.Length : idx;
     }
 
     private static int FindHtmlLineNumber(int[] lineStarts, int offset)
