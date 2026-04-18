@@ -4348,6 +4348,190 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_ContextualKeywordWithTupleSuffixReturn_DoesNotLeakCtorRegexPhantom()
+    {
+        // Before #349, `public required (int, int) R1 { get; init; }` / `public partial (int, int)? P1();`
+        // / `public readonly (int, int)? M() => null;` could be claimed by the ctor regex
+        // (`^\s*visibility\s+\w+\s*\(`) with the modifier keyword captured as the ctor name, emitting
+        // phantom `function required` / `function partial` / `function readonly` rows and silently
+        // dropping the real property/method. The ctor regex now adds a negative lookahead at the
+        // opening paren that rejects lines where the matching `)` is followed by an identifier +
+        // `{` / `(` / `=>` (with optional `?` / `[]` tuple suffixes in between), so the more specific
+        // method/property regexes get a chance to match and no phantom is emitted. Closes #349.
+        // 修飾子キーワード + tuple-suffix 戻り値の行を ctor regex が greedy に喰い、
+        // modifier キーワード自体を ctor 名として拾ってしまう現象に対するガード。
+        // ctor regex の開き括弧の直後に否定先読みを入れ、「対応する `)` のあとに
+        // 識別子 + `{` / `(` / `=>`（間に `?` / `[]` の tuple サフィックスを許す）が続く行」を
+        // 弾くようにしたので、method / property 側の regex に先を譲り phantom
+        // `function required` / `function partial` / `function readonly` が出ない
+        // ことを担保する。Closes #349.
+        var content = """
+            namespace ModifierPhantom;
+
+            public partial class A
+            {
+                public partial (int, int)? P1();
+                public partial (int, int)[] P2();
+            }
+
+            public class B
+            {
+                public required (int, int) R1 { get; init; }
+                public required (int, int)? R2 { get; init; }
+            }
+
+            public class D
+            {
+                public readonly struct E
+                {
+                    public readonly (int, int)? M() => null;
+                }
+            }
+
+            public class F
+            {
+                public F() { }
+                public F(int x) { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        // No phantom rows whose name is a modifier keyword / 修飾子キーワードを name にした phantom は出ない。
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "partial");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "required");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "readonly");
+
+        // Real members are captured / 本物のメンバーが拾えていること。
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "P1");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "P2");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "R1");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "R2");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M");
+
+        // Baseline constructors must still be captured / 通常のコンストラクタは引き続き拾えること。
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "F"));
+    }
+
+    [Fact]
+    public void Extract_CSharp_CtorRegex_StillCapturesAllValidCtorForms()
+    {
+        // The #349 fix tightens the ctor regex with a negative lookahead that rejects lines where
+        // the matching `)` is followed by `IDENT { / IDENT ( / IDENT =>`. Any realistic ctor form
+        // must still be captured after the fix — otherwise we would silently drop real ctors to
+        // block phantom ones. This test locks in every major ctor form: brace body, expression
+        // body, `: base(...)` / `: this(...)` initializers, `extern` declaration ending in `;`,
+        // multi-line signature split across lines, and tuple parameter. A regression here means
+        // the lookahead is too aggressive.
+        // #349 の修正で ctor regex に否定先読み（閉じ括弧の後に `IDENT { / IDENT ( / IDENT =>`
+        // が続く行を弾く）を足した。phantom を止めるために本物の ctor を落とすと本末転倒なので、
+        // 主要な ctor 記法（brace 本体 / 式本体 / `: base(...)` / `: this(...)` 初期化子 /
+        // `;` で終わる extern 宣言 / 複数行に分かれたシグネチャ / tuple パラメータ）が全て
+        // 引き続き拾えることをここで担保する。これが壊れたら lookahead が強すぎるサイン。
+        var content = """
+            namespace CtorForms;
+
+            public class Brace
+            {
+                public Brace() { }
+                public Brace(int x) { }
+            }
+
+            public class ExpressionBody
+            {
+                public ExpressionBody() => System.Console.WriteLine();
+            }
+
+            public class WithInitializer
+            {
+                public WithInitializer() : this(0) { }
+                public WithInitializer(int x) : base() { }
+            }
+
+            public class Extern
+            {
+                public extern Extern();
+                public extern Extern(int x);
+            }
+
+            public class MultiLine
+            {
+                public MultiLine(
+                    int x,
+                    int y)
+                {
+                }
+            }
+
+            public class TupleParam
+            {
+                public TupleParam((int, int) t) { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "Brace"));
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ExpressionBody");
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "WithInitializer"));
+        Assert.Equal(2, symbols.Count(s => s.Kind == "function" && s.Name == "Extern"));
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MultiLine");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "TupleParam");
+    }
+
+    [Fact]
+    public void Extract_CSharp_ContextualKeywordWithWhitespacedTupleSuffix_DoesNotLeakCtorRegexPhantom()
+    {
+        // Follow-up to #349: the initial positional-lookahead fix only rejected tuple suffixes
+        // directly abutting `)` (e.g. `(int, int)[]`), so legal C# that puts whitespace between
+        // `)` and the suffix token (`(int, int) []`, `(int, int) ?`, `(int, int)  ?`) fell
+        // through to the ctor regex and reintroduced phantom `function required` / `function
+        // readonly` / `function static` rows while dropping the real property / method. Both the
+        // ctor lookahead and CSharpTypePattern now share CSharpTupleSuffixPattern, which allows
+        // whitespace between `)` / identifier and each suffix token, so these formatting
+        // variants are rejected as ctor shapes via the lookahead and accepted as property /
+        // method shapes via the upstream rows.
+        // #349 のフォローアップ。初回の位置検査修正では `)` とサフィックストークンが密着した形
+        // （`(int, int)[]`）しか弾けず、`)` と `[]` / `?` の間に空白を置いた合法な書式
+        // （`(int, int) []` / `(int, int) ?` / `(int, int)  ?`）は ctor regex に落ち、
+        // phantom `function required` / `function readonly` / `function static` が再発し
+        // 本来の property / method が silent drop していた。CSharpTupleSuffixPattern を
+        // ctor 否定先読みと CSharpTypePattern で共有し、`)` や識別子と各サフィックストークンの
+        // 間に空白を許容することで、これらの整形バリエーションも ctor 形状として弾きつつ
+        // 上流の property / method 行で本物のシンボルとして拾えるようになる。
+        var content = """
+            namespace ModifierPhantomSpaced;
+
+            public partial class SpacedHost
+            {
+                public required (int, int) [] R4 { get; init; }
+                public readonly (int, int) ? F4 = null;
+                public static (int, int) ? M3() => default;
+                public partial (int, int)  ? P5 { get; init; }
+            }
+
+            public readonly struct SpacedStruct
+            {
+                public readonly (int, int) ? M4() => null;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        // No phantom rows whose name is a modifier keyword even when whitespace sits between
+        // `)` and the tuple suffix. / `)` とサフィックスの間に空白があっても、修飾子キーワードを
+        // name にした phantom 行は出ない。
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "required");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "readonly");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "static");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "partial");
+
+        // Real members are still captured with the correct kinds. / 本物のメンバーが正しい kind で拾えていること。
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "R4");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "F4");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M3");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "P5");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M4");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsRecordVariants()
     {
         // record, record class, record struct with various modifiers
