@@ -174,6 +174,51 @@ public static class ReferenceExtractor
     private static readonly Regex CSharpPrimaryCtorHeaderRegex = new(
         @"\b(?:record\s+(?:class\s+|struct\s+)?|class\s+|struct\s+)\w+(?:\s*<[^>]+>)?\s*\(",
         RegexOptions.Compiled);
+    // C# compile-time type/member references: `nameof(X.Y)`, `typeof(T)`, `sizeof(T)`, `default(T)`.
+    // Keywords are in SharedIgnoredCallNames so CallRegex skips them, but their arguments have no
+    // trailing `(` and therefore slip through. Captured here as a dedicated "type_reference" kind
+    // so callers/callees (which exclude type_reference by default) stay unaffected while
+    // references and impact see the edge. See issue #253.
+    // The regex only locates the keyword and opening `(`; the argument itself is walked by
+    // ExtractCSharpTypeKeywordSegments so generic `<...>`, array `[...]`, and `global::` qualifiers
+    // are handled without truncating the real type path.
+    // C# の nameof/typeof/sizeof/default は、キーワード自体が SharedIgnoredCallNames にあるため
+    // CallRegex では読み飛ばされ、引数の識別子も末尾に `(` が無いため通常経路では捕捉できない。
+    // ここで type_reference として拾い、callers/callees（既定で type_reference を除外）に影響せず
+    // references と impact だけに edge を届ける。issue #253 参照。
+    // 正規表現はキーワードと `(` の位置だけを捕捉し、引数本体の走査は ExtractCSharpTypeKeywordSegments
+    // に任せる。これにより generic `<...>`、配列 `[...]`、`global::` 等を途中で切らない。
+    private static readonly Regex CSharpTypeKeywordIntroRegex = new(
+        @"(?<![\w$])(?<keyword>nameof|typeof|sizeof|default)\s*\(",
+        RegexOptions.Compiled);
+    // Java compile-time type literal: `T.class`, `T[].class`, `outer.Inner.class` etc.
+    // `.class` itself is a language keyword, but the type chain in front of it is a genuine
+    // reference. Emit each dot-segment as `type_reference`. See issue #253.
+    // Java の `T.class` は型リテラル。`.class` 自体はキーワードだが、前置の型チェーンは
+    // 正当な参照。各 dot-segment を type_reference として拾う。issue #253 参照。
+    private static readonly Regex JavaDotClassArgRegex = new(
+        @"(?<![\w$.])(?<arg>[A-Za-z_][\w.]*)\s*(?:\[\s*\])*\s*\.class\b",
+        RegexOptions.Compiled);
+
+    // Java primitive type names that can precede `.class` (e.g. `int.class`, `void.class`).
+    // Skipped from reference rows because they are language-level keywords, not indexed types.
+    // `int.class` 等に現れる Java のプリミティブ型。インデックス対象の型ではないため除外する。
+    private static readonly HashSet<string> JavaPrimitiveTypeNames = new(StringComparer.Ordinal)
+    {
+        "int", "long", "short", "boolean", "byte", "char", "float", "double", "void",
+    };
+
+    // C# predefined type aliases / void / dynamic / var. They resolve to BCL primitives that are
+    // not indexed as user-defined symbols, so emitting them as `type_reference` just pollutes
+    // references/inspect output without ever linking to a real definition.
+    // C# の built-in 型 alias / void / dynamic / var。ユーザー定義シンボルに解決しないため
+    // type_reference として残すとノイズにしかならない。issue #253 のレビュー指摘により除外。
+    private static readonly HashSet<string> CSharpBuiltInTypeNames = new(StringComparer.Ordinal)
+    {
+        "bool", "byte", "sbyte", "short", "ushort", "int", "uint", "long", "ulong",
+        "nint", "nuint", "char", "float", "double", "decimal",
+        "string", "object", "void", "dynamic", "var",
+    };
 
     public static IReadOnlyCollection<string> GetSupportedLanguages() => SupportedLanguages;
 
@@ -397,6 +442,28 @@ public static class ReferenceExtractor
                     references, seen, fileId, context, lineNumber, container);
             }
 
+            // Compile-time type/member references that CallRegex cannot see because the
+            // argument has no trailing `(` of its own. See issue #253.
+            // 末尾の `(` を持たず CallRegex では取れないコンパイル時の型/メンバ参照。issue #253 参照。
+            if (language is "csharp")
+            {
+                foreach (Match match in CSharpTypeKeywordIntroRegex.Matches(preparedLine))
+                {
+                    int parenIndex = match.Index + match.Length - 1; // position of '(' / '(' の位置
+                    ExtractCSharpTypeKeywordSegments(
+                        references, seen, fileId, preparedLine, parenIndex + 1,
+                        context, lineNumber, container, language);
+                }
+            }
+            else if (language is "java")
+            {
+                foreach (Match match in JavaDotClassArgRegex.Matches(preparedLine))
+                {
+                    var argGroup = match.Groups["arg"];
+                    AddTypeReferenceSegments(references, seen, fileId, argGroup.Value, argGroup.Index, context, lineNumber, container, language);
+                }
+            }
+
             foreach (Match match in CallRegex.Matches(preparedLine))
             {
                 var name = match.Groups["name"].Value;
@@ -454,6 +521,236 @@ public static class ReferenceExtractor
             FileId = fileId,
             SymbolName = name,
             ReferenceKind = referenceKind,
+            Line = lineNumber,
+            Column = column,
+            Context = context,
+            ContainerKind = container?.Kind,
+            ContainerName = container?.Name,
+        });
+    }
+
+    /// <summary>
+    /// Emit one `type_reference` row per dot-segment of a captured argument. Columns are
+    /// computed relative to the original line so tooling can jump to the exact identifier.
+    /// 捕捉した引数の dot-segment ごとに `type_reference` 行を発行する。列位置は元の行基準で計算する。
+    /// </summary>
+    private static void AddTypeReferenceSegments(
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string arg,
+        int argStartInLine,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        string language)
+    {
+        int offset = 0;
+        foreach (var segment in arg.Split('.'))
+        {
+            if (segment.Length == 0)
+            {
+                offset += 1; // '.' separator / ドット区切り分
+                continue;
+            }
+
+            if (!IsIgnoredTypeReferenceSegment(language, segment))
+            {
+                int column = argStartInLine + offset + 1; // 1-based / 1始まり
+                var dedupeKey = $"{lineNumber}:{column}:type_reference:{segment}";
+                if (seen.Add(dedupeKey))
+                {
+                    references.Add(new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = segment,
+                        ReferenceKind = "type_reference",
+                        Line = lineNumber,
+                        Column = column,
+                        Context = context,
+                        ContainerKind = container?.Kind,
+                        ContainerName = container?.Name,
+                    });
+                }
+            }
+
+            offset += segment.Length + 1; // segment + '.'
+        }
+    }
+
+    private static bool IsIgnoredTypeReferenceSegment(string language, string segment)
+    {
+        if (IsIgnoredCallName(language, segment))
+            return true;
+        if (language == "java" && JavaPrimitiveTypeNames.Contains(segment))
+            return true;
+        if (language == "csharp" && CSharpBuiltInTypeNames.Contains(segment))
+            return true;
+        return false;
+    }
+
+    /// <summary>
+    /// Walk the argument list of a C# nameof/typeof/sizeof/default starting at
+    /// <paramref name="startIndex"/> (the char right after `(`). Emits one `type_reference` row
+    /// per identifier segment while handling generic `&lt;...&gt;`, array `[...]`,
+    /// parenthesized/tuple groups `(...)`, and `global::` / `Alias::` qualifier skipping so nested
+    /// paths like `nameof(List&lt;int&gt;.Count)`, `nameof(global::System.String)`,
+    /// and `typeof((Foo, Bar))` are indexed correctly.
+    /// C# の nameof/typeof/sizeof/default の引数を `(` 直後から lexer で走査し、
+    /// generic `&lt;...&gt;`・配列 `[...]`・タプル `(...)` 群・`global::` / `Alias::` 修飾子を
+    /// 跨ぎながら識別子セグメントごとに type_reference を発行する。
+    /// </summary>
+    private static void ExtractCSharpTypeKeywordSegments(
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string line,
+        int startIndex,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        string language)
+    {
+        int i = startIndex;
+        int parenDepth = 0;
+        bool expectSegment = true;
+        while (i < line.Length)
+        {
+            char c = line[i];
+            if (c == ')')
+            {
+                if (parenDepth == 0)
+                    return;
+                parenDepth--;
+                i++;
+                expectSegment = false;
+                continue;
+            }
+
+            if (c == ',')
+            {
+                if (parenDepth == 0)
+                    return;
+                // Tuple element separator inside `typeof((Foo, Bar))` — keep scanning.
+                // `typeof((Foo, Bar))` のタプル要素区切りは続けて走査する。
+                i++;
+                expectSegment = true;
+                continue;
+            }
+
+            if (char.IsWhiteSpace(c))
+            {
+                i++;
+                continue;
+            }
+
+            if (expectSegment && IsCSharpIdentifierStart(c))
+            {
+                int segStart = i;
+                while (i < line.Length && IsCSharpIdentifierPart(line[i]))
+                    i++;
+                var segment = line.Substring(segStart, i - segStart);
+                // `Alias::Member` — the left-hand side is a namespace alias, not an indexed
+                // type. Drop it instead of emitting it, and treat what follows the `::` as a
+                // fresh segment head.
+                // `Alias::Member` の左辺はエイリアスであり型シンボルではないため発行せず、
+                // `::` の右側を新しいセグメント先頭として読み直す。
+                if (i + 1 < line.Length && line[i] == ':' && line[i + 1] == ':')
+                {
+                    i += 2;
+                    expectSegment = true;
+                    continue;
+                }
+
+                AddTypeReferenceSegment(references, seen, fileId, segment, segStart, context, lineNumber, container, language);
+                expectSegment = false;
+                continue;
+            }
+
+            if (c == '.')
+            {
+                i++;
+                expectSegment = true;
+                continue;
+            }
+
+            if (c == '<')
+            {
+                i = SkipBalanced(line, i, '<', '>');
+                continue;
+            }
+
+            if (c == '[')
+            {
+                i = SkipBalanced(line, i, '[', ']');
+                continue;
+            }
+
+            if (c == '(')
+            {
+                // Track paren depth instead of skipping the body so tuple/parenthesized
+                // type groups like `typeof((Foo, Bar))` still yield inner segments.
+                // タプル型 `typeof((Foo, Bar))` の中身も拾えるよう、括弧はスキップせず
+                // 深さだけ追跡する。
+                parenDepth++;
+                i++;
+                expectSegment = true;
+                continue;
+            }
+
+            // Unknown token (operator, string start, etc.) — stop scanning this argument.
+            // 解釈できないトークンが来たら、このキーワード引数の走査を打ち切る。
+            return;
+        }
+    }
+
+    private static int SkipBalanced(string line, int start, char open, char close)
+    {
+        int depth = 0;
+        int i = start;
+        while (i < line.Length)
+        {
+            char c = line[i];
+            if (c == open)
+                depth++;
+            else if (c == close)
+            {
+                depth--;
+                if (depth <= 0)
+                    return i + 1;
+            }
+            i++;
+        }
+        return i;
+    }
+
+    private static bool IsCSharpIdentifierStart(char c) =>
+        c == '_' || c == '@' || char.IsLetter(c);
+
+    private static void AddTypeReferenceSegment(
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string segment,
+        int startInLine,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        string language)
+    {
+        if (segment.Length == 0 || IsIgnoredTypeReferenceSegment(language, segment))
+            return;
+
+        int column = startInLine + 1; // 1-based / 1始まり
+        var dedupeKey = $"{lineNumber}:{column}:type_reference:{segment}";
+        if (!seen.Add(dedupeKey))
+            return;
+
+        references.Add(new ReferenceRecord
+        {
+            FileId = fileId,
+            SymbolName = segment,
+            ReferenceKind = "type_reference",
             Line = lineNumber,
             Column = column,
             Context = context,
