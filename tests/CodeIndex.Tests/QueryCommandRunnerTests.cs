@@ -514,6 +514,50 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunLanguages_Json_SearchOnlyBucketsAdvertiseZeroSymbolAndGraphSupport()
+    {
+        // Search-only languages that intentionally live outside the Python / CSS extractors
+        // (Cython .pyx/.pxd, Sass .sass, Stylus .styl) must advertise
+        // symbol_extraction=false / graph_queries=false so AI clients can tell the difference
+        // between "indexed with symbols" and "indexed for search only".
+        // 意図的に Python / CSS 抽出器の対象外になっている search-only 言語
+        // （Cython の .pyx/.pxd、Sass の .sass、Stylus の .styl）は、
+        // symbol_extraction=false / graph_queries=false で広告しなければならない。
+        // こうしないと、AI クライアントが「シンボル付きインデックス」と「検索のみインデックス」を区別できない。
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var languages = document.RootElement.GetProperty("languages").EnumerateArray()
+            .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
+
+        foreach (var searchOnly in new[] { "cython", "sass", "stylus" })
+        {
+            Assert.True(languages.ContainsKey(searchOnly), $"expected '{searchOnly}' to be listed");
+            var entry = languages[searchOnly];
+            Assert.False(entry.GetProperty("symbol_extraction").GetBoolean(),
+                $"{searchOnly} must advertise symbol_extraction=false");
+            Assert.False(entry.GetProperty("graph_queries").GetBoolean(),
+                $"{searchOnly} must advertise graph_queries=false");
+        }
+
+        // Cython owns .pyx / .pxd exclusively; python keeps .py / .pyi / .pyw and Bazel filenames.
+        // Cython は .pyx / .pxd を専有し、python は .py / .pyi / .pyw と Bazel ファイル名を維持。
+        var cythonExts = languages["cython"].GetProperty("extensions").EnumerateArray()
+            .Select(ext => ext.GetString()).ToList();
+        Assert.Contains(".pyx", cythonExts);
+        Assert.Contains(".pxd", cythonExts);
+
+        var pythonExts = languages["python"].GetProperty("extensions").EnumerateArray()
+            .Select(ext => ext.GetString()).ToList();
+        Assert.DoesNotContain(".pyx", pythonExts);
+        Assert.DoesNotContain(".pxd", pythonExts);
+        Assert.Contains(".py", pythonExts);
+        Assert.Contains(".pyi", pythonExts);
+    }
+
+    [Fact]
     public void RunLanguages_HumanOutput_WideExtensionListSpillsOntoContinuationLine()
     {
         // The human-readable table must not let long extension lists (dockerfile / makefile /

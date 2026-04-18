@@ -501,7 +501,8 @@ The database reflects the working tree at the time of the last index. After swit
 
 | Language | Extensions | Symbols |
 |---|---|:---:|
-| Python | `.py`, `.pyi`, `.pyw`, `.pyx`, `.pxd`, `BUILD`, `BUILD.bazel`, `WORKSPACE`, `WORKSPACE.bazel` (Bazel Starlark) | yes |
+| Python | `.py`, `.pyi`, `.pyw`, `BUILD`, `BUILD.bazel`, `WORKSPACE`, `WORKSPACE.bazel` (Bazel Starlark) | yes |
+| Cython | `.pyx`, `.pxd` | -- |
 | JavaScript | `.js`, `.jsx`, `.cjs`, `.mjs` | yes |
 | TypeScript | `.ts`, `.tsx`, `.cts`, `.mts` | yes |
 | C# | `.cs` | yes |
@@ -1375,7 +1376,8 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 
 | 言語 | 拡張子 | シンボル |
 |---|---|:---:|
-| Python | `.py`, `.pyi`, `.pyw`, `.pyx`, `.pxd`, `BUILD`, `BUILD.bazel`, `WORKSPACE`, `WORKSPACE.bazel`（Bazel Starlark） | yes |
+| Python | `.py`, `.pyi`, `.pyw`, `BUILD`, `BUILD.bazel`, `WORKSPACE`, `WORKSPACE.bazel`（Bazel Starlark） | yes |
+| Cython | `.pyx`, `.pxd` | -- |
 | JavaScript | `.js`, `.jsx`, `.cjs`, `.mjs` | yes |
 | TypeScript | `.ts`, `.tsx`, `.cts`, `.mts` | yes |
 | C# | `.cs` | yes |

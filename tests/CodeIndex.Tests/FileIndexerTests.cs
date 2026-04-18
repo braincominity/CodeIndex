@@ -79,8 +79,8 @@ public class FileIndexerTests
     // Issue #189: additional extensions / 追加拡張子
     [InlineData("types.pyi", "python")]
     [InlineData("windowed.pyw", "python")]
-    [InlineData("module.pyx", "python")]
-    [InlineData("module.pxd", "python")]
+    [InlineData("module.pyx", "cython")]
+    [InlineData("module.pxd", "cython")]
     [InlineData("tasks.rake", "ruby")]
     [InlineData("mygem.gemspec", "ruby")]
     [InlineData("MyPod.podspec", "ruby")]
@@ -281,6 +281,16 @@ public class FileIndexerTests
         Assert.Equal("stylus", map[".styl"]);
         Assert.Equal("css", map[".scss"]);
         Assert.Equal("css", map[".less"]);
+
+        // Cython lives in its own bucket for the same reason: `cdef class` / `cpdef` / `cdef` are
+        // not parsed by the Python symbol extractor, so advertising `.pyx` / `.pxd` as `python`
+        // would claim `symbol_extraction=true` while emitting zero symbols.
+        // Cython も同様の理由で別バケット。`cdef class` / `cpdef` / `cdef` は Python の抽出器で
+        // 拾えないため、python として広告すると実際には 0 件しか出ない齟齬になる。
+        Assert.Equal("cython", map[".pyx"]);
+        Assert.Equal("cython", map[".pxd"]);
+        Assert.Equal("python", map[".py"]);
+        Assert.Equal("python", map[".pyi"]);
     }
 
     [Fact]
