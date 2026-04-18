@@ -7908,4 +7908,93 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "app-sidebar");
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "div");
     }
+
+    [Fact]
+    public void Extract_Html_CapturesAllSymbolsOnSameLine()
+    {
+        // Minified HTML or a single line with multiple landmark-bearing tags must
+        // produce one symbol per match, not only the winning pattern's first hit.
+        // Closes #215 codex review blocker.
+        // ミニファイされた HTML や 1 行に複数の landmark タグが入るケースでも、
+        // 勝ちパターンの 1 件ではなく各マッチごとにシンボルが出る必要がある。
+        var content = "<alpha-card id=\"first\"></alpha-card><beta-card id=\"second\"></beta-card>" +
+            "<script src=\"a.js\"></script><link rel=\"stylesheet\" href=\"b.css\">";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "alpha-card");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "beta-card");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "first");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "second");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "a.js");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "b.css");
+    }
+
+    [Fact]
+    public void Extract_Html_IgnoresSymbolsInsideComments()
+    {
+        // HTML comments must not produce phantom imports / classes / properties,
+        // including multi-line comments. Closes #215 codex review blocker.
+        // HTML コメント内のタグ類を phantom シンボルとして拾わないこと。複数行に
+        // またがるコメントでも同様。
+        var content = """
+            <!-- <script src="commented.js"></script> -->
+            <article id="real"></article>
+            <!--
+              <my-widget id="fake"></my-widget>
+              <link rel="stylesheet" href="also-commented.css">
+            -->
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "commented.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "also-commented.css");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "my-widget");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "fake");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "real");
+    }
+
+    [Fact]
+    public void Extract_Html_IgnoresSymbolsInsideScriptAndStyleBodies()
+    {
+        // Inline <script> body content is raw text per the HTML spec and must not
+        // leak symbols from template strings. <style> body text follows the same
+        // raw-text rule. Closes #215 codex review blocker.
+        // HTML 仕様上、<script> 本体は raw text であり、テンプレート文字列から
+        // 疑似シンボルを漏らしてはいけない。<style> 本体も同じ raw text 規則。
+        var content = """
+            <script>
+              const tpl = '<inline-card id="inline-id"></inline-card>';
+            </script>
+            <style>
+              .rule { background: url('<bg-tag id="bg">'); }
+            </style>
+            <section id="visible"></section>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "inline-card");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "inline-id");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "bg-tag");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "bg");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "visible");
+    }
+
+    [Fact]
+    public void Extract_Html_StillCapturesExternalScriptSrcEvenWhenBodyHasRawText()
+    {
+        // The masker must preserve the <script src="..."> opening tag so external
+        // scripts are still indexed, while raw-text children stay masked.
+        // raw-text の子要素はマスクしつつ、<script src="..."> 開始タグは保ち、
+        // 外部 script が引き続き import として索引されることを固定する。
+        var content = "<script src=\"app.js\">const x = '<evil-tag id=\"evil\"></evil-tag>';</script>";
+
+        var symbols = SymbolExtractor.Extract(1, "html", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "app.js");
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "evil-tag");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "evil");
+    }
 }
