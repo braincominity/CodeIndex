@@ -2440,6 +2440,62 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetFileDependencies_CSharpAttributeAmbiguityCountsSameFileDuplicateClassDefinitions()
+    {
+        // issue #293 follow-up: when a single source file defines TWO same-named
+        // class-like attribute targets under different namespaces (idiomatic C#
+        // with multiple `namespace { ... }` blocks in one .cs file), the metadata
+        // edge must be dropped as ambiguous just like the multi-file case. A
+        // path-level count (COUNT DISTINCT target_path) would see `count = 1`
+        // because both definitions live in the same file, so the previous
+        // target_ambiguity CTE falsely treated the target as unambiguous. The
+        // rewritten CTE joins back through files + symbols so it counts at
+        // symbol-identity level and correctly sees `count = 2`.
+        // issue #293 補足: 1 つの .cs ファイルに別名前空間で同名 class-like が 2 つ
+        // 定義されている場合 (C# でよくある `namespace { ... }` 複数ブロック形式)
+        // でも、複数ファイルのときと同様に metadata edge は ambiguous として落とす
+        // 必要がある。path 単位 (COUNT DISTINCT target_path) だと両方が同じ file に
+        // あるため count=1 となり、従来の target_ambiguity では誤って一意扱いされた。
+        // 書き直した CTE は files + symbols に JOIN し直すため、symbol identity 単位
+        // で count=2 を正しく検出する。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            using System;
+
+            namespace A
+            {
+                [AttributeUsage(AttributeTargets.Class)]
+                public sealed class MyAuditAttribute : Attribute
+                {
+                }
+            }
+
+            namespace B
+            {
+                [AttributeUsage(AttributeTargets.Class)]
+                public sealed class MyAuditAttribute : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var dependencies = _reader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        // Even though both MyAuditAttribute definitions live in the same file, the
+        // metadata reference is still ambiguous and must not produce a deps edge.
+        // 同じファイル内にある 2 つの MyAuditAttribute 定義でも metadata 参照は
+        // 曖昧扱いのため、deps edge を出してはならない。
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/MyAuditAttribute.cs");
+    }
+
+    [Fact]
     public void GetFileDependencies_CSharpAttributeDoesNotFanOutWhenMultipleSameNameAttributeClasses()
     {
         // issue #293 follow-up: if multiple same-named attribute classes exist
@@ -2808,6 +2864,66 @@ public class DbReaderTests : IDisposable
         var result = _reader.AnalyzeImpact("MyAuditAttribute", maxDepth: 3, limit: 20, lang: "csharp");
 
         Assert.Contains(result.FileImpacts, f => f.SourcePath == "src/Svc.cs" && f.TargetPath == "src/MyAuditAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencyHints_MetadataBypassAmbiguityGuard_CountsSameFileDuplicateDefinitions()
+    {
+        // issue #293 follow-up: the `impact` metadata bypass ambiguity guard must
+        // count class-like definitions at symbol-identity level rather than at path
+        // level. A single .cs file with two same-named `MyAuditAttribute` class
+        // declarations under different namespaces is still ambiguous — metadata
+        // reference rows only keep the short name `MyAudit` and cannot resolve
+        // between `A.MyAuditAttribute` and `B.MyAuditAttribute`. Previously the
+        // guard counted `SELECT DISTINCT f.path` so both definitions collapsed to
+        // 1 and the bypass falsely fired, mis-attributing `[MyAudit]` consumers to
+        // the impact of a specific target when the true resolution is unknown.
+        // issue #293 補足: `impact` の metadata bypass 曖昧性ガードは、path 単位
+        // ではなく symbol identity 単位で class-like 定義を数える必要がある。1 つの
+        // .cs ファイル内に別名前空間で `MyAuditAttribute` が 2 つ定義されていても、
+        // metadata 参照は短縮名 `MyAudit` しか持たず `A.MyAuditAttribute` と
+        // `B.MyAuditAttribute` を区別できないため依然として曖昧。従来は
+        // `SELECT DISTINCT f.path` で数えていたため両定義が 1 に潰れ、bypass が
+        // 誤って発動し `[MyAudit]` consumer を特定 target の影響範囲へ誤帰属させていた。
+        InsertIndexedFile("src/MyAuditAttribute.cs", "csharp",
+            """
+            using System;
+
+            namespace A
+            {
+                [AttributeUsage(AttributeTargets.Class)]
+                public sealed class MyAuditAttribute : Attribute
+                {
+                }
+            }
+
+            namespace B
+            {
+                [AttributeUsage(AttributeTargets.Class)]
+                public sealed class MyAuditAttribute : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyAudit]
+            public class Svc
+            {
+            }
+            """);
+
+        var result = _reader.AnalyzeImpact("MyAuditAttribute", maxDepth: 3, limit: 20, lang: "csharp");
+
+        // Two same-named class-like definitions in one file still make the target
+        // ambiguous, so the `[MyAudit]` consumer must not surface as a file-level
+        // impact hint — the metadata evidence bypass should fall through to the
+        // normal structured-evidence check, which `[MyAudit]`-only consumers fail.
+        // 同じファイル内の 2 つの同名 class-like 定義でも target は曖昧なので、
+        // `[MyAudit]` consumer は file-level impact hint に現れてはいけない。
+        // metadata evidence bypass は通常の structured-evidence 判定へフォール
+        // スルーし、pure `[MyAudit]` consumer はそこで落ちる。
+        Assert.DoesNotContain(result.FileImpacts, f => f.SourcePath == "src/Svc.cs" && f.TargetPath == "src/MyAuditAttribute.cs");
     }
 
     [Fact]

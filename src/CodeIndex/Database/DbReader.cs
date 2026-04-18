@@ -1934,9 +1934,20 @@ public partial class DbReader
             return false;
         using var cmd = _conn.CreateCommand();
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "metadataAmbigLang");
+        // Count at symbol-identity level (path + line + name) rather than at path
+        // level, so two same-named class-like definitions in the same source file
+        // (e.g. `namespace A { class MyAuditAttribute { } } namespace B { class
+        // MyAuditAttribute { } }` both in one .cs file) still register as ambiguous.
+        // DISTINCT f.path alone would collapse them to 1 and falsely trigger the
+        // metadata bypass.
+        // 曖昧性は path 単位ではなく symbol identity 単位 (path + line + name) で数える。
+        // 同じ .cs ファイル内に別名前空間で同名の class-like が 2 つあるケース
+        // (例: `namespace A { class MyAuditAttribute { } } namespace B { class
+        // MyAuditAttribute { } }`) でも ambiguity を 2 として検出できる。DISTINCT
+        // f.path のままだと 1 に潰れ、metadata bypass が誤って有効化される。
         var sql = $@"
             SELECT COUNT(*) FROM (
-                SELECT DISTINCT f.path
+                SELECT DISTINCT f.path, s.line, s.name
                 FROM symbols s
                 JOIN files f ON s.file_id = f.id
                 WHERE s.name = @metadataAmbigName COLLATE NOCASE
@@ -2690,19 +2701,37 @@ public partial class DbReader
                   AND lrp.symbol_name NOT LIKE '%Attribute'
             ),
             target_ambiguity AS (
-                -- Count distinct class-like target files per (target_lang, symbol_name).
-                -- Metadata references ([Foo] / @Foo) must not fan out to multiple
-                -- same-name attribute / annotation class definitions; when ambiguous,
-                -- drop the metadata edge and let `impact` / `references` guide the user.
-                -- (target_lang, symbol_name) 単位で class 系 target ファイル数を数える。
-                -- metadata 参照 ([Foo] / @Foo) は同名 attribute / annotation クラスが
-                -- 複数あるとき fan-out させず、その metadata エッジを落とす。
-                SELECT target_lang,
-                       symbol_name,
-                       COUNT(DISTINCT target_path) AS class_like_target_count
-                FROM target_files
-                WHERE has_class_like_kind = 1
-                GROUP BY target_lang, symbol_name
+                -- Count class-like definitions at symbol-identity level rather than
+                -- file level. Two same-named class-like definitions in the same file
+                -- (e.g. `namespace A { class FooAttribute { } } namespace B { class
+                -- FooAttribute { } }` both inside one .cs file) collapse to a single
+                -- target_files row because target_files is GROUPed by dst.path, so
+                -- COUNT(DISTINCT target_path) alone would see count=1 and falsely
+                -- treat the metadata target as unambiguous. Joining target_files back
+                -- through files + symbols recovers the per-definition row count while
+                -- still inheriting target_files' lang / path / graph-supported scope
+                -- (since the join only keeps rows whose (path, lang, name) already
+                -- appear in target_files).
+                -- class-like 定義は path 単位ではなく symbol identity 単位で数える。
+                -- 同じ .cs ファイル内に別名前空間で同名 class-like が 2 つあるケースは
+                -- target_files (dst.path で GROUP BY) 上では 1 行に潰れており、
+                -- COUNT(DISTINCT target_path) だけでは count=1 となり metadata target
+                -- が一意と誤判定される。target_files から files + symbols に JOIN し直す
+                -- ことで定義単位の件数を復元する。JOIN が target_files 既存行にしか
+                -- 当たらないため、lang / path / graph-supported スコープはそのまま継承。
+                SELECT tf.target_lang,
+                       tf.symbol_name,
+                       COUNT(*) AS class_like_target_count
+                FROM target_files tf
+                JOIN files dst
+                  ON dst.path = tf.target_path
+                 AND dst.lang = tf.target_lang
+                JOIN symbols s
+                  ON s.file_id = dst.id
+                 AND s.name = tf.symbol_name
+                 AND s.kind IN ('class','struct','interface')
+                WHERE tf.has_class_like_kind = 1
+                GROUP BY tf.target_lang, tf.symbol_name
             ),
             edges AS (
                 SELECT snc.source_path,
