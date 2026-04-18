@@ -3395,6 +3395,31 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetExcerptAndOutline_RoundTripPathContainingBackslash()
+    {
+        // #191: POSIX filenames containing '\' must not be silently rewritten to '/'.
+        // The index should store the literal path, and excerpt/outline must find it
+        // when the user supplies the same literal path.
+        // #191: POSIX の '\' を含むファイル名は '/' に書き換えてはいけない。
+        // 保存と検索の両方でリテラルなパスをそのまま使い、excerpt/outline で見つかることを確認する。
+        InsertIndexedFile("back\\slash.py", "python", "def hu(): pass\n");
+
+        var excerpt = _reader.GetExcerpt("back\\slash.py", 1, 1);
+        Assert.NotNull(excerpt);
+        Assert.Equal("back\\slash.py", excerpt!.Path);
+        Assert.Contains("def hu(): pass", excerpt.Content);
+
+        var outline = _reader.GetOutline("back\\slash.py");
+        Assert.NotNull(outline);
+        Assert.Equal("back\\slash.py", outline!.Path);
+
+        // The mangled form must NOT match — otherwise the fix would be a no-op.
+        // 誤った書き換え形では見つからないことを確認する（no-op 化の検出）。
+        Assert.Null(_reader.GetExcerpt("back/slash.py", 1, 1));
+        Assert.Null(_reader.GetOutline("back/slash.py"));
+    }
+
+    [Fact]
     public void GetOutline_NullStartEndLine_FallsBackToLine()
     {
         // Insert a file with a symbol that has NULL start_line/end_line (#46)
@@ -3832,6 +3857,334 @@ public class DbReaderTests : IDisposable
 
         var property = Assert.Single(unused, symbol => symbol.Name == "FullName");
         Assert.Equal("reflection_or_config_suspect", property.UnusedBucket);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_InlineAttributeWithBracketInString_DoesNotLeakToAdjacentProperty()
+    {
+        // Regression for #375 — `[` or `]` inside an attribute string argument must not
+        // confuse the bracket-depth scanner. Without the fix, the adjacent plain property
+        // below inherited the reflection attribute and flipped into the wrong bucket.
+        // #375 回帰: 属性文字列引数内の `[` / `]` が bracket-depth スキャナを乱すと、
+        // 直下の属性なしプロパティが誤って reflection 属性を継承して分類が狂う。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_string_bracket_fixture.cs",
+            Lang = "csharp",
+            Size = 320,
+            Lines = 12,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 10,
+                Content = """
+                using System.Text.Json.Serialization;
+
+                public class Target
+                {
+                    [JsonPropertyName("a[")] public string BuggyName { get; set; } = "";
+
+                    public string PlainName { get; set; } = "";
+                }
+                """,
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "Target",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 8,
+                Signature = "public class Target",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "BuggyName",
+                Line = 5,
+                StartLine = 5,
+                EndLine = 5,
+                Signature = "[JsonPropertyName(\"a[\")] public string BuggyName { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "PlainName",
+                Line = 7,
+                StartLine = 7,
+                EndLine = 7,
+                Signature = "public string PlainName { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["reflection_string_bracket_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        var buggy = Assert.Single(unused, symbol => symbol.Name == "BuggyName");
+        Assert.Equal("reflection_or_config_suspect", buggy.UnusedBucket);
+
+        var plain = Assert.Single(unused, symbol => symbol.Name == "PlainName");
+        Assert.Equal("public_or_exported_no_refs", plain.UnusedBucket);
+    }
+
+    [Theory]
+    [InlineData("[JsonPropertyName(\"a[\")] public string Name { get; set; } = \"\";")]
+    [InlineData("[JsonPropertyName(\"a]b\")] public string Name { get; set; } = \"\";")]
+    [InlineData("[JsonPropertyName(\"]\")] public string Name { get; set; } = \"\";")]
+    [InlineData("[JsonPropertyName(@\"a[\")] public string Name { get; set; } = \"\";")]
+    [InlineData("[JsonPropertyName(\"\"\"a[\"\"\")] public string Name { get; set; } = \"\";")]
+    [InlineData("[JsonPropertyName($\"\"\"a[\"\"\")] public string Name { get; set; } = \"\";")]
+    [InlineData("[JsonPropertyName($$\"\"\"a[\"\"\")] public string Name { get; set; } = \"\";")]
+    public void GetUnusedSymbols_InlineReflectionAttributeWithBracketInString_IsStillSuspect(string anchor)
+    {
+        // The inline-declaration line itself must still be recognized as having
+        // both an attribute and a declaration, regardless of `[` / `]` in string args.
+        // 属性文字列中の `[` / `]` によらず、インライン宣言行自身は
+        // 「属性 + 宣言が同じ行にある」と認識されねばならない。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = $"src/reflection_string_bracket_inline_{anchor.GetHashCode():x8}.cs",
+            Lang = "csharp",
+            Size = 200,
+            Lines = 8,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 7,
+                Content = $$"""
+                using System.Text.Json.Serialization;
+
+                public class Target
+                {
+                    {{anchor}}
+                }
+                """,
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "Target",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 6,
+                Signature = "public class Target",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "Name",
+                Line = 5,
+                StartLine = 5,
+                EndLine = 5,
+                Signature = anchor,
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: [$"reflection_string_bracket_inline_{anchor.GetHashCode():x8}.cs"],
+            excludePathPatterns: null, excludeTests: false);
+
+        var property = Assert.Single(unused, symbol => symbol.Name == "Name");
+        Assert.Equal("reflection_or_config_suspect", property.UnusedBucket);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_StandaloneAttributeWithBracketInString_DoesNotLeakToAdjacentDeclaration()
+    {
+        // Regression extension for #375 — when a standalone attribute line
+        // (attribute on its own line, declaration on the next line) contains `[`
+        // or `]` inside a string literal, the upward scan must not treat that as
+        // an extra bracket and swallow the previous member's attribute block.
+        // #375 の追加回帰: 属性単独行 (属性と宣言が別行) の文字列リテラル内の `[` / `]` が
+        // 上方スキャンで bracket depth として誤算されると、直前メンバーの属性ブロックまで
+        // 吸い込まれて無関係なシンボルに属性が漏れ出す。これを防ぐ。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_standalone_bracket_fixture.cs",
+            Lang = "csharp",
+            Size = 400,
+            Lines = 14,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 12,
+                Content = "using System;\nusing System.Text.Json.Serialization;\n\npublic class Target\n{\n    [JsonPropertyName(\"name\")]\n    public string A { get; set; } = \"\";\n\n    [Obsolete(\"]\")]\n    public string B { get; set; } = \"\";\n}\n",
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "Target",
+                Line = 4,
+                StartLine = 4,
+                EndLine = 11,
+                Signature = "public class Target",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "A",
+                Line = 7,
+                StartLine = 6,
+                EndLine = 7,
+                Signature = "public string A { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "B",
+                Line = 10,
+                StartLine = 9,
+                EndLine = 10,
+                Signature = "public string B { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["reflection_standalone_bracket_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        // A sits under a real reflection attribute → suspect.
+        // B sits under [Obsolete("]")], which is NOT a reflection attribute, so B
+        // must not inherit A's reflection attribute through the bracket-leak path.
+        // A は本物の reflection 属性の下なので suspect。
+        // B は reflection 属性ではない `[Obsolete("]")]` の下なので、bracket leak で
+        // A の reflection 属性を継承してはならない。
+        var a = Assert.Single(unused, symbol => symbol.Name == "A");
+        Assert.Equal("reflection_or_config_suspect", a.UnusedBucket);
+
+        var b = Assert.Single(unused, symbol => symbol.Name == "B");
+        Assert.Equal("public_or_exported_no_refs", b.UnusedBucket);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_InlineRawInterpolatedAttributeWithBracketInString_DoesNotLeakToAdjacentProperty()
+    {
+        // Regression extension for #375 — raw-interpolated string literals
+        // (`$"""..."""`) inside an inline attribute must not escape bracket-depth
+        // sanitization either, or the adjacent plain property re-inherits the
+        // reflection attribute context.
+        // #375 の追加回帰: raw 補間文字列 (`$"""..."""`) を含むインライン属性でも、
+        // 直下の属性なしプロパティに reflection 属性コンテキストが漏れ出さないこと。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reflection_raw_interpolated_fixture.cs",
+            Lang = "csharp",
+            Size = 340,
+            Lines = 12,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 10,
+                Content = "using System.Text.Json.Serialization;\n\npublic class Target\n{\n    [JsonPropertyName($\"\"\"a[\"\"\")] public string BuggyName { get; set; } = \"\";\n\n    public string PlainName { get; set; } = \"\";\n}\n",
+            }
+        ]);
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "Target",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 8,
+                Signature = "public class Target",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "BuggyName",
+                Line = 5,
+                StartLine = 5,
+                EndLine = 5,
+                Signature = "[JsonPropertyName($\"\"\"a[\"\"\")] public string BuggyName { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "PlainName",
+                Line = 7,
+                StartLine = 7,
+                EndLine = 7,
+                Signature = "public string PlainName { get; set; } = \"\";",
+                Visibility = "public",
+                ContainerKind = "class",
+                ContainerName = "Target",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: null, lang: "csharp",
+            pathPatterns: ["reflection_raw_interpolated_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        var buggy = Assert.Single(unused, symbol => symbol.Name == "BuggyName");
+        Assert.Equal("reflection_or_config_suspect", buggy.UnusedBucket);
+
+        var plain = Assert.Single(unused, symbol => symbol.Name == "PlainName");
+        Assert.Equal("public_or_exported_no_refs", plain.UnusedBucket);
     }
 
     [Fact]
@@ -4867,5 +5220,201 @@ public class DbReaderTests : IDisposable
         Assert.True(result.SnippetTruncated);
         Assert.Contains("target", result.Snippet);
         Assert.True(result.Snippet.Length <= 96);
+    }
+
+    // Issue #203 regression: --since thresholds with a time-of-day component used to silently
+    // return zero rows because `@since` was bound via ToString("O") (yyyy-MM-ddTHH:mm:ss.fffffffZ)
+    // while files.modified is stored by Microsoft.Data.Sqlite as "yyyy-MM-dd HH:mm:ss.FFFFFFF"
+    // (space separator, no T, no Z). SQLite compares TEXT lexicographically, and "T" (0x54) is
+    // greater than " " (0x20) at position 10, so `f.modified >= @since` was always false for
+    // T-formatted thresholds regardless of actual temporal ordering. These tests bind DateTimes
+    // straight through AddWithValue so both sides share the same serialization.
+    // Issue #203 回帰: --since に時刻成分を渡すと無条件に0件だったバグの再発防止。
+    // `@since` は ToString("O") で T 区切り + Z 付きに整形されていた一方、`files.modified` は
+    // Microsoft.Data.Sqlite の既定 "yyyy-MM-dd HH:mm:ss.FFFFFFF"（空白区切り、T や Z なし）で
+    // 保存されており、位置10の文字比較（スペース 0x20 vs T 0x54）で必ず保存値 < @since に
+    // なっていた。DateTime をそのままバインドすれば書き込み側と完全に同じ文字列になる。
+
+    [Fact]
+    public void ListFiles_WithTimeOfDaySince_IncludesNewerFiles()
+    {
+        InsertIndexedFile(
+            "src/since203_new.py",
+            "python",
+            "def new_func():\n    return 1\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/since203_old.py",
+            "python",
+            "def old_func():\n    return 0\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        // Threshold 1h before the newer file; the newer file must be included.
+        // より新しいファイルの1時間前を閾値にした場合、その新しいファイルが含まれるはず。
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+        var results = _reader.ListFiles(
+            pathPatterns: new[] { "src/since203_" },
+            since: since);
+
+        Assert.Contains(results, r => r.Path == "src/since203_new.py");
+        Assert.DoesNotContain(results, r => r.Path == "src/since203_old.py");
+    }
+
+    [Fact]
+    public void CountListFiles_WithTimeOfDaySince_CountsOnlyNewerFiles()
+    {
+        InsertIndexedFile(
+            "src/count203_new.py",
+            "python",
+            "def new_func():\n    return 1\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/count203_old.py",
+            "python",
+            "def old_func():\n    return 0\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+        var summary = _reader.CountListFiles(
+            pathPatterns: new[] { "src/count203_" },
+            since: since);
+
+        Assert.Equal(1, summary.Count);
+    }
+
+    [Fact]
+    public void SearchSymbols_WithTimeOfDaySince_IncludesNewerFiles()
+    {
+        InsertIndexedFile(
+            "src/sym_new.py",
+            "python",
+            "def sym_only_new():\n    return 1\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/sym_old.py",
+            "python",
+            "def sym_only_old():\n    return 0\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+
+        var newHits = _reader.SearchSymbols("sym_only_new", since: since);
+        Assert.Single(newHits, s => s.Path == "src/sym_new.py");
+
+        var oldHits = _reader.SearchSymbols("sym_only_old", since: since);
+        Assert.Empty(oldHits);
+    }
+
+    [Fact]
+    public void Search_WithTimeOfDaySince_IncludesNewerFiles()
+    {
+        InsertIndexedFile(
+            "src/search_new.py",
+            "python",
+            "def search_only_new():\n    return 'needle_203'\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/search_old.py",
+            "python",
+            "def search_only_old():\n    return 'needle_203'\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+        var results = _reader.Search("needle_203", since: since);
+
+        Assert.Contains(results, r => r.Path == "src/search_new.py");
+        Assert.DoesNotContain(results, r => r.Path == "src/search_old.py");
+    }
+
+    [Fact]
+    public void ListFiles_WithTimeOfDaySince_ExcludesFilesBeforeThreshold()
+    {
+        InsertIndexedFile(
+            "src/excl_only.py",
+            "python",
+            "def excl():\n    return 1\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+
+        // Threshold 1h after the file; must exclude everything.
+        // ファイルより1時間後を閾値にした場合は除外されるはず。
+        var since = new DateTime(2025, 6, 20, 23, 0, 0, DateTimeKind.Utc);
+        var results = _reader.ListFiles(pathPatterns: new[] { "src/excl_only.py" }, since: since);
+
+        Assert.Empty(results);
+    }
+
+    // Count-only SQL paths (search --count / symbols --count / definition --count) are compiled
+    // independently from the list paths above, so they need their own regressions against the
+    // ToString("O") vs DateTimeSqliteDefaultFormat mismatch. Without these, a future refactor that
+    // reintroduces ToString("O") on any single count binding would pass the list-path tests.
+    // `--count` 経路の SQL は一覧経路とは別に組み立てられているため、`ToString("O")` と
+    // DateTimeSqliteDefaultFormat の非対称が再発しても一覧側テストだけでは検出できない。
+    // カウント経路専用の回帰テストで各 bind を独立に守る。
+
+    [Fact]
+    public void CountSearchResults_WithTimeOfDaySince_CountsOnlyNewerChunks()
+    {
+        InsertIndexedFile(
+            "src/countsearch_new.py",
+            "python",
+            "def countsearch_only_new():\n    return 'needle_203_count'\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/countsearch_old.py",
+            "python",
+            "def countsearch_only_old():\n    return 'needle_203_count'\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+        var summary = _reader.CountSearchResults("needle_203_count", since: since);
+
+        Assert.Equal(1, summary.FileCount);
+        Assert.True(summary.Count >= 1);
+    }
+
+    [Fact]
+    public void CountSearchSymbolsTotal_WithTimeOfDaySince_CountsOnlyNewerSymbols()
+    {
+        InsertIndexedFile(
+            "src/countsym_new.py",
+            "python",
+            "def countsym_only_new():\n    return 1\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/countsym_old.py",
+            "python",
+            "def countsym_only_old():\n    return 0\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+
+        var newSummary = _reader.CountSearchSymbolsTotal("countsym_only_new", since: since);
+        Assert.Equal(1, newSummary.Count);
+
+        var oldSummary = _reader.CountSearchSymbolsTotal("countsym_only_old", since: since);
+        Assert.Equal(0, oldSummary.Count);
+    }
+
+    [Fact]
+    public void CountDefinitionsTotal_WithTimeOfDaySince_CountsOnlyNewerDefinitions()
+    {
+        InsertIndexedFile(
+            "src/countdef_new.py",
+            "python",
+            "def countdef_only_new():\n    return 1\n",
+            modified: new DateTime(2025, 6, 20, 22, 0, 0, DateTimeKind.Utc));
+        InsertIndexedFile(
+            "src/countdef_old.py",
+            "python",
+            "def countdef_only_old():\n    return 0\n",
+            modified: new DateTime(2025, 6, 20, 10, 0, 0, DateTimeKind.Utc));
+
+        var since = new DateTime(2025, 6, 20, 21, 0, 0, DateTimeKind.Utc);
+
+        var newSummary = _reader.CountDefinitionsTotal("countdef_only_new", since: since);
+        Assert.Equal(1, newSummary.Count);
+
+        var oldSummary = _reader.CountDefinitionsTotal("countdef_only_old", since: since);
+        Assert.Equal(0, oldSummary.Count);
     }
 }
