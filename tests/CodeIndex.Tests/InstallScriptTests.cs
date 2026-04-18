@@ -413,9 +413,76 @@ public sealed class InstallScriptTests : IDisposable
 
         Assert.Equal(1, exitCode);
         Assert.Contains("Fetching latest release version", stdout);
-        Assert.Contains("GitHub API returned HTTP 403 while fetching the latest release", stderr);
+        Assert.Contains("GitHub API returned HTTP 403 while fetching", stderr);
+        Assert.Contains("/releases/latest", stderr);
         Assert.Contains("bash ./install.sh vX.Y.Z", stderr);
+        Assert.Contains("CDIDX_GITHUB_API_BASE_URL", stderr);
         Assert.Contains("CONNECT tunnel failed, response 403", stderr);
+    }
+
+    [Fact]
+    public void DownloadAndInstall_ForbiddenAssetDownload_PrintsAllowListHint()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "forbidden_asset_target");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            VERSION="v1.2.3"
+            OS_NAME="linux"
+            ARCH_NAME="x64"
+            RID="linux-x64"
+
+            curl() {
+                local output_path=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o)
+                            output_path="$2"
+                            shift 2
+                            ;;
+                        -w)
+                            shift 2
+                            ;;
+                        *)
+                            shift
+                            ;;
+                    esac
+                done
+
+                : > "$output_path"
+                printf '403'
+                return 0
+            }
+
+            download_status=0
+            if ( download_and_install ); then
+                echo "UNEXPECTED_SUCCESS"
+            else
+                download_status=$?
+            fi
+
+            echo "DOWNLOAD_STATUS:$download_status"
+            [ -e "$INSTALL_DIR/cdidx" ] && echo "CDIDX_PRESENT" || echo "CDIDX_MISSING"
+            [ -e "$INSTALL_DIR/version.json" ] && echo "VERSION_PRESENT" || echo "VERSION_MISSING"
+            [ -e "$INSTALL_DIR/libe_sqlite3.so" ] && echo "LIB_PRESENT" || echo "LIB_MISSING"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("UNEXPECTED_SUCCESS", stdout);
+        Assert.Contains("DOWNLOAD_STATUS:1", stdout);
+        Assert.Contains("CDIDX_MISSING", stdout);
+        Assert.Contains("VERSION_MISSING", stdout);
+        Assert.Contains("LIB_MISSING", stdout);
+        Assert.Contains("HTTP 403", stderr);
+        Assert.Contains("allow-list at least one artifact host path", stderr);
     }
 
     [Fact]
