@@ -192,7 +192,12 @@ public class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("--focus-column requires a positive integer", stderr);
+            // The recognized-option guard in TryReadRawOptionValue short-circuits `--focus-column --json`
+            // as a missing-value case before TryParsePositiveInt runs, so the error is "requires a value"
+            // rather than the older TryParsePositiveInt-level "requires a positive integer" message.
+            // `--focus-column --json` は TryReadRawOptionValue の既知オプション判定で TryParsePositiveInt
+            // 実行前に値欠如として短絡するため、旧メッセージではなく "requires a value" となる。
+            Assert.Contains("--focus-column requires a value", stderr);
         }
         finally
         {
@@ -213,7 +218,10 @@ public class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("--max-line-width requires a positive integer", stderr);
+            // Missing-value guard short-circuits before TryParsePositiveInt; see
+            // RunExcerpt_RejectsMissingFocusColumnValue for the matching contract note.
+            // TryParsePositiveInt より前で値欠如として短絡する。契約の詳細は上記テスト参照。
+            Assert.Contains("--max-line-width requires a value", stderr);
         }
         finally
         {
@@ -234,7 +242,10 @@ public class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("--max-line-width requires a positive integer", stderr);
+            // Missing-value guard short-circuits before TryParsePositiveInt; see
+            // RunExcerpt_RejectsMissingFocusColumnValue for the matching contract note.
+            // TryParsePositiveInt より前で値欠如として短絡する。契約の詳細は上記テスト参照。
+            Assert.Contains("--max-line-width requires a value", stderr);
         }
         finally
         {
@@ -861,6 +872,259 @@ public class QueryCommandRunnerTests
             Assert.Contains($"got '{value}'", stderr);
             Assert.Contains("Hint: fix the invalid or missing option value", stderr);
             Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    // Regression lock for #184: when a value-taking option is followed by the next recognized
+    // `--flag` token (e.g. `--limit --lang rust`), the parser must NOT consume the next flag as
+    // this option's value. Previously `--limit --lang rust` silently stole `--lang` as the
+    // `--limit` value, failed TryParsePositiveInt, and surfaced a confusing error — while
+    // `--lang` itself was dropped. Now the parser detects the recognized-option token and
+    // reports "requires a value" cleanly, matching the contract that a missing value fails
+    // closed instead of swallowing neighboring flags.
+    // #184 の回帰ロック: value-taking オプションの直後に別の `--flag` が来た場合
+    // （例: `--limit --lang rust`）、パーサはその次のフラグを値として取り込んではならない。
+    // 以前は `--limit --lang rust` が silent に `--lang` を `--limit` の値として奪っており、
+    // TryParsePositiveInt が失敗して分かりにくいエラーが出る一方で `--lang` も落ちていた。
+    // 今は recognized-option token を検知して "requires a value" でクリーンに失敗させ、値欠落は
+    // 黙って隣接フラグを飲み込まず fail-close する、という契約に合わせる。
+    [Theory]
+    [InlineData(new[] { "search", "hello", "--limit", "--lang", "rust" }, "--limit requires a value.")]
+    [InlineData(new[] { "search", "hello", "--lang", "--limit", "5" }, "--lang requires a value.")]
+    [InlineData(new[] { "search", "hello", "--snippet-lines", "--limit", "5" }, "--snippet-lines requires a value.")]
+    [InlineData(new[] { "search", "hello", "--max-line-width", "--limit", "5" }, "--max-line-width requires a value.")]
+    [InlineData(new[] { "symbols", "hello", "--kind", "--lang", "rust" }, "--kind requires a value.")]
+    [InlineData(new[] { "impact", "hello", "--depth", "--lang", "rust" }, "--depth requires a value.")]
+    public void QueryEntrypoints_RecognizedOptionAsValueFailsClosed_Issue184(string[] commandAndArgs, string expectedFragment)
+    {
+        var command = commandAndArgs[0];
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_issue184_{command}_{expectedFragment.GetHashCode():x}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Issue184.cs",
+                "csharp",
+                "namespace Issue184; public class T { public void M() { } }");
+            MarkGraphAndFoldReady(dbPath);
+
+            var args = commandAndArgs.Skip(1).Concat(new[] { "--db", dbPath, "--json" }).ToArray();
+            var (exitCode, stdout, stderr) = CaptureConsole(() => command switch
+            {
+                "search" => QueryCommandRunner.RunSearch(args, _jsonOptions),
+                "symbols" => QueryCommandRunner.RunSymbols(args, _jsonOptions),
+                "impact" => QueryCommandRunner.RunImpact(args, _jsonOptions),
+                _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+            });
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains(expectedFragment, stderr);
+            Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    // Regression lock for #184: non-repeatable value-taking options specified more than once
+    // (e.g. `--db /A --db /B`, `--limit 5 --limit 10`) must emit a stderr warning so the
+    // override is visible. The last value wins (backward compatible), but users and AI callers
+    // can spot a copy/paste or scripted mistake instead of the previous silent take-last.
+    // `--top` is canonicalized to `--limit`, so `--limit 5 --top 10` also triggers.
+    // Repeatable options (`--path`, `--exclude-path`, `--name`) must NOT warn.
+    // #184 の回帰ロック: 非 repeatable な value-taking オプションが 2 回以上指定された場合
+    // （例: `--db /A --db /B`、`--limit 5 --limit 10`）、上書きを stderr に警告する。最後の値が
+    // 採用されるのは後方互換だが、従来の silent な take-last ではスクリプトやコピペのミスに
+    // ユーザーや AI 呼び出し側が気付けない。`--top` は `--limit` と canonical 共有。repeatable
+    // な `--path` / `--exclude-path` / `--name` は警告しない。
+    [Fact]
+    public void QueryEntrypoints_DuplicateSingleValueOptionsWarn_Issue184()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue184_dup_single_value");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Issue184.cs",
+                "csharp",
+                "namespace Issue184; public class T { public void M() { } }");
+
+            // Warnings must fire even when the command itself returns zero results (NotFound);
+            // the duplicate flag warning is an argv-parsing concern, not a result-set concern.
+            // NotFound 等のゼロ件応答でも warn は出るべき。重複フラグは argv 解析段階の関心事で、
+            // 検索結果の有無とは独立している。
+
+            // --limit appears twice with different values: last value wins, warning emitted.
+            var (exitLimit, _, stderrLimit) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Issue184", "--db", dbPath, "--json", "--limit", "5", "--limit", "10"], _jsonOptions));
+            Assert.NotEqual(CommandExitCodes.UsageError, exitLimit);
+            Assert.Contains("Warning: --limit specified more than once; using the last value '10'.", stderrLimit);
+
+            // --top is canonicalized to --limit, so `--limit 5 --top 10` also warns.
+            var (exitTop, _, stderrTop) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Issue184", "--db", dbPath, "--json", "--limit", "5", "--top", "10"], _jsonOptions));
+            Assert.NotEqual(CommandExitCodes.UsageError, exitTop);
+            Assert.Contains("Warning: --limit specified more than once; using the last value '10'.", stderrTop);
+
+            // Single --limit must NOT warn.
+            var (exitSingle, _, stderrSingle) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Issue184", "--db", dbPath, "--json", "--limit", "10"], _jsonOptions));
+            Assert.NotEqual(CommandExitCodes.UsageError, exitSingle);
+            Assert.DoesNotContain("specified more than once", stderrSingle);
+
+            // Repeatable --path must NOT warn on repetition.
+            var (exitPath, _, stderrPath) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Issue184", "--db", dbPath, "--json", "--path", "src/**", "--path", "tests/**"], _jsonOptions));
+            Assert.NotEqual(CommandExitCodes.UsageError, exitPath);
+            Assert.DoesNotContain("specified more than once", stderrPath);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    // Regression lock for #184 follow-up: options that legitimately accept separated
+    // dash-prefixed literal values (`--db`, `--path`, `--exclude-path`) must preserve the
+    // pre-existing "requires a value" error WITH the inline-form hint when followed by a
+    // double-dash token. The recognized-option guard added for `--lang --limit 5` style
+    // cases must NOT short-circuit these dashed-literal options; instead their error must
+    // still guide the user to the `--db=<value>` disambiguation form. `--query` keeps
+    // accepting dashed literals as query text (no hint needed).
+    // #184 のフォローアップ回帰ロック: separated dashed literal を正当に受け入れる
+    // `--db` / `--path` / `--exclude-path` は、double-dash 値が続いた場合 "requires a value" と
+    // 同時に inline-form ヒントを返す既存契約を維持する。`--lang --limit 5` 系のために追加した
+    // recognized-option guard でこれらを早期に短絡させてはならず、ヒントで `--db=<value>` 形式を
+    // ユーザーに案内する。`--query` は引き続き dashed literal を query テキストとして受け入れる。
+    [Theory]
+    [InlineData("--db")]
+    [InlineData("--path")]
+    [InlineData("--exclude-path")]
+    public void QueryEntrypoints_DashedLiteralOptionsKeepHint_Issue184(string optionName)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_issue184_dashed_literal_{optionName.TrimStart('-')}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Issue184.cs",
+                "csharp",
+                "namespace Issue184; public class T { public void M() { } }");
+
+            string[] args = optionName == "--db"
+                ? ["Issue184", optionName, "--json"]
+                : ["Issue184", "--db", dbPath, optionName, "--json"];
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(args, _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains($"{optionName} requires a value", stderr);
+            Assert.Contains($"pass it as `{optionName}=<value>`", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    // Regression lock for #184 follow-up: `--query` accepts dashed literals including
+    // recognized flags (e.g. `--json`) as query text, because FTS-style queries can
+    // legitimately contain dash-prefixed tokens. The recognized-option guard must NOT
+    // short-circuit `--query`, and the downstream IsRejectedSeparatedStringValue check
+    // must also skip `--query` so the flag-shaped token flows through as a literal.
+    // #184 のフォローアップ回帰ロック: `--query` は `--json` のような既知フラグを含む dashed
+    // literal をクエリ本文として受け入れる（FTS 風クエリには dash 付きトークンが現れ得る）。
+    // recognized-option guard で `--query` を早期に短絡してはならず、後段の
+    // IsRejectedSeparatedStringValue も `--query` を素通りさせて flag 形状のトークンをリテラルと
+    // して扱う契約を維持する。
+    [Fact]
+    public void RunFind_QueryAcceptsDashedLiteralValue_Issue184()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue184_query_dashed_literal");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Issue184.cs",
+                "csharp",
+                "namespace Issue184; public class T { public void M() { } }");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["--query", "--json", "--path", "src/**", "--db", dbPath, "--json"], _jsonOptions));
+
+            // Accepting `--json` as query text is the success contract; the query may or may not
+            // match, but parsing must NOT fail with a "requires a value" error for --query.
+            // `--json` をクエリテキストとして受け入れるのが成功契約。ヒットの有無は問わないが、
+            // --query が "requires a value" で失敗してはならない。
+            Assert.NotEqual(CommandExitCodes.UsageError, exitCode);
+            Assert.DoesNotContain("--query requires a value", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    // Regression lock for #184 follow-up: `--focus-column` and `--max-line-width` are
+    // positive-integer options. Zero, negative, and non-numeric values must fail closed with
+    // UsageError and the "requires a positive integer" error message. Earlier tests only
+    // covered the missing-value case (which now short-circuits before TryParsePositiveInt),
+    // leaving the positive-integer contract uncovered for these two options specifically.
+    // #184 のフォローアップ回帰ロック: `--focus-column` と `--max-line-width` は正の整数オプション。
+    // 0・負数・非数値は UsageError と "requires a positive integer" メッセージで fail-close する。
+    // 以前のテストは値欠如（今は TryParsePositiveInt 前に短絡する）しかカバーしていなかったため、
+    // この 2 つのオプション固有の正の整数契約を明示的にロックする。
+    [Theory]
+    [InlineData("0")]
+    [InlineData("abc")]
+    public void RunExcerpt_RejectsInvalidFocusColumnValue(string invalidValue)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_excerpt_invalid_focus_column_{invalidValue}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "sample");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["README.md", "--db", dbPath, "--start", "1", "--focus-column", invalidValue, "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--focus-column requires a positive integer", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("abc")]
+    public void RunReferences_RejectsInvalidMaxLineWidthValue(string invalidValue)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_references_invalid_max_line_width_{invalidValue}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["target", "--db", dbPath, "--max-line-width", invalidValue, "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--max-line-width requires a positive integer", stderr);
         }
         finally
         {

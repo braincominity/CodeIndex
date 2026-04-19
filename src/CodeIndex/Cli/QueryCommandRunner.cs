@@ -2350,6 +2350,20 @@ public static class QueryCommandRunner
             parseErrors.Add(error);
         }
 
+        // Track non-repeatable value-taking options that have already been observed and warn on
+        // subsequent occurrences. Previously `--db /A --db /B` silently used `/B`; this makes the
+        // override explicit so users (and AI callers) can spot a copy/paste or scripted mistake.
+        // 非 repeatable な value-taking オプションの初出を記録し、2 回目以降で警告する。以前は
+        // `--db /A --db /B` が silent に `/B` を採用していたため、スクリプトやコピペのミスに
+        // ユーザーや AI 呼び出し側が気付けるよう、上書きを明示化する。
+        var seenSingleValueOptions = new HashSet<string>(StringComparer.Ordinal);
+        void WarnIfDuplicateSingleValueOption(string canonicalName, string newValue)
+        {
+            if (seenSingleValueOptions.Add(canonicalName))
+                return;
+            Console.Error.WriteLine($"Warning: {canonicalName} specified more than once; using the last value '{newValue}'.");
+        }
+
         for (int i = 0; i < args.Length; i++)
         {
             var currentArg = args[i];
@@ -2363,6 +2377,7 @@ public static class QueryCommandRunner
                 case "--db":
                     if (TryReadStringOptionValue(args, ref i, "--db", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var dbPathValue, out var dbPathError))
                     {
+                        WarnIfDuplicateSingleValueOption("--db", dbPathValue!);
                         dbPath = dbPathValue!;
                         dbPathExplicit = true;
                     }
@@ -2377,17 +2392,23 @@ public static class QueryCommandRunner
                     if (!TryReadRawOptionValue(args, ref i, "--limit", inlineValue, out var limitValue, out var missingLimitError))
                         AddParseError(missingLimitError!);
                     else if (TryParsePositiveInt(limitValue!, "--limit", out var parsedLimit, out var limitError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--limit", limitValue!);
                         limit = parsedLimit;
+                    }
                     else
                         AddParseError(limitError!);
                     break;
                 case "--lang":
                     if (TryReadStringOptionValue(args, ref i, "--lang", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var langValue, out var langError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--lang", langValue!);
                         // Normalize to lowercase so '--lang Python' == '--lang python' — every LangMap key and
                         // every DB 'files.lang' row is lowercase, so the SQL filter and WriteLangHint match.
                         // '--lang Python' と '--lang python' を同一視するため lowercase 正規化する。LangMap の key と
                         // DB の `files.lang` はすべて lowercase なので、SQL filter と WriteLangHint が一致する。
                         lang = langValue?.ToLowerInvariant();
+                    }
                     else
                         AddParseError(langError!);
                     break;
@@ -2399,17 +2420,23 @@ public static class QueryCommandRunner
                             i++;
                     }
                     else if (TryReadStringOptionValue(args, ref i, "--query", inlineValue, allowSeparatedDashPrefixedLiteralValue: true, out var queryValue, out var queryError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--query", queryValue!);
                         query = queryValue;
+                    }
                     else
                         AddParseError(queryError!);
                     break;
                 case "--kind":
                     if (TryReadStringOptionValue(args, ref i, "--kind", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var kindValue, out var kindError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--kind", kindValue!);
                         // Normalize to lowercase so '--kind FUNCTION' == '--kind function'. AllValidKinds entries
                         // and every DB 'symbols.kind' row are lowercase.
                         // '--kind FUNCTION' と '--kind function' を同一視するため lowercase 正規化する。AllValidKinds
                         // と DB の `symbols.kind` はすべて lowercase。
                         kind = kindValue?.ToLowerInvariant();
+                    }
                     else
                         AddParseError(kindError!);
                     break;
@@ -2438,7 +2465,10 @@ public static class QueryCommandRunner
                     if (!TryReadRawOptionValue(args, ref i, "--depth", inlineValue, out var depthValue, out var missingDepthError))
                         AddParseError(missingDepthError!);
                     else if (TryParseNonNegativeInt(depthValue!, "--depth", out var parsedDepth, out var depthError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--depth", depthValue!);
                         contextAfter = parsedDepth; // reused as depth for impact / impact用に再利用
+                    }
                     else
                         AddParseError(depthError!);
                     break;
@@ -2465,7 +2495,10 @@ public static class QueryCommandRunner
                     if (!TryReadStringOptionValue(args, ref i, "--since", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var sinceValue, out var sinceError))
                         AddParseError(sinceError!);
                     else if (TryParseIso8601Since(sinceValue!, out var parsedSince))
+                    {
+                        WarnIfDuplicateSingleValueOption("--since", sinceValue!);
                         since = parsedSince;
+                    }
                     else
                         AddParseError($"Error: could not parse --since value '{sinceValue}' as a date/time. Use ISO 8601 format (e.g. 2024-01-01 or 2024-01-01T00:00:00Z).");
                     break;
@@ -2473,7 +2506,10 @@ public static class QueryCommandRunner
                     if (!TryReadRawOptionValue(args, ref i, "--start", inlineValue, out var startValue, out var missingStartError))
                         AddParseError(missingStartError!);
                     else if (TryParsePositiveInt(startValue!, "--start", out var parsedStart, out var startError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--start", startValue!);
                         startLine = parsedStart;
+                    }
                     else
                         AddParseError(startError!);
                     break;
@@ -2481,7 +2517,10 @@ public static class QueryCommandRunner
                     if (!TryReadRawOptionValue(args, ref i, "--end", inlineValue, out var endValue, out var missingEndError))
                         AddParseError(missingEndError!);
                     else if (TryParsePositiveInt(endValue!, "--end", out var parsedEnd, out var endError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--end", endValue!);
                         endLine = parsedEnd;
+                    }
                     else
                         AddParseError(endError!);
                     break;
@@ -2489,7 +2528,10 @@ public static class QueryCommandRunner
                     if (!TryReadRawOptionValue(args, ref i, "--before", inlineValue, out var beforeValue, out var missingBeforeError))
                         AddParseError(missingBeforeError!);
                     else if (TryParseNonNegativeInt(beforeValue!, "--before", out var parsedBefore, out var beforeError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--before", beforeValue!);
                         contextBefore = parsedBefore;
+                    }
                     else
                         AddParseError(beforeError!);
                     break;
@@ -2497,7 +2539,10 @@ public static class QueryCommandRunner
                     if (!TryReadRawOptionValue(args, ref i, "--after", inlineValue, out var afterValue, out var missingAfterError))
                         AddParseError(missingAfterError!);
                     else if (TryParseNonNegativeInt(afterValue!, "--after", out var parsedAfter, out var afterError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--after", afterValue!);
                         contextAfter = parsedAfter;
+                    }
                     else
                         AddParseError(afterError!);
                     break;
@@ -2505,7 +2550,10 @@ public static class QueryCommandRunner
                     if (!TryReadRawOptionValue(args, ref i, "--focus-line", inlineValue, out var focusLineValue, out var missingFocusLineError))
                         AddParseError(missingFocusLineError!);
                     else if (TryParsePositiveInt(focusLineValue!, "--focus-line", out var parsedFocusLine, out var focusLineError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--focus-line", focusLineValue!);
                         focusLine = parsedFocusLine;
+                    }
                     else
                         AddParseError(focusLineError!);
                     break;
@@ -2513,7 +2561,10 @@ public static class QueryCommandRunner
                     if (!TryReadRawOptionValue(args, ref i, "--focus-column", inlineValue, out var focusColumnValue, out var missingFocusColumnError))
                         AddParseError(missingFocusColumnError!);
                     else if (TryParsePositiveInt(focusColumnValue!, "--focus-column", out var parsedFocusColumn, out var focusColumnError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--focus-column", focusColumnValue!);
                         focusColumn = parsedFocusColumn;
+                    }
                     else
                         AddParseError(focusColumnError!);
                     break;
@@ -2521,7 +2572,10 @@ public static class QueryCommandRunner
                     if (!TryReadRawOptionValue(args, ref i, "--focus-length", inlineValue, out var focusLengthValue, out var missingFocusLengthError))
                         AddParseError(missingFocusLengthError!);
                     else if (TryParsePositiveInt(focusLengthValue!, "--focus-length", out var parsedFocusLength, out var focusLengthError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--focus-length", focusLengthValue!);
                         focusLength = parsedFocusLength;
+                    }
                     else
                         AddParseError(focusLengthError!);
                     break;
@@ -2535,7 +2589,10 @@ public static class QueryCommandRunner
                     if (!TryReadRawOptionValue(args, ref i, "--snippet-lines", inlineValue, out var snippetLinesValue, out var missingSnippetLinesError))
                         AddParseError(missingSnippetLinesError!);
                     else if (TryParsePositiveInt(snippetLinesValue!, "--snippet-lines", out var parsedSnippetLines, out var snippetLinesError))
+                    {
+                        WarnIfDuplicateSingleValueOption("--snippet-lines", snippetLinesValue!);
                         snippetLines = SearchSnippetFormatter.ClampSnippetLines(parsedSnippetLines);
+                    }
                     else
                         AddParseError(snippetLinesError!);
                     break;
@@ -2547,7 +2604,10 @@ public static class QueryCommandRunner
                         if (parsedMaxLineWidth > LineWidthFormatter.MaxAllowedLineWidth)
                             AddParseError($"--max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth} (got '{maxLineWidthValue}').");
                         else
+                        {
+                            WarnIfDuplicateSingleValueOption("--max-line-width", maxLineWidthValue!);
                             maxLineWidth = parsedMaxLineWidth;
+                        }
                     }
                     else
                         AddParseError(maxLineWidthError!);
@@ -3422,7 +3482,24 @@ public static class QueryCommandRunner
             return false;
         }
 
-        value = args[++index];
+        var candidate = args[index + 1];
+        // If the next token is itself a recognized CLI option, treat this as a missing-value
+        // case rather than consuming the option as if it were a value. Without this guard
+        // `--limit --lang rust` was parsed as `--limit=--lang` (numeric-parse failure) and then
+        // the trailing `rust` was silently dropped, leaving the user with a confusing message
+        // about `--lang` being an invalid integer.
+        // 次トークンが別の既知オプションなら「値欠如」として扱い、index を進めない。これを
+        // 入れないと `--limit --lang rust` が `--limit=--lang` と解釈され、後続の `rust` が
+        // 黙って捨てられ、`--lang` が integer じゃないという混乱したメッセージが出てしまう。
+        if (IsRecognizedOptionToken(candidate))
+        {
+            value = null;
+            error = $"Error: {optionName} requires a value.";
+            return false;
+        }
+
+        index++;
+        value = candidate;
         error = null;
         return true;
     }
@@ -3451,6 +3528,25 @@ public static class QueryCommandRunner
         }
 
         var candidate = args[index + 1];
+        // Apply the recognized-option guard only when the option does NOT legitimately accept
+        // separated dash-prefixed literal values. For flags like `--lang` / `--kind` / `--since`
+        // / `--name` (allowSeparatedDashPrefixedLiteralValue=false), `--lang --limit 5` must stop
+        // at `--limit` instead of consuming a known CLI flag as the `--lang` value. For flags like
+        // `--db` / `--path` / `--exclude-path` / `--query` (allowSeparatedDashPrefixedLiteralValue=true),
+        // skip this guard so the downstream `IsRejectedSeparatedStringValue` can emit the
+        // inline-form hint for double-dash literals, preserving the pre-existing contract.
+        // dash-prefix ヒューリスティックより前に既知オプション判定を置くが、この guard は
+        // `allowSeparatedDashPrefixedLiteralValue=false` の時だけ適用する。`--lang` / `--kind` /
+        // `--since` / `--name` は `--lang --limit 5` のとき `--limit` を値として飲み込まず値欠如
+        // として扱う。`--db` / `--path` / `--exclude-path` / `--query` は dashed literal を受け入れる
+        // 設計なので対象外とし、後段の `IsRejectedSeparatedStringValue` 側で double-dash に対する
+        // inline-form ヒントを返して既存契約を維持する。
+        if (!allowSeparatedDashPrefixedLiteralValue && IsRecognizedOptionToken(candidate))
+        {
+            value = null;
+            error = $"Error: {optionName} requires a value.";
+            return false;
+        }
         if (optionName != "--query" && IsRejectedSeparatedStringValue(candidate, allowSeparatedDashPrefixedLiteralValue))
         {
             value = null;
