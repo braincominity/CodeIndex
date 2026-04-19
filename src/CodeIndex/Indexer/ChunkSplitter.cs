@@ -23,7 +23,7 @@ public static class ChunkSplitter
     /// <returns>List of chunk records / チャンクレコードのリスト</returns>
     public static List<ChunkRecord> Split(long fileId, string content)
     {
-        if (content.Length == 0)
+        if (string.IsNullOrEmpty(content))
             return [];
 
         // Defensive CRLF normalization — FileIndexer.BuildRecord already normalizes,
@@ -31,17 +31,14 @@ public static class ChunkSplitter
         // 防御的CRLF正規化 — BuildRecordで正規化済みだが、直接呼び出し時の安全策。
         if (content.Contains('\r'))
             content = content.Replace("\r\n", "\n").Replace("\r", "\n");
-        // Defensive UTF-8 BOM strip — FileIndexer.BuildRecord already strips every
-        // U+FEFF, but this method is public and may be called directly with raw
-        // content. Strip all occurrences (not just leading) so mid-file BOM does
-        // not leak into chunk content and from there into `search` / `excerpt`.
-        // Closes #183.
-        // 防御的UTF-8 BOM剥離 — FileIndexer.BuildRecordで全U+FEFFを除去済みだが、
-        // 本メソッドはpublicで直接呼び出される可能性がある。mid-file BOMが
-        // チャンク内容経由で search / excerpt に漏れないよう全箇所を除去する。
-        // Closes #183.
-        if (content.Contains('\uFEFF'))
-            content = content.Replace("\uFEFF", string.Empty);
+        // Defensive line-leading UTF-8 BOM strip — BuildRecord already strips the
+        // leading BOM and any BOM that follows `\n`, but this method is public and
+        // may be called directly. Mid-line U+FEFF (e.g. inside a string literal)
+        // is preserved. Closes #183.
+        // 防御的な行頭 UTF-8 BOM 剥離 — BuildRecord で先頭 BOM と `\n` 直後の BOM を
+        // 既に剥がしているが、本メソッドはpublicで直接呼ばれうる。行頭以外の
+        // U+FEFF (文字列リテラル内等) はそのまま残す。Closes #183.
+        content = FileIndexer.StripLineLeadingBom(content);
         // Re-check for empty after BOM/CRLF strip so BOM-only input yields no chunks,
         // matching the no-chunks contract for empty files.
         // BOM/CRLF剥離後に再度空判定し、BOMのみの入力が空ファイルと同じく0チャンクになるようにする。

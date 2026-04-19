@@ -414,15 +414,16 @@ public static class ReferenceExtractor
 
         var language = lang!;
 
-        // Strip every UTF-8 BOM (U+FEFF) defensively so tests / direct callers
-        // that bypass FileIndexer still match `^\s*`-anchored patterns on line 1
-        // and on any mid-file line that happens to start with a BOM (e.g. from
-        // file concatenation or tool insertion). Closes #183.
-        // UTF-8 BOM (U+FEFF) を全箇所から防御的に剥がす。FileIndexer を経由しない
-        // テスト / 直接呼び出しでも 1 行目および mid-file BOM を持つ任意の行で
-        // `^\s*` 固定パターンが成立する。Closes #183.
-        if (content.Contains('\uFEFF'))
-            content = content.Replace("\uFEFF", string.Empty);
+        // Strip line-leading UTF-8 BOM (U+FEFF) defensively so tests / direct callers
+        // that bypass FileIndexer still match `^\s*`-anchored patterns on line 1 and
+        // on any mid-file line that begins with a BOM (e.g. from file concatenation
+        // or tool insertion). Non-line-leading U+FEFF is preserved so content with
+        // intentional ZWNBSP inside a string literal stays verbatim. Closes #183.
+        // 行頭の UTF-8 BOM (U+FEFF) だけを防御的に剥がす。FileIndexer を経由しない
+        // テスト / 直接呼び出しでも 1 行目および mid-file の行頭 BOM で `^\s*`
+        // 固定パターンが成立する。行頭以外の U+FEFF (文字列リテラル中の意図的な
+        // ZWNBSP 等) はそのまま保持する。Closes #183.
+        content = FileIndexer.StripLineLeadingBom(content);
         var lines = content.Split('\n');
         var structuralLines = StructuralLineMasker.MaskLines(language, lines);
         var preparedLines = new string[lines.Length];

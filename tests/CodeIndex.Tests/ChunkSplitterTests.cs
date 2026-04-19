@@ -133,4 +133,38 @@ public class ChunkSplitterTests
         var chunks = ChunkSplitter.Split(1, "\uFEFF");
         Assert.Empty(chunks);
     }
+
+    [Fact]
+    public void Split_MidLineBom_PreservedInChunkContent()
+    {
+        // Non-line-leading U+FEFF (Unicode 3.2+ ZWNBSP inside a string literal or
+        // identifier, e.g. `const s = "A\uFEFFB"`) must be preserved verbatim.
+        // The fix for #183 narrows the strip to line-leading BOM only so intentional
+        // mid-line ZWNBSP use is not silently corrupted. Closes #183.
+        // 行頭以外の U+FEFF (Unicode 3.2+ の ZWNBSP を文字列リテラルや識別子で
+        // 意図的に使用しているケース、例: `const s = "A\uFEFFB"`) はそのまま残す。
+        // #183 の修正は行頭 BOM のみに絞っており、mid-line ZWNBSP の意図的利用が
+        // 黙って壊れないことを保証する。Closes #183.
+        var content = "const string s = \"A\uFEFFB\";\n";
+        var chunks = ChunkSplitter.Split(1, content);
+
+        Assert.Single(chunks);
+        Assert.Contains('\uFEFF', chunks[0].Content);
+        Assert.Contains("\"A\uFEFFB\"", chunks[0].Content);
+    }
+
+    [Fact]
+    public void Split_NullContent_ReturnsNoChunks()
+    {
+        // The pre-#183 guard used `string.IsNullOrEmpty`, which accepted null.
+        // The first iteration of the #183 fix regressed this to `content.Length == 0`
+        // and threw NullReferenceException for direct callers passing null. Restore
+        // the null-safe contract and pin it here. Closes #183.
+        // #183 以前のガードは `string.IsNullOrEmpty` で null を受け付けていた。
+        // #183 修正の初版で `content.Length == 0` に変えて null 渡しで NRE を
+        // 投げるようになっていたため、null セーフな契約を復元しピンで固定する。
+        // Closes #183.
+        var chunks = ChunkSplitter.Split(1, null!);
+        Assert.Empty(chunks);
+    }
 }

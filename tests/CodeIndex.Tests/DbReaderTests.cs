@@ -1,3 +1,4 @@
+using System.Text;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
@@ -7759,5 +7760,88 @@ public class DbReaderTests : IDisposable
 
         var oldSummary = _reader.CountDefinitionsTotal("countdef_only_old", since: since);
         Assert.Equal(0, oldSummary.Count);
+    }
+
+    [Fact]
+    public void SearchAndExcerpt_BomBearingFile_StripLineLeadingBomPreserveMidLineZwnbsp()
+    {
+        // End-to-end #183 vertical: real bytes on disk → FileIndexer.BuildRecord →
+        // ChunkSplitter.Split → DbWriter → DbReader.Search + GetExcerpt. Pins three
+        // invariants at once:
+        //   1. Leading BOM at offset 0 is stripped: search finds the line-1 symbol
+        //      (`^\s*`-anchored indexing succeeds) and excerpt of line 1 does not
+        //      emit a phantom U+FEFF.
+        //   2. A BOM that immediately follows `\n` is stripped: excerpt of the
+        //      affected mid-file line does not emit a phantom U+FEFF.
+        //   3. Non-line-leading U+FEFF (intentional ZWNBSP inside a string literal)
+        //      is preserved verbatim — the narrowing iteration of the fix must not
+        //      silently corrupt intentional mid-line ZWNBSP use.
+        // Closes #183.
+        // #183 のエンドツーエンド縦串テスト: 実バイトから FileIndexer.BuildRecord →
+        // ChunkSplitter.Split → DbWriter → DbReader.Search + GetExcerpt まで通す。
+        // 3 つの不変条件を同時に pin する:
+        //   1. オフセット 0 の先頭 BOM は剥がす。1 行目のシンボルが search で見つかり
+        //      (`^\s*` 固定パターンが成立)、1 行目の excerpt に幽霊 U+FEFF を含めない。
+        //   2. `\n` の直後の BOM は剥がす。該当 mid-file 行の excerpt に幽霊 U+FEFF を
+        //      含めない。
+        //   3. 行頭以外の U+FEFF (文字列リテラル内の意図的 ZWNBSP) はそのまま保持する。
+        //      修正を行頭限定に絞ったことで、mid-line ZWNBSP の意図的利用を黙って
+        //      壊さないことを保証する。
+        // Closes #183.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_bom_e2e_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var source =
+                "\uFEFFnamespace BomE2E;\n" +
+                "\n" +
+                "\uFEFFpublic class PhraseHolder\n" +
+                "{\n" +
+                "    public const string Phrase = \"A\uFEFFB\";\n" +
+                "}\n";
+            var bytes = Encoding.UTF8.GetBytes(source);
+            var filePath = Path.Combine(tempDir, "bom_e2e.cs");
+            File.WriteAllBytes(filePath, bytes);
+
+            var indexer = new FileIndexer(tempDir);
+            var (record, content, _, _) = indexer.BuildRecordWithRawBytes(filePath);
+
+            // Line-leading BOMs are stripped; mid-line ZWNBSP inside the string literal is preserved.
+            // 行頭 BOM は剥がし、文字列リテラル内の mid-line ZWNBSP は保持されている。
+            Assert.DoesNotContain('\uFEFF', new string(content.Split('\n')[0].ToCharArray()));
+            Assert.Contains("\"A\uFEFFB\"", content);
+
+            var fileId = _writer.UpsertFile(record);
+            _writer.InsertChunks(ChunkSplitter.Split(fileId, content));
+            var symbols = SymbolExtractor.Extract(fileId, "csharp", content);
+            _writer.InsertSymbols(symbols);
+
+            // 1. Line-1 namespace declaration is found (would be missed if leading BOM leaked into chunk content).
+            // 1. 1 行目の namespace 宣言が発見される (先頭 BOM がチャンク内容に漏れていれば拾えない)。
+            var searchResults = _reader.Search("BomE2E");
+            Assert.Contains(searchResults, r => r.Path == record.Path);
+
+            // 2. Excerpt of lines 1 and 3 has no phantom U+FEFF at line start.
+            // 2. 1 行目と 3 行目の excerpt に、行頭の幽霊 U+FEFF が含まれない。
+            var headExcerpt = _reader.GetExcerpt(record.Path, startLine: 1, endLine: 3);
+            Assert.NotNull(headExcerpt);
+            foreach (var line in headExcerpt!.Content.Split('\n'))
+            {
+                if (line.Length == 0) continue;
+                Assert.NotEqual('\uFEFF', line[0]);
+            }
+            Assert.Contains("namespace BomE2E;", headExcerpt.Content);
+            Assert.Contains("public class PhraseHolder", headExcerpt.Content);
+
+            // 3. Excerpt of the const-string line still carries the intentional mid-line ZWNBSP.
+            // 3. const 文字列の行の excerpt には、意図的な mid-line ZWNBSP がそのまま残る。
+            var literalExcerpt = _reader.GetExcerpt(record.Path, startLine: 5, endLine: 5);
+            Assert.NotNull(literalExcerpt);
+            Assert.Contains("\"A\uFEFFB\"", literalExcerpt!.Content);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
     }
 }
