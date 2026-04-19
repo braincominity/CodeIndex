@@ -540,11 +540,16 @@ public static class SymbolExtractor
             new("delegate",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|file|new)\s+)*delegate\s+(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             // Event — visibility optional; modifier order is free. Accepts `static` / `unsafe` /
             // `extern` plus inheritance modifiers (`virtual` / `override` / `abstract` / `sealed` / `new`)
-            // which are all legal on event declarations per the C# spec. Closes #355.
+            // which are all legal on event declarations per the C# spec. `partial` is also legal on
+            // events (C# 14 field-like partial events, and extended partial member support on accessor
+            // events), so accept it as well — otherwise every `partial event` declaration would be
+            // silently dropped from symbols / definition / outline. Closes #350.
             // イベント — visibility 省略可。修飾子順序は自由。`static` / `unsafe` / `extern` に加え、
             // C# 仕様で event 宣言に有効な継承修飾子 (`virtual` / `override` / `abstract` / `sealed` / `new`)
-            // も受け付ける。Closes #355.
-            new("event",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern|virtual|override|abstract|sealed|new)\s+)*event\s+(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*(?:[;=]|\{{)", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            // も受け付ける。event には `partial` も合法 (C# 14 field-like partial event、およびアクセサ
+            // ベースの partial member 拡張) なので、ここでも受け付けないと `partial event` 宣言が
+            // symbols / definition / outline から無言で欠落する。Closes #350.
+            new("event",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern|virtual|override|abstract|sealed|new|partial)\s+)*event\s+(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*(?:[;=]|\{{)", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             // Explicit interface implementation (e.g. void IDisposable.Dispose())
             // Requires a valid return type (not a statement keyword) and interface name before the dot.
             // Reject named-argument labels only when they are followed by a qualified call site,
@@ -569,8 +574,14 @@ public static class SymbolExtractor
             // Explicit interface property implementation (expression body), e.g. string IThing.Name => "x";
             // 明示的インターフェースプロパティ実装（式本体）。例: string IThing.Name => "x";
             new("property",  new Regex($@"^\s*(?![?:])(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>\w+)\s*=>\s*", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
-            // Indexer (this[...]) / インデクサ (this[...])
-            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?<returnType>{CSharpTypePattern})\s+(?<name>this)\s*\[", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            // Indexer (this[...]) — `partial` is legal on indexers since C# 13 (extended partial
+            // member support), so accept it alongside the other modifiers. Otherwise every
+            // `partial` indexer declaration would be silently dropped from symbols / definition /
+            // outline. Closes #350.
+            // インデクサ (this[...]) — C# 13 で indexer に対しても `partial` が使える (partial
+            // member 拡張) ため、他の修飾子と並べて受け付ける。そうしないと `partial` indexer 宣言
+            // が symbols / definition / outline から無言で欠落する。Closes #350.
+            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|readonly|unsafe|extern|partial|ref(?:\s+readonly)?)\s+)*(?<returnType>{CSharpTypePattern})\s+(?<name>this)\s*\[", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Static constructor / 静的コンストラクタ
             // `unsafe` can appear before or after `static` (`unsafe static S()` ≡ `static unsafe S()`). Closes #355.
             // `unsafe` は `static` の前後どちらにも置ける（`unsafe static S()` ≡ `static unsafe S()`）。Closes #355.
