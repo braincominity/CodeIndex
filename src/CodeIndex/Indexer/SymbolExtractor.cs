@@ -403,22 +403,38 @@ public static class SymbolExtractor
             new("class",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*(?:record\s+class\s+|record\s+|class\s+)(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Implicit/explicit conversion operator — must come before general operator pattern.
             // Visibility may appear before or after `static` / `unsafe` / `extern`. Closes #355.
+            // Modifier slot also accepts `abstract|virtual|sealed|override|new` so C# 11
+            // `static abstract` / `abstract static` interface conversion operators (generic
+            // math: `System.Numerics.INumber<TSelf>` etc.) and default-implementation /
+            // member-hiding forms on interfaces are not silently dropped. Closes #244.
             // 暗黙的/明示的変換演算子 — 一般のoperatorパターンより先に配置。
             // visibility は `static` / `unsafe` / `extern` のどちら側にも置ける。Closes #355.
+            // 修飾子スロットは `abstract|virtual|sealed|override|new` も受け付ける。
+            // これにより C# 11 の `static abstract` / `abstract static` interface 変換演算子
+            // （generic math: `System.Numerics.INumber<TSelf>` など）と、interface 上の
+            // default implementation / member hiding 形態を黙って取りこぼさない。Closes #244.
             new("function",  new Regex(
                 $@"^\s*"
-              + $@"(?=(?:(?:{CSharpVisibilityPattern}|static|unsafe|extern)\s+)*static\s+)"
-              + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern)\s+)+"
+              + $@"(?=(?:(?:{CSharpVisibilityPattern}|static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)*static\s+)"
+              + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)+"
               + $@"(?<conversionKind>implicit|explicit)\s+operator\b",
                 RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Operator overload (+ - * / == != < > etc.) — must come before method pattern.
             // Visibility may appear before or after `static`. Closes #355.
+            // Modifier slot also accepts `abstract|virtual|sealed|override|new` so C# 11
+            // `static abstract` / `abstract static` interface operators (generic math:
+            // `IAdditionOperators<T>`, `IComparisonOperators<T>`, etc.) are not silently
+            // dropped. Closes #244.
             // 演算子オーバーロード — メソッドパターンより前に配置。
             // visibility は `static` のどちら側にも置ける。Closes #355.
+            // 修飾子スロットは `abstract|virtual|sealed|override|new` も受け付ける。
+            // これにより C# 11 の `static abstract` / `abstract static` interface 演算子
+            // （generic math: `IAdditionOperators<T>`、`IComparisonOperators<T>` など）を
+            // 黙って取りこぼさない。Closes #244.
             new("function",  new Regex(
                 $@"^\s*"
-              + $@"(?=(?:(?:{CSharpVisibilityPattern}|static|unsafe|extern)\s+)*static\s+)"
-              + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern)\s+)+"
+              + $@"(?=(?:(?:{CSharpVisibilityPattern}|static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)*static\s+)"
+              + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)+"
               + @".+?\s+(?<name>operator\s+(?:checked\s+)?\S+)\s*\(",
                 RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Method with return type — visibility optional for explicit interface impl and nested members.
