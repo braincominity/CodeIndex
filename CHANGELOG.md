@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.12.0] - 2026-04-19
+
 #### Changed
 - **Installer cloud documentation expanded for Claude Code *and* Codex cloud harnesses** — `README.md`, `DEVELOPER_GUIDE.md`, and `CLOUD_BOOTSTRAP_PROMPT.md` now explicitly document that the published `install.sh` flow is intended for cloud AI coding containers beyond Claude Code (including Codex-style harnesses), with mirrored bilingual guidance for restricted-egress setups, mirror/proxy env vars, and built-in local self-test invocation. The new `--self-test-local-mirror` path now defaults to an isolated temporary install directory unless a **non-empty** `CDIDX_INSTALL_DIR` is explicitly set, so a mock self-test cannot silently overwrite an existing real `~/.local/bin/cdidx` even when `CDIDX_INSTALL_DIR=""` is present in the environment. It also validates local mirror startup on `127.0.0.1` before download begins, forces loopback traffic to bypass outbound proxies via `NO_PROXY` / `no_proxy` plus `curl --noproxy`, and reports mirror-specific startup failures with log tail output instead of misclassifying them as generic external network/proxy errors. Permission-denied loopback bind failures are now differentiated from "port already in use" failures, and the docs now call out the mirror/proxy env vars, the loopback-listen prerequisite, and `CDIDX_LOCAL_MIRROR_PORT`. Added regression coverage for isolated self-test installs, explicit install-dir override behavior, empty-string install-dir handling, configured mirror override URLs, loopback proxy bypass, custom-port wiring, permission-denied bind failures, and generic local-mirror startup diagnostics. Affected: `README.md`, `DEVELOPER_GUIDE.md`, `CLOUD_BOOTSTRAP_PROMPT.md`, `install.sh`, `tests/CodeIndex.Tests/InstallScriptTests.cs`.
 - **Installer 403 troubleshooting now distinguishes API lookup failures from tunnel-policy denies** — `install.sh` now gives concrete next steps for HTTP 403 during latest-release lookup and asset download (explicit version pinning, mirror API override, and upstream proxy allow-list guidance), and `CLOUD_BOOTSTRAP_PROMPT.md` now explicitly states that `CONNECT tunnel failed, response 403` across every candidate host is an egress-policy deny that route substitution alone cannot fix. Affected: `install.sh`, `CLOUD_BOOTSTRAP_PROMPT.md`.
@@ -744,6 +746,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.12.0] - 2026-04-19
+
 #### 変更
 - **installer の cloud ドキュメントを Claude Code だけでなく Codex 系ハーネスまで明示的に拡張** — `README.md`、`DEVELOPER_GUIDE.md`、`CLOUD_BOOTSTRAP_PROMPT.md` で、公開 `install.sh` フローが Claude Code 以外の cloud AI コーディングコンテナ（Codex 系を含む）でも想定どおり使えることを明記。egress 制約環境向けの mirror/proxy 環境変数、組み込み self-test、診断手順を英日で揃え、ユーザー向け・開発者向け・bootstrap prompt 間で説明を一致させた。新しい `--self-test-local-mirror` 経路は、**非空の** `CDIDX_INSTALL_DIR` を明示しない限り既定で隔離された一時 install dir を使うようになり、環境側で `CDIDX_INSTALL_DIR=""` が set されていても mock self-test が実在の `~/.local/bin/cdidx` を黙って上書きしない。また、ダウンロード前に `127.0.0.1` 上の local mirror 起動を検証し、loopback 宛トラフィックは `NO_PROXY` / `no_proxy` と `curl --noproxy` で outbound proxy を必ず迂回する。loopback bind の権限不足は「ポート使用中」と分けて診断され、docs 側にも mirror/proxy 用 env vars、loopback listen 前提、`CDIDX_LOCAL_MIRROR_PORT` の使い方を明記した。隔離 self-test、明示 install-dir override、空文字 install-dir、configured mirror override URL、loopback proxy bypass、custom port、権限不足 bind failure、generic な local mirror 起動失敗診断の回帰テストも追加。対象: `README.md`、`DEVELOPER_GUIDE.md`、`CLOUD_BOOTSTRAP_PROMPT.md`、`install.sh`、`tests/CodeIndex.Tests/InstallScriptTests.cs`。
 - **installer の 403 トラブルシュートで「latest API 失敗」と「トンネル段階 deny」を分離して案内** — `install.sh` の 403 エラー表示を強化し、latest-release 取得失敗時の明示バージョン指定 / mirror API override と、asset ダウンロード時の allow-list 対応を具体的に提示するようにした。`CLOUD_BOOTSTRAP_PROMPT.md` でも、候補ホストすべてで `CONNECT tunnel failed, response 403` になる場合は「経路差し替えだけでは解決しない upstream egress policy deny」であることを明記した。対象: `install.sh`、`CLOUD_BOOTSTRAP_PROMPT.md`。
@@ -1471,7 +1475,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.11.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.12.0...HEAD
+[1.12.0]: https://github.com/Widthdom/CodeIndex/compare/v1.11.0...v1.12.0
 [1.11.0]: https://github.com/Widthdom/CodeIndex/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/Widthdom/CodeIndex/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/Widthdom/CodeIndex/compare/v1.8.1...v1.9.0
