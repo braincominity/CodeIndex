@@ -54,6 +54,40 @@ public static class SymbolExtractor
     private const string CSharpNonTypeKeywordPattern = @"(?:(?:public|private|protected|internal|static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|required|ref)\b|delegate\b(?!\s*\*))";
     private static readonly Regex PartialModifierRegex = new(@"\bpartial\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
+    // Optional TypeScript generic type-argument token that may sit between an HOC call
+    // name and its `(`. Consumed only by the TypeScript HOC-binding row — the JavaScript
+    // row intentionally does NOT accept this token, because JavaScript has no generic
+    // syntax and a bare `memo < Props > (Component)` is a chained comparison / call
+    // expression that must NOT produce a phantom HOC binding. The expression balances up
+    // to three levels of nested angle brackets (`<Record<string, Map<string, Props>>>`)
+    // and allows parenthesised segments (`<(props: Props) => JSX.Element>`) inside a
+    // generic argument, which covers the function-type / conditional-type shapes real TS
+    // HOC call sites use. The inner alternation treats `=>` as a single two-character
+    // token via `=>?` (greedy `?` so the `>` is consumed when present) instead of
+    // letting the `>` leak out and close the outer `<...>` early, which would otherwise
+    // drop function-type generic arguments. Each alternation branch starts with a
+    // distinct character class — `[^<>()=]` (plain), `=>?` (=-rooted), `\(` (paren),
+    // `<` (nested angle) — so the engine never has overlapping choices at a single input
+    // position, which rules out catastrophic backtracking on long or malformed inputs.
+    // Four or more levels of nesting are vanishingly rare in real HOC signatures and
+    // would require a full bracket walker to stay ReDoS-safe. Closes #240.
+    // HOC 呼び出し名と `(` の間に入りうる、TypeScript の generic 型引数トークン（オプション）。
+    // TypeScript 行の HOC 束縛だけがこのトークンを受け付け、JavaScript 行は意図的に
+    // 受け付けない。JavaScript には generic 構文が無く、`memo < Props > (Component)` は
+    // 比較・呼び出しの連鎖式であって、ここから phantom な HOC 束縛を生やしてはいけないため。
+    // 式は 3 段までのネストした山括弧（`<Record<string, Map<string, Props>>>`）と、
+    // generic 引数内の丸括弧付きセグメント（`<(props: Props) => JSX.Element>`）を許容する
+    // ので、実在する TS HOC 呼び出しで使われる関数型・条件型形状までカバーできる。
+    // 内側 alternation は `=>` を `=>?` の 2 文字トークンとして 1 度に消費する（greedy の
+    // `?` によって後続の `>` があれば必ず消費）。こうしないと `=>` の `>` が外側の
+    // 山括弧閉じとして早期マッチしてしまい、関数型 generic 引数全体が落ちる。各
+    // alternation 分岐は先頭文字クラスが互いに素（`[^<>()=]`（平文字）、`=>?`（=-root）、
+    // `\(`（丸括弧）、`<`（ネスト山括弧））で、同一入力位置で選択が重ならないため、
+    // 長い入力や不正な入力に対しても catastrophic backtracking が発生しない。4 段以上の
+    // ネストは実 HOC シグネチャでは極めて稀で、ReDoS 安全に受理するには完全な bracket
+    // walker が必要になるため、3 段で打ち切る。#240 解消。
+    private const string TypeScriptOptionalHocTypeArgsPattern = @"(?:<(?:[^<>()=]|=>?|\([^()]*\)|<(?:[^<>()=]|=>?|\([^()]*\)|<(?:[^<>()=]|=>?|\([^()]*\))*>)*>)*>\s*)?";
+
     private enum BodyStyle
     {
         None,
@@ -307,16 +341,13 @@ public static class SymbolExtractor
             // restricted to a known set of HOC call shapes — `React.memo(` /
             // `React.forwardRef(` / `React.lazy(`, `styled.`/`styled(`/`styled``,
             // bare `connect(`/`memo(`/`forwardRef(`/`lazy(`/`observer(`, and
-            // `with<PascalCase>(`. Each HOC call-name branch also accepts an
-            // optional TypeScript-style generic token `<TypeArgs>` between the
-            // name and the `(` (one level of nested `<<...>>` is supported) so
-            // `React.forwardRef<HTMLDivElement, Props>(...)` / `React.memo<Props>(...)` /
-            // `connect<State, Dispatch>(...)` / `with<Pascal><T>(...)` and nested-
-            // generic forms like `React.memo<Map<string, Props>>(...)` still match
-            // — the same regex is used by the JavaScript and TypeScript rows so
-            // the two stay in lock-step, and JavaScript sources happen never to
-            // carry generic syntax so the extra optional token is a no-op for
-            // real JS code — so ordinary PascalCase constants like
+            // `with<PascalCase>(`. Unlike the TypeScript row below, the JavaScript
+            // row deliberately does NOT accept an optional `<TypeArgs>` token
+            // between the HOC call name and its `(` — JavaScript has no generic
+            // syntax and `const Result = memo < Props > (Component);` is a chained
+            // comparison / call expression that must not produce a phantom HOC
+            // binding. The asymmetry with the TypeScript row is documented on
+            // TypeScriptOptionalHocTypeArgsPattern. Ordinary PascalCase constants like
             // `const Config = loadConfig();` and `const Theme = React.createContext(null);`
             // (non-HOC React API calls — `createContext`, hooks, etc.) and class
             // expressions like `const Widget = class extends ...` do NOT produce phantom
@@ -333,14 +364,12 @@ public static class SymbolExtractor
             // 発火しない。RHS を既知の HOC 呼び出し形 — `React.memo(` / `React.forwardRef(`
             // / `React.lazy(`、`styled.` / `styled(` / `styled``、素の `connect(` /
             // `memo(` / `forwardRef(` / `lazy(` / `observer(`、`with<PascalCase>(` — に
-            // 限定する。各 HOC 呼び出し名の直後には TypeScript の `<型引数>` 付きの形
-            // もオプションとして許容する（ネスト 1 段まで）ため、
-            // `React.forwardRef<HTMLDivElement, Props>(...)` / `React.memo<Props>(...)` /
-            // `connect<State, Dispatch>(...)` / `with<Pascal><T>(...)`、および
-            // `React.memo<Map<string, Props>>(...)` のようなネスト generic も引き続き
-            // マッチする。同じ regex を JavaScript 行と TypeScript 行の両方で使うため
-            // 実装が一致する（JavaScript ソースに generic 構文はないので、
-            // JS 側では何も影響しない）。`const Config = loadConfig();` のような通常 PascalCase 定数や、
+            // 限定する。JavaScript 行は TypeScript 行と異なり、HOC 呼び出し名と `(` の
+            // 間に generic 型引数トークン `<...>` を意図的に受け付けない。JavaScript に
+            // generic 構文は無く、`const Result = memo < Props > (Component);` は単なる
+            // 比較・呼び出し連鎖式であって phantom な HOC 束縛を生やしてはならない。
+            // 非対称な扱いは TypeScriptOptionalHocTypeArgsPattern のコメントで詳述する。
+            // `const Config = loadConfig();` のような通常 PascalCase 定数や、
             // `const Theme = React.createContext(null);` のような非 HOC の React API 呼び出し
             // （`createContext` や hooks 等）、`const Widget = class extends ...` の
             // クラス式束縛で架空の `function` シンボルが生えないようにする。`= class` 形は
@@ -349,7 +378,7 @@ public static class SymbolExtractor
             // arrow パターンより後に置き、大文字始まりの arrow 束縛は先に一致した段階で
             // stopAfterFirstPatternMatch が立ち、こちらで上書きされないようにする。
             // Closes #240.
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>[A-Z]\w*)\s*=\s*(?:React\.(?:memo|forwardRef|lazy)\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\(|styled[.(`]|connect\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\(|memo\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\(|forwardRef\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\(|lazy\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\(|observer\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\(|with[A-Z]\w*\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\()", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>[A-Z]\w*)\s*=\s*(?:React\.(?:memo|forwardRef|lazy)\s*\(|styled[.(`]|connect\s*\(|memo\s*\(|forwardRef\s*\(|lazy\s*\(|observer\s*\(|with[A-Z]\w*\s*\()", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:default\s+)?class\s+(?<name>(?!extends\b)\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+?)\s+from\s+", RegexOptions.Compiled), BodyStyle.None),
         ],
@@ -358,13 +387,24 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:async\s+)?function\s+(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // HOC-wrapped / call-result component bindings — same narrow HOC-prefix set
-            // as the JavaScript row above. The `React.` branch is pinned to
-            // `React.memo(` / `React.forwardRef(` / `React.lazy(` so non-HOC React API
-            // calls (`const Theme = React.createContext(null);`,
+            // as the JavaScript row above, extended with an optional TypeScript generic
+            // type-argument token between the HOC call name and its `(` via the shared
+            // TypeScriptOptionalHocTypeArgsPattern constant. The generic token balances
+            // up to three levels of nested angle brackets
+            // (`React.memo<Record<string, Map<string, Props>>>(Box)`) and allows
+            // parenthesised segments inside a generic argument
+            // (`React.memo<(props: Props) => JSX.Element>(Box)`) so function-type and
+            // conditional-type TS HOC call sites still match. The `React.` branch is
+            // pinned to `React.memo(` / `React.forwardRef(` / `React.lazy(` so non-HOC
+            // React API calls (`const Theme = React.createContext(null);`,
             // `const Stable = React.useCallback(() => 1, []);`) do NOT produce phantom
-            // `function` rows on the TypeScript side either. TypeScript sources often
-            // carry a type annotation between the binding name and `=` (e.g.
-            // `const Connected: React.ComponentType<Props> = connect(...)(MyComponent);`).
+            // `function` rows on the TypeScript side either. The JavaScript row above
+            // intentionally does NOT carry the generic token because JS has no generic
+            // syntax and `memo < Props > (Component)` is a chained comparison / call
+            // expression; see the TypeScriptOptionalHocTypeArgsPattern comment for the
+            // ReDoS-safety reasoning behind the 3-level-plus-parens shape. TypeScript
+            // sources often carry a type annotation between the binding name and `=`
+            // (e.g. `const Connected: React.ComponentType<Props> = connect(...)(MyComponent);`).
             // The optional `:` branch consumes the annotation lazily up to the first `=`;
             // even when a type contains `=>` (as in `const F: () => void = fn;`), the
             // lazy match back-tracks so the name group is still captured correctly. The
@@ -373,13 +413,23 @@ public static class SymbolExtractor
             // x + 1;`) still wins with BodyStyle.Brace and is not shadowed here.
             // Closes #240.
             // HOC ラップや呼び出し結果代入のコンポーネント束縛 — JavaScript 行と同じ
-            // 狭い HOC プレフィックス集合を使う。`React.` 分岐は
+            // 狭い HOC プレフィックス集合を使い、共有定数
+            // TypeScriptOptionalHocTypeArgsPattern で HOC 呼び出し名と `(` の間に
+            // TypeScript の generic 型引数トークンをオプションで受け入れる。この
+            // トークンは 3 段までのネストした山括弧
+            // （`React.memo<Record<string, Map<string, Props>>>(Box)`）と、
+            // generic 引数内の丸括弧付きセグメント
+            // （`React.memo<(props: Props) => JSX.Element>(Box)`）を許容するため、
+            // 関数型・条件型を使う TS HOC 呼び出しもマッチする。`React.` 分岐は
             // `React.memo(` / `React.forwardRef(` / `React.lazy(` に固定し、
             // `const Theme = React.createContext(null);` や
             // `const Stable = React.useCallback(() => 1, []);` のような非 HOC の
             // React API 呼び出しが TypeScript 側でも phantom `function` シンボルを
-            // 生やさないようにする。TypeScript では束縛名と `=` の間に
-            // 型注釈（例:
+            // 生やさないようにする。JavaScript 行は generic トークンを意図的に持たない。
+            // JS に generic 構文は無く、`memo < Props > (Component)` は比較・呼び出しの
+            // 連鎖式だからである。3 段 + 括弧許容にした ReDoS 安全性の根拠は
+            // TypeScriptOptionalHocTypeArgsPattern のコメントを参照。TypeScript では
+            // 束縛名と `=` の間に型注釈（例:
             // `const Connected: React.ComponentType<Props> = connect(...)(MyComponent);`）
             // が入ることが多いため、オプションの `:` 分岐で最初の `=` まで遅延一致する。
             // 型に `=>` が含まれる場合（例: `const F: () => void = fn;`）もバックトラックで
@@ -387,7 +437,7 @@ public static class SymbolExtractor
             // 型注釈付き arrow 束縛（`const Callback: (x: number) => number = (x) =>
             // x + 1;`）は BodyStyle.Brace 側で先勝ちし、こちらで上書きされない。
             // Closes #240.
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>[A-Z]\w*)\s*(?::\s*.+?)?\s*=\s*(?:React\.(?:memo|forwardRef|lazy)\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\(|styled[.(`]|connect\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\(|memo\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\(|forwardRef\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\(|lazy\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\(|observer\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\(|with[A-Z]\w*\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\()", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>[A-Z]\w*)\s*(?::\s*.+?)?\s*=\s*(?:React\.(?:memo|forwardRef|lazy)\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\(|styled[.(`]|connect\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\(|memo\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\(|forwardRef\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\(|lazy\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\(|observer\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\(|with[A-Z]\w*\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\()", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             // Abstract class, declare class / 抽象クラス、declare クラス
             new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:default\s+)?(?:(?:abstract|declare)\s+)*class\s+(?<name>(?!(?:extends|implements)\b)\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // namespace/module — supports both identifier (namespace Foo) and quoted ambient (declare module 'express')

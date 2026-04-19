@@ -229,6 +229,8 @@ public class SymbolExtractorTests
             const WithAuthGeneric = withAuthentication<Props>(Home);
 
             const NestedMemo = React.memo<Map<string, Props>>(Box);
+            const FunctionTypeMemo = React.memo<(props: Props) => JSX.Element>(Box);
+            const DeepNestedMemo = React.memo<Record<string, Map<string, Props>>>(Box);
             """;
 
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
@@ -243,6 +245,8 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Observed");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "WithAuthGeneric");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "NestedMemo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "FunctionTypeMemo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "DeepNestedMemo");
     }
 
     [Fact]
@@ -375,6 +379,48 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(tsSymbols, s => s.Name == "Stable");
         Assert.DoesNotContain(tsSymbols, s => s.Name == "Derived");
         Assert.DoesNotContain(tsSymbols, s => s.Name == "Ref");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_HocBindingPatternDoesNotMatchComparisonShape()
+    {
+        // In JavaScript, `const Result = memo < Props > (Component);` is a chained
+        // comparison / call expression — NOT a HOC binding with generic type
+        // arguments. The TypeScript HOC row intentionally accepts an optional
+        // `<TypeArgs>` token between the HOC call name and `(`, but the
+        // JavaScript row must not, because JS has no generic syntax. A regex
+        // that shares the generic token between the two rows would produce
+        // phantom `function Result` on pure-JS comparison shapes. Pins the
+        // asymmetry so `memo < Props >` / `forwardRef < Props >` /
+        // `lazy < typeof X >` / `connect < State, Dispatch >` / `observer < Props >` /
+        // `withAuth < Props >` in a JS source stay 0-symbol. Closes #240.
+        // JavaScript では `const Result = memo < Props > (Component);` は generic 付きの
+        // HOC 束縛ではなく、比較・呼び出しの連鎖式である。TypeScript 行は HOC 呼び出し名と
+        // `(` の間に `<TypeArgs>` を意図的に受け入れるが、JavaScript 行は受け入れては
+        // いけない。JS に generic 構文は無いため、両行で同じ regex を共有すると純粋な
+        // JS の比較式から phantom な `function Result` が生えてしまう。非対称性を pin し、
+        // JS ソース上の `memo < Props >` / `forwardRef < Props >` /
+        // `lazy < typeof X >` / `connect < State, Dispatch >` / `observer < Props >` /
+        // `withAuth < Props >` が 0 シンボルのままであることを保証する。Closes #240.
+        var content = """
+            const Result = memo < Props > (Component);
+            const Forwarded = forwardRef < Props > (Component);
+            const Lazied = lazy < typeof Component > (Component);
+            const Connected = connect < State, Dispatch > (Component);
+            const Observed = observer < Props > (Component);
+            const WithAuth = withAuthentication < Props > (Home);
+            const ReactMemoed = React.memo < Props > (Component);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "Result");
+        Assert.DoesNotContain(symbols, s => s.Name == "Forwarded");
+        Assert.DoesNotContain(symbols, s => s.Name == "Lazied");
+        Assert.DoesNotContain(symbols, s => s.Name == "Connected");
+        Assert.DoesNotContain(symbols, s => s.Name == "Observed");
+        Assert.DoesNotContain(symbols, s => s.Name == "WithAuth");
+        Assert.DoesNotContain(symbols, s => s.Name == "ReactMemoed");
     }
 
     [Fact]
