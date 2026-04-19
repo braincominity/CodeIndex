@@ -6186,4 +6186,28 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "outer" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "inner" && r.ReferenceKind == "call");
     }
+
+    [Fact]
+    public void Extract_JavaScriptDeleteTaggedTemplate_IsNotCaptured()
+    {
+        // Regression guard: `delete \`...\`` is a legal (if pointless) expression form
+        // where `delete` is an operator — not a call — even though the backward-scan
+        // behind the backtick sees the identifier tail `delete`. IsIgnoredCallName must
+        // suppress the phantom `call delete` edge.
+        // 退行防止: `delete \`...\`` は `delete` が演算子の正当な式形であり、
+        // タグ付きテンプレート検出が backward-scan で拾う `delete` を
+        // IsIgnoredCallName で握り潰す必要がある。
+        const string content = """
+            function clean(obj) {
+                delete `placeholder-${obj.id}`;
+                void `side-effect-${obj.id}`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "delete");
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "void");
+    }
 }

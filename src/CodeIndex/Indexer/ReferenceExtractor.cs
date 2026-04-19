@@ -49,20 +49,21 @@ public static class ReferenceExtractor
             "instanceof", "super", "this", "assert", "throws", "extends", "implements", "synchronized",
         },
         // JavaScript / TypeScript contextual keywords / JavaScript / TypeScript 文脈キーワード
-        // `void` and `case` are listed because `void \`...\`` and `case \`...\`:` are legal
-        // expression forms that sit immediately before a template literal; without the
-        // entries here the tagged-template scanner (issue #268) would emit phantom `void` /
-        // `case` call rows for plain (untagged) templates in those positions.
-        // `void \`...\`` や `case \`...\`:` はタグ無しテンプレートの正当な前置形で、
-        // issue #268 のタグ付きテンプレート検出が `void` / `case` を誤って `call` として
-        // 発行しないようここに載せる。
+        // `void`, `case`, and `delete` are listed because `void \`...\``, `case \`...\`:`,
+        // and `delete \`...\`` are legal expression forms that sit immediately before a
+        // template literal; without the entries here the tagged-template scanner
+        // (issue #268) would emit phantom `void` / `case` / `delete` call rows for plain
+        // (untagged) templates in those positions.
+        // `void \`...\``, `case \`...\`:`, `delete \`...\`` はタグ無しテンプレートの正当な
+        // 前置形で、issue #268 のタグ付きテンプレート検出が `void` / `case` / `delete` を
+        // 誤って `call` として発行しないようここに載せる。
         ["javascript"] = new HashSet<string>(StringComparer.Ordinal)
         {
-            "import", "super", "yield", "void", "case",
+            "import", "super", "yield", "void", "case", "delete",
         },
         ["typescript"] = new HashSet<string>(StringComparer.Ordinal)
         {
-            "import", "super", "yield", "void", "case",
+            "import", "super", "yield", "void", "case", "delete",
         },
         // Python contextual keywords / Python の文脈キーワード
         ["python"] = new HashSet<string>(StringComparer.Ordinal)
