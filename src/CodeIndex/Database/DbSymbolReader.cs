@@ -1030,6 +1030,7 @@ public partial class DbReader
                        " + GetLogicalReferenceKindSql("sr.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references sr
                 JOIN files rf ON rf.id = sr.file_id
+                WHERE sr.reference_kind IN " + CallGraphReferenceKindsSql + @"
                 GROUP BY rf.lang, sr.file_id, sr.symbol_name, sr.line, sr.column_number, logical_reference_kind
             ),
             global_reference_counts AS (
@@ -1243,6 +1244,7 @@ public partial class DbReader
                        " + GetLogicalReferenceKindSql("sr.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references sr
                 JOIN files rf ON rf.id = sr.file_id
+                WHERE sr.reference_kind IN " + CallGraphReferenceKindsSql + @"
                 GROUP BY rf.lang, sr.file_id, sr.symbol_name, sr.line, sr.column_number, logical_reference_kind
             ),
             global_reference_counts AS (
@@ -1718,8 +1720,16 @@ public partial class DbReader
         if (currentIndex < 0 || currentIndex >= lines.Length)
             return false;
 
-        var triviaMask = BuildTriviaMask(lines);
-        var attributeBlock = GetAdjacentAttributeBlock(lines, triviaMask, currentIndex);
+        // Sanitize the excerpt across lines so multi-line verbatim / raw /
+        // raw-interpolated string literals that contain `[` or `]` in the
+        // attribute argument do not leak reflection attribute context onto
+        // adjacent symbols. Closes #409.
+        // 複数行 verbatim / raw / raw 補間文字列リテラル内の `[` / `]` が
+        // 隣接シンボルへ reflection 属性コンテキストを漏らさないよう、
+        // 抜粋を行をまたいで sanitize する。#409 を修正。
+        var sanitizedLines = SymbolExtractor.SanitizeCSharpLinesForCrossLineScan(lines);
+        var triviaMask = BuildTriviaMask(sanitizedLines);
+        var attributeBlock = GetAdjacentAttributeBlock(lines, sanitizedLines, triviaMask, currentIndex);
         if (attributeBlock.Count == 0)
             return false;
 
@@ -1734,18 +1744,54 @@ public partial class DbReader
         ex.SqliteErrorCode == 1
         && ex.Message.Contains("no such table: chunks", StringComparison.OrdinalIgnoreCase);
 
-    private static List<string> GetAdjacentAttributeBlock(string[] lines, bool[] triviaMask, int anchorIndex)
+    private static List<string> GetAdjacentAttributeBlock(string[] lines, string[] sanitizedLines, bool[] triviaMask, int anchorIndex)
     {
         var anchorLine = lines[anchorIndex];
-        if (LineContainsInlineAttributeAndDeclaration(anchorLine))
-            return [anchorLine.Trim()];
+        // Run the inline `[attr] decl;` check against the sanitized anchor so that
+        // a line whose first non-whitespace token is a block comment — e.g.
+        // `/* note */ [JsonPropertyName("ok")] public string A { get; set; }` —
+        // still registers as an inline-attribute-with-declaration. The sanitizer
+        // blanks leading `/* ... */` bodies and delimiters to whitespace, leaving
+        // `[JsonPropertyName(    )] public string A ...` which satisfies the
+        // leading-`[` anchor in LineContainsInlineAttributeAndDeclaration. Using
+        // the original line would miss this valid C# shape and drop the property
+        // out of `reflection_or_config_suspect`. The #409 intent — refusing to
+        // treat multi-line literal continuation tails like `]")] public string A ...`
+        // as inline declarations — is preserved: sanitization cannot blank the
+        // leading `)` into a `[`, so the leading-`[` anchor still rejects those
+        // continuation rows. Closes #409.
+        // anchor 行のインライン `[attr] decl;` 判定は sanitize 済み行に対して行う。
+        // 行頭ブロックコメントの後ろに属性と宣言が並ぶ、例えば
+        // `/* note */ [JsonPropertyName("ok")] public string A { get; set; }` も
+        // sanitizer が先頭 `/* ... */` 本体と区切りを空白化するため、
+        // `[JsonPropertyName(    )] public string A ...` として扱え、
+        // LineContainsInlineAttributeAndDeclaration の先頭 `[` アンカーを満たす。
+        // original 行で判定するとこの正しい C# 形を取りこぼし、対象プロパティが
+        // `reflection_or_config_suspect` から外れてしまう。#409 の意図
+        // （`]")] public string A ...` のような複数行リテラル tail を
+        // インライン宣言と見なさない）は、sanitize で先頭 `)` が `[` に変わる
+        // ことはないため維持される。#409 を修正。
+        if (LineContainsInlineAttributeAndDeclaration(sanitizedLines[anchorIndex]))
+            return [sanitizedLines[anchorIndex].Trim()];
 
         var declarationIndex = anchorIndex;
         if (LooksLikeAttributeBoundaryLine(anchorLine))
         {
-            declarationIndex = FindNextDeclarationLine(lines, triviaMask, anchorIndex + 1);
-            if (declarationIndex < 0)
-                return [];
+            // A line like `]")] public string A ...` is itself both the tail of a
+            // multi-line attribute literal AND the inline declaration. In that case
+            // the declaration lives on the anchor line itself, so do not walk forward
+            // looking for a separate declaration below (which would otherwise skip
+            // past the real declaration and pick up an unrelated symbol). Closes #409.
+            // `]")] public string A ...` のように複数行属性リテラルの末尾かつ
+            // インライン宣言でもある行の場合、宣言は anchor 行自身にあるため、
+            // 下方へ別の宣言を探しに行かない（探しに行くと本来の宣言を飛び越して
+            // 別シンボルを拾ってしまう）。#409 を修正。
+            if (!SanitizedLineHasInlineDeclarationTail(sanitizedLines[anchorIndex]))
+            {
+                declarationIndex = FindNextDeclarationLine(lines, triviaMask, anchorIndex + 1);
+                if (declarationIndex < 0)
+                    return [];
+            }
         }
 
         var attributeBottom = FindPreviousNonTriviaLine(lines, triviaMask, declarationIndex - 1);
@@ -1757,21 +1803,62 @@ public partial class DbReader
         // Without this guard, a line like `[JsonPropertyName("a[")] public string X { ... }`
         // would leak its reflection attribute onto the next plain property and flip
         // that unrelated symbol into the reflection_or_config_suspect bucket. Closes #375.
+        // The same leak surfaces when the `[` and the declaration are split by a
+        // multi-line verbatim / raw / raw-interpolated string literal: the line at
+        // attributeBottom then starts with a continuation tail like `)]` before the
+        // real declaration. LineContainsInlineAttributeAndDeclaration's leading-`[`
+        // anchor cannot see that pattern, so we additionally check the sanitized
+        // line for trailing declaration content after the last `]`. Both checks
+        // run against the sanitized line so that a trailing `// comment` on the
+        // attribute row (e.g. `[JsonPropertyName("ok")] // note`) does not count
+        // as an inline declaration tail. Closes #409.
         // 直前の非 trivia 行がすでに `[attr] decl` のインライン宣言を持つ場合、
         // その属性はその行の宣言に属し、下の anchor 行には及ばない。
         // このガードが無いと `[JsonPropertyName("a[")] public string X { ... }` の属性が
         // 下の属性なしプロパティに漏れ、無関係なシンボルが reflection_or_config_suspect に
         // 誤分類される。#375 を修正。
-        if (attributeBottom != anchorIndex && LineContainsInlineAttributeAndDeclaration(lines[attributeBottom]))
+        // `[` と宣言が複数行 verbatim / raw / raw 補間文字列リテラルで分断されると、
+        // attributeBottom の行は `)]` 等の継続末尾で始まり LineContainsInlineAttributeAndDeclaration の
+        // 先頭 `[` アンカーでは捕らえられない。sanitize 済み行の最後の `]` 以降に
+        // 宣言本体が残っていないかを併せて確認する。判定はいずれも sanitize 済み行に対して行う。
+        // これにより属性行末尾の `// コメント`（例: `[JsonPropertyName("ok")] // note`）が
+        // 宣言末尾と誤判定されることも防ぐ。#409 を修正。
+        if (attributeBottom != anchorIndex
+            && (LineContainsInlineAttributeAndDeclaration(sanitizedLines[attributeBottom])
+                || SanitizedLineHasInlineDeclarationTail(sanitizedLines[attributeBottom])))
             return [];
 
+        // Build the attribute block from the cross-line-sanitized lines so
+        // comment bodies never bleed into downstream attribute-name parsing.
+        // A multi-line block comment embedded inside an attribute list, e.g.
+        //   [
+        //       /* explanation
+        //          [JsonIgnore] */
+        //       JsonPropertyName("ok")
+        //   ]
+        // has `[JsonIgnore]` inside the comment body. Its original line
+        // survives `BuildSingleLineTrivia`, and `ExtractNormalizedAttributeNames`
+        // would otherwise parse a phantom `JsonIgnore` attribute that cancels
+        // the real `JsonPropertyName`. Sanitized lines blank the comment body
+        // (with lexer state carried across physical lines), so the phantom
+        // attribute disappears while real identifiers like `JsonPropertyName`
+        // are preserved. Closes #409 follow-up.
+        // 属性ブロックは横断 sanitize 済み行から構築する。これにより、
+        // 属性リスト内に埋め込まれた複数行ブロックコメント（上の例のように
+        // `[JsonIgnore]` を本体に含むもの）のコメント本体がダウンストリームの
+        // 属性名パースへ漏れることがない。元の行を渡すと `BuildSingleLineTrivia`
+        // をすり抜けて `ExtractNormalizedAttributeNames` が幻の `JsonIgnore` を
+        // 拾い、本物の `JsonPropertyName` を打ち消してしまっていた。
+        // sanitize 済み行は物理行を跨ぐ lexer 状態でコメント本体を空白化するため、
+        // 幻の属性は消え、`JsonPropertyName` のような本物の識別子だけが残る。
+        // #409 追加修正。
         var block = new List<string>();
         var bracketDepth = 0;
         var sawBracket = false;
 
         for (int i = attributeBottom; i >= 0; i--)
         {
-            var trimmed = lines[i].Trim();
+            var trimmed = sanitizedLines[i].Trim();
             if (triviaMask[i])
             {
                 if (sawBracket)
@@ -1830,10 +1917,55 @@ public partial class DbReader
 
     private static bool LineContainsInlineAttributeAndDeclaration(string line)
     {
-        if (!LooksLikeAttributeBoundaryLine(line))
+        // Only a line that actually starts with `[` (after whitespace) can be an
+        // inline `[attr] decl;` row. Without this anchor, continuation rows of a
+        // multi-line attribute literal (e.g. the `]")]` tail of
+        // `[JsonPropertyName(@"a[\n]")]`) pass LooksLikeAttributeBoundaryLine and
+        // survive StripLeadingCSharpAttributeLists (which returns the input
+        // unchanged when the line doesn't start with `[`), so the guard in
+        // GetAdjacentAttributeBlock incorrectly treats them as standalone
+        // inline-declaration rows and drops the real attribute block above —
+        // flipping reflection-attributed properties out of
+        // `reflection_or_config_suspect`. Closes #409.
+        // 先頭が `[`（空白を除く）である行だけがインライン `[attr] decl;` 行として成立する。
+        // このアンカーが無いと、複数行にまたがる属性リテラルの継続行（例:
+        // `[JsonPropertyName(@"a[\n]")]` の末尾 `]")]`）が LooksLikeAttributeBoundaryLine を
+        // 通過し、`[` 始まりでない入力をそのまま返す StripLeadingCSharpAttributeLists の
+        // 挙動により、GetAdjacentAttributeBlock のガードがそれを単独の
+        // インライン宣言行と誤判定して本来の属性ブロックを潰し、reflection 属性付き
+        // プロパティが `reflection_or_config_suspect` から外れる。#409 を修正。
+        var index = 0;
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+        if (index >= line.Length || line[index] != '[')
             return false;
 
         return !string.IsNullOrWhiteSpace(StripLeadingCSharpAttributeLists(line));
+    }
+
+    // Detect that the cross-line-sanitized line ends an attribute run with
+    // trailing declaration content (single-line `[Foo] decl;` or the tail of a
+    // multi-line literal attribute such as `)] decl;`). The sanitizer blanks
+    // string / char / comment bodies AND their delimiters, so a genuine
+    // declaration `public string X;` shows up as non-whitespace text after the
+    // last `]`. A pure attribute line `[Foo]` has only whitespace after its
+    // last `]` and returns false here. Closes #409.
+    // 横断 sanitize 済みの行が、属性ブロックに続けて宣言本体を抱えているか
+    // （単行 `[Foo] decl;` または複数行リテラル属性の末尾 `)] decl;`）を判定する。
+    // sanitizer は文字列 / 文字 / コメントの本体と区切りを空白化するため、
+    // 実宣言 `public string X;` は最後の `]` 以降に非空白として残る。
+    // 属性単独行 `[Foo]` の場合は最後の `]` 以降が空白のみなので false を返す。#409 を修正。
+    private static bool SanitizedLineHasInlineDeclarationTail(string sanitizedLine)
+    {
+        var lastBracket = sanitizedLine.LastIndexOf(']');
+        if (lastBracket < 0)
+            return false;
+        for (var i = lastBracket + 1; i < sanitizedLine.Length; i++)
+        {
+            if (!char.IsWhiteSpace(sanitizedLine[i]))
+                return true;
+        }
+        return false;
     }
 
     private static int FindNextDeclarationLine(string[] lines, bool[] triviaMask, int startIndex)
@@ -1858,49 +1990,28 @@ public partial class DbReader
         return -1;
     }
 
-    private static bool[] BuildTriviaMask(string[] lines)
+    // A line is trivia iff its cross-line-sanitized form is entirely whitespace.
+    // `SanitizeCSharpLinesForCrossLineScan` already blanks strings, chars, `//`
+    // line comments, and `/* ... */` block comments (with state carried across
+    // physical lines), so any non-whitespace left over is real code. The previous
+    // heuristic flagged any line that merely *contained* `*/` as trivia, which
+    // wrongly skipped attribute rows with a trailing block comment such as
+    // `[JsonPropertyName("ok")] /* note */` and made FindPreviousNonTriviaLine
+    // overshoot past the real attribute block, dropping reflection context off
+    // the following property. Closes #409 follow-up.
+    // 行の trivia 判定は、横断 sanitize 済み形がすべて空白かどうかで決める。
+    // `SanitizeCSharpLinesForCrossLineScan` は文字列 / 文字 / `//` 行コメント /
+    // `/* ... */` ブロックコメント（物理行を跨ぐ状態保持付き）をすべて空白化するため、
+    // 残った非空白は必ず本物のコード。以前のヒューリスティックは `*/` を含むだけで
+    // trivia 判定していたため、`[JsonPropertyName("ok")] /* note */` のような末尾
+    // ブロックコメント付き属性行を飛ばしてしまい、FindPreviousNonTriviaLine が
+    // 本来の属性ブロックを越えて遡り、直下プロパティの reflection コンテキストを
+    // 落としていた。#409 追加修正。
+    private static bool[] BuildTriviaMask(string[] sanitizedLines)
     {
-        var triviaMask = new bool[lines.Length];
-        var inBlockComment = false;
-
-        for (int i = 0; i < lines.Length; i++)
-        {
-            var trimmed = lines[i].Trim();
-            if (trimmed.Length == 0)
-            {
-                triviaMask[i] = true;
-                continue;
-            }
-
-            if (inBlockComment)
-            {
-                triviaMask[i] = true;
-                if (trimmed.Contains("*/", StringComparison.Ordinal))
-                    inBlockComment = false;
-                continue;
-            }
-
-            if (trimmed.StartsWith("//", StringComparison.Ordinal))
-            {
-                triviaMask[i] = true;
-                continue;
-            }
-
-            if (trimmed.StartsWith("/*", StringComparison.Ordinal))
-            {
-                triviaMask[i] = true;
-                if (!trimmed.Contains("*/", StringComparison.Ordinal))
-                    inBlockComment = true;
-                continue;
-            }
-
-            if (trimmed.StartsWith('*') || trimmed.Contains("*/", StringComparison.Ordinal))
-            {
-                triviaMask[i] = true;
-                continue;
-            }
-        }
-
+        var triviaMask = new bool[sanitizedLines.Length];
+        for (int i = 0; i < sanitizedLines.Length; i++)
+            triviaMask[i] = string.IsNullOrWhiteSpace(sanitizedLines[i]);
         return triviaMask;
     }
 
@@ -2369,13 +2480,26 @@ public partial class DbReader
         return simpleName.Length == 0 ? null : simpleName.ToLowerInvariant();
     }
 
+    // Pure-trivia classifier used by ExtractNormalizedAttributeNames to skip
+    // comment-only rows picked up by the block walker (pure line/block comments
+    // and javadoc-style continuation rows). The lone `*/` closing row is
+    // already covered by the `StartsWith('*')` check, so we deliberately do
+    // NOT flag any line that merely contains `*/` mid-line — that used to
+    // discard attribute rows with a trailing block comment
+    // (`[JsonPropertyName("ok")] /* note */`) and strip reflection context
+    // off the next property. Closes #409 follow-up.
+    // ExtractNormalizedAttributeNames がブロック walker に拾われたコメント専用行
+    // （純粋な行 / ブロックコメント、javadoc スタイルの継続行）を除外するための
+    // 純 trivia 判定。`*/` だけの閉じ行は `StartsWith('*')` で既に拾えるので、
+    // 途中に `*/` を含むだけの行はここでは trivia 扱いしない。以前はそれを trivia 扱いして
+    // 末尾ブロックコメント付き属性行 `[JsonPropertyName("ok")] /* note */` を落とし、
+    // 直下のプロパティから reflection コンテキストを失わせていた。#409 追加修正。
     private static bool BuildSingleLineTrivia(string trimmed)
     {
         return trimmed.Length == 0
             || trimmed.StartsWith("//", StringComparison.Ordinal)
             || trimmed.StartsWith("/*", StringComparison.Ordinal)
-            || trimmed.StartsWith('*')
-            || trimmed.Contains("*/", StringComparison.Ordinal);
+            || trimmed.StartsWith('*');
     }
 
     private static bool LooksLikeAttributeBoundaryLine(string line)

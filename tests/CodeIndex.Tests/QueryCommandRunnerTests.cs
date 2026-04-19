@@ -551,6 +551,32 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunLanguages_JsonListsHtmlWithSymbolExtractionAndAllExtensions()
+    {
+        // Pin the #215 surface: `cdidx languages --json` must report html with
+        // symbol_extraction=true and list all four extensions (.html, .htm, .xhtml, .shtml)
+        // so AI tools can discover HTML symbol support without indexing first.
+        // #215 の表面契約を pin: `cdidx languages --json` は html を symbol_extraction=true で
+        // 返し、`.html` / `.htm` / `.xhtml` / `.shtml` の 4 拡張子を列挙する必要がある。
+        // AI ツールがインデックス前でも HTML のシンボル対応を検出できるようにするため。
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+
+        using var document = ParseJsonOutput(stdout);
+        var languages = document.RootElement.GetProperty("languages");
+        var html = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "html");
+
+        Assert.True(html.GetProperty("symbol_extraction").GetBoolean());
+        var extensions = html.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()).ToList();
+        Assert.Contains(".html", extensions);
+        Assert.Contains(".htm", extensions);
+        Assert.Contains(".xhtml", extensions);
+        Assert.Contains(".shtml", extensions);
+    }
+
+    [Fact]
     public void RunLanguages_Json_SearchOnlyBucketsAdvertiseZeroSymbolAndGraphSupport()
     {
         // Search-only languages that intentionally live outside the Python / CSS extractors
@@ -2195,6 +2221,49 @@ public class QueryCommandRunnerTests
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal(0, json.GetProperty("references").GetArrayLength());
             Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("callers", "attribute")]
+    [InlineData("callers", "annotation")]
+    [InlineData("callees", "attribute")]
+    [InlineData("callees", "annotation")]
+    public void RunCallersCallees_RejectMetadataKind_WithUsageError(string command, string kind)
+    {
+        // issue #293 follow-up: `callers` / `callees` must reject `--kind attribute` and
+        // `--kind annotation` at the CLI boundary. Metadata references are attributed to the
+        // enclosing body-range symbol rather than the annotated target, so `callers Obsolete
+        // --kind attribute` would return `[Obsolete] void M()` under the enclosing class
+        // instead of `M`, and file-level targets like `[assembly: Foo]` drop entirely because
+        // `container_name` is NULL. The correct path for metadata enumeration is
+        // `references <name> --kind attribute|annotation`.
+        // issue #293 補足: `callers` / `callees` は CLI 境界で `--kind attribute` /
+        // `--kind annotation` を必ず弾かなければならない。metadata 参照は注釈対象ではなく
+        // body-range の外側シンボルに帰属するため、`callers Obsolete --kind attribute` では
+        // `[Obsolete] void M()` が `M` ではなく外側クラスに寄り、`[assembly: Foo]` のような
+        // file-level target は `container_name = NULL` で完全に脱落する。metadata 列挙の
+        // 正しい経路は `references <name> --kind attribute|annotation`。
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_{command}_reject_kind_{kind}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var args = new[] { "Symbol", "--db", dbPath, "--kind", kind };
+
+            var (exitCode, _, stderr) = command switch
+            {
+                "callers" => CaptureConsole(() => QueryCommandRunner.RunCallers(args, _jsonOptions)),
+                "callees" => CaptureConsole(() => QueryCommandRunner.RunCallees(args, _jsonOptions)),
+                _ => throw new InvalidOperationException($"Unexpected command: {command}")
+            };
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains($"'--kind {kind}' is not supported on '{command}'", stderr);
+            Assert.Contains($"references <name> --kind {kind}", stderr);
         }
         finally
         {

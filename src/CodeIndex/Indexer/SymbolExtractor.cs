@@ -13,22 +13,42 @@ public static class SymbolExtractor
     private const string CSharpVisibilityPattern = @"protected\s+internal|private\s+protected|public|protected|internal|private";
     // Return-type character class includes `*` so pointer and function-pointer returns
     // (`int*`, `void**`, `delegate*<int, int>`, `int*[]`) are not silently dropped.
-    // The trailing `(?:\?|\[[\],\s]*\])*` loop lets a tuple group carry suffixes
-    // (`(int, int)[]`, `(int, int)?`, `(int, int)[][]`, `(int, int)[,]`) so tuple-array and
-    // nullable-tuple return types are captured on methods, properties, indexers, and
-    // explicit interface implementations. Delegate and event declarations with tuple-array
-    // returns remain blocked by pre-existing pattern-order / generic-over-tuple issues
-    // (#340, #241) and are out of scope for this loop. The identifier branch already absorbs
-    // these characters via its char class, but keeping the suffix loop outside both branches
-    // is harmless and makes the tuple branch's responsibilities explicit.
+    // The trailing CSharpTupleSuffixPattern lets a tuple group carry suffixes
+    // (`(int, int)[]`, `(int, int)?`, `(int, int)[][]`, `(int, int)[,]`, and whitespaced
+    // variants like `(int, int) []` / `(int, int) ?`) so tuple-array and nullable-tuple
+    // return types are captured on methods, properties, indexers, and explicit interface
+    // implementations. Delegate and event declarations with tuple-array returns remain
+    // blocked by pre-existing pattern-order / generic-over-tuple issues (#340, #241) and are
+    // out of scope for this loop. The identifier branch already absorbs these characters via
+    // its char class, but keeping the suffix loop outside both branches is harmless and
+    // makes the tuple branch's responsibilities explicit.
     // 戻り値型のクラスに `*` を含め、ポインタ / 関数ポインタ戻り値型（`int*` / `void**` / `delegate*<int, int>` / `int*[]`）を取りこぼさない。
-    // 末尾の `(?:\?|\[[\],\s]*\])*` ループで tuple 分岐にも `[]` / `?` / `[][]` / `[,]` の
-    // サフィックスを許容し、`(int, int)[]` / `(int, int)?` のような tuple-array / nullable-tuple
-    // 戻り値をメソッド・プロパティ・インデクサ・明示的インターフェース実装で捕捉できるようにする。
-    // delegate / event 宣言で tuple-array 戻り値を扱う件はパターン評価順や generic-over-tuple
-    // 側の既存バグ（#340、#241）が残っており、このループの範囲外。識別子側の分岐は
-    // 文字クラスに `[`/`]`/`?` を既に含むため無害な冗長だが、tuple 分岐側の責務が明確になる。
-    private const string CSharpTypePattern = @"(?:(?:\([^)]+\)|(?:global::)?[\w?.<>\[\],:*]+(?:\s+[\w?.<>\[\],:*]+)*)(?:\?|\[[\],\s]*\])*)";
+    // 末尾の CSharpTupleSuffixPattern で tuple 分岐にも `[]` / `?` / `[][]` / `[,]` と、
+    // `(int, int) []` / `(int, int) ?` のような空白を挟んだ整形バリエーションまで許容し、
+    // tuple-array / nullable-tuple 戻り値をメソッド・プロパティ・インデクサ・明示的
+    // インターフェース実装で捕捉できるようにする。delegate / event 宣言で tuple-array 戻り値を
+    // 扱う件はパターン評価順や generic-over-tuple 側の既存バグ（#340、#241）が残っており、この
+    // ループの範囲外。識別子側の分岐は文字クラスに `[`/`]`/`?` を既に含むため無害な冗長だが、
+    // tuple 分岐側の責務が明確になる。
+    // Tuple / array / nullable suffix tokens that may trail a C# return type. Each iteration
+    // matches a single `?` or a bracketed `[]` / `[,]` / `[,,]` group and allows whitespace
+    // between the preceding `)` / identifier and the suffix token (the `\s*` sits inside the
+    // group so a type with no suffix still matches zero iterations and consumes no
+    // whitespace). Shared by CSharpTypePattern and the C# constructor regex negative
+    // lookahead so legal formatting variants like `public required (int, int) [] R4 { ... }`
+    // and `public readonly (int, int) ? M3() => default;` are both rejected as ctor shapes
+    // (via the lookahead) and accepted as property / method shapes (via the upstream rows).
+    // Closes #349 follow-up.
+    // C# の戻り値型末尾に付きうる tuple / 配列 / nullable サフィックストークン列。各繰り返しは
+    // `?` 1 個または `[]` / `[,]` / `[,,]` の bracket ブロック 1 個を受理し、先行する `)` や
+    // 識別子とサフィックストークンの間に空白を許容する（`\s*` を繰り返しの内側に入れているため、
+    // サフィックスを持たない型は 0 回繰り返しで一致し、空白を消費しない）。CSharpTypePattern と
+    // C# コンストラクタ regex の否定先読みで共有し、`public required (int, int) [] R4 { ... }`
+    // や `public readonly (int, int) ? M3() => default;` のような合法な整形を、
+    // 否定先読みで ctor 形状として弾きつつ、上流の property / method 行で本来のシンボルとして
+    // 拾えるようにする。#349 のフォローアップ。
+    private const string CSharpTupleSuffixPattern = @"(?:\s*(?:\?|\[[\],\s]*\]))*";
+    private const string CSharpTypePattern = @"(?:(?:\([^)]+\)|(?:global::)?[\w?.<>\[\],:*]+(?:\s+[\w?.<>\[\],:*]+)*)" + CSharpTupleSuffixPattern + @")";
     // `delegate` is a non-type keyword only when it is NOT followed by `*` — `delegate*<...>` is a valid return type.
     // `delegate` は `*` を伴わないときだけ非型キーワード扱い。`delegate*<...>` は戻り値型として有効。
     private const string CSharpNonTypeKeywordPattern = @"(?:(?:public|private|protected|internal|static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|required|ref)\b|delegate\b(?!\s*\*))";
@@ -123,7 +143,25 @@ public static class SymbolExtractor
     private readonly record struct CSharpLexState(
         CSharpLexMode Mode = CSharpLexMode.Code,
         bool EscapeNext = false,
-        int RawDelimiterLength = 0);
+        int RawDelimiterLength = 0,
+        // Interpolation tracking for $@"..." / @$"..." / $"""..."""  / $$"""..."""  etc.
+        // IsInterpolated / InterpolationDollarCount describe the CURRENT string mode
+        // (only meaningful while Mode is a string mode). Return* fields preserve the
+        // outer interpolated string's info while we are inside an interpolation hole
+        // (Mode = Code with InterpolationBraceDepth > 0). Only one level of nesting
+        // is tracked — matches the single-line TrySkipCSharpStringOrCharLiteral
+        // approximation in DbSymbolReader.
+        // 補間 verbatim / raw 文字列のホール追跡。IsInterpolated / InterpolationDollarCount は
+        // 現在のモード（string 系モードのときだけ意味を持つ）を表し、Return* は
+        // ホール内（Mode = Code かつ InterpolationBraceDepth > 0）の間、外側の
+        // 補間文字列情報を退避する。ネストは 1 レベルのみで、単一行版
+        // TrySkipCSharpStringOrCharLiteral と同等の近似とする。
+        bool IsInterpolated = false,
+        int InterpolationDollarCount = 0,
+        int InterpolationBraceDepth = 0,
+        CSharpLexMode InterpolationReturnMode = CSharpLexMode.Code,
+        int InterpolationReturnRawDelimiterLength = 0,
+        int InterpolationReturnDollarCount = 0);
 
     private readonly record struct CSharpLexedLine(
         string SanitizedLine,
@@ -366,22 +404,38 @@ public static class SymbolExtractor
             new("class",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*(?:record\s+class\s+|record\s+|class\s+)(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Implicit/explicit conversion operator — must come before general operator pattern.
             // Visibility may appear before or after `static` / `unsafe` / `extern`. Closes #355.
+            // Modifier slot also accepts `abstract|virtual|sealed|override|new` so C# 11
+            // `static abstract` / `abstract static` interface conversion operators (generic
+            // math: `System.Numerics.INumber<TSelf>` etc.) and default-implementation /
+            // member-hiding forms on interfaces are not silently dropped. Closes #244.
             // 暗黙的/明示的変換演算子 — 一般のoperatorパターンより先に配置。
             // visibility は `static` / `unsafe` / `extern` のどちら側にも置ける。Closes #355.
+            // 修飾子スロットは `abstract|virtual|sealed|override|new` も受け付ける。
+            // これにより C# 11 の `static abstract` / `abstract static` interface 変換演算子
+            // （generic math: `System.Numerics.INumber<TSelf>` など）と、interface 上の
+            // default implementation / member hiding 形態を黙って取りこぼさない。Closes #244.
             new("function",  new Regex(
                 $@"^\s*"
-              + $@"(?=(?:(?:{CSharpVisibilityPattern}|static|unsafe|extern)\s+)*static\s+)"
-              + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern)\s+)+"
+              + $@"(?=(?:(?:{CSharpVisibilityPattern}|static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)*static\s+)"
+              + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)+"
               + $@"(?<conversionKind>implicit|explicit)\s+operator\b",
                 RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Operator overload (+ - * / == != < > etc.) — must come before method pattern.
             // Visibility may appear before or after `static`. Closes #355.
+            // Modifier slot also accepts `abstract|virtual|sealed|override|new` so C# 11
+            // `static abstract` / `abstract static` interface operators (generic math:
+            // `IAdditionOperators<T>`, `IComparisonOperators<T>`, etc.) are not silently
+            // dropped. Closes #244.
             // 演算子オーバーロード — メソッドパターンより前に配置。
             // visibility は `static` のどちら側にも置ける。Closes #355.
+            // 修飾子スロットは `abstract|virtual|sealed|override|new` も受け付ける。
+            // これにより C# 11 の `static abstract` / `abstract static` interface 演算子
+            // （generic math: `IAdditionOperators<T>`、`IComparisonOperators<T>` など）を
+            // 黙って取りこぼさない。Closes #244.
             new("function",  new Regex(
                 $@"^\s*"
-              + $@"(?=(?:(?:{CSharpVisibilityPattern}|static|unsafe|extern)\s+)*static\s+)"
-              + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern)\s+)+"
+              + $@"(?=(?:(?:{CSharpVisibilityPattern}|static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)*static\s+)"
+              + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)+"
               + @".+?\s+(?<name>operator\s+(?:checked\s+)?\S+)\s*\(",
                 RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Method with return type — visibility optional for explicit interface impl and nested members.
@@ -411,11 +465,52 @@ public static class SymbolExtractor
             // `unsafe` / `extern` can appear before or after visibility so declarations like
             // `unsafe public S(int* p) {}` and `extern public S(int x);` are still captured
             // with visibility populated. Closes #355.
+            // The negative lookahead after the opening paren rejects lines where the matching
+            // `)` is followed by an identifier + `{` / `(` / `;` / `=>` / `=` (with optional
+            // tuple-type suffixes `?` / `[]` / `[,]` / `[,,]` and whitespaced variants like
+            // `) []` / `) ?` in between via CSharpTupleSuffixPattern), which is the shape of a
+            // property with a modifier + tuple return type (`public required (int, int) R1
+            // { get; init; }`, `public required (int, int) [] R4 { get; init; }`), an
+            // expression-bodied method with a modifier (`public readonly (int, int)? M() =>
+            // null;`, `public readonly (int, int) ? M3() => default;`), or a plain field with a
+            // modifier + tuple type — both the uninitialized form (`public readonly (int, int) ?
+            // F5;`, terminated by `;`) and the initialized form (`public readonly (int, int) ?
+            // F4 = null;`, terminated by `=` excluding `==` / `=>`). A plain ctor signature
+            // cannot match because there is no identifier between the closing `)` and the body
+            // opener. The plain-field shapes are covered because #400's same-line plain-field
+            // advance no longer sets stopAfterFirstPatternMatch, so the ctor regex now runs on
+            // lines the plain-field pattern already claimed and would otherwise re-emit a phantom
+            // `function readonly` ctor row. Using a positional check (not a keyword deny-list)
+            // preserves support for legal (though unusual) type names that collide with
+            // contextual keywords. Multi-line ctor signatures where the closing `)` is on a
+            // later line are unaffected because the lookahead only triggers when a `)` is
+            // visible on the current line. Sharing CSharpTupleSuffixPattern with CSharpTypePattern
+            // keeps the ctor lookahead and the upstream property / method / plain-field rows in
+            // sync on which formatting variants count as a tuple-suffix return type. Closes #349.
             // コンストラクタ（戻り値なし、名前の後に括弧）— visibility 必須。
             // `unsafe` / `extern` は visibility の前後どちらにも置けるため、
             // `unsafe public S(int* p) {}` や `extern public S(int x);` でも visibility を
             // 拾える。Closes #355.
-            new("function",  new Regex($@"^\s*(?:(?:unsafe|extern)\s+)*(?<visibility>{CSharpVisibilityPattern})\s+(?:(?:unsafe|extern)\s+)*(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // 開き括弧の直後に置いた否定先読みは、「対応する `)` のあとに識別子 + `{` / `(` / `;` /
+            // `=>` / `=`（間に `?` / `[]` / `[,]` / `[,,]` の tuple サフィックス、および
+            // CSharpTupleSuffixPattern によって `) []` / `) ?` のような空白を挟んだ整形バリエーションも
+            // 許す）」形の行を弾く。これは `public required (int, int) R1 { get; init; }` や
+            // `public required (int, int) [] R4 { get; init; }` のような modifier 付き property、
+            // `public readonly (int, int)? M() => null;` や `public readonly (int, int) ? M3() => default;`
+            // のような modifier 付き式形式メソッド、および modifier 付き tuple 型の plain field —
+            // `public readonly (int, int) ? F5;` のような未初期化（`;` 終端）形、
+            // `public readonly (int, int) ? F4 = null;` のような初期化（`=` 終端、`==` / `=>` は除外）形 —
+            // であり、従来はいずれも `required` / `readonly` を ctor 名として greedy に喰っていた。
+            // 通常の ctor シグネチャでは閉じ括弧と本体開始の間に識別子が入らないためマッチし続ける。
+            // plain field 形が対象に入ったのは、#400 の同一行 plain-field 前進が
+            // stopAfterFirstPatternMatch をセットしなくなったため、ctor 正規表現が plain-field
+            // パターン既取得の行にも再走して phantom `function readonly` を再発する経路ができたため。
+            // キーワード deny-list ではなく位置検査なので、contextual keyword と綴りが衝突する合法な
+            // 型名のコンストラクタも弾かない。複数行にまたがる ctor シグネチャ（閉じ括弧が次行以降にある場合）は、
+            // 現在行に `)` が出ないため lookahead が発動せずそのままマッチする。
+            // CSharpTupleSuffixPattern を CSharpTypePattern と共有することで、ctor 否定先読みと上流の
+            // property / method / plain-field 行が tuple サフィックス戻り値の受理形について常に一致する。Closes #349.
+            new("function",  new Regex($@"^\s*(?:(?:unsafe|extern)\s+)*(?<visibility>{CSharpVisibilityPattern})\s+(?:(?:unsafe|extern)\s+)*(?<name>\w+)\s*\((?!.*\){CSharpTupleSuffixPattern}\s*\w+\s*(?:[{{(;]|=>|=(?![=>])))", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Property with get/set/init — visibility optional
             // Reject statement keywords (return/throw/switch/...) as the return type so that
             // multi-line statement fragments merged by BuildCSharpPropertyMatchLine — e.g.
@@ -809,6 +904,19 @@ public static class SymbolExtractor
             // SCSS placeholder selector / SCSS プレースホルダーセレクタ
             new("class",    new Regex(@"^\s*(?<name>%[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
         ],
+        // HTML does not use the regex pattern loop — it needs true tag-structure
+        // awareness (attribute enumeration, quoted-value handling, custom-element
+        // detection) that regex alone can't express without losing outer-tag
+        // context. `Extract` dispatches to `ExtractHtmlSymbols`, which drives a
+        // character state machine. The empty list here keeps "html" listed as a
+        // supported language via `GetSupportedLanguages()` without pretending to
+        // offer regex-based extraction.
+        // HTML は汎用の regex パターンループではなく、タグ構造を理解した走査（属性列挙、
+        // 引用符付き値の処理、カスタム要素検出）を必要とするため、`Extract` は
+        // `ExtractHtmlSymbols` に分岐して文字単位の state machine で抽出する。空リストは
+        // `GetSupportedLanguages()` で "html" を対応言語として残すための置き場であり、
+        // regex 抽出を模したものではない。
+        ["html"] = [],
         ["powershell"] =
         [
             // Function/filter declarations / 関数・フィルタ宣言
@@ -819,6 +927,45 @@ public static class SymbolExtractor
             new("enum",     new Regex(@"^\s*enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.Brace),
             // Import-Module / using module / モジュールインポート
             new("import",   new Regex(@"^\s*(?:Import-Module|using\s+module)\s+(?<name>\S+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+        ],
+        ["batch"] =
+        [
+            // Labels — goto :X / call :X targets, the only navigation anchors in a batch script.
+            // `::` comment form has no label name, so the name character class naturally rejects it.
+            // Dotted labels like `:build.release` are real batch label names, so accept `.` too.
+            // `:EOF` is a reserved batch target used by `goto :EOF` / `call :EOF`, not a user-defined
+            // label, so exclude it — but only the literal full-name `eof`. Labels that merely begin
+            // with `eof` such as `:eof2` / `:eofish` / `:end-of-file` / `:eof.x` must still surface,
+            // which is why the negative lookahead checks for name-terminating characters instead of `\b`.
+            // ラベル — goto :X / call :X の着地点であり、batch スクリプト内で唯一のナビゲーションアンカー。
+            // `::` コメント形式はラベル名を持たないため名前文字クラスが自然に弾く。
+            // `:build.release` のようなドット付きラベルも正規のラベル名として受け入れる。
+            // `:EOF` は `goto :EOF` / `call :EOF` 用の予約ターゲットであってユーザー定義ラベルではないため除外するが、
+            // 除外するのは名前全体が `eof` のときだけ。`:eof2` / `:eofish` / `:end-of-file` / `:eof.x` のように
+            // 単に `eof` で始まるだけのラベルは通す必要があるため、`\b` ではなく名前終端文字を見る negative lookahead を使う。
+            new("function", new Regex(@"^\s*:(?!eof(?![\w.-]))(?<name>[\w.\-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // Variable assignment — set VAR=value, set /a VAR=expr, set /p VAR=prompt, set "VAR=value".
+            // Also handles `@set VAR=...` (echo suppression prefix), `set /a VAR+=1` (compound
+            // assignment operators), `if ... set VAR=...` (inline assignment inside a one-line
+            // control statement), and same-line multi-statement forms `set A=1 & set B=2`,
+            // `( set X=1 )`, `if ... ( set P=1 ) else set Q=2`, `for ... do set LOOPVAR=...`.
+            // Boundary alternation: line-leading `^`, or after `&` / `(` / `\belse` / `\bdo` so
+            // the regex (paired with the batch multi-match advance in the extractor loop) can
+            // emit one symbol per `set` occurrence on the same line instead of dropping every
+            // assignment after the first match. `rem` / `@rem` / `::` comment lines can also
+            // contain those boundary tokens (e.g. `REM & set FAKE=1`), so they are short-
+            // circuited by `IsBatchCommentLine` before this pattern ever runs — the boundary
+            // alternation alone is not enough to keep comment bodies out of the capture.
+            // 変数代入 — set VAR=value、set /a VAR=expr、set /p VAR=prompt、set "VAR=value" に対応。
+            // 併せて `@set VAR=...` (echo 抑止プレフィクス) 、`set /a VAR+=1` (複合代入演算子) 、
+            // `if ... set VAR=...` (1 行制御文内の代入) 、および `set A=1 & set B=2` / `( set X=1 )` /
+            // `if ... ( set P=1 ) else set Q=2` / `for ... do set LOOPVAR=...` のような同一行複数ステートメント形も拾う。
+            // 境界は `^` / `&` / `(` / `\belse` / `\bdo` のいずれかで、extractor 側の batch 専用
+            // multi-match advance と組み合わせて 1 行中の `set` ごとに 1 シンボルを出す。
+            // `rem` / `@rem` / `::` コメント行にもこれらの境界トークンが入りうる
+            // (`REM & set FAKE=1` 等) ため、この正規表現が走る前に `IsBatchCommentLine` で
+            // 行ごと早期スキップしている — 境界 alternation だけではコメント本文を弾ききれない。
+            new("property", new Regex(@"(?:(?:^|&|\()\s*|(?:\belse|\bdo)\s+)(?:@\s*)?(?:if\s+.+?\s+)?set\s+(?:/[aApP]\s+)?""?(?<name>[A-Za-z_][\w]*)\s*(?:[+\-*/%&^|]|<<|>>)?=", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
         ],
         ["zig"] =
         [
@@ -891,6 +1038,22 @@ public static class SymbolExtractor
     // `const` も他の field 対応修飾子と一緒に列挙する。Closes #355.
     private static readonly Regex CSharpPropertyHeaderPrefixRegex = new($@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|volatile|unsafe|extern|const|ref(?:\s+readonly)?)\s+)*(?:{CSharpTypePattern})\s*(?:\w+)?\s*\{{?\s*$", RegexOptions.Compiled);
 
+    // Detect physical lines that consist solely of C# modifier keywords (no identifier,
+    // no parentheses, no punctuation). Used by TryFindCSharpWrappedHeaderModifier to
+    // re-assemble wrapped declarations such as `static\nFoo() { ... }` or
+    // `public\nBar() { ... }` whose identifier line alone does not satisfy the
+    // constructor / static-constructor regexes. Closes #348.
+    // 識別子・括弧・句読点を含まず、C# のモディファイアキーワードのみで構成される物理行を検出する。
+    // `static\nFoo() { ... }` や `public\nBar() { ... }` のようにラップされた宣言の
+    // 識別子行だけでは constructor / static constructor の regex を満たせないため、
+    // TryFindCSharpWrappedHeaderModifier が prefix を再構築する用途で使う。Closes #348.
+    private static readonly Regex CSharpWrappedHeaderModifierLineRegex = new(
+        @"^\s*(?:public|private|protected|internal|static|partial|readonly|abstract|sealed|virtual|override|async|new|file|unsafe|extern|required|volatile)(?:\s+(?:public|private|protected|internal|static|partial|readonly|abstract|sealed|virtual|override|async|new|file|unsafe|extern|required|volatile))*\s*$",
+        RegexOptions.Compiled);
+
+    private readonly record struct CSharpWrappedHeaderModifierInfo(string Prefix);
+
+
     /// <summary>
     /// Extract symbols from the given source content.
     /// 指定されたソース内容からシンボルを抽出する。
@@ -905,12 +1068,29 @@ public static class SymbolExtractor
             return [];
 
         var lines = content.Split('\n');
+
+        // HTML has no brace/indent-scoped bodies, so the generic pattern loop's
+        // "first match per line" semantics drop every additional symbol on the
+        // same line. HTML also needs cross-line masking of `<!-- ... -->` and
+        // raw-text children of `<script>` / `<style>` before patterns run, or
+        // phantom imports/classes/properties leak out of commented-out tags
+        // and inline template string literals. Closes #215 codex review blocker.
+        // HTML は brace/indent スコープの本体を持たないため、汎用パターンループの
+        // 「1 行の先勝ち」意味論を通すと同一行の追加シンボルを取りこぼす。加えて
+        // `<!-- ... -->` と `<script>` / `<style>` の raw-text 子要素を跨ぎ行で
+        // マスクしておかないと、コメントアウトされたタグやインラインテンプレート
+        // 文字列から phantom な import / class / property が漏れる。#215 の codex
+        // レビュー blocker 対応としてここで専用抽出に分岐する。
+        if (lang == "html")
+            return ExtractHtmlSymbols(fileId, lines);
+
         var structuralLines = StructuralLineMasker.MaskLines(lang, lines);
         var cssScannerLines = lang == "css"
             ? MaskCssScannerLines(lines)
             : null;
+        int[]?[] csharpMatchColumnToRaw = null!;
         var csharpMatchLines = lang == "csharp"
-            ? BuildCSharpMatchLines(structuralLines)
+            ? BuildCSharpMatchLines(structuralLines, out csharpMatchColumnToRaw)
             : null;
         var privateScopeColumns = lang is "javascript" or "typescript"
             ? BuildJavaScriptTypeScriptPrivateScopeColumns(lines, lang)
@@ -954,6 +1134,20 @@ public static class SymbolExtractor
                 matchLine = csharpMatchLines![i];
             }
 
+            // Batch `rem` / `@rem` / `::` comment lines contain the same `&` / `(` / `else` /
+            // `do` boundary tokens that the property regex now accepts for inline `set`
+            // capture, so `REM & set FAKE=1` or `:: else set FAKE=2` would otherwise leak a
+            // phantom property. Short-circuit those lines before any pattern fires — batch
+            // labels never match on `::` / `rem` lines anyway because the label regex
+            // requires `:<name-char>`, not `::` or `r`.
+            // batch の `rem` / `@rem` / `::` コメント行は、inline `set` 捕捉のために property 正規表現が
+            // 受け付ける `&` / `(` / `else` / `do` の境界トークンを含みうるため、`REM & set FAKE=1` や
+            // `:: else set FAKE=2` が偽 property を出す恐れがある。パターン適用前に当該行ごと
+            // 早期スキップする — batch ラベル側は `::` / `rem` 行ではそもそも `:<名前文字>` の要件を
+            // 満たさないため影響を受けない。
+            if (lang == "batch" && IsBatchCommentLine(line))
+                continue;
+
             var stopAfterFirstPatternMatch = false;
             foreach (var pattern in patterns)
             {
@@ -977,9 +1171,58 @@ public static class SymbolExtractor
                 var lineOffset = lang is "javascript" or "typescript"
                     ? FindNextJavaScriptTypeScriptStatementStart(patternMatchLine, 0)
                     : 0;
+                string? csharpWrappedModifierPrefix = null;
                 while (lineOffset >= 0 && lineOffset < patternMatchLine.Length)
                 {
                     var match = pattern.Regex.Match(patternMatchLine[lineOffset..]);
+                    if (!match.Success
+                        && lang == "csharp"
+                        && pattern.Kind == "function"
+                        && lineOffset == 0
+                        && csharpMatchLines != null
+                        && csharpWrappedModifierPrefix == null)
+                    {
+                        // Wrapped leading modifier recovery: when a C# function-kind pattern
+                        // fails at column 0 of the identifier line, try prepending the
+                        // modifier prefix accumulated from preceding modifier-only lines
+                        // (`static\nFoo() { ... }`, `public\nBar() { ... }`, etc.) and retry.
+                        // The method regex already tolerates an omitted modifier run, so it
+                        // matches on the identifier line alone — this branch only fires for
+                        // constructor / static-constructor shapes that require the modifier
+                        // on the same line as the name. Closes #348.
+                        // ラップされた先頭モディファイアの救済: C# の function 系パターンが
+                        // 識別子行の先頭マッチに失敗した場合、直前のモディファイアのみ行
+                        // （`static\nFoo() { ... }` や `public\nBar() { ... }` 等）から
+                        // 再構築した prefix を付け直して再試行する。メソッド regex は
+                        // 先頭モディファイアが無くても識別子行単体でマッチするため、この
+                        // 分岐は修飾子が識別子と同行に必要な constructor / static ctor
+                        // シェイプでのみ発火する。Closes #348.
+                        var wrappedInfo = TryFindCSharpWrappedHeaderModifier(csharpMatchLines!, i);
+                        if (wrappedInfo != null)
+                        {
+                            foreach (var candidatePrefix in EnumerateCSharpWrappedModifierCandidates(wrappedInfo.Value.Prefix))
+                            {
+                                var wrappedMatchLine = candidatePrefix + " " + patternMatchLine.TrimStart();
+                                var wrappedMatch = pattern.Regex.Match(wrappedMatchLine);
+                                if (wrappedMatch.Success)
+                                {
+                                    match = wrappedMatch;
+                                    patternMatchLine = wrappedMatchLine;
+                                    // Preserve the full prefix in the stored signature so
+                                    // declarations like `public\nstatic\nP1()` retain
+                                    // `public static P1()`, even when the matching regex
+                                    // variant only accepted `static P1()`. Closes #348.
+                                    // シグネチャには完全な prefix を残し、`public\nstatic\nP1()`
+                                    // のような宣言を `public static P1()` として保存する。
+                                    // マッチした regex 変種が `static P1()` 形だけを受け付けた
+                                    // 場合でも、保存シグネチャは完全な prefix を保持する。Closes #348.
+                                    csharpWrappedModifierPrefix = wrappedInfo.Value.Prefix;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
                     if (!match.Success)
                     {
                         if (lang is "javascript" or "typescript" or "csharp" or "css")
@@ -1009,17 +1252,54 @@ public static class SymbolExtractor
                     // ラムダの内部にあるローカル変数宣言が同じ形でマッチしてしまい、
                     // `symbols` / `definition` / `outline` / `inspect` / `unused` に
                     // 擬似シンボルが混入する。Closes #298 の codex レビュー blocker 対応。
-                    if (lang == "csharp"
-                        && pattern.Kind == "property"
-                        && pattern.BodyStyle == BodyStyle.None
-                        && csharpInsideTypeBody != null
-                        && !csharpInsideTypeBody[i])
-                        break;
-
                     if (ShouldSkipCssNestedSelectorCandidate(lang, pattern, patternMatchLine, cssQualifiedRuleAncestors, i))
                         break;
 
                     var absoluteStartColumn = lineOffset + match.Index;
+                    // For C#, collapsed-space column (from CollapseCSharpGenericTypeWhitespace)
+                    // has to be translated back to raw-space before it can be compared against
+                    // CSharpTypeBodyScope's per-line transitions, which were built from
+                    // structural (raw) columns. Only translate when the pattern match runs on
+                    // the per-line collapsed string (single-line case); multi-line merged
+                    // candidates use a different composed string whose column domain does not
+                    // line up with a single line's map, so we leave the column alone there to
+                    // preserve pre-existing behavior. Closes #400.
+                    // C# では CollapseCSharpGenericTypeWhitespace で空白を取り除いた列を、
+                    // structural 行の生列で構築された CSharpTypeBodyScope に渡す前に
+                    // raw 列へ戻す必要がある。複数行を結合した match では単一行の map が
+                    // 使えないため、単一行ケース（per-line collapsed line そのものにマッチした
+                    // 場合）だけ変換する。Closes #400.
+                    var csharpGateRawStartColumn = absoluteStartColumn;
+                    if (lang == "csharp"
+                        && csharpMatchLines != null
+                        && ReferenceEquals(patternMatchLine, csharpMatchLines[i]))
+                    {
+                        csharpGateRawStartColumn = TranslateCSharpCollapsedColumnToRaw(
+                            csharpMatchColumnToRaw,
+                            i,
+                            absoluteStartColumn,
+                            line.Length);
+                    }
+
+                    if (lang == "csharp"
+                        && pattern.Kind == "property"
+                        && pattern.BodyStyle == BodyStyle.None
+                        && csharpInsideTypeBody != null
+                        && !csharpInsideTypeBody.IsInsideTypeBodyAt(i, csharpGateRawStartColumn))
+                    {
+                        // Move the cursor past this same-line candidate so a later
+                        // column on the same line (e.g. a real field that lives after
+                        // a same-line method body or similar non-type-body scope) can
+                        // still be evaluated against its own column-aware scope.
+                        // Without this advance, the outer `while` would exit the line
+                        // entirely on the first rejection and drop any following match.
+                        // 同一行に続く別候補（例: 同一行の method 本体など非型本体の
+                        // 後ろにある実フィールド）を取りこぼさないよう、次の候補探索
+                        // 位置へ進める。この進行が無いと最初の拒否で while ループが
+                        // 行を抜けてしまい、後続候補が失われる。Closes #400.
+                        lineOffset = FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang);
+                        continue;
+                    }
                     if (privateScopeColumns != null
                         && pattern.Kind == "class"
                         && IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, i, absoluteStartColumn, matchLine, includeBlockScope: true))
@@ -1105,7 +1385,24 @@ public static class SymbolExtractor
                         ? FindSameLineBraceEndColumn(line, absoluteStartColumn, lang, kind)
                         : -1;
                     string signature;
-                    if (sameLineEndColumn >= absoluteStartColumn)
+                    if (csharpWrappedModifierPrefix != null)
+                    {
+                        // Wrapped ctor signature: prepend the modifier prefix recovered from
+                        // preceding modifier-only lines so the stored signature reflects the
+                        // full declaration (`static Foo() { ... }`) rather than only the name
+                        // line. Honor the same-line brace body truncation when present so the
+                        // signature does not absorb the entire ctor body. Closes #348.
+                        // ラップされたコンストラクタのシグネチャ: 直前のモディファイアのみ行から
+                        // 復元した prefix を付与し、識別子行だけでなく宣言全体
+                        // (`static Foo() { ... }`) を保存する。同一行に brace 本体が閉じる
+                        // ケースではその末尾で切り詰め、シグネチャが本体全体を飲み込まない
+                        // ようにする。Closes #348.
+                        var nameLineContent = sameLineEndColumn >= absoluteStartColumn
+                            ? line[absoluteStartColumn..(sameLineEndColumn + 1)]
+                            : line[absoluteStartColumn..];
+                        signature = (csharpWrappedModifierPrefix + " " + nameLineContent.TrimStart()).Trim();
+                    }
+                    else if (sameLineEndColumn >= absoluteStartColumn)
                     {
                         signature = line[absoluteStartColumn..(sameLineEndColumn + 1)].Trim();
                     }
@@ -1147,6 +1444,72 @@ public static class SymbolExtractor
                             absoluteStartColumn,
                             csharpTypeHeaderLastLineIndex,
                             csharpTypeHeaderLastLineExclusiveEndColumn);
+                    }
+                    else if (lang == "csharp"
+                        && pattern.Kind == "property"
+                        && pattern.BodyStyle == BodyStyle.None)
+                    {
+                        // For a plain C# field (kind `property`, BodyStyle.None), clamp the
+                        // signature to the end of the field's declaration statement (the
+                        // terminating `;`, or — if an unbalanced `}` from a same-line
+                        // enclosing type body is hit first — the position of that `}`).
+                        // This keeps initializer-backed fields such as
+                        // `private int _x = 42;` carrying a full `private int _x = 42;`
+                        // signature instead of being truncated at `=`, and still prevents
+                        // `public int X; } }` inside a same-line nested type from leaking
+                        // the trailing `} }` into X's signature (which would break the
+                        // same-line `ContainsSymbol` check in `AssignContainers` and make
+                        // X attach to `Outer` instead of `Inner`). Closes #400.
+                        // C# の通常フィールド（kind `property`、BodyStyle.None）では、signature を
+                        // 宣言文の終端（`;` まで、または同一行の囲む型本体の閉じ `}` が先に
+                        // 来ればその位置）までで clamp する。`private int _x = 42;` のような
+                        // 初期化子付きフィールドでも signature が `=` で切れず完全に残り、かつ
+                        // `public int X; } }` のような同一行ネスト型内のフィールドでも
+                        // trailing `} }` が signature に混入せず、AssignContainers の
+                        // ContainsSymbol 判定が正しく動いて X が Inner ではなく Outer に
+                        // ぶら下がる事故が起きない。Closes #400.
+                        var statementEnd = FindCSharpPlainFieldStatementEnd(patternMatchLine, absoluteStartColumn);
+                        if (csharpMatchLines != null
+                            && ReferenceEquals(patternMatchLine, csharpMatchLines[i]))
+                        {
+                            // Single-line candidate: translate both endpoints through the
+                            // per-line collapsed→raw column map so the raw slice keeps the
+                            // `;` terminator and does not absorb a phantom leading `;` from
+                            // the next declarator on the same line. Without this, a line like
+                            // `public Dictionary<string, int> Map = new(); public int B;`
+                            // returned `Map` without `;` and `B` with a leading `;` because
+                            // the collapsed-space endpoints no longer lined up with raw
+                            // character positions. Closes #400.
+                            // 単一行候補では、per-line collapsed→raw map で両端点を raw 列に
+                            // 戻してから slice する。こうしないと、
+                            // `public Dictionary<string, int> Map = new(); public int B;` のような行で
+                            // `Map` の終端 `;` が欠け、後続の `B` の先頭に `;` が混入する。Closes #400.
+                            var rawStart = TranslateCSharpCollapsedColumnToRaw(
+                                csharpMatchColumnToRaw,
+                                i,
+                                absoluteStartColumn,
+                                line.Length);
+                            var rawEnd = TranslateCSharpCollapsedColumnToRaw(
+                                csharpMatchColumnToRaw,
+                                i,
+                                statementEnd,
+                                line.Length);
+                            if (rawEnd > line.Length)
+                                rawEnd = line.Length;
+                            if (rawStart > line.Length)
+                                rawStart = line.Length;
+                            if (rawEnd <= rawStart)
+                                rawEnd = Math.Min(rawStart + Math.Max(1, match.Length), line.Length);
+                            signature = line[rawStart..rawEnd].Trim();
+                        }
+                        else
+                        {
+                            if (statementEnd > line.Length)
+                                statementEnd = line.Length;
+                            if (statementEnd <= absoluteStartColumn)
+                                statementEnd = Math.Min(absoluteStartColumn + Math.Max(1, match.Length), line.Length);
+                            signature = line[absoluteStartColumn..statementEnd].Trim();
+                        }
                     }
                     else
                     {
@@ -1223,8 +1586,127 @@ public static class SymbolExtractor
                         pendingRecordPrimaryComponents,
                         symbols);
 
+                    // C# plain-field (kind `property`, BodyStyle.None) matches need their own
+                    // advance path. The generic `sameLineEndColumn`-based advance below resolves
+                    // to -1 for BodyStyle.None and would set `stopAfterFirstPatternMatch`, which
+                    // prevents structural siblings on the same line (e.g. the enclosing
+                    // `public class C` in `public class C { public int X; }`) from being
+                    // captured by later patterns. Instead, advance past the field terminator
+                    // and continue the same-pattern scan so multiple same-line fields are
+                    // still collected, and skip the stop flag so later patterns can still run.
+                    // Closes #400.
+                    // C# 通常フィールド（kind `property`、BodyStyle.None）は専用の前進経路を使う。
+                    // 既定の `sameLineEndColumn` ベースの前進は BodyStyle.None では -1 に落ち、
+                    // `stopAfterFirstPatternMatch` を立ててしまうため、同一行に存在する構造宣言
+                    // （例: `public class C { public int X; }` の外側 class）を後続パターンで
+                    // 取得できなくなる。代わりにフィールド終端を越えて同一パターンのスキャンを
+                    // 続け、stop フラグを立てずに次のパターンにも機会を残す。Closes #400.
+                    if (lang == "csharp"
+                        && pattern.Kind == "property"
+                        && pattern.BodyStyle == BodyStyle.None)
+                    {
+                        // Advance past the end of the full field declaration statement
+                        // (the top-level `;`, with paren / bracket / brace depth tracking
+                        // so `{` / `;` inside an initializer cannot short-circuit the
+                        // scan) and continue. Using the statement end rather than the
+                        // regex match end keeps later same-line field statements visible
+                        // to the same pattern: without this, `A = 1; B;` stopped after
+                        // capturing `A` and dropped `B`, and `A, B; C;` stopped after
+                        // expanding `A, B` as a declarator list and dropped `C`. It also
+                        // avoids the earlier regression where advancing to the match end
+                        // (which sits on `=` when the field has an initializer) made the
+                        // regex re-match the tail `1, _b, _c =` as a bogus field with
+                        // `return_type = "1, _b,"`. If the scanner hits an unbalanced
+                        // `}` (the closing brace of the enclosing type body) before a
+                        // `;`, break out without setting `stopAfterFirstPatternMatch` so
+                        // later unrelated patterns on the same line still get a chance
+                        // to run. Closes #400.
+                        // フィールド宣言文全体の終端（`;`、paren / bracket / brace 深さを
+                        // 追って初期化子内の `{` や `;` で途切れないようにする）まで進めて
+                        // 同一パターンで scan を続ける。regex match の末尾ではなく文の
+                        // 終端で advance するのが肝心で、これが無いと `A = 1; B;` は
+                        // `A` を拾った時点で止まって `B` を取り落とし、`A, B; C;` は
+                        // `A, B` を declarator list として展開した時点で `C` を取り落とす。
+                        // さらに、match の末尾（初期化子付きなら `=`）まで進めて continue
+                        // すると正規表現が残りの `1, _b, _c =` を `return_type = "1, _b,"`
+                        // の偽フィールドとして再マッチしていた旧 regression も再発しない。
+                        // `;` より先に囲む型本体の閉じ `}`（深さ 0）に到達した場合は、
+                        // `stopAfterFirstPatternMatch` を立てずに break して同一行の他
+                        // パターン（class 等）へ機会を残す。Closes #400.
+                        var statementEnd = FindCSharpPlainFieldStatementEnd(patternMatchLine, absoluteStartColumn);
+                        if (statementEnd < patternMatchLine.Length
+                            && patternMatchLine[statementEnd] == '}')
+                        {
+                            break;
+                        }
+                        // Only continue the same-pattern same-line scan when the regex
+                        // ran on a per-line single-line candidate (patternMatchLine ===
+                        // csharpMatchLines[i]). For multi-line merged candidates,
+                        // BuildCSharpPropertyMatchLine joined the header line with one
+                        // or more continuation lines, so absoluteStartColumn sits in
+                        // the merged-string column domain and does not line up with
+                        // lines[i]'s raw columns. Continuing past statementEnd into a
+                        // second regex hit would then feed a column > lines[i].Length
+                        // into BuildCSharpMultilineSignature (which slices
+                        // lines[startLineIndex][startColumn..]) and crash indexing with
+                        // `startIndex cannot be larger than length of string`. The
+                        // continuation line is revisited by the outer physical-line
+                        // loop anyway (csharpSuppressedContinuationUntil is only bumped
+                        // for expression-bodied properties), so for multi-line merged
+                        // candidates we break here and let the outer loop handle any
+                        // additional fields on that line. Closes #400.
+                        // same-pattern での同一行 scan 継続は、per-line の単一行候補
+                        // （patternMatchLine === csharpMatchLines[i]）のときだけ許す。
+                        // BuildCSharpPropertyMatchLine が header 行と continuation 行を
+                        // マージした複数行候補では、absoluteStartColumn がマージ後文字列の
+                        // 列を指しており lines[i] の raw 列として使えない。この状態で
+                        // statementEnd を越えて 2 個目の regex ヒットに進むと、
+                        // BuildCSharpMultilineSignature の lines[startLineIndex][startColumn..]
+                        // で範囲外アクセスとなり
+                        // 「startIndex cannot be larger than length of string」で indexing が
+                        // 落ちる。continuation 行は外側の物理行ループが再訪する
+                        // （csharpSuppressedContinuationUntil は expression-bodied property
+                        // でしか進まない）ため、複数行候補ではここで break して後続の
+                        // 同一行フィールド抽出を外側ループに任せる。Closes #400.
+                        if (csharpMatchLines == null
+                            || !ReferenceEquals(patternMatchLine, csharpMatchLines[i]))
+                        {
+                            break;
+                        }
+                        var advance = statementEnd;
+                        if (advance <= lineOffset)
+                            advance = lineOffset + 1;
+                        if (advance >= patternMatchLine.Length)
+                            break;
+                        lineOffset = advance;
+                        continue;
+                    }
+
                     if (!CanContinueScanningSameLineBraceBody(lang, kind, pattern.BodyStyle, bodyEndLine, startLine, sameLineEndColumn, absoluteStartColumn))
                     {
+                        // Batch `set` assignments can legitimately repeat on a single line via
+                        // `&` command-chaining (`set A=1 & set B=2`), parenthesized grouping
+                        // (`if ... ( set P=1 ) else set Q=2`), or `for`-loop bodies
+                        // (`for %%I in (1) do set LOOPVAR=%%I`). The brace-body rescan path
+                        // above is JS/TS/CSS/C#-only, so drive the advance explicitly for the
+                        // batch property pattern instead of short-circuiting after the first
+                        // match. Forward progress is guaranteed because `match.Length >= 1`
+                        // (the regex requires a literal `set\s+NAME=` tail).
+                        // batch の `set` 代入は `&` 連結や `( ... ) else ... `、`for ... do ...` で
+                        // 1 行に複数回現れうる。上の brace-body 再スキャンは JS/TS/CSS/C# 限定なので、
+                        // batch の property パターンだけは explicit に advance して追加マッチも拾う。
+                        // 前進は `match.Length >= 1` (正規表現が `set\s+NAME=` を要求するため) で保証される。
+                        if (lang == "batch"
+                            && pattern.BodyStyle == BodyStyle.None
+                            && pattern.Kind == "property")
+                        {
+                            var nextBatchOffset = absoluteStartColumn + Math.Max(1, match.Length);
+                            if (nextBatchOffset <= lineOffset)
+                                break;
+                            lineOffset = nextBatchOffset;
+                            continue;
+                        }
+
                         // Stop after first match per line to avoid duplicate symbols
                         // (e.g. C# method pattern + constructor pattern both matching)
                         // 1行につき最初のマッチのみ採用し重複を防ぐ
@@ -1232,7 +1714,22 @@ public static class SymbolExtractor
                         break;
                     }
 
-                    lineOffset = FindNextSameLineBraceStatementStart(matchLine, sameLineEndColumn + 1, lang);
+                    // For C# class-like kinds with a same-line brace body, step into the body
+                    // (advance just past the match header) instead of jumping past the closing
+                    // `}`. This lets nested same-line declarations be captured, e.g.
+                    // `public class Outer { public class Inner { public int X; } }` matches
+                    // Outer and Inner, with X correctly attached to Inner. JavaScript/TypeScript
+                    // does not need this because class-body members there are extracted via the
+                    // separate JS/TS lexer/state machine; the brace-skip path only handles
+                    // same-line siblings like `class A {} class B {}`. Closes #400.
+                    // C# の class 系 kind は同一行の `{...}` 本体を飛び越えず、ヘッダ直後へ
+                    // 進めて本体内部の宣言（例: `public class Outer { public class Inner { ... } }`
+                    // の Inner）を拾えるようにする。JavaScript/TypeScript は class body の
+                    // member 抽出を専用 lexer/state machine で行うため従来通り終端の後ろへ
+                    // 進め、同一行 sibling（`class A {} class B {}` など）だけを扱う。Closes #400.
+                    lineOffset = lang == "csharp" && kind is "class" or "struct" or "interface" or "enum" or "namespace"
+                        ? FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang)
+                        : FindNextSameLineBraceStatementStart(matchLine, sameLineEndColumn + 1, lang);
                 }
 
                 if (stopAfterFirstPatternMatch)
@@ -1514,6 +2011,705 @@ public static class SymbolExtractor
     private static readonly Regex JavaEnumMemberLineFallbackRegex = new(
         @"^\s+(?<name>[A-Z]\w*)\s*(?:\([^)]*\))?\s*(?:,|\{|;)\s*$",
         RegexOptions.Compiled);
+
+    // Raw-text / RCDATA element names that must be masked before the symbol state
+    // machine runs. `<script>` / `<style>` are raw-text, `<textarea>` / `<title>`
+    // are RCDATA. Using a HashSet keeps the mask state machine branch-free per
+    // opening tag.
+    // state machine がシンボル抽出する前にマスクしなければならない raw-text / RCDATA
+    // 要素名。`<script>` / `<style>` は raw-text、`<textarea>` / `<title>` は RCDATA。
+    private static readonly HashSet<string> HtmlRawTextElementNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "script", "style", "textarea", "title",
+    };
+
+    // Native HTML/SVG/MathML tag names that happen to contain a hyphen but are
+    // reserved by the spec, so they must NOT be treated as custom-element class
+    // symbols. See https://html.spec.whatwg.org/multipage/custom-elements.html#valid-custom-element-name
+    // for the PotentialCustomElementName / reserved names production.
+    // ハイフンを含むが仕様で予約されている標準 HTML / SVG / MathML タグ名。custom
+    // element の class シンボルとして扱ってはいけない。
+    private static readonly HashSet<string> HtmlReservedHyphenatedTags = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "annotation-xml",
+        "color-profile",
+        "font-face",
+        "font-face-src",
+        "font-face-uri",
+        "font-face-format",
+        "font-face-name",
+        "missing-glyph",
+    };
+
+    private static string MaskHtmlRawTextRegions(string text)
+    {
+        // Walk `text` character by character, masking the body of raw-text /
+        // RCDATA elements (`<script>` / `<style>` / `<textarea>` / `<title>`)
+        // and `<!-- ... -->` comments. Regex-based masking could not reliably
+        // handle cases like `<script data-note="a > b" src="/app.js">` (quoted
+        // `>` inside an attribute terminated the naive `[^>]*` pattern) or
+        // `<script data-note="oops\nconst tpl = '<evil-card id="phantom">';`
+        // (unterminated quote let nested `"..."` pairs match across script
+        // body content). The state machine uses the same quote-handling logic
+        // as the symbol extractor's state machine so both agree on where a
+        // raw-text opener ends, and falls back to masking through EOF when an
+        // opener is unterminated — that matches HTML's spec behavior (an
+        // unclosed raw-text element swallows everything until EOF or
+        // `</name>`) and prevents script-body content from leaking as phantom
+        // HTML symbols.
+        // マスクを正規表現ではなく文字単位の state machine で行い、`<script>` /
+        // `<style>` / `<textarea>` / `<title>` の本体と `<!-- ... -->` コメントを
+        // マスクする。正規表現だと `<script data-note="a > b" src="/app.js">` の
+        // ように属性値内の引用符付き `>` で早期終了したり、未終端引用符を持つ
+        // `<script data-note="oops\nconst tpl = '<evil-card id="phantom">';`
+        // のような入力で引用符ペアが script 本体をまたいで誤マッチする問題が
+        // あった。state machine は symbol extractor と同じ引用符処理を共有して
+        // 開始タグの境界を一致させ、開始タグが未終端の場合は EOF までマスクする
+        // （仕様上、未閉鎖 raw-text 要素は EOF か `</name>` まで本体を飲むため）。
+        var chars = text.ToCharArray();
+        var i = 0;
+        while (i < chars.Length)
+        {
+            if (chars[i] != '<')
+            {
+                i++;
+                continue;
+            }
+
+            // `<!-- ... -->` comment. Closing `-->` is optional (masked through
+            // EOF) so mid-edit working-tree HTML with an unclosed comment does
+            // not leak following tags as phantom symbols.
+            // 未閉鎖コメントは EOF までマスクし、以降のタグが phantom にならないようにする。
+            if (i + 3 < chars.Length && chars[i + 1] == '!' && chars[i + 2] == '-' && chars[i + 3] == '-')
+            {
+                var commentClose = text.IndexOf("-->", i + 4, StringComparison.Ordinal);
+                var commentEnd = commentClose < 0 ? chars.Length : commentClose + 3;
+                BlankPreservingNewlines(chars, i, commentEnd);
+                i = commentEnd;
+                continue;
+            }
+
+            // `<![CDATA[ ... ]]>` section. In XHTML / SVG / MathML these are
+            // valid and must not leak their content as phantom tags. The
+            // terminator is specifically `]]>`, not the first `>`, so a naive
+            // `IndexOf('>', ...)` would stop early on inner markup and let the
+            // remaining CDATA body be parsed as real HTML. Unterminated CDATA
+            // masks through EOF, matching the comment-branch behavior.
+            // `<![CDATA[ ... ]]>` は XHTML / SVG / MathML で有効。終端は
+            // `]]>` のみであり、単純な `>` 検索では内部のタグで早期終了して
+            // 残り本体が phantom として抽出される。未閉鎖は EOF までマスクする。
+            if (i + 8 < chars.Length && chars[i + 1] == '!' && chars[i + 2] == '[' &&
+                chars[i + 3] == 'C' && chars[i + 4] == 'D' && chars[i + 5] == 'A' &&
+                chars[i + 6] == 'T' && chars[i + 7] == 'A' && chars[i + 8] == '[')
+            {
+                var cdataClose = text.IndexOf("]]>", i + 9, StringComparison.Ordinal);
+                var cdataEnd = cdataClose < 0 ? chars.Length : cdataClose + 3;
+                BlankPreservingNewlines(chars, i, cdataEnd);
+                i = cdataEnd;
+                continue;
+            }
+
+            // Other `<!...>` declarations (DOCTYPE and similar). Content
+            // between `<!` and the first unquoted `>` is a declaration, not a
+            // tag body, so mask it to prevent attribute-lookalike tokens from
+            // being emitted as symbols. Quoted values inside DOCTYPE PUBLIC /
+            // SYSTEM are walked via FindHtmlQuoteClose so embedded `>` does
+            // not terminate the declaration early.
+            // DOCTYPE などの `<!...>` 宣言は `FindHtmlTagOpenerEnd` で閉じ `>` を
+            // 探して丸ごとマスクする。引用符内の `>` で早期終了しないようにする。
+            if (i + 1 < chars.Length && chars[i + 1] == '!')
+            {
+                var declEnd = FindHtmlTagOpenerEnd(text, i);
+                if (declEnd < 0)
+                {
+                    BlankPreservingNewlines(chars, i, chars.Length);
+                    i = chars.Length;
+                    continue;
+                }
+                BlankPreservingNewlines(chars, i, declEnd + 1);
+                i = declEnd + 1;
+                continue;
+            }
+
+            // Processing instructions `<?...?>` (XML prolog, XSLT PIs, PHP
+            // short tags embedded in XHTML). Terminator is `?>`, not bare `>`.
+            // Content between can include tag-like markup that must not leak.
+            // `<?...?>` 処理命令。終端は `?>` で、内部のタグ様テキストは漏らさない。
+            if (i + 1 < chars.Length && chars[i + 1] == '?')
+            {
+                var piClose = text.IndexOf("?>", i + 2, StringComparison.Ordinal);
+                var piEnd = piClose < 0 ? chars.Length : piClose + 2;
+                BlankPreservingNewlines(chars, i, piEnd);
+                i = piEnd;
+                continue;
+            }
+
+            var rawName = TryMatchHtmlRawTextOpenerName(text, i);
+            if (rawName != null)
+            {
+                // Walk the opening tag to find its closing `>`. Multi-line
+                // quoted attribute values are allowed; the helper only returns
+                // -1 if the opener cannot be closed before EOF.
+                // 開始タグの `>` を探す。複数行に跨る引用符付き属性値は OK。
+                // EOF 前に閉じられない場合のみ -1 を返す。
+                var openerEnd = FindHtmlTagOpenerEnd(text, i);
+                if (openerEnd < 0)
+                {
+                    // Unterminated raw-text opener. Mask from `<` to EOF — this
+                    // matches HTML spec behavior and prevents script-body
+                    // content from leaking as phantom symbols.
+                    // 開始タグが未終端の場合、仕様どおり EOF までマスクする。
+                    BlankPreservingNewlines(chars, i, chars.Length);
+                    i = chars.Length;
+                    continue;
+                }
+
+                var bodyStart = openerEnd + 1;
+                var closeIdx = FindHtmlRawTextClose(text, bodyStart, rawName);
+                var bodyEnd = closeIdx < 0 ? chars.Length : closeIdx;
+                BlankPreservingNewlines(chars, bodyStart, bodyEnd);
+
+                if (closeIdx < 0)
+                {
+                    i = chars.Length;
+                    continue;
+                }
+
+                var closeGt = text.IndexOf('>', closeIdx);
+                i = closeGt < 0 ? chars.Length : closeGt + 1;
+                continue;
+            }
+
+            // Non-raw-text tag opener (including closing tags `</...`). Walk
+            // past the whole opener so quoted attribute values like
+            // `<div title="<script>">` or `<div title="<!--">` do not re-enter
+            // the raw-text / comment branches on the next character and get
+            // misidentified as raw-text/comment openers. Without this skip,
+            // the char-by-char scan would re-encounter `<script>` / `<!--`
+            // inside the attribute value and mask through EOF.
+            // raw-text 以外のタグ opener（`</...` を含む）に遭遇したら、opener 全体を
+            // 飛ばして属性値内の `<script>` / `<!--` が次の文字で raw-text / comment
+            // として再解釈されないようにする。これを入れないと属性値内の `<script>`
+            // を raw-text 本体マスク対象と誤認して以降の兄弟タグを全部飲み込む。
+            if (i + 1 < chars.Length && (IsHtmlTagNameStart(chars[i + 1]) || chars[i + 1] == '/'))
+            {
+                var openerEnd = FindHtmlTagOpenerEnd(text, i);
+                if (openerEnd >= 0)
+                {
+                    i = openerEnd + 1;
+                    continue;
+                }
+
+                // Unterminated non-raw-text tag opener (mid-edit quoted attribute
+                // like `<div title="<!--` or `<div title="<script>`). Advance
+                // past the current line so the `<!--` / `<script>` inside the
+                // broken quoted value is not re-encountered on the very next
+                // character and misidentified as a real comment / raw-text
+                // opener that would mask through EOF. Sibling tags on later
+                // lines still get their chance to be walked.
+                // 未終端の non-raw-text タグ opener（`<div title="<!--` のような
+                // 編集途中の引用属性）に遭遇した場合、`i++` で戻ると引用値内の
+                // `<!--` / `<script>` が次文字で comment / raw-text opener として
+                // 再解釈されて EOF までマスクされるため、現在行末まで一気に進めて
+                // 次行以降の兄弟タグを拾えるようにする。
+                var eolIdx = text.IndexOf('\n', i);
+                i = eolIdx < 0 ? chars.Length : eolIdx + 1;
+                continue;
+            }
+
+            i++;
+        }
+        return new string(chars);
+    }
+
+    private static string? TryMatchHtmlRawTextOpenerName(string text, int start)
+    {
+        // Check if `text[start]` (must be `<`) begins `<script` / `<style` /
+        // `<textarea` / `<title` followed by a non-tag-name-char (so `<scriptx`
+        // is NOT matched as `<script`).
+        // `start` は `<` の位置。`<script` / `<style` / `<textarea` / `<title`
+        // に続く文字がタグ名文字でないもののみ一致させる（`<scriptx` は除外）。
+        foreach (var name in HtmlRawTextElementNames)
+        {
+            var nameStart = start + 1;
+            if (nameStart + name.Length > text.Length)
+                continue;
+            var match = true;
+            for (var j = 0; j < name.Length; j++)
+            {
+                if (char.ToLowerInvariant(text[nameStart + j]) != name[j])
+                {
+                    match = false;
+                    break;
+                }
+            }
+            if (!match)
+                continue;
+            var after = nameStart + name.Length;
+            if (after >= text.Length || !IsHtmlTagNameChar(text[after]))
+                return name;
+        }
+        return null;
+    }
+
+    private static int FindHtmlTagOpenerEnd(string text, int start)
+    {
+        // Walk from `start` (position of `<`) forward to find the opening `>`,
+        // skipping over quoted attribute values. Multi-line quoted values are
+        // allowed per HTML5 spec.
+        // `start` は `<` の位置。引用符付き属性値を `FindHtmlQuoteClose` で飛ばしつつ
+        // 開始タグの閉じ `>` を探す。HTML5 仕様どおり複数行値も許容する。
+        var i = start + 1;
+        while (i < text.Length)
+        {
+            var c = text[i];
+            if (c == '>')
+                return i;
+            if (c == '"' || c == '\'')
+            {
+                var closeIdx = FindHtmlQuoteClose(text, i + 1, c);
+                if (closeIdx < 0)
+                    return -1;
+                i = closeIdx + 1;
+                continue;
+            }
+            i++;
+        }
+        return -1;
+    }
+
+    private static int FindHtmlQuoteClose(string text, int start, char quote)
+    {
+        // Scan forward for the matching closing quote. HTML5 allows newlines
+        // inside quoted attribute values (`<meta description="line1\nline2">`)
+        // and tag-like content (`<div title="<section id=x>">`), so we cross
+        // line boundaries and tag-name-like bytes without bailing. A quote is
+        // accepted as the close when it has "strong valid" post-value context:
+        // per HTML5 the char immediately after a quoted attribute value must
+        // be whitespace, `>`, or EOF. `/` alone is intentionally excluded from
+        // strong context — a `/` following a quote is ambiguous between the
+        // self-closing marker (`attr="v"/>`) and the opening `"` of a later
+        // path-like attribute (`href="/app.css"`). Accepting bare `/` would
+        // let an earlier unterminated `title="...` silently steal the opening
+        // quote of `href="/app.css"` and swallow every sibling tag between
+        // them. The self-closing form `"/>` IS accepted (ambiguity gone —
+        // the `/` is followed by `>`), so void-element tags like
+        // `<link href="/app.css"/>` still close cleanly without triggering
+        // the nested-attribute fallback on the following sibling tag.
+        //
+        // When a non-strong `"` is encountered and it matches an "attribute-
+        // start" pattern (preceded by `[attr-name-chars]+=` with whitespace
+        // before the ident), the scanner treats it as a nested attribute
+        // opening: it walks past that attribute's value (finding the matching
+        // inner quote) and resumes scanning, instead of mis-taking the inner
+        // opening for our close. This preserves strict-HTML5 behavior on
+        // well-formed multi-line quoted values (they contain no spurious
+        // `ident="` patterns) while keeping mid-edit resilience — if the
+        // outer quote is truly unterminated, we'll walk through all nested
+        // attributes without finding a strong close, and return -1 so the
+        // attribute parser can bail at EOL and recover sibling tags on the
+        // next lines.
+        //
+        // If neither a strong close nor a nested pattern is ever seen, fall
+        // back to the first bare `"` candidate (matches spec tokenizer
+        // recovery for malformed content like `<div id="foo"bar>`). If nested
+        // patterns WERE seen but no strong close was found, return -1 to
+        // signal the attribute is effectively unterminated for our purposes.
+        //
+        // 閉じ引用符を探す。HTML5 は属性値内の改行とタグ様テキストを許容するため、
+        // 改行やタグ様の文字では早期中断しない。引用符を閉じとして採用する条件は、
+        // 直後が空白 / `>` / EOF の「strong な属性値終端」であること。`/` は
+        // self-closing (`attr="v"/>`) と後続属性の開始引用符 (`href="/app.css"`)
+        // の区別が文脈無しでは付かないため、`/` 単独は strong には含めない。
+        // bare `/` を許容すると、未終端の `title="...` が後続 `href="/app.css"`
+        // の開き `"` を奪って兄弟タグを丸呑みする。
+        //
+        // strong でない `"` が「属性開始パターン」(`[attr-name-chars]+=` の前が
+        // 空白) にマッチしたら、それは nested な属性開始と判断し、その属性の値を
+        // 次の引用符まで飛ばして外側 scan を再開する。これにより Blocker 2
+        // (`<div title="line1\n<section></section>\nline3" id="real">`) のような
+        // 真に妥当な複数行引用属性値は strong 終端まで到達して通り、一方で未終端な
+        // 外側 `"` は nested を何個かスキップしても strong 終端に到達せず、最終的に
+        // -1 を返して属性パーサが EOL で bail → 次行以降の兄弟タグを拾える。
+        //
+        // strong 終端にも nested にも該当しない `"` は弱い候補として記録し、EOF
+        // 到達時に nested を見ていなければ fallback として返す（`<div id="foo"bar>`
+        // のような malformed でも spec に近い形で拾う）。nested を見ていれば -1 を
+        // 返して、未終端扱いにする。
+        var firstCandidate = -1;
+        var sawNested = false;
+        var i = start;
+        while (i < text.Length)
+        {
+            if (text[i] == quote)
+            {
+                var after = i + 1;
+                if (after >= text.Length)
+                    return i;
+                var nextCh = text[after];
+                if (nextCh == '>' || char.IsWhiteSpace(nextCh))
+                    return i;
+                // Accept the XML-style self-closing marker `"/>` as strong
+                // post-context. Bare `/` is still rejected because it cannot
+                // be distinguished from a path-like `href="/app.css"` opener.
+                // 自己閉鎖タグの `"/>` は strong として受理する。bare `/` は
+                // `href="/app.css"` の開きとの区別が付かないため受理しない。
+                if (nextCh == '/' && after + 1 < text.Length && text[after + 1] == '>')
+                    return i;
+
+                if (IsPrecededByHtmlAttributeStart(text, i, start))
+                {
+                    sawNested = true;
+                    var inner = i + 1;
+                    while (inner < text.Length && text[inner] != quote)
+                        inner++;
+                    if (inner >= text.Length)
+                        break;
+                    i = inner + 1;
+                    continue;
+                }
+
+                if (firstCandidate < 0)
+                    firstCandidate = i;
+            }
+            i++;
+        }
+        if (sawNested)
+            return -1;
+        return firstCandidate;
+    }
+
+    private static bool IsPrecededByHtmlAttributeStart(string text, int quotePos, int scanStart)
+    {
+        // Return true if the characters immediately before `quotePos` form a
+        // `[attr-name-chars]+=` pattern AND the ident is preceded by whitespace
+        // within the current scan — i.e. it looks like the start of a new
+        // attribute inside an outer quoted value. This is the signal that the
+        // `"` is more likely a nested attribute opening than the true close of
+        // the outer value.
+        // `quotePos` の直前が `[attr-name-chars]+=` で、その ident の前が
+        // scan 範囲内の空白文字なら true。外側引用値の中で新しい属性が
+        // 始まっているパターンと判定する。
+        if (quotePos <= scanStart)
+            return false;
+        if (text[quotePos - 1] != '=')
+            return false;
+        var j = quotePos - 2;
+        var identEnd = j + 1;
+        while (j >= scanStart && IsHtmlAttrNameChar(text[j]))
+            j--;
+        if (j + 1 >= identEnd)
+            return false;
+        if (j < scanStart)
+            return false;
+        return char.IsWhiteSpace(text[j]);
+    }
+
+    private static int FindHtmlRawTextClose(string text, int start, string tagName)
+    {
+        // Locate the next `</tagName` (case-insensitive) at or after `start`.
+        // Returns the position of `<`, or -1 if none.
+        // `</tagName` を大文字小文字非区別で `start` 以降から探し、`<` の位置を返す。
+        var i = start;
+        while (i < text.Length - tagName.Length - 2)
+        {
+            if (text[i] == '<' && text[i + 1] == '/')
+            {
+                var match = true;
+                for (var j = 0; j < tagName.Length; j++)
+                {
+                    if (char.ToLowerInvariant(text[i + 2 + j]) != tagName[j])
+                    {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match)
+                {
+                    var after = i + 2 + tagName.Length;
+                    if (after >= text.Length)
+                        return i;
+                    var nc = text[after];
+                    if (nc == '>' || nc == '/' || char.IsWhiteSpace(nc))
+                        return i;
+                }
+            }
+            i++;
+        }
+        return -1;
+    }
+
+    private static void BlankPreservingNewlines(char[] chars, int start, int end)
+    {
+        var limit = Math.Min(end, chars.Length);
+        for (var i = start; i < limit; i++)
+        {
+            if (chars[i] != '\n' && chars[i] != '\r')
+                chars[i] = ' ';
+        }
+    }
+
+    private static List<SymbolRecord> ExtractHtmlSymbols(long fileId, string[] lines)
+    {
+        // HTML needs proper tag-structure awareness so attribute lookalikes inside
+        // other attributes' quoted values (e.g. `<link title="href=evil.css" href="/real.css">`)
+        // don't leak phantom imports AND real attributes on the same tag aren't
+        // skipped. Regex alone can't do this — the outer tag context is lost once
+        // an attribute inside it is rejected — so walk the masked text with a
+        // character state machine that enumerates each tag's attributes in order.
+        // HTML は同一タグ内で別属性の引用符付き値に書かれた attribute 名の文字列（例:
+        // `<link title="href=evil.css" href="/real.css">`）から phantom な import を
+        // 漏らさず、かつ本物の属性を飛ばさないために、タグ構造を理解した走査が必要。
+        // regex だけでは、タグ内のある属性を mask で落とした瞬間に外側タグのコンテキスト
+        // を失うため不可能。マスク済みテキストを文字単位の state machine で走査し、タグ
+        // ごとに属性を列挙していく。
+        var rawText = string.Join('\n', lines);
+        var maskedText = MaskHtmlRawTextRegions(rawText);
+
+        // Precompute per-line absolute offsets for O(log n) line lookup via binary
+        // search. Each lines[i] does not include the joining '\n', so lineStarts[i]
+        // points at the first character of line i.
+        // 各シンボルの行番号を O(log n) で引けるように行ごとの絶対 offset を事前計算。
+        // lines[i] 自体は連結に使う '\n' を含まないため、lineStarts[i] は i 行目の
+        // 先頭文字位置を指す。
+        var lineStarts = new int[lines.Length];
+        var lineCursor = 0;
+        for (var i = 0; i < lines.Length; i++)
+        {
+            lineStarts[i] = lineCursor;
+            lineCursor += lines[i].Length + 1;
+        }
+
+        var symbols = new List<SymbolRecord>();
+        var pos = 0;
+        while (pos < maskedText.Length)
+        {
+            if (maskedText[pos] != '<')
+            {
+                pos++;
+                continue;
+            }
+
+            // Skip closing tags, comments/doctypes/CDATA, and processing instructions.
+            // Raw-text bodies (<script>/<style>) and comments have already been masked
+            // by MaskHtmlRawTextRegions, but the opening/closing tags themselves remain.
+            // 閉じタグ / コメント / doctype / 処理命令はここで読み飛ばす。raw-text 本文と
+            // HTML コメントは MaskHtmlRawTextRegions で既に空白化されているが、開始タグ
+            // 自体はそのまま残っているため通常の属性走査対象になる。
+            if (pos + 1 < maskedText.Length && (maskedText[pos + 1] == '/' || maskedText[pos + 1] == '!' || maskedText[pos + 1] == '?'))
+            {
+                pos = IndexOfOrEnd(maskedText, '>', pos + 1) + 1;
+                continue;
+            }
+
+            var tagNameStart = pos + 1;
+            if (tagNameStart >= maskedText.Length || !IsHtmlTagNameStart(maskedText[tagNameStart]))
+            {
+                pos++;
+                continue;
+            }
+
+            var tagNameEnd = tagNameStart;
+            while (tagNameEnd < maskedText.Length && IsHtmlTagNameChar(maskedText[tagNameEnd]))
+                tagNameEnd++;
+
+            var tagName = maskedText[tagNameStart..tagNameEnd];
+            var tagNameLower = tagName.ToLowerInvariant();
+
+            // Emit custom Web Components (hyphenated opening tag) at the `<` position,
+            // but skip the standard HTML/SVG/MathML tags that happen to contain a hyphen
+            // (`<font-face>`, `<color-profile>`, `<annotation-xml>`, etc.). Those are
+            // native elements, not user components, so labeling them as `class` symbols
+            // would pollute `symbols` / `definition` / `outline` on any project with
+            // inline SVG / MathML content.
+            // 開始タグ名にハイフンを含むカスタム Web Components を `<` の位置で emit する。
+            // ただしハイフン付きでも仕様で予約されている `<font-face>` / `<color-profile>`
+            // / `<annotation-xml>` などの標準タグは除外する。SVG / MathML を埋め込んだ
+            // ファイルで `symbols` / `definition` / `outline` が汚染されるのを防ぐ。
+            if (tagName.Contains('-') && !HtmlReservedHyphenatedTags.Contains(tagNameLower))
+            {
+                var startLine = FindHtmlLineNumber(lineStarts, pos);
+                var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "class",
+                    Name = tagName,
+                    Line = startLine,
+                    StartLine = startLine,
+                    EndLine = startLine,
+                    Signature = lines[signatureIndex].Trim(),
+                });
+            }
+
+            // Walk the tag body, enumerating attribute name/value pairs until `>` or EOF.
+            // タグ本体を走査し、`>` か EOF まで属性 name/value を順に列挙する。
+            var cursor = tagNameEnd;
+            while (cursor < maskedText.Length && maskedText[cursor] != '>')
+            {
+                // Skip whitespace and stray '/' (self-closing marker).
+                // 空白文字と self-closing の `/` を読み飛ばす。
+                if (char.IsWhiteSpace(maskedText[cursor]) || maskedText[cursor] == '/')
+                {
+                    cursor++;
+                    continue;
+                }
+
+                // Read attribute name. HTML5 allows broad attribute-name charsets, but for
+                // our emit rules we only need to recognize ASCII names plus `:` / `-` / `.`
+                // (xml:id, data-*, aria-*, etc.). Anything else aborts the parse of this tag
+                // gracefully by treating it as a non-matching attribute start.
+                // 属性名を読む。HTML5 の属性名は広いが、emit 対象の判定には ASCII の名前と
+                // `:` / `-` / `.` が拾えれば十分（xml:id, data-*, aria-* 等を含めるため）。
+                // それ以外の文字が来たら、このタグのパースは壊さずに 1 文字進めるだけで抜ける。
+                if (!IsHtmlAttrNameStart(maskedText[cursor]))
+                {
+                    cursor++;
+                    continue;
+                }
+                var attrNameStart = cursor;
+                while (cursor < maskedText.Length && IsHtmlAttrNameChar(maskedText[cursor]))
+                    cursor++;
+                var attrName = maskedText[attrNameStart..cursor];
+                var attrNameLower = attrName.ToLowerInvariant();
+
+                // Skip whitespace between name and `=`.
+                while (cursor < maskedText.Length && char.IsWhiteSpace(maskedText[cursor]))
+                    cursor++;
+
+                string? attrValue = null;
+                int attrValueStart = -1;
+                if (cursor < maskedText.Length && maskedText[cursor] == '=')
+                {
+                    cursor++;
+                    while (cursor < maskedText.Length && char.IsWhiteSpace(maskedText[cursor]))
+                        cursor++;
+                    if (cursor < maskedText.Length && (maskedText[cursor] == '"' || maskedText[cursor] == '\''))
+                    {
+                        var quote = maskedText[cursor];
+                        cursor++;
+                        attrValueStart = cursor;
+                        // Use the shared FindHtmlQuoteClose helper so this and the raw-text
+                        // mask agree on where quoted attribute values end. The helper allows
+                        // multi-line quoted values (valid HTML5 like `<div title="line1\n
+                        // line2" id="real">` where `id="real"` must still be emitted) and
+                        // tag-like content inside quoted values, identifying the close by
+                        // post-value context (`>`, `/`, whitespace, or EOF). Only truly
+                        // unterminated quotes (no matching `"` at all) return -1, so the
+                        // caller can bail to EOL without walking to EOF.
+                        // 共有ヘルパー `FindHtmlQuoteClose` を使い、mask 側とも引用符終端の
+                        // 判断を一致させる。複数行 quoted 属性値 (`<div title="line1\n
+                        // line2" id="real">` など) とタグ様テキストを含む引用符付き値を
+                        // 許容し、`>` / `/` / 空白 / EOF が直後に来る位置を終端として検出する。
+                        // 真に未終端（マッチ `"` が存在しない）場合のみ -1 を返し、呼び出し側が
+                        // EOF まで走らず行末で被害を止められるようにする。
+                        var valueEnd = FindHtmlQuoteClose(maskedText, cursor, quote);
+                        if (valueEnd < 0)
+                        {
+                            // Unterminated: bail to end of current line so the outer tag
+                            // loop can restart at the beginning of the next line's `<`.
+                            // 未終端: 当該行末まで進め、次行先頭の `<` から外側ループが再開できるようにする。
+                            attrValue = null;
+                            var eol = maskedText.IndexOf('\n', cursor);
+                            cursor = eol < 0 ? maskedText.Length : eol;
+                            break;
+                        }
+                        attrValue = maskedText[cursor..valueEnd];
+                        cursor = valueEnd + 1;
+                    }
+                    else if (cursor < maskedText.Length && maskedText[cursor] != '>')
+                    {
+                        // Unquoted value: HTML5 excludes space, `"`, `'`, `=`, `<`, `>`, backtick.
+                        // 引用符なし値: HTML5 では空白、`"`、`'`、`=`、`<`、`>`、バッククォートを除外。
+                        attrValueStart = cursor;
+                        while (cursor < maskedText.Length && !IsHtmlUnquotedValueTerminator(maskedText[cursor]))
+                            cursor++;
+                        attrValue = maskedText[attrValueStart..cursor];
+                    }
+                }
+
+                if (attrValue == null || attrValue.Length == 0)
+                    continue;
+
+                string? emitKind = null;
+                if (attrNameLower == "src" && tagNameLower == "script")
+                    emitKind = "import";
+                else if (attrNameLower == "href" && tagNameLower == "link")
+                    emitKind = "import";
+                else if (attrNameLower == "id" && !attrName.Contains(':') && !attrName.Contains('-') && !attrName.Contains('.'))
+                    emitKind = "property";
+
+                if (emitKind == null)
+                    continue;
+
+                var name = attrValue.Trim();
+                if (name.Length == 0)
+                    continue;
+
+                // Anchor the symbol at the attribute value so cross-line tags like
+                // `<script\n  type="module"\n  src="/app.js">` land on the line that
+                // actually carries the value.
+                // 属性値の位置でシンボルを固定し、属性が折り返されたタグでも値が書かれた
+                // 行にジャンプできるようにする。
+                var anchor = attrValueStart >= 0 ? attrValueStart : pos;
+                var startLine = FindHtmlLineNumber(lineStarts, anchor);
+                var signatureIndex = Math.Clamp(startLine - 1, 0, lines.Length - 1);
+                symbols.Add(new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = emitKind,
+                    Name = name,
+                    Line = startLine,
+                    StartLine = startLine,
+                    EndLine = startLine,
+                    Signature = lines[signatureIndex].Trim(),
+                });
+            }
+
+            pos = cursor < maskedText.Length ? cursor + 1 : cursor;
+        }
+
+        AssignContainers(symbols);
+        PopulateDeclaredContainerQualifiedNames(symbols);
+        return symbols;
+    }
+
+    private static bool IsHtmlTagNameStart(char c) => (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+
+    private static bool IsHtmlTagNameChar(char c) =>
+        (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
+
+    private static bool IsHtmlAttrNameStart(char c) =>
+        (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_' || c == ':';
+
+    private static bool IsHtmlAttrNameChar(char c) =>
+        IsHtmlAttrNameStart(c) || (c >= '0' && c <= '9') || c == '-' || c == '.';
+
+    private static bool IsHtmlUnquotedValueTerminator(char c) =>
+        char.IsWhiteSpace(c) || c == '"' || c == '\'' || c == '=' || c == '<' || c == '>' || c == '`';
+
+    private static int IndexOfOrEnd(string text, char needle, int start)
+    {
+        var idx = text.IndexOf(needle, start);
+        return idx < 0 ? text.Length : idx;
+    }
+
+    private static int FindHtmlLineNumber(int[] lineStarts, int offset)
+    {
+        if (lineStarts.Length == 0)
+            return 1;
+        var lo = 0;
+        var hi = lineStarts.Length - 1;
+        while (lo < hi)
+        {
+            var mid = (lo + hi + 1) / 2;
+            if (lineStarts[mid] <= offset)
+                lo = mid;
+            else
+                hi = mid - 1;
+        }
+        return lo + 1;
+    }
 
     private static void ExtractJavaEnumMembers(long fileId, string[] rawLines, List<SymbolRecord> symbols)
     {
@@ -4476,6 +5672,47 @@ public static class SymbolExtractor
         return new JavaScriptLexedLine(new string(sanitized), state);
     }
 
+    // Sanitize a contiguous block of C# source lines for cross-line structural
+    // analysis (attribute boundaries, bracket depth). String / char / comment
+    // content is blanked to spaces while preserving original line lengths, and
+    // the lexer state (VerbatimString / RawString / BlockComment / ...) is
+    // threaded across line boundaries so multi-line literals no longer leak
+    // stray `[` / `]` / `"` characters into downstream parsers.
+    // After `LexCSharpLine` sanitization, string delimiters themselves (`"`,
+    // `'`, `\`) are also blanked so continuation lines (e.g. `]")] decl` closing
+    // a verbatim string from the previous physical line) do not look like they
+    // open a fresh string literal when the caller scans them line-by-line.
+    // C# ソース行の塊を、横断的な構造解析（属性境界や bracket depth）向けに
+    // sanitize する。文字列 / 文字 / コメント内容は空白で置換し元の行長を保持、
+    // lexer state（VerbatimString / RawString / BlockComment など）を行をまたいで
+    // 持ち越すことで、複数行リテラル由来の `[` / `]` / `"` が下流パーサへ漏れない。
+    // `LexCSharpLine` による sanitize 後、文字列区切りそのもの（`"`, `'`, `\`）も
+    // 空白化する。こうしないと、前行の verbatim 文字列を閉じる継続行
+    // （例: `]")] decl`）が単独で走査された際に新たな文字列リテラル開始と
+    // 誤読されてしまう。
+    internal static string[] SanitizeCSharpLinesForCrossLineScan(string[] lines)
+    {
+        if (lines.Length == 0)
+            return lines;
+
+        var result = new string[lines.Length];
+        var state = new CSharpLexState();
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var lexed = LexCSharpLine(lines[i], state);
+            var chars = lexed.SanitizedLine.ToCharArray();
+            for (var k = 0; k < chars.Length; k++)
+            {
+                var ch = chars[k];
+                if (ch == '"' || ch == '\'' || ch == '\\')
+                    chars[k] = ' ';
+            }
+            result[i] = new string(chars);
+            state = lexed.EndState;
+        }
+        return result;
+    }
+
     private static CSharpLexedLine LexCSharpLine(string line, CSharpLexState state)
     {
         var sanitized = new char[line.Length];
@@ -4554,6 +5791,44 @@ public static class SymbolExtractor
             if (state.Mode == CSharpLexMode.VerbatimString)
             {
                 sanitized[i] = ch == '"' ? '"' : ' ';
+
+                // Interpolation hole handling for $@"..." / @$"...".
+                // { opens a hole (unless {{, which is a literal {). Entering a hole
+                // switches to Code mode so inner strings / brackets are parsed normally;
+                // Return* fields preserve the outer verbatim-interp context.
+                // 補間 verbatim 文字列（$@"..." / @$"..."）のホール処理。
+                // { 単独でホール開始（{{ は literal {）。ホール進入時は Code モードへ切替。
+                if (state.IsInterpolated && ch == '{')
+                {
+                    if (next == '{')
+                    {
+                        sanitized[i + 1] = ' ';
+                        i += 2;
+                        continue;
+                    }
+
+                    sanitized[i] = ' ';
+                    state = state with
+                    {
+                        Mode = CSharpLexMode.Code,
+                        InterpolationReturnMode = CSharpLexMode.VerbatimString,
+                        InterpolationReturnRawDelimiterLength = 0,
+                        InterpolationReturnDollarCount = state.InterpolationDollarCount,
+                        InterpolationBraceDepth = 1,
+                        IsInterpolated = false,
+                        InterpolationDollarCount = 0,
+                    };
+                    i++;
+                    continue;
+                }
+
+                if (state.IsInterpolated && ch == '}' && next == '}')
+                {
+                    sanitized[i + 1] = ' ';
+                    i += 2;
+                    continue;
+                }
+
                 if (ch == '"' && next == '"')
                 {
                     sanitized[i + 1] = '"';
@@ -4562,7 +5837,12 @@ public static class SymbolExtractor
                 }
 
                 if (ch == '"')
-                    state = state with { Mode = CSharpLexMode.Code };
+                    state = state with
+                    {
+                        Mode = CSharpLexMode.Code,
+                        IsInterpolated = false,
+                        InterpolationDollarCount = 0,
+                    };
 
                 i++;
                 continue;
@@ -4571,19 +5851,143 @@ public static class SymbolExtractor
             if (state.Mode == CSharpLexMode.RawString)
             {
                 sanitized[i] = ' ';
+
+                // Interpolation hole handling for $"""..."""  (and multi-$ forms).
+                // A run of N consecutive `{` where N = InterpolationDollarCount opens
+                // a hole; fewer are literal string content. Closing mirrors this but
+                // is handled in the Code-mode hole tracking below.
+                // 補間 raw 文字列（$"""..."""  と $$"""..."""  など）のホール処理。
+                // `{` 連続数 N が InterpolationDollarCount と一致したらホール開始。
+                if (state.IsInterpolated && ch == '{')
+                {
+                    var openRun = 0;
+                    while (i + openRun < line.Length && line[i + openRun] == '{')
+                        openRun++;
+
+                    var dollarCount = state.InterpolationDollarCount;
+                    if (openRun >= dollarCount)
+                    {
+                        for (var j = 0; j < dollarCount && i + j < line.Length; j++)
+                            sanitized[i + j] = ' ';
+
+                        state = state with
+                        {
+                            Mode = CSharpLexMode.Code,
+                            InterpolationReturnMode = CSharpLexMode.RawString,
+                            InterpolationReturnRawDelimiterLength = state.RawDelimiterLength,
+                            InterpolationReturnDollarCount = dollarCount,
+                            InterpolationBraceDepth = 1,
+                            IsInterpolated = false,
+                            InterpolationDollarCount = 0,
+                            RawDelimiterLength = 0,
+                        };
+                        i += dollarCount;
+                        continue;
+                    }
+
+                    for (var j = 0; j < openRun && i + j < line.Length; j++)
+                        sanitized[i + j] = ' ';
+                    i += openRun;
+                    continue;
+                }
+
                 if (ch == '"' && HasCSharpQuoteRun(line, i, state.RawDelimiterLength))
                 {
                     var quoteRunLength = GetCSharpQuoteRunLength(line, i);
                     for (var j = 0; j < quoteRunLength && i + j < line.Length; j++)
                         sanitized[i + j] = ' ';
 
-                    state = state with { Mode = CSharpLexMode.Code, RawDelimiterLength = 0 };
+                    state = state with
+                    {
+                        Mode = CSharpLexMode.Code,
+                        RawDelimiterLength = 0,
+                        IsInterpolated = false,
+                        InterpolationDollarCount = 0,
+                    };
                     i += quoteRunLength;
                     continue;
                 }
 
                 i++;
                 continue;
+            }
+
+            // Interpolation hole tracking. Only active when we are inside a hole of
+            // an outer interpolated string (Mode = Code, InterpolationReturnMode set).
+            // { increments depth; } decrements, and at depth 1 tries to close the hole
+            // using the outer string's dollar count.
+            // ホール内の括弧追跡。外側補間文字列のホール内（Mode=Code かつ Return* セット時）
+            // のみ有効。{ で深さ++、} で --。深さ 1 で外側 dollar count を満たせば閉じる。
+            if (state.Mode == CSharpLexMode.Code
+                && state.InterpolationReturnMode != CSharpLexMode.Code
+                && state.InterpolationBraceDepth > 0)
+            {
+                if (ch == '{')
+                {
+                    sanitized[i] = ch;
+                    state = state with { InterpolationBraceDepth = state.InterpolationBraceDepth + 1 };
+                    i++;
+                    continue;
+                }
+
+                if (ch == '}')
+                {
+                    if (state.InterpolationBraceDepth > 1)
+                    {
+                        sanitized[i] = ch;
+                        state = state with { InterpolationBraceDepth = state.InterpolationBraceDepth - 1 };
+                        i++;
+                        continue;
+                    }
+
+                    if (state.InterpolationReturnMode == CSharpLexMode.VerbatimString)
+                    {
+                        sanitized[i] = ' ';
+                        state = state with
+                        {
+                            Mode = CSharpLexMode.VerbatimString,
+                            IsInterpolated = true,
+                            InterpolationDollarCount = state.InterpolationReturnDollarCount,
+                            InterpolationBraceDepth = 0,
+                            InterpolationReturnMode = CSharpLexMode.Code,
+                            InterpolationReturnRawDelimiterLength = 0,
+                            InterpolationReturnDollarCount = 0,
+                        };
+                        i++;
+                        continue;
+                    }
+
+                    if (state.InterpolationReturnMode == CSharpLexMode.RawString)
+                    {
+                        var closeRun = 0;
+                        while (i + closeRun < line.Length && line[i + closeRun] == '}')
+                            closeRun++;
+
+                        var dollarCount = state.InterpolationReturnDollarCount;
+                        if (closeRun >= dollarCount)
+                        {
+                            for (var j = 0; j < dollarCount && i + j < line.Length; j++)
+                                sanitized[i + j] = ' ';
+
+                            state = state with
+                            {
+                                Mode = CSharpLexMode.RawString,
+                                RawDelimiterLength = state.InterpolationReturnRawDelimiterLength,
+                                IsInterpolated = true,
+                                InterpolationDollarCount = dollarCount,
+                                InterpolationBraceDepth = 0,
+                                InterpolationReturnMode = CSharpLexMode.Code,
+                                InterpolationReturnRawDelimiterLength = 0,
+                                InterpolationReturnDollarCount = 0,
+                            };
+                            i += dollarCount;
+                            continue;
+                        }
+
+                        // Not enough } — fall through to normal code handling.
+                        // dollar count に満たない } — 通常の Code ハンドリングへ。
+                    }
+                }
             }
 
             if (ch == '/' && next == '/')
@@ -4618,7 +6022,13 @@ public static class SymbolExtractor
                 for (var j = 0; j < rawPrefixLength + rawDelimiterLength && i + j < line.Length; j++)
                     sanitized[i + j] = ' ';
 
-                state = state with { Mode = CSharpLexMode.RawString, RawDelimiterLength = rawDelimiterLength };
+                state = state with
+                {
+                    Mode = CSharpLexMode.RawString,
+                    RawDelimiterLength = rawDelimiterLength,
+                    IsInterpolated = rawPrefixLength > 0,
+                    InterpolationDollarCount = rawPrefixLength,
+                };
                 i += rawPrefixLength + rawDelimiterLength;
                 continue;
             }
@@ -4627,7 +6037,12 @@ public static class SymbolExtractor
             {
                 sanitized[i] = ' ';
                 sanitized[i + 1] = '"';
-                state = state with { Mode = CSharpLexMode.VerbatimString };
+                state = state with
+                {
+                    Mode = CSharpLexMode.VerbatimString,
+                    IsInterpolated = false,
+                    InterpolationDollarCount = 0,
+                };
                 i += 2;
                 continue;
             }
@@ -4637,7 +6052,12 @@ public static class SymbolExtractor
                 sanitized[i] = ' ';
                 sanitized[i + 1] = ' ';
                 sanitized[i + 2] = '"';
-                state = state with { Mode = CSharpLexMode.VerbatimString };
+                state = state with
+                {
+                    Mode = CSharpLexMode.VerbatimString,
+                    IsInterpolated = true,
+                    InterpolationDollarCount = 1,
+                };
                 i += 3;
                 continue;
             }
@@ -4647,7 +6067,12 @@ public static class SymbolExtractor
                 sanitized[i] = ' ';
                 sanitized[i + 1] = ' ';
                 sanitized[i + 2] = '"';
-                state = state with { Mode = CSharpLexMode.VerbatimString };
+                state = state with
+                {
+                    Mode = CSharpLexMode.VerbatimString,
+                    IsInterpolated = true,
+                    InterpolationDollarCount = 1,
+                };
                 i += 3;
                 continue;
             }
@@ -7414,6 +8839,67 @@ public static class SymbolExtractor
             && CSharpEnumMemberNameRegex.IsMatch(line);
     }
 
+    /// <summary>
+    /// Return true when a batch (.bat / .cmd) line is a comment, i.e. `::` / `:::` / `rem` /
+    /// `@rem` (with optional leading whitespace and case-insensitive `rem`). Comment lines
+    /// must not contribute `set` property symbols even when they contain the boundary tokens
+    /// (`&`, `(`, `else`, `do`) that the new inline-set-capture regex accepts.
+    /// batch (.bat / .cmd) のコメント行 (`::` / `:::` / `rem` / `@rem`、先頭空白可、`rem` は大小文字不問) のときに
+    /// true を返す。新しい inline `set` 捕捉正規表現が受け付ける境界トークン (`&` / `(` / `else` / `do`) を
+    /// 含んでいても、コメント行からは `set` property を拾わない。
+    /// </summary>
+    private static bool IsBatchCommentLine(string line)
+    {
+        var i = 0;
+        while (i < line.Length && (line[i] == ' ' || line[i] == '\t'))
+            i++;
+
+        if (i >= line.Length)
+            return false;
+
+        // `::` (and therefore also `:::`, `::: ...`) opens a batch comment that consumes the
+        // rest of the line. The label regex does not match these because it requires a name
+        // char after the first `:`, but the property regex could match their inline tokens.
+        // `::` 以降はコメント (`:::`、`::: ...` も同様)。ラベル正規表現は `:` の後ろに名前文字を
+        // 要求するため影響を受けないが、property 正規表現は inline トークンを拾ってしまう。
+        if (line[i] == ':' && i + 1 < line.Length && line[i + 1] == ':')
+            return true;
+
+        // `@rem` (echo-suppression prefix + rem). Accept optional whitespace between `@` and
+        // `rem` to mirror how the property regex tolerates `@ set`.
+        // `@rem` (echo 抑止プレフィクス + rem) 。property 正規表現が `@ set` を許すのに合わせて
+        // `@` と `rem` の間の空白も許容する。
+        if (line[i] == '@')
+        {
+            var j = i + 1;
+            while (j < line.Length && (line[j] == ' ' || line[j] == '\t'))
+                j++;
+            return IsBatchRemKeyword(line, j);
+        }
+
+        return IsBatchRemKeyword(line, i);
+    }
+
+    private static bool IsBatchRemKeyword(string line, int start)
+    {
+        // A bare `rem` or `rem` followed by whitespace / end-of-line is a comment.
+        // Case-insensitive: `REM`, `rem`, `Rem`, `rEM`, etc. are all comments.
+        // 単独の `rem` または `rem` の直後が空白か行末ならコメント扱い。
+        // 大小文字不問 — `REM` / `rem` / `Rem` / `rEM` などすべてコメント。
+        if (start + 3 > line.Length)
+            return false;
+        if ((line[start] | 0x20) != 'r')
+            return false;
+        if ((line[start + 1] | 0x20) != 'e')
+            return false;
+        if ((line[start + 2] | 0x20) != 'm')
+            return false;
+        if (start + 3 == line.Length)
+            return true;
+        var next = line[start + 3];
+        return next == ' ' || next == '\t' || next == '\r' || next == '\n';
+    }
+
     private static bool CanContinueScanningSameLineBraceBody(
         string? lang,
         string kind,
@@ -7459,6 +8945,76 @@ public static class SymbolExtractor
         }
 
         return -1;
+    }
+
+    // For C# plain fields (kind `property`, BodyStyle.None), find the end of the
+    // field's declaration statement on the same (merged) match line so the
+    // signature can be clamped to the full declaration text and the same-line
+    // pattern scanner can resume after the terminating `;`. Walks with paren /
+    // bracket / brace depth tracking so `{` / `}` inside an initializer
+    // (collection or object initializer, lambda body) does not short-circuit
+    // the scan; when an unbalanced `}` is encountered (the closing brace of
+    // the enclosing type body) the position of that `}` is returned instead
+    // so signature and advance both stop before the wrapper terminator. Input
+    // is expected to be the structurally-masked match line so string-literal
+    // `{` / `;` cannot poison the depth tracker.
+    // C# 通常フィールド（kind `property`、BodyStyle.None）向けに、結合済みマッチ行での
+    // 宣言文の終端位置を返す。signature を `;` まで含む完全な宣言文字列に揃え、かつ
+    // 同一行のパターンスキャンを `;` の次から再開できるようにするために使う。paren /
+    // bracket / brace の深さを追うので、初期化子（コレクション / オブジェクト初期化子や
+    // ラムダ本体）内の `{` / `}` で判定が途切れない。深さ 0 で出現する `}`（囲む型本体の
+    // 閉じ括弧）は、その位置をそのまま返すため signature と advance の両方がラッパー
+    // 終端の手前で止まる。入力は構造的にマスク済みのマッチ行を想定し、文字列リテラル内の
+    // `{` / `;` が深さトラッカを誤認させないようにしている。
+    private static int FindCSharpPlainFieldStatementEnd(string maskedLine, int startIndex)
+    {
+        int parenDepth = 0;
+        int bracketDepth = 0;
+        int braceDepth = 0;
+        var index = Math.Max(0, startIndex);
+        while (index < maskedLine.Length)
+        {
+            var ch = maskedLine[index];
+            if (ch == '(')
+            {
+                parenDepth++;
+            }
+            else if (ch == ')')
+            {
+                if (parenDepth > 0) parenDepth--;
+            }
+            else if (ch == '[')
+            {
+                bracketDepth++;
+            }
+            else if (ch == ']')
+            {
+                if (bracketDepth > 0) bracketDepth--;
+            }
+            else if (ch == '{')
+            {
+                braceDepth++;
+            }
+            else if (ch == '}')
+            {
+                if (braceDepth > 0)
+                {
+                    braceDepth--;
+                }
+                else
+                {
+                    return index;
+                }
+            }
+            else if (ch == ';' && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+            {
+                return index + 1;
+            }
+
+            index++;
+        }
+
+        return maskedLine.Length;
     }
 
     private static int FindSameLineBraceEndColumn(string line, int startColumn, string? lang, string kind)
@@ -7527,13 +9083,204 @@ public static class SymbolExtractor
         return -1;
     }
 
+    // Walk upward from the identifier line looking for a contiguous run of modifier-only
+    // physical lines, skipping blank lines and attribute-stripped whitespace. Returns the
+    // concatenated modifier prefix (in declaration order) so callers can prepend it to the
+    // identifier line for regex matching. Returns null when no modifier-only predecessor
+    // exists. Used to recover wrapped C# constructors whose leading `static` / `public` /
+    // etc. sits on its own physical line. Closes #348.
+    // 識別子行から上に遡り、空行や属性ストリップで空白化された行をスキップしつつ、
+    // モディファイアのみの物理行を連続して連結する。宣言順に連結したプレフィックスを返し、
+    // 呼び出し元は識別子行の先頭に付けて regex マッチに使える。先頭モディファイア行が
+    // 見つからなければ null を返す。C# の `static` / `public` などが単独行に書かれた
+    // ラップ型コンストラクタを拾うために使う。Closes #348.
+    private static CSharpWrappedHeaderModifierInfo? TryFindCSharpWrappedHeaderModifier(
+        string[] csharpMatchLines,
+        int nameLineIndex)
+    {
+        if (nameLineIndex <= 0)
+            return null;
+
+        string? prefix = null;
+        for (int index = nameLineIndex - 1; index >= 0; index--)
+        {
+            var structural = csharpMatchLines[index];
+            if (string.IsNullOrWhiteSpace(structural))
+                continue;
+
+            if (!CSharpWrappedHeaderModifierLineRegex.IsMatch(structural))
+                break;
+
+            var structuralTrimmed = structural.Trim();
+            prefix = prefix == null
+                ? structuralTrimmed
+                : structuralTrimmed + " " + prefix;
+        }
+
+        if (prefix == null)
+            return null;
+
+        return new CSharpWrappedHeaderModifierInfo(prefix);
+    }
+
+    // Enumerate candidate prefixes to retry against the C# function-kind regexes when the
+    // full wrapped-modifier prefix fails. Multi-modifier shapes like
+    // `public\nstatic\nP1()` synthesize `public static P1()` which neither the ctor regex
+    // (accepts only unsafe/extern between visibility and name) nor the static-ctor regex
+    // (requires static first) will match. Falling back to `static`-only and
+    // visibility-only variants lets the respective regex still fire so the wrapped ctor
+    // is not silently dropped. Closes #348.
+    // ラップされた先頭モディファイア prefix で C# function 系パターンに失敗した場合に
+    // 試す候補 prefix を列挙する。`public\nstatic\nP1()` のような複数モディファイア形は
+    // `public static P1()` と合成されるが、ctor regex は visibility と name の間に
+    // `unsafe` / `extern` しか許さず、静的 ctor regex は `static` 先頭を要求するため、
+    // このままではどちらもマッチしない。`static` 単独や visibility 単独の variant に
+    // フォールバックして、適合する regex を拾えるようにする。Closes #348.
+    private static IEnumerable<string> EnumerateCSharpWrappedModifierCandidates(string prefix)
+    {
+        yield return prefix;
+
+        var tokens = prefix.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length <= 1)
+            yield break;
+
+        var hasStatic = false;
+        string? visibility = null;
+        foreach (var token in tokens)
+        {
+            if (token == "static")
+                hasStatic = true;
+            else if (visibility == null
+                && token is "public" or "private" or "protected" or "internal" or "file")
+                visibility = token;
+        }
+
+        if (hasStatic)
+            yield return "static";
+        if (visibility != null)
+            yield return visibility;
+    }
+
+    /// <summary>
+    /// Track multi-line C# `[...]` bracket sections across lines and blank out any text that
+    /// sits inside those sections, so downstream symbol regexes do not treat interior identifiers
+    /// as declarations. Activates whenever a `[` opens without a matching `]` on the same line,
+    /// regardless of whether the `[` sits at the start of the line (leading attribute) or deeper
+    /// inside the line (parameter attribute like `void M([\n Attr\n] T x)`, type-parameter
+    /// attribute like `class C<[\n Attr\n] T>`, delegate/lambda parameter attributes, etc.).
+    /// Single-line attribute lists continue to be handled by `StripLeadingCSharpAttributeLists`.
+    /// 複数行にまたがる C# `[...]` セクションを跨行で追跡し、内部の文字列を空白化することで
+    /// 下流のシンボル regex が内部の識別子を宣言として誤解釈しないようにする。`[` が行頭
+    /// （空白の後）にある場合だけでなく、`void M([\n Attr\n] T x)` のようなパラメータ属性、
+    /// `class C<[\n Attr\n] T>` のような型パラメータ属性、delegate / lambda のパラメータ属性など、
+    /// 行の途中で開いて同一行で閉じない `[` でも作動する。同一行で完結する属性リストは
+    /// `StripLeadingCSharpAttributeLists` が引き続き担当する。
+    /// </summary>
+    private static string StripMultiLineCSharpAttributeInterior(string line, ref int depth)
+    {
+        if (depth == 0)
+        {
+            // Scan the line for a `[` that is NOT closed on the same line. Everything before
+            // that `[` is real code (method header text like `void M(`, generic opener like
+            // `class C<`, etc.) and must be preserved so downstream declaration regexes can
+            // still recognize the surrounding construct. Everything from the unclosed `[`
+            // onward is blanked, and subsequent lines are blanked until the matching `]`.
+            // Only attribute-position `[` should trigger blanking — a multi-line indexer
+            // declaration such as `public int this[\n    int i\n] => _items[i];` opens `[`
+            // immediately after the identifier `this`, which is NOT an attribute and must
+            // not be stripped (otherwise the indexer regex sees only `public int this` and
+            // the indexer silently disappears from symbols / definition / outline). Treat
+            // `[` as an attribute opener only when the immediately preceding non-whitespace
+            // character is not a word character (`[_A-Za-z0-9]`) and not `)` / `]` (which
+            // indicate indexer / array access on an expression result or chained indexer).
+            // 行内を走査し、同一行で閉じない `[` を探す。その `[` より前は通常のコード
+            // （`void M(` のようなメソッドヘッダ、`class C<` のようなジェネリック開口など）
+            // であり、下流の宣言 regex が外側の構文を認識できるように残す必要がある。
+            // 閉じない `[` 以降は空白化し、対応する `]` が現れるまで後続行も空白化する。
+            // `[` が属性位置にあるときだけ空白化する — `public int this[\n    int i\n]`
+            // のような複数行インデクサ宣言では `this` 直後の `[` が属性でないため、
+            // ここを削ってしまうとインデクサがシンボルから消える。直前の非空白文字が
+            // 語文字（`[_A-Za-z0-9]`）でも `)` / `]` でもない場合にのみ属性開口と判定する。
+            int openIndex = -1;
+            int localDepth = 0;
+            for (int i = 0; i < line.Length; i++)
+            {
+                if (line[i] == '[')
+                {
+                    if (localDepth == 0)
+                    {
+                        // Look back past whitespace for the character that introduces the `[`.
+                        // 先行する非空白文字を探して `[` の導入子を判定する。
+                        int p = i - 1;
+                        while (p >= 0 && (line[p] == ' ' || line[p] == '\t'))
+                            p--;
+                        if (p >= 0)
+                        {
+                            char prev = line[p];
+                            if (prev == '_' || (prev >= 'A' && prev <= 'Z') || (prev >= 'a' && prev <= 'z') || (prev >= '0' && prev <= '9') || prev == ')' || prev == ']')
+                            {
+                                // Not an attribute opener (e.g. `this[`, `arr[`, `(expr)[`, `arr[i][`).
+                                // Treat this `[` as opaque — do not track depth, do not blank.
+                                // 属性開口ではない（`this[`・`arr[`・`(expr)[`・`arr[i][` など）。
+                                // この `[` は追跡も空白化もしない。
+                                continue;
+                            }
+                        }
+                        openIndex = i;
+                    }
+                    localDepth++;
+                }
+                else if (line[i] == ']')
+                {
+                    if (localDepth > 0)
+                    {
+                        localDepth--;
+                        if (localDepth == 0)
+                            openIndex = -1;
+                    }
+                }
+            }
+
+            if (openIndex < 0 || localDepth <= 0)
+                return line;
+
+            depth = localDepth;
+            return line.Substring(0, openIndex);
+        }
+
+        // We are inside a multi-line attribute section. Walk the line, closing brackets when we
+        // see `]`. Once depth returns to zero, the remainder of the line is real code.
+        int index = 0;
+        while (index < line.Length && depth > 0)
+        {
+            if (line[index] == '[') depth++;
+            else if (line[index] == ']') depth--;
+            index++;
+        }
+        if (depth > 0)
+            return string.Empty;
+        return line[index..];
+    }
+
     private static CSharpPropertyMatchCandidate BuildCSharpPropertyMatchLine(string[] lines, string[] csharpMatchLines, int startLineIndex)
     {
         var matchLine = csharpMatchLines[startLineIndex];
         if (string.IsNullOrWhiteSpace(matchLine)
             || !CSharpPropertyHeaderPrefixRegex.IsMatch(matchLine)
-            || HasCSharpPropertyAccessorStart(matchLine))
+            || HasCSharpPropertyAccessorStart(matchLine)
+            || CSharpWrappedHeaderModifierLineRegex.IsMatch(matchLine))
         {
+            // Modifier-only lines (`static`, `public`, etc. on their own physical line)
+            // are handled by the name-line wrapped-modifier recovery in the extraction
+            // loop. If the field-header merger runs here, it joins the next line and
+            // produces a phantom emission at the modifier line with a truncated
+            // signature. Returning the raw matchLine lets the pattern match fail at the
+            // modifier line so only the name line emits a symbol. Closes #348.
+            // 単独行に書かれたモディファイア（`static`、`public` 等）は、抽出ループ側の
+            // 名前行ラップド救済が処理する。フィールドヘッダ結合がここで動くと、次の行を
+            // 結合してモディファイア行に signature の切れた幻のエミットを残してしまう。
+            // 生の matchLine を返してモディファイア行ではパターンに失敗させ、名前行のみが
+            // シンボルを emit するようにする。Closes #348.
             return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
         }
 
@@ -8329,12 +10076,36 @@ public static class SymbolExtractor
     }
 
     private static string CollapseCSharpGenericTypeWhitespace(string line)
+        => CollapseCSharpGenericTypeWhitespace(line, out _);
+
+    // Collapse only the whitespace that sits between generic type-argument angle brackets
+    // so patterns like `Dictionary<string, int>` normalize to `Dictionary<string,int>`.
+    // Also emits a column-mapping array so callers can translate a column in the collapsed
+    // string back to the corresponding column in the raw source. `collapsedToRaw[c]` is
+    // the raw index of the character at collapsed column `c`; the final element
+    // (`collapsedToRaw[collapsed.Length]`) is the sentinel `raw.Length`, which lets
+    // translation use exclusive-end indices safely. When nothing collapses (early return
+    // path), the map is emitted as `null` to signal identity — callers fall back to the
+    // original collapsed column in that case. Closes #400.
+    // ジェネリック型引数の `<...>` 内部の空白だけを取り除き、`Dictionary<string, int>` の
+    // ような型を `Dictionary<string,int>` に正規化する。併せて column map を出力する。
+    // `collapsedToRaw[c]` は collapsed 列 `c` に対応する raw 列で、末尾 sentinel には
+    // `raw.Length` を入れているため、排他終端インデックスの変換にもそのまま使える。
+    // 折り畳みが発生しない early return 経路では `null` を返し、呼び出し元は識別写像を
+    // 用いる運用にしている。Closes #400.
+    private static string CollapseCSharpGenericTypeWhitespace(string line, out int[]? collapsedToRaw)
     {
         if (string.IsNullOrEmpty(line) || !line.Contains('<') || !line.Contains(' '))
+        {
+            collapsedToRaw = null;
             return line;
+        }
 
         var builder = new StringBuilder(line.Length);
         var angleDepth = 0;
+        var map = new int[line.Length + 1];
+        var mapLength = 0;
+        var collapsed = false;
 
         for (int i = 0; i < line.Length; i++)
         {
@@ -8342,6 +10113,7 @@ public static class SymbolExtractor
             if (ch == '<' && LooksLikeRecordGenericAngleStart(line, i))
             {
                 angleDepth++;
+                map[mapLength++] = i;
                 builder.Append(ch);
                 continue;
             }
@@ -8349,16 +10121,31 @@ public static class SymbolExtractor
             if (ch == '>' && angleDepth > 0)
             {
                 angleDepth--;
+                map[mapLength++] = i;
                 builder.Append(ch);
                 continue;
             }
 
             if (angleDepth > 0 && char.IsWhiteSpace(ch))
+            {
+                collapsed = true;
                 continue;
+            }
 
+            map[mapLength++] = i;
             builder.Append(ch);
         }
 
+        if (!collapsed)
+        {
+            collapsedToRaw = null;
+            return line;
+        }
+
+        map[mapLength] = line.Length;
+        if (mapLength + 1 != map.Length)
+            Array.Resize(ref map, mapLength + 1);
+        collapsedToRaw = map;
         return builder.ToString();
     }
 
@@ -8375,8 +10162,12 @@ public static class SymbolExtractor
         && matchLine.Contains("=>", StringComparison.Ordinal);
 
     private static string[] BuildCSharpMatchLines(string[] structuralLines)
+        => BuildCSharpMatchLines(structuralLines, out _);
+
+    private static string[] BuildCSharpMatchLines(string[] structuralLines, out int[]?[] collapsedToRaw)
     {
         var matchLines = new string[structuralLines.Length];
+        collapsedToRaw = new int[]?[structuralLines.Length];
         var csharpLexState = new CSharpLexState();
         var inLeadingAttributeBlock = false;
         var attributeBracketDepth = 0;
@@ -8393,7 +10184,9 @@ public static class SymbolExtractor
                     ref inLeadingAttributeBlock,
                     ref attributeBracketDepth,
                     ref attributeParenDepth,
-                    activeEnumBodyDepth > 0));
+                    activeEnumBodyDepth > 0),
+                out var lineCollapsedToRaw);
+            collapsedToRaw[lineIndex] = lineCollapsedToRaw;
 
             var matchLine = matchLines[lineIndex];
             var trimmed = matchLine.Trim();
@@ -8422,6 +10215,31 @@ public static class SymbolExtractor
         }
 
         return matchLines;
+    }
+
+    // Translate a column in a CollapseCSharpGenericTypeWhitespace-collapsed match line back
+    // to the matching column in the raw source line. Used by the plain-field scope gate and
+    // signature clamp so `public class C<T1, T2>{int X;}` does not misalign the type-body
+    // scope lookup when internal generic whitespace has been collapsed away, and so field
+    // signatures sliced out of the raw line preserve the original separators instead of
+    // picking up phantom leading `;` from the next declarator on the same line. Closes #400.
+    // CollapseCSharpGenericTypeWhitespace で空白を詰めた match 行上の列を、元の raw 行の
+    // 列に戻す。`public class C<T1, T2>{int X;}` のような行で CSharpTypeBodyScope の参照列が
+    // ずれないようにしたり、同一行に続くフィールドを raw から slice したときに
+    // 先頭に余計な `;` が混入しないようにするため、プレーンフィールドのゲートと
+    // signature clamp で利用する。Closes #400.
+    private static int TranslateCSharpCollapsedColumnToRaw(int[]?[] mapPerLine, int lineIndex, int collapsedColumn, int rawLength)
+    {
+        if (mapPerLine == null || lineIndex < 0 || lineIndex >= mapPerLine.Length)
+            return collapsedColumn;
+        var map = mapPerLine[lineIndex];
+        if (map == null)
+            return collapsedColumn;
+        if (collapsedColumn < 0)
+            return 0;
+        if (collapsedColumn >= map.Length)
+            return rawLength;
+        return map[collapsedColumn];
     }
 
     // Gate only the block-bodied property pattern (requires `{ get|set|init ... }`).
@@ -8462,8 +10280,20 @@ public static class SymbolExtractor
     // 騙されない。`new { ... }` や collection initializer、ラムダ本体の `{` は
     // 直前バッファに `class|struct|interface|record|enum` を含まないため
     // 非型本体として扱われる。Closes #298 の codex レビュー blocker 対応。
+    // Marks `{` that opens a class-like body where C# plain fields are legal.
+    // `enum` is intentionally excluded: enum bodies contain enum members (not
+    // fields), and the field regex would otherwise match enum member shapes like
+    // `[Obsolete] A = (int)B,` as phantom `property` symbols. The column-aware
+    // scope gate relies on this distinction to reject field candidates inside
+    // enum bodies while still accepting legitimate fields inside class / struct
+    // / interface / record bodies. Closes #400.
+    // 型本体に相当する `{` を識別する正規表現。`enum` を意図的に除外することで、
+    // enum 本体内の `[Obsolete] A = (int)B,` のような enum member を plain field
+    // regex が `property` として拾ってしまう問題を防ぐ。列意識スコープゲートは
+    // この区別を使って、enum 本体内の field 候補は拒否し、class / struct /
+    // interface / record 本体内の本物のフィールドは引き続き許容する。Closes #400.
     private static readonly Regex CSharpTypeBodyDeclarationMarker = new(
-        @"\b(?:class|struct|interface|record|enum)\b\s+\w",
+        @"\b(?:class|struct|interface|record)\b\s+\w",
         RegexOptions.Compiled);
 
     // Expand a C# plain-field regex match into one entry per declarator when the
@@ -8593,6 +10423,26 @@ public static class SymbolExtractor
                 return result;
             if (tail[i] == ',')
                 i++;
+        }
+        else
+        {
+            // A plain-field match that ended at `;` is a complete declaration with no
+            // continuation declarators — whatever follows on the same line belongs to a
+            // separate statement (e.g. a second `public int B;` on the same line inside
+            // a same-line class body). Treating that residual text as `A, <tail>` would
+            // pick up stray tokens like `public` and emit phantom declarator symbols.
+            // Multi-declarator forms like `public int A, B;` already flow through the
+            // `hasCommaInReturnType` branch in TryExpandCSharpFieldDeclaratorList, so
+            // returning empty here only disables the buggy `;`-separated path.
+            // Closes #400.
+            // `;` で終わった plain-field マッチは、それ自体で宣言が完結しており、同一行に
+            // 続く内容（例: 同一行 class 本体内の 2 つ目の `public int B;`）は別の文。
+            // ここで tail をスキャンすると `public` のような周辺トークンが declarator 名
+            // として拾われ、phantom シンボルになる。`public int A, B;` のような多重
+            // declarator は TryExpandCSharpFieldDeclaratorList の `hasCommaInReturnType`
+            // 経路で既に処理されるため、このガードは `;` 区切り経路の誤検出だけを
+            // 無効化する。Closes #400.
+            return result;
         }
 
         while (i < tail.Length)
@@ -8873,16 +10723,61 @@ public static class SymbolExtractor
         return true;
     }
 
-    private static bool[] BuildCSharpTypeBodyScope(string[] structuralLines)
+    /// <summary>
+    /// Column-aware record of the C# type-body scope on each line. Captures the state
+    /// at the start of the line plus every same-line `{` / `}` transition, so a plain-field
+    /// candidate at any column can be gated against the scope that actually applies there.
+    /// Closes #400.
+    /// 各行の C# 型本体スコープを列位置まで含めて保持する。行頭の状態と、同一行内で
+    /// 発生する `{` / `}` による遷移を記録することで、任意の列にある field 候補を
+    /// その位置で実際に効いているスコープで判定できるようにする。Closes #400.
+    /// </summary>
+    private sealed class CSharpTypeBodyScope
     {
-        var insideTypeBody = new bool[structuralLines.Length];
+        private readonly bool[] _lineStartInsideTypeBody;
+        private readonly List<(int Column, bool IsTypeBody)>?[] _transitions;
+
+        public CSharpTypeBodyScope(bool[] lineStartInsideTypeBody, List<(int Column, bool IsTypeBody)>?[] transitions)
+        {
+            _lineStartInsideTypeBody = lineStartInsideTypeBody;
+            _transitions = transitions;
+        }
+
+        /// <summary>
+        /// Returns whether the given (lineIndex, column) position is directly inside a type body.
+        /// `{` / `}` at column X flips the state starting at column X+1, so a candidate whose
+        /// match starts at column C sees every transition with `transitionColumn &lt; C`.
+        /// 指定の (lineIndex, column) が型本体の直下にあるかを返す。列 X の `{` / `}` は
+        /// 列 X+1 以降に状態を反映するため、列 C から始まる候補は
+        /// `transitionColumn &lt; C` を満たす遷移だけを適用する。
+        /// </summary>
+        public bool IsInsideTypeBodyAt(int lineIndex, int column)
+        {
+            var state = _lineStartInsideTypeBody[lineIndex];
+            var transitions = _transitions[lineIndex];
+            if (transitions == null)
+                return state;
+            foreach (var (col, isTypeBody) in transitions)
+            {
+                if (col >= column)
+                    break;
+                state = isTypeBody;
+            }
+            return state;
+        }
+    }
+
+    private static CSharpTypeBodyScope BuildCSharpTypeBodyScope(string[] structuralLines)
+    {
+        var lineStartInsideTypeBody = new bool[structuralLines.Length];
+        var transitions = new List<(int Column, bool IsTypeBody)>?[structuralLines.Length];
         var scopeStack = new Stack<bool>();
         scopeStack.Push(false);
         var declBuffer = new StringBuilder();
 
         for (int lineIndex = 0; lineIndex < structuralLines.Length; lineIndex++)
         {
-            insideTypeBody[lineIndex] = scopeStack.Peek();
+            lineStartInsideTypeBody[lineIndex] = scopeStack.Peek();
 
             var line = structuralLines[lineIndex];
             for (int cursor = 0; cursor < line.Length; cursor++)
@@ -8892,12 +10787,14 @@ public static class SymbolExtractor
                 {
                     var isTypeBody = CSharpTypeBodyDeclarationMarker.IsMatch(declBuffer.ToString());
                     scopeStack.Push(isTypeBody);
+                    (transitions[lineIndex] ??= new List<(int, bool)>()).Add((cursor, isTypeBody));
                     declBuffer.Clear();
                 }
                 else if (ch == '}')
                 {
                     if (scopeStack.Count > 1)
                         scopeStack.Pop();
+                    (transitions[lineIndex] ??= new List<(int, bool)>()).Add((cursor, scopeStack.Peek()));
                     declBuffer.Clear();
                 }
                 else if (ch == ';')
@@ -8911,7 +10808,7 @@ public static class SymbolExtractor
             }
         }
 
-        return insideTypeBody;
+        return new CSharpTypeBodyScope(lineStartInsideTypeBody, transitions);
     }
 
     private static bool[] FindCSharpSwitchExpressionLines(string[] structuralLines)

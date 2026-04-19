@@ -63,6 +63,12 @@ public partial class DbReader
             ELSE 0
         END";
     private const string InvokeReferenceKindsSql = "('call', 'instantiate')";
+    // Reference kinds that participate in the call-graph (callers/callees/hotspots). Metadata
+    // kinds such as `attribute` / `annotation` are excluded so they do not inflate the graph
+    // with non-call edges (issue #293).
+    // call-graph (callers/callees/hotspots) に参加する reference kind。`attribute` / `annotation`
+    // のようなメタデータ kind は非呼び出しエッジなのでここから除外する (issue #293)。
+    internal const string CallGraphReferenceKindsSql = "('call', 'instantiate', 'subscribe')";
 
     // Reference kinds that represent compile-time type/member references (e.g. C# `nameof(X)`,
     // `typeof(T)`, Java `T.class`). They are intentionally excluded from default `callers` /
@@ -681,18 +687,45 @@ public partial class DbReader
         if (referenceKind != null)
             sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
+        var referencesSuffixAlias = ComputeCSharpAttributeSuffixAlias(query, lang, referenceKind);
+        // When the alias fires without an explicit `lang` / `--kind` scope we still need
+        // to keep it from bleeding into non-C# rows or non-attribute rows. The SQL guard
+        // clamps the alias disjunct to `f.lang = 'csharp' AND r.reference_kind = 'attribute'`
+        // so unscoped `references FooAttribute` only picks up real C# attribute sites.
+        // alias が `--lang` / `--kind` スコープなしで発火するときも、C# 以外の行や
+        // attribute 以外の行を拾わないように、SQL 側で `f.lang = 'csharp' AND
+        // r.reference_kind = 'attribute'` に限定する。
+        var referencesAliasScope = referencesSuffixAlias != null
+            ? " AND f.lang = 'csharp' AND r.reference_kind = 'attribute'"
+            : string.Empty;
         if (query != null)
         {
             // --exact: Unicode-aware equality when FoldReady (#86), else ASCII COLLATE NOCASE.
             // Fold path: r.symbol_name_folded = @qFolded (indexed), query pre-folded in .NET.
             // Fallback: r.symbol_name = @q COLLATE NOCASE (indexed by idx_symbol_refs_name_nocase).
+            // When the query ends with C# attribute suffix `Attribute`, also OR against the
+            // suffix-stripped alias so `references FooAttribute --exact` reaches the idiomatic
+            // `[Foo]` reference site stored with `symbol_name = "Foo"`. In substring mode we
+            // still LIKE-match `%FooAttribute%` and add only the exact stripped alias to avoid
+            // overmatching unrelated names (e.g. `FooAuditLog`) that share the stripped prefix.
+            // The alias disjunct is scoped to C# attribute rows to avoid false positives.
             // --exact: FoldReady なら Unicode 折り畳み経路、未 ready なら ASCII NOCASE へ fallback。
+            // C# の `Attribute` suffix が付いたクエリは、suffix を外した別名とも照合する。
+            // 部分一致モードでは `%FooAttribute%` をそのまま使い、別名側は exact 照合だけを OR
+            // することで `FooAuditLog` など無関係な名前を巻き込まないようにする。
+            // 別名節は C# の attribute 行に限定し、誤一致を避ける。
             if (exact && _foldReady)
-                sql += " AND r.symbol_name_folded = @query";
+                sql += referencesSuffixAlias != null
+                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{referencesAliasScope}))"
+                    : " AND r.symbol_name_folded = @query";
             else if (exact)
-                sql += " AND r.symbol_name = @query COLLATE NOCASE";
+                sql += referencesSuffixAlias != null
+                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}))"
+                    : " AND r.symbol_name = @query COLLATE NOCASE";
             else
-                sql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+                sql += referencesSuffixAlias != null
+                    ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}))"
+                    : " AND r.symbol_name LIKE @query ESCAPE '\\'";
         }
         if (referenceKind != null)
             sql += " AND r.reference_kind = @referenceKind";
@@ -721,6 +754,20 @@ public partial class DbReader
             else
                 queryParam = query;
             cmd.Parameters.AddWithValue("@query", queryParam);
+            if (referencesSuffixAlias != null)
+            {
+                // Exact-match alias value is used both in --exact paths (folded / NOCASE)
+                // and in the substring path (COLLATE NOCASE exact OR to bypass LIKE noise).
+                // In the folded --exact branch the alias is pre-folded; the substring branch
+                // uses the raw stripped form because the OR clause is a literal `=` comparison.
+                // exact 用の別名値は --exact 経路（folded / NOCASE）と部分一致経路（LIKE ノイズを
+                // 避けるための COLLATE NOCASE の等値 OR）の両方で使う。folded 経路だけは事前に
+                // 折りたたみ、部分一致経路は生の stripped 形をそのまま使う。
+                var aliasParam = exact && _foldReady
+                    ? NameFold.Fold(referencesSuffixAlias) ?? referencesSuffixAlias
+                    : referencesSuffixAlias;
+                cmd.Parameters.AddWithValue("@queryAttributeAlias", aliasParam);
+            }
             cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
             cmd.Parameters.AddWithValue("@rankingQueryPrefix", $"{EscapeLikeQuery(query.Trim())}%");
         }
@@ -774,14 +821,24 @@ public partial class DbReader
             WHERE 1=1";
         innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
+        var countSuffixAlias = ComputeCSharpAttributeSuffixAlias(query, lang, referenceKind);
+        var countAliasScope = countSuffixAlias != null
+            ? " AND f.lang = 'csharp' AND r.reference_kind = 'attribute'"
+            : string.Empty;
         if (query != null)
         {
             if (exact && _foldReady)
-                innerSql += " AND r.symbol_name_folded = @query";
+                innerSql += countSuffixAlias != null
+                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{countAliasScope}))"
+                    : " AND r.symbol_name_folded = @query";
             else if (exact)
-                innerSql += " AND r.symbol_name = @query COLLATE NOCASE";
+                innerSql += countSuffixAlias != null
+                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}))"
+                    : " AND r.symbol_name = @query COLLATE NOCASE";
             else
-                innerSql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+                innerSql += countSuffixAlias != null
+                    ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}))"
+                    : " AND r.symbol_name LIKE @query ESCAPE '\\'";
         }
         if (referenceKind != null)
             innerSql += " AND r.reference_kind = @referenceKind";
@@ -801,6 +858,13 @@ public partial class DbReader
                     ? NameFold.Fold(query) ?? query
                     : query;
             cmd.Parameters.AddWithValue("@query", value);
+            if (countSuffixAlias != null)
+            {
+                var aliasParam = exact && _foldReady
+                    ? NameFold.Fold(countSuffixAlias) ?? countSuffixAlias
+                    : countSuffixAlias;
+                cmd.Parameters.AddWithValue("@queryAttributeAlias", aliasParam);
+            }
         }
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
@@ -829,14 +893,24 @@ public partial class DbReader
                 WHERE 1=1";
         innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
+        var totalSuffixAlias = ComputeCSharpAttributeSuffixAlias(query, lang, referenceKind);
+        var totalAliasScope = totalSuffixAlias != null
+            ? " AND f.lang = 'csharp' AND r.reference_kind = 'attribute'"
+            : string.Empty;
         if (query != null)
         {
             if (exact && _foldReady)
-                innerSql += " AND r.symbol_name_folded = @query";
+                innerSql += totalSuffixAlias != null
+                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{totalAliasScope}))"
+                    : " AND r.symbol_name_folded = @query";
             else if (exact)
-                innerSql += " AND r.symbol_name = @query COLLATE NOCASE";
+                innerSql += totalSuffixAlias != null
+                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}))"
+                    : " AND r.symbol_name = @query COLLATE NOCASE";
             else
-                innerSql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+                innerSql += totalSuffixAlias != null
+                    ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}))"
+                    : " AND r.symbol_name LIKE @query ESCAPE '\\'";
         }
         if (referenceKind != null)
             innerSql += " AND r.reference_kind = @referenceKind";
@@ -856,6 +930,13 @@ public partial class DbReader
                     ? NameFold.Fold(query) ?? query
                     : query;
             cmd.Parameters.AddWithValue("@query", value);
+            if (totalSuffixAlias != null)
+            {
+                var aliasParam = exact && _foldReady
+                    ? NameFold.Fold(totalSuffixAlias) ?? totalSuffixAlias
+                    : totalSuffixAlias;
+                cmd.Parameters.AddWithValue("@queryAttributeAlias", aliasParam);
+            }
         }
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
@@ -882,6 +963,7 @@ public partial class DbReader
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
                 WHERE r.container_name IS NOT NULL
+                  AND r.reference_kind IN {CallGraphReferenceKindsSql}
                   AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}"
             : @"
             SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
@@ -975,7 +1057,7 @@ public partial class DbReader
         if (referenceKind != null)
             groupedSql += " AND r.reference_kind = @referenceKind";
         else
-            groupedSql += NonInvocationReferenceKindsExclusion;
+            groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
         if (exact && _foldReady)
             groupedSql += " AND r.symbol_name_folded = @query";
         else if (exact)
@@ -1026,7 +1108,7 @@ public partial class DbReader
         if (referenceKind != null)
             groupedSql += " AND r.reference_kind = @referenceKind";
         else
-            groupedSql += NonInvocationReferenceKindsExclusion;
+            groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
         if (exact && _foldReady)
             groupedSql += " AND r.symbol_name_folded = @query";
         else if (exact)
@@ -1074,6 +1156,7 @@ public partial class DbReader
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
                 WHERE r.container_name IS NOT NULL
+                  AND r.reference_kind IN {CallGraphReferenceKindsSql}
                   AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}"
             : @"
             SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
@@ -1171,7 +1254,7 @@ public partial class DbReader
         if (referenceKind != null)
             groupedSql += " AND r.reference_kind = @referenceKind";
         else
-            groupedSql += NonInvocationReferenceKindsExclusion;
+            groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
         if (exact && _foldReady)
             groupedSql += " AND r.container_name_folded = @query";
         else if (exact)
@@ -1225,7 +1308,7 @@ public partial class DbReader
         if (referenceKind != null)
             groupedSql += " AND r.reference_kind = @referenceKind";
         else
-            groupedSql += NonInvocationReferenceKindsExclusion;
+            groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
         if (exact && _foldReady)
             groupedSql += " AND r.container_name_folded = @query";
         else if (exact)
@@ -1312,13 +1395,19 @@ public partial class DbReader
             : @"
               AND r.symbol_name = @symbolName COLLATE NOCASE";
 
+        // impact BFS must share the call-graph contract with `callers`/`callees`/`hotspots`,
+        // so event subscriptions (`Click += OnClick`) also participate in the transitive
+        // caller chain. Metadata edges (`attribute`, `annotation`) stay excluded.
+        // impact の BFS は `callers`/`callees`/`hotspots` と同じ call-graph 契約を共有し、
+        // `subscribe` エッジ（`Click += OnClick` 等）も推移 caller に含める。`attribute` /
+        // `annotation` のような metadata エッジは引き続き除外する。
         var sql = $@"
             WITH logical_references AS (
                 SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.line
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
                 WHERE r.container_name IS NOT NULL
-                  AND r.reference_kind IN {InvokeReferenceKindsSql}
+                  AND r.reference_kind IN {CallGraphReferenceKindsSql}
                   AND {supportedLangFilter}
                   {nameCondition}";
         if (lang != null)
@@ -1623,6 +1712,39 @@ public partial class DbReader
         return results;
     }
 
+    // C# convention: a class `FooAttribute` is used in source as `[Foo]`, so the reference
+    // site is stored with `symbol_name = "Foo"`. When a user queries with the class name
+    // (`references FooAttribute`, `inspect FooAttribute`, `analyze_symbol("FooAttribute")`),
+    // return the suffix-stripped form as an alias so the query still reaches the idiomatic
+    // use site. Only applies for C# scope — other languages do not share the convention.
+    // C# の規約: クラス `FooAttribute` はソース中で `[Foo]` として使われるため、参照サイトは
+    // `symbol_name = "Foo"` で保存される。ユーザーがクラス名で問い合わせたとき
+    // (`references FooAttribute` 等) でも慣用的な利用サイトに到達できるよう、
+    // suffix を外した別名を返す。C# 以外の言語ではこの規約を持たないので適用しない。
+    private static string? ComputeCSharpAttributeSuffixAlias(string? query, string? lang, string? referenceKind)
+    {
+        if (string.IsNullOrEmpty(query)) return null;
+        if (lang != null && !lang.Equals("csharp", StringComparison.OrdinalIgnoreCase)) return null;
+        // Only metadata lookups should apply the suffix alias: ordinary call-graph
+        // queries (`--kind call` / `instantiate` / `subscribe`) must not match `Foo()`
+        // call rows when the user typed `FooAttribute`. When `referenceKind` is null,
+        // the SQL side additionally constrains the alias clause to attribute rows only.
+        // metadata 参照の問い合わせ時だけ alias を適用する: `--kind call` などの call-graph
+        // クエリは `FooAttribute` と入力されたときに `Foo()` の call 行に一致してはならない。
+        // referenceKind が null のときは SQL 側でも alias 節を attribute 行に限定する。
+        if (referenceKind != null && !referenceKind.Equals("attribute", StringComparison.OrdinalIgnoreCase))
+            return null;
+        const string suffix = "Attribute";
+        // Case-insensitive suffix detection so `references myauditattribute` and
+        // `inspect MyAuditATTRIBUTE` still produce the `MyAudit` alias, matching the
+        // NOCASE / folded contract of the surrounding exact/substring query paths.
+        // 大文字小文字を無視して suffix を検出することで、`myauditattribute` や
+        // `MyAuditATTRIBUTE` のような形でも alias を生成できる。
+        if (!query!.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) return null;
+        if (query.Length <= suffix.Length) return null;
+        return query.Substring(0, query.Length - suffix.Length);
+    }
+
     private List<string> ResolveImpactFallbackNames(SymbolResult definition)
     {
         if (string.IsNullOrWhiteSpace(definition.Path) || string.IsNullOrWhiteSpace(definition.Name))
@@ -1649,6 +1771,30 @@ public partial class DbReader
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
             results.Add(reader.GetString(0));
+
+        // C# attribute naming convention: a class `FooAttribute` is used as `[Foo]` in source,
+        // so reference sites are stored with symbol_name `Foo`. Add the suffix-stripped alias
+        // for the resolved definition itself so impact on `FooAttribute` can find metadata-only
+        // usage sites. Only the resolved definition's own name gets the alias — applying the
+        // strip to every same-file fallback name (e.g. a nested `BarAttribute` inside the file
+        // that defines `FooAttribute`) would let `impact FooAttribute` falsely report `[Bar]`
+        // usages as part of `FooAttribute`'s blast radius.
+        // C# の属性命名規約: クラス `FooAttribute` はソースで `[Foo]` として使われ、参照サイトは
+        // symbol_name `Foo` で保存される。`FooAttribute` への impact でも metadata 参照サイトを
+        // 見つけられるよう、*解決済み定義自身* にのみサフィックスを外した別名を追加する。
+        // same-file fallback 名全体（例: `FooAttribute` と同一ファイルに nested で存在する
+        // `BarAttribute`）にまで strip を適用すると、`impact FooAttribute` が `[Bar]` 利用を
+        // 誤って `FooAttribute` の影響範囲として報告してしまうため、定義自身だけに限定する。
+        if (string.Equals(definition.Lang, "csharp", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrEmpty(definition.Name) &&
+            definition.Name.Length > "Attribute".Length &&
+            definition.Name.EndsWith("Attribute", StringComparison.Ordinal))
+        {
+            var stripped = definition.Name.Substring(0, definition.Name.Length - "Attribute".Length);
+            if (stripped.Length > 0 && !results.Contains(stripped))
+                results.Add(stripped);
+        }
+
         return results;
     }
 
@@ -1667,6 +1813,19 @@ public partial class DbReader
                 FROM symbol_references r
                 JOIN files src ON r.file_id = src.id
                 WHERE src.path != @impactTargetPath";
+        // `impact` heuristic file hints intentionally include metadata-only reference
+        // kinds (`attribute` / `annotation`). A rename or removal of `User` breaks
+        // `[JsonConverter(typeof(User))]` / `@Inject(User.class)` at compile time just
+        // as surely as it breaks `new User()`, so file-level blast-radius analysis
+        // must surface those sites as real dependencies. `callers` / `callees` still
+        // reject metadata kinds at the CLI / MCP boundary because those commands model
+        // the dynamic call graph, not the dependency graph.
+        // `impact` の heuristic file hint は metadata-only な参照 (`attribute` /
+        // `annotation`) も意図的に含める。`User` を rename / 削除すると
+        // `[JsonConverter(typeof(User))]` / `@Inject(User.class)` も compile-time で
+        // 壊れるため、ファイル単位の blast-radius 分析ではそれらも本物の依存として
+        // 出す必要がある。`callers` / `callees` は call graph を扱うので、metadata 種別
+        // の拒否は引き続き CLI / MCP boundary 側で行う。
         innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "src", "impactDepsLang")}";
         if (lang != null)
             innerSql += " AND src.lang = @lang";
@@ -1694,7 +1853,8 @@ public partial class DbReader
         cmd.CommandText = $@"
             SELECT source_file_id, source_path, target_path,
                    COUNT(*) AS reference_count,
-                   GROUP_CONCAT(DISTINCT symbol_name) AS symbols
+                   GROUP_CONCAT(DISTINCT symbol_name) AS symbols,
+                   MAX(CASE WHEN logical_reference_kind IN ('attribute','annotation') THEN 1 ELSE 0 END) AS has_metadata_ref
             FROM ({innerSql}) edges
             GROUP BY source_file_id, source_path, target_path
             ORDER BY reference_count DESC, source_path, target_path";
@@ -1705,12 +1865,13 @@ public partial class DbReader
             cmd.Parameters.AddWithValue($"@impactFallbackName{i}", fallbackNames[i]);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
-        var candidates = new List<(long SourceFileId, FileDependencyResult Edge)>();
+        var candidates = new List<(long SourceFileId, bool HasMetadataRef, FileDependencyResult Edge)>();
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
             candidates.Add((
                 reader.GetInt64(0),
+                reader.GetInt32(5) == 1,
                 new FileDependencyResult
                 {
                     SourcePath = reader.GetString(1),
@@ -1720,10 +1881,37 @@ public partial class DbReader
                 }));
         }
 
+        // Metadata references only carry the short use-site name (`Foo` for `[Foo]`,
+        // `@Foo`). If multiple class-like definitions share the same unqualified name
+        // across namespaces / packages (e.g. `A.MyAuditAttribute` and
+        // `B.MyAuditAttribute`), we cannot uniquely attribute a `[MyAudit]` site to
+        // either target. Skip the metadata evidence bypass in that ambiguous case so
+        // `impact` does not over-report the blast radius of a rename / removal.
+        // metadata 参照は use-site 側の短縮名 (`[Foo]` / `@Foo` の `Foo`) しか持た
+        // ないため、namespace / package を跨いで同名の class-like 定義が複数存在
+        // する場合、`[MyAudit]` 参照をどちらの target にも一意に紐付けられない。
+        // そのような曖昧なケースでは metadata の evidence bypass を行わず、
+        // `impact` が rename / 削除の影響範囲を過大報告しないようにする。
+        var metadataBypassSafe = IsMetadataTargetUnambiguous(definition, lang, pathPatterns, excludePathPatterns, excludeTests);
         var evidenceCache = new Dictionary<long, bool>();
         var filtered = new List<FileDependencyResult>();
         foreach (var candidate in candidates)
         {
+            // Metadata-only consumers (attribute / annotation sites like `[MyAudit]` or
+            // `@Inject(User.class)`) legitimately lack structured type evidence in the
+            // source file. Bypass the evidence guard for those edges only when the
+            // class-like target is unambiguous so deps/impact can surface pure-attribute
+            // consumers without over-attributing same-named targets.
+            // metadata 専用の参照 (`[MyAudit]` や `@Inject(User.class)` のような attribute /
+            // annotation 利用) は、source 側のファイルに structured な型利用が無くても
+            // 正当な依存となるが、class-like target が一意に決まるときだけ evidence guard
+            // をスキップする。曖昧なときは下の evidence 要求へフォールスルーさせ、
+            // 同名 target への誤帰属を防ぐ。
+            if (candidate.HasMetadataRef && metadataBypassSafe)
+            {
+                filtered.Add(candidate.Edge);
+                continue;
+            }
             if (!evidenceCache.TryGetValue(candidate.SourceFileId, out var hasEvidence))
             {
                 hasEvidence = SourceFileHasStructuredTypeEvidence(candidate.SourceFileId, definition.Name);
@@ -1738,6 +1926,115 @@ public partial class DbReader
             filtered.RemoveRange(limit, filtered.Count - limit);
 
         return (filtered, truncated);
+    }
+
+    // Returns true when the metadata target name resolves to at most one class-like
+    // symbol across the graph-supported languages. Ambiguous names (same unqualified
+    // name under different namespaces / packages) must not trigger the metadata
+    // evidence bypass because attribute / annotation reference rows only keep the
+    // short name and cannot disambiguate between them.
+    // graph 対応言語の中で class-like シンボルが高々 1 件しか存在しないときに true。
+    // namespace / package を跨いで同名の class-like 定義が複数ある曖昧なケースでは
+    // attribute / annotation 参照行が短縮名しか持たず区別できないため、metadata の
+    // evidence bypass を許可しない。
+    private bool IsMetadataTargetUnambiguous(
+        SymbolResult definition,
+        string? lang,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests)
+    {
+        if (string.IsNullOrWhiteSpace(definition.Name))
+            return false;
+        using var cmd = _conn.CreateCommand();
+        var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "metadataAmbigLang");
+        // Count at symbol-identity level (path + line + name) rather than at path
+        // level, so two same-named class-like definitions in the same source file
+        // (e.g. `namespace A { class MyAuditAttribute { } } namespace B { class
+        // MyAuditAttribute { } }` both in one .cs file) still register as ambiguous.
+        // DISTINCT f.path alone would collapse them to 1 and falsely trigger the
+        // metadata bypass.
+        // 曖昧性は path 単位ではなく symbol identity 単位 (path + line + name) で数える。
+        // 同じ .cs ファイル内に別名前空間で同名の class-like が 2 つあるケース
+        // (例: `namespace A { class MyAuditAttribute { } } namespace B { class
+        // MyAuditAttribute { } }`) でも ambiguity を 2 として検出できる。DISTINCT
+        // f.path のままだと 1 に潰れ、metadata bypass が誤って有効化される。
+        // For C# specifically, only count class-like definitions that are
+        // plausible attribute metadata targets. We don't resolve base types
+        // transitively at SQL time, so the best portable approximation is
+        // "has an inheritance clause": any class declared with `: ...` is a
+        // potential attribute type (direct `: Attribute`, indirect
+        // `: BaseAudit` where BaseAudit itself derives from Attribute, or
+        // any other `: Base` chain). A plain `class MyAuditAttribute { }`
+        // with no `:` clause is not a valid `[MyAudit]` target at compile
+        // time, so excluding it prevents the metadata bypass from being
+        // falsely suppressed. We deliberately over-accept non-attribute
+        // derived classes rather than under-accept indirectly-derived
+        // attribute classes, because an invalid `[MyFoo]` against a
+        // non-attribute class would fail to compile and therefore not
+        // appear as a real reference. Other languages keep the broad
+        // class-like candidate set because their metadata-target markers
+        // don't match this signature shape.
+        // C# は SQL 時点で基底型を遡れないため、「何かを継承している
+        // class-like」を attribute 候補の近似として扱う。`: Attribute` の
+        // 直接継承も、`: BaseAudit` のような中間基底経由の間接継承も、
+        // 何らかの `: Base` があれば候補に含める。継承節の無い plain
+        // `class MyAuditAttribute { }` だけを除外することで metadata
+        // bypass の誤抑止を防ぐ。非 attribute を過剰に含めるが、無効な
+        // `[MyFoo]` はコンパイルできないので実参照にはならず実害が無い。
+        // 署名列が無い legacy DB では degrade して class 限定のみ使う。
+        var metadataTargetKindExprF = BuildMetadataTargetKindExpr("f");
+        var sql = $@"
+            SELECT COUNT(*) FROM (
+                SELECT DISTINCT f.path, s.line, s.name
+                FROM symbols s
+                JOIN files f ON s.file_id = f.id
+                WHERE s.name = @metadataAmbigName COLLATE NOCASE
+                  AND {metadataTargetKindExprF}
+                  AND {supportedLangFilter}";
+        if (lang != null)
+        {
+            sql += " AND f.lang = @metadataAmbigLangFilter";
+            cmd.Parameters.AddWithValue("@metadataAmbigLangFilter", lang);
+        }
+        // Path / exclude-path parameters must be wrapped with `%...%` and escaped
+        // through EscapeLikeQuery so the LIKE semantics match the rest of the
+        // reader (search / references / callers / deps etc.). Passing the raw
+        // CLI value would require an anchored path like `%src/A/%` to match, so
+        // normal `--path src/A/` invocations would see zero in-scope definitions,
+        // the ambiguity count would underflow to 1, and the metadata bypass
+        // would falsely fire on what are actually ambiguous targets.
+        // path / exclude-path のパラメータは他の読み取り経路 (search / references /
+        // callers / deps 等) と同じ LIKE セマンティクスに合わせるため、
+        // EscapeLikeQuery でエスケープした上で `%...%` で包んでバインドする。生値の
+        // まま渡すと、通常の `--path src/A/` のような呼び出しでは LIKE が一致せず、
+        // 曖昧性カウントが 1 に過小化され、本来抑止すべき metadata bypass が
+        // 誤って発動してしまう。
+        if (pathPatterns is { Count: > 0 })
+        {
+            var ors = new List<string>(pathPatterns.Count);
+            for (int i = 0; i < pathPatterns.Count; i++)
+            {
+                ors.Add($"f.path LIKE @metadataAmbigPath{i} ESCAPE '\\'");
+                cmd.Parameters.AddWithValue($"@metadataAmbigPath{i}", $"%{EscapeLikeQuery(pathPatterns[i])}%");
+            }
+            sql += " AND (" + string.Join(" OR ", ors) + ")";
+        }
+        if (excludePathPatterns is { Count: > 0 })
+        {
+            for (int i = 0; i < excludePathPatterns.Count; i++)
+            {
+                sql += $" AND f.path NOT LIKE @metadataAmbigExcludePath{i} ESCAPE '\\'";
+                cmd.Parameters.AddWithValue($"@metadataAmbigExcludePath{i}", $"%{EscapeLikeQuery(excludePathPatterns[i])}%");
+            }
+        }
+        if (excludeTests)
+            sql += $" AND NOT {TestPathCondition}";
+        sql += ")";
+        cmd.CommandText = sql;
+        cmd.Parameters.AddWithValue("@metadataAmbigName", definition.Name);
+        var count = Convert.ToInt32(cmd.ExecuteScalar() ?? 0);
+        return count <= 1;
     }
 
     private bool SourceFileHasStructuredTypeEvidence(long fileId, string typeName)
@@ -2290,6 +2587,85 @@ public partial class DbReader
         return fallbackSql ?? "NULL";
     }
 
+    // Build the language-aware metadata-target eligibility predicate used by
+    // `deps` (target_files / target_ambiguity) and `impact`
+    // (IsMetadataTargetUnambiguous). Returns a SQL fragment that evaluates to
+    // TRUE when a `(symbols s, files <fileAlias>)` row should be counted as a
+    // plausible metadata target (`[Attribute]` / `@Annotation` / `@decorator`).
+    // Rules by language:
+    //   - C# (`csharp`): only `kind = 'class'` with an inheritance clause
+    //     (`signature LIKE '%: %'`). Transitive base-type resolution is not
+    //     available at SQL time, so "has any inheritance clause" is the
+    //     portable approximation for direct `: Attribute` plus indirect
+    //     `: BaseAudit` where `BaseAudit` itself derives from Attribute.
+    //     Extractor-driven authoritative `is_metadata_target` classification is
+    //     tracked as a follow-up (issue #435) and would let `deps` / `impact`
+    //     reject non-attribute classes like `class MyAuditAttribute : BaseService`
+    //     that this heuristic cannot distinguish.
+    //     For legacy-migration DBs whose `signature` column exists but stores
+    //     NULL for individual C# class rows, fall back to the canonical C#
+    //     attribute-naming convention (`name LIKE '%Attribute'`). This is
+    //     strictly narrower than the previous unconditional NULL-signature
+    //     pass-through and prevents every NULL-signature class from being
+    //     treated as a plausible metadata target. DBs without any `signature`
+    //     column at all degrade to the same naming heuristic.
+    //   - JS / TS (`javascript` / `typescript`): decorators target runtime
+    //     entities — classes and factory `function` definitions
+    //     (e.g. `function sealed(target) {}` used as `@sealed class Foo {}`).
+    //     TypeScript `interface` is a compile-time type-only construct and
+    //     cannot be a decorator target at runtime; including it would let a
+    //     same-name `interface` inject false ambiguity against the real
+    //     `function` or `class` provider and silently drop the decorator edge.
+    //   - Everything else (Java `@interface`, Kotlin `annotation class`,
+    //     Scala annotation classes, etc.): the annotation target is a
+    //     class-like declaration, so keep the original class-like candidate
+    //     set (`class` / `struct` / `interface`).
+    // `deps` と `impact` で共有する言語別 metadata-target 適格性判定。
+    // C# は `kind = 'class'` かつ継承節を持つ行を対象とする（直接/間接の Attribute 継承を
+    // ポータブルに近似するため）。signature 列は存在するが値が NULL の legacy-migration
+    // DB では C# の命名規約 `name LIKE '%Attribute'` にフォールバック — 従来の
+    // 無条件許容より厳密で、NULL-signature の全 class を metadata target 扱いしない。
+    // signature 列自体が無い旧 DB も同じ命名規約ヒューリスティックを使う。
+    // extractor 主導の authoritative な `is_metadata_target` 判定は follow-up（issue #435）
+    // として追跡しており、schema 化すれば `class MyAuditAttribute : BaseService` のような
+    // 非 attribute 継承も厳密に除外できるが、現状のヒューリスティックでは判別できない。
+    // JS / TS は decorator が runtime entity (class / factory function) のみ対象。
+    // TypeScript の `interface` は型定義で runtime decorator target にならないため除外し、
+    // 同名 `interface` が本物の `function` / `class` provider を曖昧化するのを防ぐ。
+    // それ以外は従来どおり class-like を候補にする。
+    private string BuildMetadataTargetKindExpr(string fileAlias)
+    {
+        // C# clause — class only (interface/struct cannot be attribute targets).
+        // Non-NULL signature: accept any inheritance clause (`: %`) as the portable
+        // approximation of direct/indirect Attribute derivation (see issue #435).
+        // NULL signature: require the C# attribute naming convention
+        // (`name LIKE '%Attribute'`). This is strictly narrower than the previous
+        // unconditional NULL pass-through and prevents arbitrary NULL-signature
+        // classes on a legacy-migration DB from being treated as metadata targets.
+        // DBs missing the `signature` column entirely degrade to the same naming
+        // heuristic.
+        // C# は class のみ（interface/struct は attribute target にできない）。
+        // 非 NULL signature は従来どおり継承節 `: %` で判定（直接/間接 Attribute の近似）。
+        // NULL signature は C# 命名規約 `name LIKE '%Attribute'` に縮退 — 従来の
+        // 無条件許容より厳密で、legacy-migration DB で任意の NULL-signature class が
+        // metadata target 扱いされるのを防ぐ。signature 列欠落 DB も同じ命名規約を使う。
+        var csharpClause = _symbolColumns.Contains("signature")
+            ? $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND ((s.signature IS NOT NULL AND s.signature LIKE '%: %') OR (s.signature IS NULL AND s.name LIKE '%Attribute')))"
+            : $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND s.name LIKE '%Attribute')";
+        // JS / TS clause — decorators target runtime entities (classes and factory
+        // functions). TS `interface` is a type-only construct that cannot be a
+        // decorator target, so excluding it avoids false ambiguity against a
+        // real function/class provider sharing the same name.
+        // JS / TS: decorator は runtime entity (class / factory function) のみ対象。
+        // TS の `interface` は型定義のため除外しないと同名 interface が偽の曖昧さを
+        // 発生させる。
+        var jsClause = $"({fileAlias}.lang IN ('javascript','typescript') AND s.kind IN ('class','function'))";
+        // All other graph-supported languages keep the original class-like set.
+        // その他の graph 対応言語は従来どおり class-like を対象にする。
+        var otherClause = $"({fileAlias}.lang NOT IN ('csharp','javascript','typescript') AND s.kind IN ('class','struct','interface'))";
+        return $"({csharpClause} OR {jsClause} OR {otherClause})";
+    }
+
     /// <summary>
     /// Compute file-level dependency edges: which files reference symbols defined in which other files.
     /// ファイル間の依存関係エッジを算出: どのファイルがどのファイルで定義されたシンボルを参照しているか。
@@ -2307,7 +2683,7 @@ public partial class DbReader
         var sourceFilterAlias = "src";
         var targetFilterAlias = "dst";
         var sql = @"
-            WITH logical_references AS (
+            WITH logical_references_primary AS (
                 SELECT src.id AS source_file_id,
                        src.path AS source_path,
                        src.lang AS source_lang,
@@ -2318,6 +2694,21 @@ public partial class DbReader
                 FROM symbol_references r
                 JOIN files src ON r.file_id = src.id
                 WHERE 1 = 1";
+        // `deps` intentionally includes metadata-only reference kinds
+        // (`attribute` / `annotation`). Same rationale as
+        // `GetFileDependencyHintsToResolvedType`: renaming or removing a type that
+        // is only referenced via `[JsonConverter(typeof(User))]` or
+        // `@Inject(User.class)` still breaks the annotated file at compile time, so
+        // file-level dependency analysis must treat those sites as real edges.
+        // Call-graph-specific commands (`callers` / `callees`) keep rejecting
+        // metadata kinds at the CLI / MCP boundary — that is a separate contract.
+        // `deps` は metadata-only 参照 (`attribute` / `annotation`) も意図的に
+        // 含める。`GetFileDependencyHintsToResolvedType` と同じ理由で、
+        // `[JsonConverter(typeof(User))]` や `@Inject(User.class)` 経由でしか参照
+        // されない型でも、rename / 削除すれば annotated ファイルは compile-time
+        // で壊れるため、ファイル単位の依存分析では本物の edge として扱う必要が
+        // ある。call-graph 専用コマンド (`callers` / `callees`) 側では metadata
+        // 種別の拒否を CLI / MCP boundary で引き続き行う — そちらは別契約。
         sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "src", "depsLang")}";
         if (lang != null)
             sql += " AND src.lang = @lang";
@@ -2338,19 +2729,81 @@ public partial class DbReader
         sql += @"
                 GROUP BY src.id, src.path, src.lang, r.symbol_name, r.line, r.column_number, logical_reference_kind
             ),
+            logical_references AS (
+                SELECT source_file_id, source_path, source_lang, symbol_name, line, column_number, logical_reference_kind,
+                       0 AS is_attribute_alias,
+                       CASE WHEN logical_reference_kind IN ('attribute', 'annotation') THEN 1 ELSE 0 END AS is_metadata
+                FROM logical_references_primary
+                UNION ALL
+                -- C# attribute suffix alias: [Foo] in source is stored with symbol_name='Foo',
+                -- but the defining class is named 'FooAttribute'. Emit the canonical 'Foo' + 'Attribute'
+                -- form so deps can match the class file as a target. The alias rows are flagged
+                -- so the edges CTE can restrict them to class-like targets and avoid spurious
+                -- edges to unrelated functions / properties that happen to be named 'FooAttribute'.
+                -- C# 属性のサフィックス別名: ソース上の [Foo] は symbol_name='Foo' で保存されるが、
+                -- 定義クラスは 'FooAttribute' 命名になるため、正規形 'Foo' + 'Attribute' を補って
+                -- deps がクラス側のファイルを target として join できるようにする。alias 行には
+                -- フラグを付け、edges CTE 側で class-like target だけに限定する。これにより、
+                -- 偶然 'FooAttribute' という名前を持つ関数やプロパティへの誤ったエッジを防ぐ。
+                SELECT source_file_id, source_path, source_lang,
+                       symbol_name || 'Attribute' AS symbol_name,
+                       line, column_number, logical_reference_kind,
+                       1 AS is_attribute_alias,
+                       1 AS is_metadata
+                FROM logical_references_primary
+                WHERE source_lang = 'csharp'
+                  AND logical_reference_kind = 'attribute'
+                  AND symbol_name NOT LIKE '%Attribute'
+            ),
             source_name_counts AS (
+                -- Grouping includes is_metadata so metadata-only groups ([Foo] / @Foo)
+                -- can be restricted to class-like targets independently from non-metadata
+                -- call-graph groups that share the same symbol_name in the same file
+                -- (e.g. `Foo()` call + `[Foo]` attribute both present in the same source).
+                -- is_metadata を GROUP BY に含めることで、同じ source file / symbol_name を
+                -- 共有する metadata 行と call-graph 行 (例: 同じファイル内の `Foo()` 呼び出し
+                -- と `[Foo]` 属性) を別グループとして扱い、metadata 側だけに class-like
+                -- target 制限を掛けられるようにする。
                 SELECT source_file_id,
                        source_path,
                        source_lang,
                        symbol_name,
+                       is_attribute_alias,
+                       is_metadata,
                        COUNT(*) AS ref_count
                 FROM logical_references
-                GROUP BY source_file_id, source_path, source_lang, symbol_name
+                GROUP BY source_file_id, source_path, source_lang, symbol_name, is_attribute_alias, is_metadata
             ),
             target_files AS (
-                SELECT DISTINCT dst.path AS target_path,
+                -- Collapse per-symbol rows to one per (target_path, target_lang, symbol_name)
+                -- and remember whether any of the same-name symbols is a class-like kind
+                -- via MAX. Keeping kind in DISTINCT would split identical (path, lang, name)
+                -- rows when one file defines both a class and a same-name function (e.g. a
+                -- C# constructor), inflating the deps reference count.
+                -- (target_path, target_lang, symbol_name) 単位に集約し、同名のシンボルの
+                -- いずれかが class 系であるかを MAX で覚える。kind を DISTINCT に含めると、
+                -- 同じ (path, lang, name) でも class と同名 function (C# のコンストラクタ等)
+                -- が別行として残り、deps の参照カウントが膨らんでしまう。
+                -- has_metadata_target_kind further narrows the class-like set to targets
+                -- that can legitimately be referenced as [Attribute] metadata. For C#
+                -- we cannot resolve base types transitively at SQL time, so the best
+                -- portable approximation is an inheritance-clause check: any class
+                -- declared with a base list is a potential attribute type (direct or
+                -- indirect Attribute derivation). A plain class FooAttribute with no
+                -- base clause is not a valid [Foo] target at compile time.
+                -- Other languages keep the original class-like breadth. Legacy DBs
+                -- without a signature column degrade to the broad class-like set.
+                -- has_metadata_target_kind は [Attribute] metadata target として妥当な
+                -- class-like のみに絞る。C# は SQL 時点で基底型を遡れないため、継承節を
+                -- 持つクラスを候補とする近似を採る(直接・間接の Attribute 継承を
+                -- 取りこぼさない)。他言語は class-like 全体を残す。signature 列が無い
+                -- legacy DB では filter を無効化し class-like 全体に戻る。
+                SELECT dst.path AS target_path,
                        dst.lang AS target_lang,
-                       s.name AS symbol_name
+                       s.name AS symbol_name,
+                       MAX(CASE WHEN s.kind IN ('class','struct','interface') THEN 1 ELSE 0 END) AS has_class_like_kind,
+                       MAX(CASE WHEN " + BuildMetadataTargetKindExpr("dst") + @"
+                                THEN 1 ELSE 0 END) AS has_metadata_target_kind
                 FROM symbols s
                 JOIN files dst ON s.file_id = dst.id
                 WHERE 1 = 1";
@@ -2372,6 +2825,69 @@ public partial class DbReader
         if (reverse && excludeTests)
             sql += $" AND NOT {TestPathCondition.Replace("f.path", $"{targetFilterAlias}.path")}";
         sql += @"
+                GROUP BY dst.path, dst.lang, s.name
+            ),
+            metadata_raw_suppression AS (
+                -- When a raw C# attribute reference '[Foo]' (stored as symbol_name='Foo',
+                -- logical_reference_kind='attribute') also has a synthetic suffix alias
+                -- row that resolves to a class-like 'FooAttribute' target, drop the raw
+                -- row to avoid creating a duplicate edge to any unrelated 'Foo' symbol
+                -- (method, property, local class) that merely shares the bare name.
+                -- 生の C# 属性参照 '[Foo]' (symbol_name='Foo', kind='attribute') に対して
+                -- 同じ source_file 内で 'FooAttribute' の synthetic alias 行が
+                -- class 系 target に解決できる場合、この行自体は落として
+                -- 同名の関数/プロパティ/ローカルクラス 'Foo' への誤依存を防ぐ。
+                SELECT DISTINCT lrp.source_file_id, lrp.symbol_name
+                FROM logical_references_primary lrp
+                JOIN target_files tf_alias
+                  ON tf_alias.target_lang = lrp.source_lang
+                 AND tf_alias.symbol_name = lrp.symbol_name || 'Attribute'
+                 AND tf_alias.has_metadata_target_kind = 1
+                WHERE lrp.source_lang = 'csharp'
+                  AND lrp.logical_reference_kind = 'attribute'
+                  AND lrp.symbol_name NOT LIKE '%Attribute'
+            ),
+            target_ambiguity AS (
+                -- Count class-like definitions at symbol-identity level rather than
+                -- file level. Two same-named class-like definitions in the same file
+                -- (e.g. `namespace A { class FooAttribute { } } namespace B { class
+                -- FooAttribute { } }` both inside one .cs file) collapse to a single
+                -- target_files row because target_files is GROUPed by dst.path, so
+                -- COUNT(DISTINCT target_path) alone would see count=1 and falsely
+                -- treat the metadata target as unambiguous. Joining target_files back
+                -- through files + symbols recovers the per-definition row count while
+                -- still inheriting target_files' lang / path / graph-supported scope
+                -- (since the join only keeps rows whose (path, lang, name) already
+                -- appear in target_files).
+                -- class-like 定義は path 単位ではなく symbol identity 単位で数える。
+                -- 同じ .cs ファイル内に別名前空間で同名 class-like が 2 つあるケースは
+                -- target_files (dst.path で GROUP BY) 上では 1 行に潰れており、
+                -- COUNT(DISTINCT target_path) だけでは count=1 となり metadata target
+                -- が一意と誤判定される。target_files から files + symbols に JOIN し直す
+                -- ことで定義単位の件数を復元する。JOIN が target_files 既存行にしか
+                -- 当たらないため、lang / path / graph-supported スコープはそのまま継承。
+                SELECT tf.target_lang,
+                       tf.symbol_name,
+                       COUNT(*) AS class_like_target_count
+                FROM target_files tf
+                JOIN files dst
+                  ON dst.path = tf.target_path
+                 AND dst.lang = tf.target_lang
+                JOIN symbols s
+                  ON s.file_id = dst.id
+                 AND s.name = tf.symbol_name
+                 -- Same language-aware metadata-eligibility filter as
+                 -- target_files: C# restricts to `class` with inheritance
+                 -- clause (interface/struct cannot be attribute targets);
+                 -- JS/TS additionally accepts `function` (decorator
+                 -- factory); others keep the class-like candidate set.
+                 -- target_files と同じ言語別 metadata 適格性フィルタ。
+                 -- C# は class 限定 + 継承節 (interface/struct は除外)。
+                 -- JS/TS は decorator factory 用に function も許容。
+                 -- それ以外は class-like 全体を候補にする。
+                 AND " + BuildMetadataTargetKindExpr("dst") + @"
+                WHERE tf.has_metadata_target_kind = 1
+                GROUP BY tf.target_lang, tf.symbol_name
             ),
             edges AS (
                 SELECT snc.source_path,
@@ -2382,7 +2898,40 @@ public partial class DbReader
                 JOIN target_files tf
                   ON tf.symbol_name = snc.symbol_name
                  AND tf.target_lang = snc.source_lang
+                LEFT JOIN metadata_raw_suppression mrs
+                  ON mrs.source_file_id = snc.source_file_id
+                 AND mrs.symbol_name = snc.symbol_name
+                LEFT JOIN target_ambiguity ta
+                  ON ta.target_lang = snc.source_lang
+                 AND ta.symbol_name = snc.symbol_name
                 WHERE snc.source_path != tf.target_path
+                  -- All metadata references ([Foo] / @Foo) and their synthetic C#
+                  -- suffix aliases must only match class-like target kinds; otherwise
+                  -- a metadata reference would spuriously depend on any file that
+                  -- merely defines a function / property / variable sharing the name.
+                  -- Non-metadata call-graph refs keep matching any kind so e.g. a
+                  -- constructor call can still tie back to a class definition.
+                  -- metadata 参照 ([Foo] / @Foo) と C# の合成 alias 行はいずれも
+                  -- class 系の target 種別にのみ一致させる。これを許すと同名の
+                  -- 関数/プロパティ/変数を持つだけのファイルまで誤って依存してしまう。
+                  -- 非 metadata の call-graph 参照は任意の kind に一致させて構わない
+                  -- (コンストラクタ呼び出しがクラス定義に結び付くケースなど)。
+                  AND (snc.is_metadata = 0 OR tf.has_metadata_target_kind = 1)
+                  -- Drop raw C# '[Foo]' rows when the suffix alias already resolves
+                  -- to a class-like 'FooAttribute' target in the same source file.
+                  -- 同じ source file で suffix alias が class 系 'FooAttribute' に
+                  -- 解決できている C# の raw '[Foo]' 行は落とす。
+                  AND NOT (
+                        snc.is_metadata = 1
+                    AND snc.is_attribute_alias = 0
+                    AND snc.source_lang = 'csharp'
+                    AND mrs.source_file_id IS NOT NULL
+                  )
+                  -- Metadata edges only survive when the target symbol resolves to
+                  -- a single class-like definition within scope; ambiguous cases
+                  -- (multiple same-name attribute / annotation classes) are dropped.
+                  -- metadata エッジは同名 class 系 target が 1 つだけのときのみ残す。
+                  AND (snc.is_metadata = 0 OR COALESCE(ta.class_like_target_count, 0) <= 1)
             )
             SELECT source_path,
                    target_path,

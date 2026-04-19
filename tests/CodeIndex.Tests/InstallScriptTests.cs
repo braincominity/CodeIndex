@@ -373,9 +373,282 @@ public sealed class InstallScriptTests : IDisposable
 
         Assert.Equal(1, exitCode);
         Assert.Contains("Fetching latest release version", stdout);
-        Assert.Contains("GitHub API rate limit exceeded while fetching the latest release", stderr);
+        Assert.Contains("GitHub API rate limit exceeded while fetching", stderr);
         Assert.Contains("pass an explicit version", stderr);
         Assert.DoesNotContain("Check your network connection", stderr);
+    }
+
+    [Fact]
+    public void ResolveVersion_ForbiddenLatestLookup_PrintsProxyAndVersionPinHints()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            curl() {
+                local output_path=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o)
+                            output_path="$2"
+                            shift 2
+                            ;;
+                        -w)
+                            shift 2
+                            ;;
+                        *)
+                            shift
+                            ;;
+                    esac
+                done
+
+                printf '{"message":"Forbidden"}' > "$output_path"
+                printf '403'
+                return 0
+            }
+
+            resolve_version ""
+            """);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Fetching latest release version", stdout);
+        Assert.Contains("GitHub API returned HTTP 403 while fetching", stderr);
+        Assert.Contains("/releases/latest", stderr);
+        Assert.Contains("curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/vX.Y.Z/install.sh | bash -s -- vX.Y.Z", stderr);
+        Assert.Contains("bash ./install.sh vX.Y.Z", stderr);
+        Assert.Contains("from a checkout", stderr);
+        Assert.Contains("CDIDX_GITHUB_API_BASE_URL", stderr);
+        Assert.Contains("CONNECT tunnel failed, response 403", stderr);
+    }
+
+    [Fact]
+    public void ResolveVersion_ForbiddenConfiguredLatestLookup_PrintsConfiguredApiHints()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            curl() {
+                local output_path=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o)
+                            output_path="$2"
+                            shift 2
+                            ;;
+                        -w)
+                            shift 2
+                            ;;
+                        *)
+                            shift
+                            ;;
+                    esac
+                done
+
+                printf '{"message":"Forbidden"}' > "$output_path"
+                printf '403'
+                return 0
+            }
+
+            resolve_version ""
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_GITHUB_API_BASE_URL"] = "https://mirror.example.test/api",
+            });
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Fetching latest release version", stdout);
+        Assert.Contains("configured latest-release API (https://mirror.example.test/api) returned HTTP 403", stderr);
+        Assert.Contains("Check the configured API endpoint, credentials, path ACL, or proxy policy.", stderr);
+        Assert.Contains("curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/vX.Y.Z/install.sh | bash -s -- vX.Y.Z", stderr);
+        Assert.Contains("bash ./install.sh vX.Y.Z", stderr);
+        Assert.Contains("from a checkout", stderr);
+        Assert.DoesNotContain("set CDIDX_GITHUB_API_BASE_URL to a reachable internal mirror API", stderr);
+        Assert.Contains("CONNECT tunnel failed, response 403", stderr);
+    }
+
+    [Theory]
+    [InlineData("curl: (56) CONNECT tunnel failed, response 403")]
+    [InlineData("curl: (56) Received HTTP code 403 from proxy after CONNECT")]
+    public void ResolveVersion_TunnelForbiddenLatestLookup_PrintsProxyDenyGuidance(string curlStderr)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            curl() {
+                printf '%s\n' "{{curlStderr}}" >&2
+                return 56
+            }
+
+            resolve_version ""
+            """);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Fetching latest release version", stdout);
+        Assert.Contains(curlStderr, stderr);
+        Assert.Contains("CONNECT tunnel failed with HTTP 403 while reaching GitHub API", stderr);
+        Assert.Contains("curl exit 56", stderr);
+        Assert.Contains("CONNECT-stage HTTP 403", stderr);
+        Assert.Contains("route substitution alone will not fix it", stderr);
+        Assert.Contains("allow-list at least one required API or artifact host path", stderr);
+        Assert.DoesNotContain("Network error reaching GitHub API while fetching", stderr);
+    }
+
+    [Fact]
+    public void DownloadAndInstall_ForbiddenGitHubAssetDownload_PrintsGitHubAndAllowListHints()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "forbidden_asset_target");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            VERSION="v1.2.3"
+            OS_NAME="linux"
+            ARCH_NAME="x64"
+            RID="linux-x64"
+
+            curl() {
+                local output_path=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o)
+                            output_path="$2"
+                            shift 2
+                            ;;
+                        -w)
+                            shift 2
+                            ;;
+                        *)
+                            shift
+                            ;;
+                    esac
+                done
+
+                : > "$output_path"
+                printf '403'
+                return 0
+            }
+
+            download_and_install
+            echo "UNREACHABLE"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            });
+
+        Assert.Equal(1, exitCode);
+        Assert.DoesNotContain("UNREACHABLE", stdout);
+        Assert.False(File.Exists(Path.Combine(installDir, "cdidx")));
+        Assert.False(File.Exists(Path.Combine(installDir, "version.json")));
+        Assert.False(File.Exists(Path.Combine(installDir, "libe_sqlite3.so")));
+        Assert.Contains("HTTP 403", stderr);
+        Assert.Contains("GitHub release host", stderr);
+        Assert.Contains("GitHub may be blocking or rate-limiting this route.", stderr);
+        Assert.Contains("allow-list at least one artifact host path", stderr);
+    }
+
+    [Theory]
+    [InlineData("curl: (56) CONNECT tunnel failed, response 403")]
+    [InlineData("curl: (56) Received HTTP code 403 from proxy after CONNECT")]
+    public void DownloadAndInstall_TunnelForbiddenAssetDownload_PrintsProxyDenyGuidance(string curlStderr)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "tunnel_forbidden_asset_target");
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            $$"""
+            VERSION="v1.2.3"
+            OS_NAME="linux"
+            ARCH_NAME="x64"
+            RID="linux-x64"
+
+            curl() {
+                printf '%s\n' "{{curlStderr}}" >&2
+                return 56
+            }
+
+            download_and_install
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            });
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains(curlStderr, stderr);
+        Assert.Contains("CONNECT tunnel failed with HTTP 403 while reaching GitHub release host", stderr);
+        Assert.Contains("curl exit 56", stderr);
+        Assert.Contains("CONNECT-stage HTTP 403", stderr);
+        Assert.Contains("route substitution alone will not fix it", stderr);
+        Assert.Contains("allow-list at least one required API or artifact host path", stderr);
+        Assert.DoesNotContain("Network error reaching GitHub release host while fetching", stderr);
+    }
+
+    [Fact]
+    public void DownloadAndInstall_ForbiddenConfiguredAssetDownload_PrintsConfiguredMirrorHints()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "forbidden_configured_asset_target");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            VERSION="v1.2.3"
+            OS_NAME="linux"
+            ARCH_NAME="x64"
+            RID="linux-x64"
+
+            curl() {
+                local output_path=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o)
+                            output_path="$2"
+                            shift 2
+                            ;;
+                        -w)
+                            shift 2
+                            ;;
+                        *)
+                            shift
+                            ;;
+                    esac
+                done
+
+                : > "$output_path"
+                printf '403'
+                return 0
+            }
+
+            download_and_install
+            echo "UNREACHABLE"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+                ["CDIDX_GITHUB_BASE_URL"] = "https://mirror.example.test/releases",
+            });
+
+        Assert.Equal(1, exitCode);
+        Assert.DoesNotContain("UNREACHABLE", stdout);
+        Assert.False(File.Exists(Path.Combine(installDir, "cdidx")));
+        Assert.False(File.Exists(Path.Combine(installDir, "version.json")));
+        Assert.False(File.Exists(Path.Combine(installDir, "libe_sqlite3.so")));
+        Assert.Contains("configured release host (https://mirror.example.test/releases)", stderr);
+        Assert.Contains("Check the configured mirror/proxy path, credentials, or access policy.", stderr);
+        Assert.DoesNotContain("GitHub may be blocking or rate-limiting this route.", stderr);
+        Assert.Contains("allow-list at least one artifact host path", stderr);
     }
 
     [Fact]
@@ -424,7 +697,7 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("Fetching latest release version", stdout);
         Assert.DoesNotContain("Done!", stdout);
         Assert.DoesNotContain("DOWNLOAD_SHOULD_NOT_RUN", stdout);
-        Assert.Contains("GitHub API rate limit exceeded while fetching the latest release", stderr);
+        Assert.Contains("GitHub API rate limit exceeded while fetching", stderr);
     }
 
     [Fact]
@@ -440,6 +713,7 @@ public sealed class InstallScriptTests : IDisposable
             download_and_install() { echo "DOWNLOAD_SHOULD_NOT_RUN"; }
             check_path() { :; }
             curl() {
+                printf 'curl: (7) Failed to connect to api.github.com port 443 after 0 ms: Connection refused\n' >&2
                 return 7
             }
 
@@ -455,7 +729,8 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("Fetching latest release version", stdout);
         Assert.DoesNotContain("Done!", stdout);
         Assert.DoesNotContain("DOWNLOAD_SHOULD_NOT_RUN", stdout);
-        Assert.Contains("Network error reaching GitHub while fetching", stderr);
+        Assert.Contains("curl: (7) Failed to connect to api.github.com port 443 after 0 ms: Connection refused", stderr);
+        Assert.Contains("Network error reaching GitHub API while fetching", stderr);
         Assert.Contains("curl exit 7", stderr);
     }
 
@@ -1300,7 +1575,8 @@ public sealed class InstallScriptTests : IDisposable
 
         Assert.Equal(1, exitCode);
         Assert.Contains("HTTP 404", stderr);
-        Assert.Contains("version v0.99.0 exists and publishes linux-x64 assets", stderr);
+        Assert.Contains("version v0.99.0 exists", stderr);
+        Assert.Contains("linux-x64 assets", stderr);
         Assert.DoesNotContain("Check your network connection", stderr);
     }
 
@@ -1446,6 +1722,1987 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, stderr);
         Assert.Contains("Version: v9.9.9", stdout);
+    }
+
+    [Fact]
+    public void ResolveVersion_UsesConfiguredApiBaseUrl()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var urlLogPath = Path.Combine(_tempRoot, "configured_api_base_url.log");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            curl() {
+                local output_path=""
+                local url=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o)
+                            output_path="$2"
+                            shift 2
+                            ;;
+                        -w)
+                            shift 2
+                            ;;
+                        *)
+                            url="$1"
+                            shift
+                            ;;
+                    esac
+                done
+
+                printf '%s\n' "$url" > "{{urlLogPath}}"
+                printf '{"tag_name":"v1.2.3"}' > "$output_path"
+                printf '200'
+                return 0
+            }
+
+            resolve_version ""
+            cat "{{urlLogPath}}"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_GITHUB_API_BASE_URL"] = "https://mirror.example/api",
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("Version: v1.2.3", stdout);
+        Assert.Contains("https://mirror.example/api/repos/Widthdom/CodeIndex/releases/latest", stdout);
+    }
+
+    [Fact]
+    public void ResolveVersion_ConfiguredApiBase403_PrintsConfiguredEndpointGuidance()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            curl() {
+                local output_path=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o)
+                            output_path="$2"
+                            shift 2
+                            ;;
+                        -w)
+                            shift 2
+                            ;;
+                        *)
+                            shift
+                            ;;
+                    esac
+                done
+
+                printf '{"message":"forbidden"}' > "$output_path"
+                printf '403'
+                return 0
+            }
+
+            resolve_version ""
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_GITHUB_API_BASE_URL"] = "https://mirror.example/api",
+            });
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Fetching latest release version", stdout);
+        Assert.Contains("configured latest-release API (https://mirror.example/api) returned HTTP 403", stderr);
+        Assert.Contains("https://mirror.example/api/repos/Widthdom/CodeIndex/releases/latest", stderr);
+        Assert.DoesNotContain("GitHub API returned HTTP 403", stderr);
+    }
+
+    [Fact]
+    public void DownloadAndInstall_ConfiguredReleaseBaseNetworkFailure_PrintsConfiguredHostGuidance()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "configured_release_base_network_failure");
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            VERSION="v1.2.3"
+            OS_NAME="linux"
+            ARCH_NAME="x64"
+            RID="linux-x64"
+
+            curl() {
+                printf 'curl: (6) Could not resolve host: mirror.example\n' >&2
+                return 7
+            }
+
+            download_and_install
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+                ["CDIDX_GITHUB_BASE_URL"] = "https://mirror.example/releases",
+            });
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("curl: (6) Could not resolve host: mirror.example", stderr);
+        Assert.Contains("Network error reaching configured release host (https://mirror.example/releases)", stderr);
+        Assert.Contains("https://mirror.example/releases/Widthdom/CodeIndex/releases/download/v1.2.3/CodeIndex-linux-x64.tar.gz", stderr);
+        Assert.DoesNotContain("Network error reaching GitHub", stderr);
+    }
+
+    [Fact]
+    public void SelfTestLocalMirror_WithoutExplicitInstallDir_UsesIsolatedTempInstallDir()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var homeDir = Path.Combine(_tempRoot, "self_test_home");
+        var realInstallDir = Path.Combine(homeDir, ".local", "bin");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            export HOME="{{homeDir}}"
+            mkdir -p "{{realInstallDir}}"
+            printf '%s\n' '#!/usr/bin/env bash' 'echo "REAL_EXISTING_BINARY"' > "{{Path.Combine(realInstallDir, "cdidx")}}"
+            chmod +x "{{Path.Combine(realInstallDir, "cdidx")}}"
+            printf '{"version":"9.9.9"}' > "{{Path.Combine(realInstallDir, "version.json")}}"
+            printf 'real-lib' > "{{Path.Combine(realInstallDir, "libe_sqlite3.so")}}"
+
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            wait_for_local_mirror_ready() { :; }
+            python3() { sleep 30; }
+            curl() { :; }
+            main() {
+                echo "MAIN_INSTALL_DIR:$INSTALL_DIR"
+                mkdir -p "$INSTALL_DIR"
+                printf '%s\n' '#!/usr/bin/env bash' 'echo "cdidx v1.2.3"' > "$INSTALL_DIR/cdidx"
+                chmod +x "$INSTALL_DIR/cdidx"
+                printf '{"version":"1.2.3"}' > "$INSTALL_DIR/version.json"
+                printf 'self-test-lib' > "$INSTALL_DIR/libe_sqlite3.so"
+            }
+
+            run_local_mirror_self_test v1.2.3
+            grep -q 'REAL_EXISTING_BINARY' "{{Path.Combine(realInstallDir, "cdidx")}}" && echo "REAL_INSTALL_PRESERVED"
+            [ "$INSTALL_DIR" = "{{realInstallDir}}" ] && echo "USED_REAL_INSTALL_DIR"
+            [ -f "$INSTALL_DIR/cdidx" ] && echo "SELF_TEST_INSTALL_PRESENT"
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Using isolated self-test install dir:", stdout);
+        Assert.Contains("REAL_INSTALL_PRESERVED", stdout);
+        Assert.Contains("SELF_TEST_INSTALL_PRESENT", stdout);
+        Assert.DoesNotContain($"MAIN_INSTALL_DIR:{realInstallDir}", stdout);
+        Assert.DoesNotContain("USED_REAL_INSTALL_DIR", stdout);
+        Assert.DoesNotContain("ERROR:", stderr);
+    }
+
+    [Fact]
+    public void SelfTestLocalMirror_WithExplicitInstallDir_UsesRequestedInstallDir()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "self_test_explicit_install");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            wait_for_local_mirror_ready() { :; }
+            python3() { sleep 30; }
+            curl() { :; }
+            main() {
+                echo "MAIN_INSTALL_DIR:$INSTALL_DIR"
+                mkdir -p "$INSTALL_DIR"
+                printf '%s\n' '#!/usr/bin/env bash' 'echo "cdidx v1.2.3"' > "$INSTALL_DIR/cdidx"
+                chmod +x "$INSTALL_DIR/cdidx"
+                printf '{"version":"1.2.3"}' > "$INSTALL_DIR/version.json"
+                printf 'self-test-lib' > "$INSTALL_DIR/libe_sqlite3.so"
+            }
+
+            run_local_mirror_self_test v1.2.3
+            [ -f "$INSTALL_DIR/cdidx" ] && echo "EXPLICIT_INSTALL_PRESENT"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains($"MAIN_INSTALL_DIR:{installDir}", stdout);
+        Assert.Contains("Using explicit self-test install dir:", stdout);
+        Assert.Contains("EXPLICIT_INSTALL_PRESENT", stdout);
+        Assert.DoesNotContain("ERROR:", stderr);
+    }
+
+    [Fact]
+    public void SelfTestLocalMirror_EmptyInstallDirEnv_StillUsesIsolatedTempInstallDir()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var homeDir = Path.Combine(_tempRoot, "self_test_empty_env_home");
+        var realInstallDir = Path.Combine(homeDir, ".local", "bin");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            export HOME="{{homeDir}}"
+            mkdir -p "{{realInstallDir}}"
+            printf '%s\n' '#!/usr/bin/env bash' 'echo "REAL_EXISTING_BINARY"' > "{{Path.Combine(realInstallDir, "cdidx")}}"
+            chmod +x "{{Path.Combine(realInstallDir, "cdidx")}}"
+            printf '{"version":"9.9.9"}' > "{{Path.Combine(realInstallDir, "version.json")}}"
+            printf 'real-lib' > "{{Path.Combine(realInstallDir, "libe_sqlite3.so")}}"
+
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            wait_for_local_mirror_ready() { :; }
+            python3() { sleep 30; }
+            curl() { :; }
+            main() {
+                echo "MAIN_INSTALL_DIR:$INSTALL_DIR"
+                mkdir -p "$INSTALL_DIR"
+                printf '%s\n' '#!/usr/bin/env bash' 'echo "cdidx v1.2.3"' > "$INSTALL_DIR/cdidx"
+                chmod +x "$INSTALL_DIR/cdidx"
+                printf '{"version":"1.2.3"}' > "$INSTALL_DIR/version.json"
+                printf 'self-test-lib' > "$INSTALL_DIR/libe_sqlite3.so"
+            }
+
+            run_local_mirror_self_test v1.2.3
+            grep -q 'REAL_EXISTING_BINARY' "{{Path.Combine(realInstallDir, "cdidx")}}" && echo "REAL_INSTALL_PRESERVED"
+            [ "$INSTALL_DIR" = "{{realInstallDir}}" ] && echo "USED_REAL_INSTALL_DIR"
+            echo "SELF_TEST_DONE"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = "",
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Using isolated self-test install dir:", stdout);
+        Assert.Contains("REAL_INSTALL_PRESERVED", stdout);
+        Assert.DoesNotContain($"MAIN_INSTALL_DIR:{realInstallDir}", stdout);
+        Assert.DoesNotContain("USED_REAL_INSTALL_DIR", stdout);
+        Assert.DoesNotContain("ERROR:", stderr);
+    }
+
+    [Fact]
+    public void SelfTestLocalMirror_AddsLoopbackNoProxyAndUsesCurlNoProxy()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "self_test_no_proxy_install");
+        var curlLogPath = Path.Combine(_tempRoot, "self_test_no_proxy.log");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            python3() { sleep 30; }
+            curl() {
+                case " $* " in
+                    *" --noproxy 127.0.0.1,localhost "*) printf 'HAS_NOPROXY\n' >> "{{curlLogPath}}" ;;
+                    *) printf 'MISSING_NOPROXY\n' >> "{{curlLogPath}}" ;;
+                esac
+                printf 'NO_PROXY=%s\n' "${NO_PROXY:-}" >> "{{curlLogPath}}"
+                printf 'no_proxy=%s\n' "${no_proxy:-}" >> "{{curlLogPath}}"
+                printf '200'
+                return 0
+            }
+            main() {
+                local output_file
+                output_file="$(mktemp)"
+                curl_http_get "http://127.0.0.1:18765/download" "$output_file" > /dev/null
+                rm -f "$output_file"
+                mkdir -p "$INSTALL_DIR"
+                printf '%s\n' '#!/usr/bin/env bash' 'echo "cdidx v1.2.3"' > "$INSTALL_DIR/cdidx"
+                chmod +x "$INSTALL_DIR/cdidx"
+                printf '{"version":"1.2.3"}' > "$INSTALL_DIR/version.json"
+                printf 'self-test-lib' > "$INSTALL_DIR/libe_sqlite3.so"
+            }
+
+            run_local_mirror_self_test v1.2.3
+            cat "{{curlLogPath}}"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+                ["NO_PROXY"] = "example.internal",
+                ["no_proxy"] = "svc.local",
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("MISSING_NOPROXY", stdout);
+        Assert.Contains("HAS_NOPROXY", stdout);
+        Assert.Contains("NO_PROXY=example.internal,127.0.0.1,localhost", stdout);
+        Assert.Contains("no_proxy=svc.local,127.0.0.1,localhost", stdout);
+        Assert.DoesNotContain("ERROR:", stderr);
+    }
+
+    [Fact]
+    public void SelfTestLocalMirror_CustomPort_UsesConfiguredPort()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "self_test_custom_port_install");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            wait_for_local_mirror_ready() {
+                echo "READY_URL:$1"
+            }
+            python3() { sleep 30; }
+            curl() { :; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                printf '%s\n' '#!/usr/bin/env bash' 'echo "cdidx v1.2.3"' > "$INSTALL_DIR/cdidx"
+                chmod +x "$INSTALL_DIR/cdidx"
+                printf '{"version":"1.2.3"}' > "$INSTALL_DIR/version.json"
+                printf 'self-test-lib' > "$INSTALL_DIR/libe_sqlite3.so"
+            }
+
+            run_local_mirror_self_test v1.2.3
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+                ["CDIDX_LOCAL_MIRROR_PORT"] = "18766",
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("READY_URL:http://127.0.0.1:18766/Widthdom/CodeIndex/releases/download/v1.2.3/CodeIndex-linux-x64.tar.gz", stdout);
+        Assert.Contains("Running local mirror self-test against http://127.0.0.1:18766/", stdout);
+        Assert.DoesNotContain("ERROR:", stderr);
+    }
+
+    [Fact]
+    public void SelfTestLocalMirror_LocalMirrorStartFailure_PrintsSelfTestSpecificError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "self_test_start_failure");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            python3() {
+                echo "SELF_TEST_BIND_FAILED" >&2
+                return 1
+            }
+            curl() { :; }
+            main() { echo "MAIN_SHOULD_NOT_RUN"; }
+
+            run_local_mirror_self_test v1.2.3
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(1, exitCode);
+        Assert.DoesNotContain("MAIN_SHOULD_NOT_RUN", stdout);
+        Assert.Contains("Local mirror self-test could not start a loopback HTTP server", stderr);
+        Assert.Contains("This is a self-test harness failure, not an external network/proxy problem.", stderr);
+        Assert.Contains("SELF_TEST_BIND_FAILED", stderr);
+        Assert.DoesNotContain("Check your connection or corporate proxy", stderr);
+        Assert.DoesNotContain("CDIDX_LOCAL_MIRROR_PORT", stderr);
+    }
+
+    [Fact]
+    public void SelfTestLocalMirror_AddressAlreadyInUse_PrintsPortSpecificGuidance()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "self_test_port_in_use");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            python3() {
+                echo "OSError: [Errno 48] Address already in use" >&2
+                return 1
+            }
+            curl() { :; }
+            main() { echo "MAIN_SHOULD_NOT_RUN"; }
+
+            run_local_mirror_self_test v1.2.3
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(1, exitCode);
+        Assert.DoesNotContain("MAIN_SHOULD_NOT_RUN", stdout);
+        Assert.Contains("Address already in use", stderr);
+        Assert.Contains("CDIDX_LOCAL_MIRROR_PORT", stderr);
+        Assert.Contains("free port", stderr);
+    }
+
+    [Fact]
+    public void SelfTestLocalMirror_BindPermissionFailure_PrintsPermissionSpecificGuidance()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "self_test_permission_failure");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            python3() {
+                echo "PermissionError: [Errno 1] Operation not permitted" >&2
+                return 1
+            }
+            curl() { :; }
+            main() { echo "MAIN_SHOULD_NOT_RUN"; }
+
+            run_local_mirror_self_test v1.2.3
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(1, exitCode);
+        Assert.DoesNotContain("MAIN_SHOULD_NOT_RUN", stdout);
+        Assert.Contains("Local mirror self-test could not start a loopback HTTP server", stderr);
+        Assert.Contains("PermissionError: [Errno 1] Operation not permitted", stderr);
+        Assert.Contains("does not permit binding a loopback TCP port", stderr);
+        Assert.DoesNotContain("CDIDX_LOCAL_MIRROR_PORT", stderr);
+        Assert.DoesNotContain("free port", stderr);
+    }
+
+    [Fact]
+    public void SelfTestLocalMirror_CdidxInstallDirPointsAtHomeLocalBin_AbortsToProtectRealInstall()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var homeDir = Path.Combine(_tempRoot, "self_test_guard_home");
+        var realInstallDir = Path.Combine(homeDir, ".local", "bin");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            export HOME="{{homeDir}}"
+            mkdir -p "{{realInstallDir}}"
+            printf '%s\n' '#!/usr/bin/env bash' 'echo "REAL_EXISTING_BINARY"' > "{{Path.Combine(realInstallDir, "cdidx")}}"
+            chmod +x "{{Path.Combine(realInstallDir, "cdidx")}}"
+            printf '{"version":"9.9.9"}' > "{{Path.Combine(realInstallDir, "version.json")}}"
+            printf 'real-lib' > "{{Path.Combine(realInstallDir, "libe_sqlite3.so")}}"
+
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            wait_for_local_mirror_ready() { :; }
+            python3() { sleep 30; }
+            curl() { :; }
+            main() { echo "MAIN_SHOULD_NOT_RUN"; }
+
+            run_local_mirror_self_test v1.2.3
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = realInstallDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.DoesNotContain("MAIN_SHOULD_NOT_RUN", stdout);
+        Assert.Contains("points at a real install path", stderr);
+        Assert.Contains("--self-test-allow-overwrite", stderr);
+        Assert.Contains("Local mirror self-test aborted to protect an existing install", stderr);
+
+        var realCdidx = File.ReadAllText(Path.Combine(realInstallDir, "cdidx"));
+        Assert.Contains("REAL_EXISTING_BINARY", realCdidx);
+    }
+
+    [Fact]
+    public void SelfTestLocalMirror_CdidxInstallDirContainingExistingCdidx_AbortsToProtectRealInstall()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var customInstallDir = Path.Combine(_tempRoot, "self_test_guard_custom");
+        Directory.CreateDirectory(customInstallDir);
+        var preExistingBinary = Path.Combine(customInstallDir, "cdidx");
+        File.WriteAllText(preExistingBinary, "#!/usr/bin/env bash\necho 'REAL_EXISTING_BINARY'\n");
+        File.SetUnixFileMode(preExistingBinary, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            wait_for_local_mirror_ready() { :; }
+            python3() { sleep 30; }
+            curl() { :; }
+            main() { echo "MAIN_SHOULD_NOT_RUN"; }
+
+            run_local_mirror_self_test v1.2.3
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = customInstallDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.DoesNotContain("MAIN_SHOULD_NOT_RUN", stdout);
+        Assert.Contains("points at a real install path", stderr);
+        Assert.Contains("--self-test-allow-overwrite", stderr);
+
+        var realCdidx = File.ReadAllText(preExistingBinary);
+        Assert.Contains("REAL_EXISTING_BINARY", realCdidx);
+    }
+
+    [Fact]
+    public void SelfTestLocalMirror_EnvSelfTestAllowOverwrite_IsNotHonoredAsSilentBypass()
+    {
+        // Regression: a pre-exported SELF_TEST_ALLOW_OVERWRITE=1 in the caller's
+        // shell or CI must NOT silently bypass the install-dir guard. The only
+        // supported escape hatch is the explicit --self-test-allow-overwrite CLI flag.
+        // 呼び出し側シェルや CI に残った SELF_TEST_ALLOW_OVERWRITE=1 は
+        // install-dir ガードを黙って無効化してはならない。唯一の解除手段は
+        // --self-test-allow-overwrite CLI フラグ。
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var homeDir = Path.Combine(_tempRoot, "self_test_env_bypass_home");
+        var realInstallDir = Path.Combine(homeDir, ".local", "bin");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            export HOME="{{homeDir}}"
+            mkdir -p "{{realInstallDir}}"
+            printf '%s\n' '#!/usr/bin/env bash' 'echo "REAL_EXISTING_BINARY"' > "{{Path.Combine(realInstallDir, "cdidx")}}"
+            chmod +x "{{Path.Combine(realInstallDir, "cdidx")}}"
+
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            wait_for_local_mirror_ready() { :; }
+            python3() { sleep 30; }
+            curl() { :; }
+            main() { echo "MAIN_SHOULD_NOT_RUN"; }
+
+            # After sourcing install.sh the SELF_TEST_ALLOW_OVERWRITE shell var
+            # must be reset to 0 regardless of any inherited env value.
+            # install.sh を source した後、SELF_TEST_ALLOW_OVERWRITE は env から
+            # 継承した値にかかわらず 0 にリセットされていること。
+            echo "ALLOW_FLAG_AFTER_SOURCE:${SELF_TEST_ALLOW_OVERWRITE:-unset}"
+            run_local_mirror_self_test v1.2.3
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = realInstallDir,
+                ["SELF_TEST_ALLOW_OVERWRITE"] = "1",
+            },
+            enforceStrictMode: false);
+
+        Assert.Contains("ALLOW_FLAG_AFTER_SOURCE:0", stdout);
+        Assert.NotEqual(0, exitCode);
+        Assert.DoesNotContain("MAIN_SHOULD_NOT_RUN", stdout);
+        Assert.Contains("points at a real install path", stderr);
+        Assert.Contains("--self-test-allow-overwrite", stderr);
+        Assert.Contains("Local mirror self-test aborted to protect an existing install", stderr);
+
+        var realCdidx = File.ReadAllText(Path.Combine(realInstallDir, "cdidx"));
+        Assert.Contains("REAL_EXISTING_BINARY", realCdidx);
+    }
+
+    [Theory]
+    [InlineData("/usr/local/bin/")]
+    [InlineData("/usr/bin/")]
+    [InlineData("/opt/homebrew/bin/")]
+    [InlineData("/opt/local/bin/")]
+    public void SelfTestLocalMirror_WellKnownSystemPathWithTrailingSlash_IsStillRiskyAndAborts(string systemPath)
+    {
+        // The risky-path detector must normalize trailing slashes so
+        // CDIDX_INSTALL_DIR="/usr/local/bin/" is caught just like "/usr/local/bin".
+        // 末尾スラッシュがあっても既知のシステム install 先として検出されること。
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            export BINARY_NAME="cdidx_does_not_exist_here"
+            is_self_test_install_dir_risky "{{systemPath}}"
+            echo "RISKY_EXIT:$?"
+            """,
+            null,
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("RISKY_EXIT:0", stdout);
+        _ = stderr;
+    }
+
+    [Fact]
+    public void SelfTestLocalMirror_HomeLocalBinWithTrailingSlash_IsStillRiskyAndAborts()
+    {
+        // A CDIDX_INSTALL_DIR of "$HOME/.local/bin/" (with trailing slash, no
+        // existing cdidx yet) must still abort — previously it slipped past the
+        // exact-string comparison and only got caught after a real binary existed.
+        // 末尾スラッシュ付きの "$HOME/.local/bin/" も、実バイナリがまだ無い段階で
+        // ガードに引っかかること。
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var homeDir = Path.Combine(_tempRoot, "self_test_trailing_slash_home");
+        var realInstallDir = Path.Combine(homeDir, ".local", "bin");
+        Directory.CreateDirectory(realInstallDir);
+        var installDirWithSlash = realInstallDir.EndsWith("/") ? realInstallDir : realInstallDir + "/";
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            export HOME="{{homeDir}}"
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            wait_for_local_mirror_ready() { :; }
+            python3() { sleep 30; }
+            curl() { :; }
+            main() { echo "MAIN_SHOULD_NOT_RUN"; }
+
+            run_local_mirror_self_test v1.2.3
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDirWithSlash,
+            },
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.DoesNotContain("MAIN_SHOULD_NOT_RUN", stdout);
+        Assert.Contains("points at a real install path", stderr);
+        Assert.Contains("--self-test-allow-overwrite", stderr);
+    }
+
+    [Fact]
+    public void SelfTestLocalMirror_AllowOverwriteCliFlag_ProceedsDespiteRiskyInstallDir()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var homeDir = Path.Combine(_tempRoot, "self_test_allow_cli_home");
+        var realInstallDir = Path.Combine(homeDir, ".local", "bin");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            export HOME="{{homeDir}}"
+            mkdir -p "{{realInstallDir}}"
+            printf '%s\n' '#!/usr/bin/env bash' 'echo "REAL_EXISTING_BINARY"' > "{{Path.Combine(realInstallDir, "cdidx")}}"
+            chmod +x "{{Path.Combine(realInstallDir, "cdidx")}}"
+
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            wait_for_local_mirror_ready() { :; }
+            python3() { sleep 30; }
+            curl() { :; }
+            main() {
+                echo "MAIN_INSTALL_DIR:$INSTALL_DIR"
+                echo "ALLOW_FLAG_VALUE:${SELF_TEST_ALLOW_OVERWRITE:-0}"
+                mkdir -p "$INSTALL_DIR"
+                printf '%s\n' '#!/usr/bin/env bash' 'echo "cdidx v1.2.3"' > "$INSTALL_DIR/cdidx"
+                chmod +x "$INSTALL_DIR/cdidx"
+                printf '{"version":"1.2.3"}' > "$INSTALL_DIR/version.json"
+                printf 'self-test-lib' > "$INSTALL_DIR/libe_sqlite3.so"
+            }
+
+            # Simulate CLI dispatch of `install.sh --self-test-local-mirror --self-test-allow-overwrite v1.2.3`
+            set -- --self-test-allow-overwrite v1.2.3
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --self-test-allow-overwrite)
+                        SELF_TEST_ALLOW_OVERWRITE=1
+                        shift
+                        ;;
+                    --*)
+                        echo "UNKNOWN_OPTION:$1" >&2
+                        exit 2
+                        ;;
+                    *)
+                        break
+                        ;;
+                esac
+            done
+            run_local_mirror_self_test "${1:-}"
+            echo "CLI_OVERWRITE_ALLOWED"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = realInstallDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("CLI_OVERWRITE_ALLOWED", stdout);
+        Assert.Contains("ALLOW_FLAG_VALUE:1", stdout);
+        Assert.DoesNotContain("Local mirror self-test aborted", stderr);
+    }
+
+    [Fact]
+    public void SelfTestLocalMirror_CdidxInstallDirPointsAtFreshCustomDir_ProceedsWithoutGuard()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var safeInstallDir = Path.Combine(_tempRoot, "self_test_safe_custom_install");
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            wait_for_local_mirror_ready() { :; }
+            python3() { sleep 30; }
+            curl() { :; }
+            main() {
+                echo "MAIN_INSTALL_DIR:$INSTALL_DIR"
+                mkdir -p "$INSTALL_DIR"
+                printf '%s\n' '#!/usr/bin/env bash' 'echo "cdidx v1.2.3"' > "$INSTALL_DIR/cdidx"
+                chmod +x "$INSTALL_DIR/cdidx"
+                printf '{"version":"1.2.3"}' > "$INSTALL_DIR/version.json"
+                printf 'self-test-lib' > "$INSTALL_DIR/libe_sqlite3.so"
+            }
+
+            run_local_mirror_self_test v1.2.3
+            echo "SAFE_CUSTOM_DONE"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = safeInstallDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("SAFE_CUSTOM_DONE", stdout);
+        Assert.Contains($"MAIN_INSTALL_DIR:{safeInstallDir}", stdout);
+        Assert.DoesNotContain("Local mirror self-test aborted", stderr);
+    }
+
+    [Fact]
+    public void DownloadAndInstall_UsesConfiguredReleaseBaseUrl()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "configured_release_base_install");
+        var payloadDir = Path.Combine(_tempRoot, "configured_release_base_payload");
+        var archivePath = Path.Combine(_tempRoot, "configured_release_base.tar.gz");
+        var checksumsPath = Path.Combine(_tempRoot, "configured_release_base.sha256sums.txt");
+        var urlLogPath = Path.Combine(_tempRoot, "configured_release_base_urls.log");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            mkdir -p "{{payloadDir}}"
+            printf '%s\n' '#!/usr/bin/env bash' 'echo "cdidx v1.2.3"' > "{{Path.Combine(payloadDir, "cdidx")}}"
+            chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
+            printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
+            printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
+            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+
+            if command -v sha256sum > /dev/null 2>&1; then
+                checksum="$(sha256sum "{{archivePath}}" | awk '{print $1}')"
+            elif command -v shasum > /dev/null 2>&1; then
+                checksum="$(shasum -a 256 "{{archivePath}}" | awk '{print $1}')"
+            else
+                checksum="$(openssl dgst -sha256 "{{archivePath}}" | awk '{print $NF}')"
+            fi
+            printf '%s  CodeIndex-linux-x64.tar.gz\n' "$checksum" > "{{checksumsPath}}"
+
+            VERSION="v1.2.3"
+            OS_NAME="linux"
+            ARCH_NAME="x64"
+            RID="linux-x64"
+
+            curl() {
+                local output_path=""
+                local url=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o)
+                            output_path="$2"
+                            shift 2
+                            ;;
+                        -w)
+                            shift 2
+                            ;;
+                        *)
+                            url="$1"
+                            shift
+                            ;;
+                    esac
+                done
+
+                printf '%s\n' "$url" >> "{{urlLogPath}}"
+                case "$url" in
+                    */sha256sums.txt) command cp "{{checksumsPath}}" "$output_path" ;;
+                    *) command cp "{{archivePath}}" "$output_path" ;;
+                esac
+
+                printf '200'
+                return 0
+            }
+
+            download_and_install
+            cat "{{urlLogPath}}"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+                ["CDIDX_GITHUB_BASE_URL"] = "https://mirror.example/releases",
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("https://mirror.example/releases/Widthdom/CodeIndex/releases/download/v1.2.3/CodeIndex-linux-x64.tar.gz", stdout);
+        Assert.Contains("https://mirror.example/releases/Widthdom/CodeIndex/releases/download/v1.2.3/sha256sums.txt", stdout);
+    }
+
+    [Fact]
+    public void ReinstallReal_WithoutVersionArgument_FailsWithUsageError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            run_reinstall_real
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("--reinstall-real requires a version argument", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_PrefixesBareVersionWithV()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, _) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                echo "MAIN_VERSION_ARG:$1"
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)
+                    # Real cdidx search emits range-form with the first
+                    # snippet line equal to `  def greet(name):` — the
+                    # tightened awk requires this exact shape.
+                    # 実 cdidx 準拠の範囲形 + 直後 1 行目完全一致の snippet。
+                    printf '%s\n%s\n' "sample.py:1-6" "  def greet(name):"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real 1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("MAIN_VERSION_ARG:v1.2.3", stdout);
+    }
+
+    [Fact]
+    public void ReinstallReal_IgnoresCdidxInstallDirAndUsesIsolatedTempDir()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var homeDir = Path.Combine(_tempRoot, "reinstall_real_home");
+        var realInstallDir = Path.Combine(homeDir, ".local", "bin");
+        Directory.CreateDirectory(realInstallDir);
+        var realBinaryPath = Path.Combine(realInstallDir, "cdidx");
+        File.WriteAllText(realBinaryPath, "#!/usr/bin/env bash\necho REAL_EXISTING_BINARY\n");
+        File.SetUnixFileMode(realBinaryPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        var (exitCode, stdout, _) = RunInstallerSnippet(
+            $$"""
+            export HOME="{{homeDir}}"
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                echo "MAIN_INSTALL_DIR:$INSTALL_DIR"
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)
+                    # Real cdidx search emits range-form with the first
+                    # snippet line equal to `  def greet(name):` — the
+                    # tightened awk requires this exact shape.
+                    # 実 cdidx 準拠の範囲形 + 直後 1 行目完全一致の snippet。
+                    printf '%s\n%s\n' "sample.py:1-6" "  def greet(name):"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            grep -q 'REAL_EXISTING_BINARY' "{{realBinaryPath}}" && echo "REAL_INSTALL_PRESERVED"
+            [ "$INSTALL_DIR" = "{{realInstallDir}}" ] && echo "USED_REAL_INSTALL_DIR"
+            case "$INSTALL_DIR" in
+                /tmp/cdidx-reinstall-real.*) echo "USED_ISOLATED_TMPDIR" ;;
+                *) echo "DID_NOT_USE_ISOLATED_TMPDIR:$INSTALL_DIR" ;;
+            esac
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = realInstallDir,
+            },
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("REAL_INSTALL_PRESERVED", stdout);
+        Assert.Contains("USED_ISOLATED_TMPDIR", stdout);
+        Assert.DoesNotContain("USED_REAL_INSTALL_DIR", stdout);
+        Assert.DoesNotContain($"MAIN_INSTALL_DIR:{realInstallDir}", stdout);
+    }
+
+    [Fact]
+    public void ReinstallReal_ExercisesVersionIndexAndSearch()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var versionSentinel = Path.Combine(_tempRoot, "reinstall_real_version_invoked");
+        var searchSentinel = Path.Combine(_tempRoot, "reinstall_real_search_invoked");
+
+        var (exitCode, stdout, _) = RunInstallerSnippet(
+            $$"""
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<SH
+            #!/usr/bin/env bash
+            case "\$1" in
+                --version)
+                    # run_reinstall_real requires the entire --version output
+                    # to be EXACTLY `cdidx v<ver>` on one non-empty line with
+                    # no trailing diagnostic text and no additional lines.
+                    # A sentinel file is used to confirm invocation instead
+                    # of echoing an extra marker line, because the multi-line
+                    # check would otherwise reject this stub.
+                    # 先頭行形式チェックは出力全体が `cdidx v<ver>` の 1 行だけ
+                    # であることを要求するため、呼び出し確認にはマーカー行で
+                    # はなくセンチネルファイルを使う。
+                    printf 'invoked' > "{{versionSentinel}}"
+                    echo "cdidx v1.2.3"
+                    ;;
+                search)
+                    # Real cdidx search output is the strict range form
+                    # `sample.py:<start>-<end>` with the first snippet line
+                    # indented by exactly two spaces and equal to the real
+                    # Python source line. The tightened awk state machine
+                    # requires that first indented line to be exactly
+                    # `  def greet(name):`, so the stub must mirror that
+                    # exact shape rather than emit a grep-like single line.
+                    # 実 cdidx search 出力は範囲形 `sample.py:<start>-<end>` と
+                    # 直後の 2 スペースインデント行が `  def greet(name):` に
+                    # 完全一致する形。新しい awk 状態機械は「ヘッダ直後 1 行目が
+                    # exactly `  def greet(name):`」を要求するため stub も
+                    # 同形で返す。
+                    printf 'invoked' > "{{searchSentinel}}"
+                    printf '%s\n%s\n' "sample.py:1-6" "  def greet(name):"
+                    ;;
+                *)
+                    echo "INVOKED_INDEX"
+                    if [ "\$2" = "--db" ] && [ -n "\$3" ]; then
+                        mkdir -p "\$(dirname "\$3")"
+                        printf 'mock-db' > "\$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.True(File.Exists(versionSentinel), "cdidx --version stub was not invoked by run_reinstall_real / run_reinstall_real が cdidx --version を呼んでいない");
+        Assert.Contains("INVOKED_INDEX", stdout);
+        Assert.True(File.Exists(searchSentinel), "cdidx search stub was not invoked by run_reinstall_real / run_reinstall_real が cdidx search を呼んでいない");
+        Assert.Contains("Real reinstall validation passed", stdout);
+    }
+
+    [Fact]
+    public void ReinstallReal_BinaryMissingAfterInstall_FailsLoudly()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                # Intentionally do not create the binary to simulate a broken install.
+                # バイナリを作らないことで壊れたインストールを模す。
+                :
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("installed binary not found", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_SearchFails_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)    exit 3 ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("search returned a non-zero exit code", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_VersionMismatch_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v9.9.9" ;;
+                *)        : ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("expected exactly one version token v1.2.3", stderr);
+        Assert.Contains("9.9.9", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_VersionWithoutLeftBoundary_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "prefixv1.2.3" ;;
+                *)        : ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("expected exactly one version token v1.2.3", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_VersionWithTrailingDigit_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.30" ;;
+                *)        : ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("expected exactly one version token v1.2.3", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_SearchOutputWithoutStructuredMatch_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)
+                    # Successful exit but no structured match — e.g. diagnostic text
+                    # that happens to mention "greet". Must NOT false-pass.
+                    # 構造化されていない "greet" を含む診断文は false pass させてはならない。
+                    echo "searching for greet returned 0 matches"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("did not return a structured match", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_VersionMixedOutput_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version)
+                    # Mixed output: requested tag appears in a diagnostic line
+                    # while a different version is actually running. Must abort.
+                    # 要求タグが診断文に混ざりつつ別 version が走る出力は false pass させない。
+                    echo "warning: requested version v1.2.3 not installed; running v9.9.9"
+                    ;;
+                search) echo "sample.py:1: def greet(name):" ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("expected exactly one version token", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_SearchPathPrefix_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)
+                    # Path-prefix false positive: "other/sample.py:1" contains
+                    # "sample.py:1" as a substring. The second line mentions
+                    # "greet" in a diagnostic, so a split-condition check
+                    # would false-pass. Must abort because the structured
+                    # match is not anchored at the scratch project's own
+                    # sample.py path.
+                    # `other/sample.py:1` が `sample.py:1` を部分一致で含み、
+                    # かつ 'greet' を含む診断文が同居するケース。行頭アンカーで
+                    # 除外する必要がある。
+                    printf '%s\n%s\n' "other/sample.py:1" "searching for greet returned 0 matches"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("did not return a structured match", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_VersionDiagnosticOnlyRequestedToken_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version)
+                    # Diagnostic-only output whose sole v<semver> token equals
+                    # the requested one but does NOT represent the binary's
+                    # actual reported version. First-line form check must reject.
+                    # v<semver> token は要求版と一致するものの、実バイナリの
+                    # バージョン行ではなく診断文のみというケース。先頭行形式
+                    # チェックで弾く必要がある。
+                    echo "see /releases/v1.2.3/notes for details"
+                    ;;
+                search) echo "sample.py:1: def greet(name):" ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("first non-empty line of cdidx --version must be exactly", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_SearchHeaderPlusDiagnosticGreet_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)
+                    # Split-evidence false positive: structured range-form
+                    # header on one line, but no indented snippet line under
+                    # it — the `greet` token appears only on a separate
+                    # non-indented diagnostic line. The awk state machine
+                    # requires the verbatim source signature `def greet(name):`
+                    # on a 2-space-indented line belonging to the header's
+                    # match block, so this non-indented diagnostic is rejected.
+                    # ヘッダは正しい range 形だが、`greet` は非インデント診断行に
+                    # しか存在しない split-evidence ケース。awk 状態機械は
+                    # match block 内のインデント行に verbatim な
+                    # `def greet(name):` を要求するため弾かれる。
+                    printf '%s\n%s\n' "sample.py:1-6" "warning: greet query returned 0 matches"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("did not return a structured match", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_VersionFirstLineTrailingDiagnostic_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version)
+                    # Trailing-diagnostic shape: first non-empty line starts with
+                    # `cdidx v1.2.3` (so token enumeration sees one distinct token
+                    # equal to the requested tag) but adds diagnostic text after
+                    # the version. Real cdidx --version output is literally
+                    # `cdidx v<ver>` with nothing trailing, so the exact-match
+                    # check must reject this.
+                    # 先頭行が `cdidx v1.2.3` で始まるが末尾に診断文が続くケース。
+                    # 実バイナリの --version 出力は `cdidx v<ver>` 単独なので完全
+                    # 一致を要求して弾く。
+                    echo "cdidx v1.2.3 warning: expected package missing"
+                    ;;
+                search) echo "sample.py:1: def greet(name):" ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("first non-empty line of cdidx --version must be exactly", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_SearchHeaderInlineDiagnostic_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)
+                    # Header-inline diagnostic: the structured path prefix and
+                    # a greet-mentioning diagnostic share a single line. The
+                    # tightened awk requires either a strict grep form whose
+                    # entire line is exactly `sample.py:<N>:def greet(name):`
+                    # (no trailing diagnostic text, no space between the colon
+                    # and the signature) or a strict range-form header with
+                    # nothing trailing (`^sample\.py:[0-9]+-[0-9]+$`) followed
+                    # by an exact `  def greet(name):` first-indent snippet.
+                    # This adversarial line matches neither, so it must abort.
+                    # ヘッダ行自体に診断文 `greet` が続くケース。行全体を
+                    # `sample.py:<N>:def greet(name):` に完全一致させる grep 形
+                    # でも、末尾アンカー付き range 形でもないため弾かれる必要がある。
+                    printf '%s\n' "sample.py:1-6 warning: greet query returned 0 matches"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("did not return a structured match", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_SearchIndentedDiagnosticWithoutDef_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)
+                    # Indented-diagnostic shape: strict range-form header
+                    # followed by a two-space-indented line that mentions
+                    # greet only as part of a diagnostic, not as real Python
+                    # source. The tightened awk requires the first indented
+                    # line under a range header to be exactly
+                    # `  def greet(name):`, so this false-passes neither the
+                    # substring check nor the adjacency check.
+                    # ヘッダは正しい range 形だが、直後の 2 スペースインデント行が
+                    # 診断文で `  def greet(name):` と完全一致しないケース。
+                    # ヘッダ直後 1 行目の完全一致を要求して弾く。
+                    printf '%s\n%s\n' "sample.py:1-6" "  warning: greet query returned 0 matches"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("did not return a structured match", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_VersionMultiLineExactFirstLinePlusDiagnostic_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version)
+                    # Multi-line shape where the FIRST non-empty line is
+                    # exactly `cdidx v1.2.3` (so the exact-first-line check
+                    # passes and token enumeration sees one distinct token
+                    # equal to the requested tag), but a second non-empty
+                    # line carries a diagnostic. Real cdidx --version output
+                    # is literally `cdidx v<ver>` on ONE non-empty line with
+                    # no additional lines, so the non-empty-line-count guard
+                    # must reject this multi-line shape.
+                    # 先頭行が完全一致するが後続行に診断文が続く multi-line
+                    # 形。非空行数チェックで弾く必要がある。
+                    printf '%s\n%s\n' "cdidx v1.2.3" "warning: expected package v1.2.3 missing"
+                    ;;
+                search) echo "sample.py:1: def greet(name):" ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("must emit exactly one non-empty line", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_SearchHeaderLineContainsDefGreetDiagnostic_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)
+                    # Header-line diagnostic that deliberately contains the
+                    # substring `def greet`, matching the strict grep-form
+                    # header `^sample\.py:[0-9]+:` but not the verbatim
+                    # scratch source signature `def greet(name):`. A loose
+                    # check that accepted the `def greet` substring alone
+                    # would false-pass; the tightened check requires the
+                    # full argument-list shape.
+                    # grep 形ヘッダにマッチするが、`def greet` を診断文内にしか
+                    # 含まず verbatim な `def greet(name):` ではないケース。
+                    # 引数リスト付きの完全な形を要求することで弾かれる。
+                    printf '%s\n' "sample.py:1: warning: expected code signature def greet missing"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("did not return a structured match", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_SearchIndentedLineContainsDefGreetDiagnostic_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)
+                    # Strict range-form header followed by a two-space-indented
+                    # diagnostic that deliberately contains the substring
+                    # `def greet` without the real argument list. A loose
+                    # indented-line check that accepted any `def greet`
+                    # substring would false-pass; the tightened check
+                    # requires the verbatim scratch source signature
+                    # `def greet(name):`.
+                    # 範囲形ヘッダの下に 2 スペースインデントで `def greet` を
+                    # 含む診断文が続くが、verbatim な `def greet(name):` では
+                    # ないケース。引数リスト付きの完全な形を要求して弾く。
+                    printf '%s\n%s\n' "sample.py:1-6" "  warning: expected code signature def greet missing"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("did not return a structured match", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_SearchHeaderLineContainsVerbatimSignatureDiagnostic_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)
+                    # Grep-form-style header whose diagnostic prose embeds the
+                    # FULL verbatim signature `def greet(name):` as a substring.
+                    # A substring check that accepted `def greet(name):`
+                    # anywhere on the line would false-pass; the tightened
+                    # check requires the whole line to be exactly
+                    # `sample.py:<N>:def greet(name):` with nothing before
+                    # or after the signature, so this adversarial shape is
+                    # rejected even though it carries the verbatim argument
+                    # list.
+                    # grep 形ヘッダの診断文内に verbatim な `def greet(name):`
+                    # を substring として埋め込んだケース。行全体の完全一致を
+                    # 要求するため弾かれる。
+                    printf '%s\n' "sample.py:1: warning: expected code signature def greet(name): missing"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("did not return a structured match", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_SearchIndentedLineContainsVerbatimSignatureDiagnostic_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)
+                    # Strict range-form header followed by a two-space-indented
+                    # diagnostic whose prose embeds the FULL verbatim signature
+                    # `def greet(name):` as a substring. A substring check would
+                    # false-pass; the tightened check requires the first indented
+                    # line under the range header to be exactly
+                    # `  def greet(name):` (no prefix / suffix prose), so this
+                    # adversarial shape is rejected even though it carries the
+                    # verbatim argument list inside the indented block.
+                    # 範囲形ヘッダ直後の 2 スペースインデント診断行に verbatim な
+                    # `def greet(name):` を substring として埋め込んだケース。
+                    # ヘッダ直後 1 行目の完全一致を要求するため弾かれる。
+                    printf '%s\n%s\n' "sample.py:1-6" "  warning: expected code signature def greet(name): missing"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("did not return a structured match", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_SearchRangeBlockNonFirstIndentMatchesSignature_AbortsWithError()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)
+                    # Strict range-form header + a non-matching decoy
+                    # indented line + a LATER indented line that is exactly
+                    # `  def greet(name):`. A permissive check that scanned
+                    # the whole range block for the signature anywhere in
+                    # block-adjacent indented output would false-pass; the
+                    # tightened check arms a one-shot `expect_first_indent`
+                    # flag that is consumed by the decoy line, so the
+                    # later-adjacent verbatim signature never counts as the
+                    # block's first snippet line and the match is rejected.
+                    # 範囲形ヘッダの後、1 行目が非一致の decoy インデント行で、
+                    # 2 行目以降に exactly `  def greet(name):` を置いたケース。
+                    # ヘッダ直後 1 行目の完全一致のみを許可する one-shot フラグで
+                    # 弾かれる（後置の verbatim 署名は隣接条件を満たさない）。
+                    printf '%s\n%s\n%s\n' "sample.py:1-6" "  warning: no matches" "  def greet(name):"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("did not return a structured match", stderr);
+    }
+
+    [Fact]
+    public void ReinstallReal_SearchGrepFormExactFullLine_Succeeds()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, _) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)
+                    # Positive test for the strict grep-form branch of the
+                    # tightened awk state machine: the single line
+                    # `sample.py:<N>:def greet(name):` with no space between
+                    # the colon and the signature and no trailing diagnostic
+                    # prose must still match. Without this test the grep-form
+                    # accept path has no dedicated regression coverage — all
+                    # other success-path stubs use the range form.
+                    # grep 形成功分岐のポジティブテスト。行全体が
+                    # `sample.py:<N>:def greet(name):`（コロン直後に空白なし・
+                    # 末尾診断なし）である完全一致を通す awk 分岐を確認する。
+                    printf '%s\n' "sample.py:1:def greet(name):"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Real reinstall validation passed", stdout);
+    }
+
+    [Fact]
+    public void ReinstallReal_SearchLaterRangeHeaderRearmsFirstIndent_Succeeds()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, _) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)
+                    # Positive test for one-shot flag re-arming: the first
+                    # range-form header arms the `expect_first_indent` flag,
+                    # the first indented line under it is a non-matching
+                    # decoy that consumes the flag and abandons the block,
+                    # and THEN a second range-form header re-arms the flag
+                    # whose first indented line is exactly
+                    # `  def greet(name):`. The tightened awk state machine
+                    # must accept this shape — otherwise a single decoy
+                    # anywhere in the output would permanently disarm
+                    # matching.
+                    # one-shot フラグの再武装成功ケース。最初の範囲形ヘッダ
+                    # 直後の 1 行目が非一致 decoy で block を放棄した後、
+                    # 2 つ目の範囲形ヘッダで flag が再び立ち、その直後 1 行目
+                    # が exactly `  def greet(name):` で完全一致して通る。
+                    # 先頭 block の decoy が検証を永続的に無効化しないことを
+                    # 保証する。
+                    printf '%s\n%s\n%s\n%s\n' "sample.py:1-6" "  warning: no matches" "sample.py:10-15" "  def greet(name):"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Real reinstall validation passed", stdout);
+    }
+
+    [Fact]
+    public void ReinstallReal_DoesNotRequestJsonFromSearch()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, _, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            main() {
+                mkdir -p "$INSTALL_DIR"
+                cat > "$INSTALL_DIR/cdidx" <<'SH'
+            #!/usr/bin/env bash
+            case "$1" in
+                --version) echo "cdidx v1.2.3" ;;
+                search)
+                    # Simulate a trimmed release build: reject --json with exit 4.
+                    # trimmed release では --json を exit 4 で拒否する。
+                    for arg in "$@"; do
+                        if [ "$arg" = "--json" ]; then
+                            echo "--json not available on this trimmed build" >&2
+                            exit 4
+                        fi
+                    done
+                    # Real cdidx search emits range-form with the first
+                    # snippet line equal to `  def greet(name):` — the
+                    # tightened awk requires this exact shape.
+                    # 実 cdidx 準拠の範囲形 + 直後 1 行目完全一致の snippet。
+                    printf '%s\n%s\n' "sample.py:1-6" "  def greet(name):"
+                    ;;
+                *)
+                    if [ "$2" = "--db" ] && [ -n "$3" ]; then
+                        mkdir -p "$(dirname "$3")"
+                        printf 'mock-db' > "$3"
+                    fi
+                    ;;
+            esac
+            SH
+                chmod +x "$INSTALL_DIR/cdidx"
+            }
+
+            run_reinstall_real v1.2.3
+            """,
+            enforceStrictMode: false);
+
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("--json not available", stderr);
+        Assert.DoesNotContain("search returned a non-zero exit code", stderr);
     }
 
     [UnsupportedOSPlatform("windows")]
