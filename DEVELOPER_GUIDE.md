@@ -411,6 +411,8 @@ Supported symbol kinds by language (33 languages with symbol extraction):
 
 For C#, the `Graph = yes` column applies to callable/reference extraction and event subscriptions. Enum members are indexed as symbols, but enum-member access edges such as `Nested.A` are not indexed yet; when the active scope includes those enum-member candidates, `inspect` keeps `graph_supported` aligned with any callable candidates while exposing `graph_degraded=true` / `unsupported_symbol_kind=enum_member`, exact `references` / `callers` / `callees` surface the same gap on zero/count payloads plus successful JSON rows, and `unused` marks the active scope as degraded because C# enum members are excluded while enum declarations may still be false positives until those edges exist.
 
+For JavaScript / TypeScript, reference extraction also captures tagged template literal call sites such as `` gql`...` ``, `` styled.button`...` ``, `` sql`...` ``, and generic-tagged `` html<User>`...` ``. The `StructuralLineMasker` template-literal state machine collects tag identifiers at the moment each opener frame is pushed (including openers nested inside `${...}` holes), and `ReferenceExtractor` emits them as `"call"` references alongside the `CallRegex`-matched call sites. Member-access tags attribute to the last segment (`styled.button` → `button`), matching the existing `CallRegex` convention, and `void \`...\`` / `case \`...\`:` are filtered out via the shared `IsIgnoredCallName` set.
+
 SQL also emits `namespace` symbols for `CREATE SCHEMA`, but the summary table above does not have a dedicated namespace column.
 
 Additionally, 13 languages are detected and indexed as raw text without symbol extraction: batch, cmake, dockerignore, editorconfig, gitignore, json, justfile, markdown, svelte, toml, vue, xml, yaml.
@@ -1471,6 +1473,8 @@ LIMIT 20;
 | HTML | -- | 専用のタグ構造 state machine で抽出するカスタム Web Component のタグ名（ハイフンを含む開始タグ、例: `<my-button>` / `<app-sidebar>`。`font-face` / `color-profile` / `annotation-xml` のような予約済み SVG / MathML のハイフン入りタグは除外） | -- | -- | -- | `id="..."` / `id='...'` 属性（state machine がタグの開始、引用符付き/なし値、複数行の引用符付き値を走査し、`id` 属性のみ採用するため、`data-id=` / `aria-*id=` / `xml:id=` は正規表現の lookbehind ではなく構造的に除外される） | -- | 外部 `<script src="...">` と `<link href="...">`（`<script>` / `<style>` / `<textarea>` / `<title>` の raw-text 本体と `<!-- ... -->` コメントはマスクされ、本体内の属性名に似た文字列から phantom シンボルが漏れない） | -- |
 
 C# の `Graph = yes` は callable/reference extraction と event subscription を指します。enum member 自体は symbol として索引されますが、`Nested.A` のような enum-member access edge はまだ索引していません。そのため active scope にその enum member 候補が含まれる場合、`inspect` は callable 候補があれば `graph_supported` を維持したまま `graph_degraded=true` / `unsupported_symbol_kind=enum_member` を返し、exact `references` / `callers` / `callees` も zero/count payload と成功した JSON row の両方で同じ制約を示します。`unused` もその理由で active scope を degraded として扱い、C# enum member は除外しつつ enum declaration は偽陽性になりうるものとして残します。
+
+JavaScript / TypeScript では、reference extraction が `` gql`...` ``・`` styled.button`...` ``・`` sql`...` ``・generic 付き `` html<User>`...` `` のような tagged template literal の呼び出し箇所も捕捉します。`StructuralLineMasker` の template-literal state machine が各 opener frame を push する瞬間にタグ識別子を収集し（`${...}` ホール内のネスト opener も含む）、`ReferenceExtractor` が既存 `CallRegex` の call 行と並べて `"call"` 参照として emit します。member access タグは既存 `CallRegex` の扱いに揃って末尾 segment（`styled.button` → `button`）に帰属し、`void \`...\`` / `case \`...\`:` は共有の `IsIgnoredCallName` 集合で除外しています。
 
 SQL は `CREATE SCHEMA` から `namespace` シンボルも出力しますが、上の要約表には namespace 専用の列がありません。
 

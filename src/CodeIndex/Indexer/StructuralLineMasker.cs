@@ -1,6 +1,13 @@
 namespace CodeIndex.Indexer;
 
 /// <summary>
+/// JavaScript / TypeScript tagged template literal call site captured while masking.
+/// Line and Column are 1-based; Column points to the tag identifier's starting column.
+/// マスク走査中に検出した JS/TS タグ付きテンプレート呼び出し。Line/Column は 1 始まり。
+/// </summary>
+internal readonly record struct JsTaggedTemplateHit(int Line, int Column, string Name);
+
+/// <summary>
 /// Masks non-code regions that would otherwise confuse line-based structural regexes.
 /// 行ベースの構造 regex を誤誘導する非コード領域をマスクする。
 /// </summary>
@@ -64,7 +71,11 @@ internal static class StructuralLineMasker
     }
 
     internal static string[] MaskLines(string? lang, string[] originalLines)
+        => MaskLines(lang, originalLines, out _);
+
+    internal static string[] MaskLines(string? lang, string[] originalLines, out List<JsTaggedTemplateHit>? jsTaggedTemplateHits)
     {
+        jsTaggedTemplateHits = null;
         var maskedLines = (string[])originalLines.Clone();
 
         switch (lang)
@@ -80,7 +91,8 @@ internal static class StructuralLineMasker
                 break;
             case "javascript":
             case "typescript":
-                MaskJsTsTemplateLiteralContents(maskedLines);
+                jsTaggedTemplateHits = new List<JsTaggedTemplateHit>();
+                MaskJsTsTemplateLiteralContents(maskedLines, jsTaggedTemplateHits);
                 break;
         }
 
@@ -1370,7 +1382,7 @@ internal static class StructuralLineMasker
     // ホール内の本物のコードは参照抽出に見せるためマスクしない。
     // regex literal は外側と hole 内の両方でスキップし、regex 中の backtick が template を
     // 誤って開始したり `}` が hole を早く閉じたりするのを避ける。
-    private static void MaskJsTsTemplateLiteralContents(string[] lines)
+    private static void MaskJsTsTemplateLiteralContents(string[] lines, List<JsTaggedTemplateHit>? taggedTemplateHits = null)
     {
         var frames = new Stack<ScannerFrame>();
         // `lexState` must persist across lines so that multi-line expressions in
@@ -1494,6 +1506,8 @@ internal static class StructuralLineMasker
                             // restore paren/state context for the token that follows.
                             // hole 側の lex state を退避し、閉じ backtick 後に paren
                             // などの context を元に戻せるようにする。
+                            if (taggedTemplateHits != null)
+                                TryRecordJsTaggedTemplateHit(masked, i, pos, taggedTemplateHits);
                             pos++;
                             frames.Push(new JsTemplateLiteralFrame { SavedLexState = lexState });
                             lexState = default;
@@ -1604,6 +1618,8 @@ internal static class StructuralLineMasker
                     // the paren stack / statement-head hints that preceded the template.
                     // テンプレート直前の lex state を退避し、閉じ backtick で paren
                     // stack や statement-head hint を復元できるようにする。
+                    if (taggedTemplateHits != null)
+                        TryRecordJsTaggedTemplateHit(masked, i, pos, taggedTemplateHits);
                     masked[pos] = ' ';
                     pos++;
                     frames.Push(new JsTemplateLiteralFrame { SavedLexState = lexState });
@@ -1756,6 +1772,65 @@ internal static class StructuralLineMasker
 
     private static bool IsJsIdentifierPart(char c) =>
         c == '_' || c == '$' || char.IsLetterOrDigit(c);
+
+    // Backward-scan the masked buffer at a template-literal opener backtick for a tag
+    // identifier such as `gql`, `styled.div` (last segment), or `html<T>` (generics are
+    // skipped). Whitespace between the identifier and the backtick is tolerated so
+    // `html \`...\`` still matches. `IsIgnoredCallName` downstream filters out keywords
+    // like `return` / `throw` / `await` / `typeof` that can legally precede a plain
+    // template literal.
+    // マスク済みバッファを opener バッククォート位置から後方スキャンし、`gql` や
+    // `styled.div`（最後のセグメント）、`html<T>`（ジェネリクスを読み飛ばす）の
+    // タグ識別子を取り出す。識別子とバッククォートの間の空白は許容し、
+    // `return` / `throw` / `await` / `typeof` のようなプレーンテンプレートの前に
+    // 立ちうるキーワードは呼び出し側の `IsIgnoredCallName` で除外する。
+    private static void TryRecordJsTaggedTemplateHit(
+        char[] masked, int lineIndex, int backtickPos, List<JsTaggedTemplateHit> hits)
+    {
+        int k = backtickPos - 1;
+        while (k >= 0 && (masked[k] == ' ' || masked[k] == '\t'))
+            k--;
+        if (k < 0)
+            return;
+
+        // Skip a balanced `<...>` (TypeScript generics) so `html<T>\`...\`` still sees `html`.
+        // `<` without a matching `>` on the same line is treated as a comparison operator.
+        // `html<T>\`...\`` のジェネリクスを読み飛ばすため、同一行内で `<...>` が釣り合っている
+        // 場合のみ括弧を剥がす。そうでなければ比較演算子として扱う。
+        if (masked[k] == '>')
+        {
+            int probe = k - 1;
+            int depth = 1;
+            while (probe >= 0 && depth > 0)
+            {
+                var ch = masked[probe];
+                if (ch == '>') depth++;
+                else if (ch == '<') depth--;
+                probe--;
+            }
+            if (depth != 0)
+                return;
+            k = probe;
+            while (k >= 0 && (masked[k] == ' ' || masked[k] == '\t'))
+                k--;
+            if (k < 0)
+                return;
+        }
+
+        if (!IsJsIdentifierPart(masked[k]))
+            return;
+
+        int end = k + 1;
+        while (k >= 0 && IsJsIdentifierPart(masked[k]))
+            k--;
+        int start = k + 1;
+
+        if (!IsJsIdentifierStart(masked[start]))
+            return;
+
+        var name = new string(masked, start, end - start);
+        hits.Add(new JsTaggedTemplateHit(lineIndex + 1, start + 1, name));
+    }
 
     // Decide whether `/` at the current scan position starts a regex literal rather
     // than a division operator. Division follows numeric / string / regex / template literals,

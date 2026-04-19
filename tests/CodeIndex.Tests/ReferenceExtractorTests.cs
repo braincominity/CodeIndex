@@ -6059,4 +6059,131 @@ public class ReferenceExtractorTests
         var test = Assert.Single(references.Where(r => r.SymbolName == "Test"));
         Assert.Equal("annotation", test.ReferenceKind);
     }
+
+    [Fact]
+    public void Extract_JavaScriptTaggedTemplateLiteral_IsCapturedAsCall()
+    {
+        // issue #268: bare tagged template literals (`gql`, `sql`, etc.) must emit a `call`
+        // reference so they surface in references / callers / callees / impact.
+        // issue #268: 素のタグ付きテンプレートリテラル (`gql` / `sql` 等) も `call` として記録する。
+        const string content = """
+            function loadUser(id) {
+                return gql`query { user(id: ${id}) { name } }`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        var gql = Assert.Single(references.Where(r => r.SymbolName == "gql"));
+        Assert.Equal("call", gql.ReferenceKind);
+        Assert.Equal("loadUser", gql.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_TypeScriptStyledTaggedTemplate_CapturesLastSegment()
+    {
+        // issue #268: member-access tags like `styled.button\`...\`` must emit a `call` row on
+        // the last segment so the existing CallRegex convention (capture the final identifier)
+        // carries over to tagged templates.
+        // issue #268: `styled.button\`...\`` のようなメンバアクセスタグは、既存 CallRegex の
+        // 規約に揃えて末尾セグメントを `call` として発行する。
+        const string content = """
+            const Btn = styled.button`
+              color: red;
+            `;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        var button = Assert.Single(references.Where(r => r.SymbolName == "button"));
+        Assert.Equal("call", button.ReferenceKind);
+        Assert.DoesNotContain(references, r => r.SymbolName == "color");
+        Assert.DoesNotContain(references, r => r.SymbolName == "red");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptGenericTaggedTemplate_IsCaptured()
+    {
+        // issue #268: TS generic-tagged forms like `html<User>\`...\`` read past the balanced
+        // `<...>` so the tag identifier is still captured.
+        // issue #268: `html<User>\`...\`` のようなジェネリクス付きタグは `<...>` を読み飛ばして
+        // タグ識別子を捕捉する。
+        const string content = """
+            function render(user: User) {
+                return html<User>`<p>${user.name}</p>`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        var html = Assert.Single(references.Where(r => r.SymbolName == "html"));
+        Assert.Equal("call", html.ReferenceKind);
+        Assert.Equal("render", html.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_JavaScriptTaggedTemplateInStringLiteral_IsNotMisdetected()
+    {
+        // Regression guard: a backtick appearing inside a single- or double-quoted string must
+        // not be treated as a tagged template opener. The structural masker enters string-skip
+        // mode so the backtick is consumed as string content.
+        // 退行防止: シングル/ダブルクオート文字列内のバッククォートをタグ付きテンプレートと誤認しない。
+        const string content = """
+            function note() {
+                const s = "see gql`docs` for details";
+                return s;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "gql");
+        Assert.DoesNotContain(references, r => r.SymbolName == "docs");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptPlainTemplateLiteral_IsNotCaptured()
+    {
+        // Regression guard: an untagged template literal (preceded by `=`, operator, or
+        // statement-head keyword) must not synthesize a phantom `call` reference.
+        // 退行防止: タグのないテンプレート（`=` や演算子、ステートメント先頭キーワードの直後）を
+        // 誤って `call` として記録しない。
+        const string content = """
+            function greet(name) {
+                const msg = `Hello, ${name}!`;
+                return `Bye, ${name}.`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "return");
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "msg");
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "Hello");
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "Bye");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptTaggedTemplateInsideHole_IsCaptured()
+    {
+        // Tagged templates nested in an outer template hole (`\`outer ${inner\`hi\`} rest\``)
+        // should also be recorded because the structural masker detects both opener locations.
+        // 外側テンプレートのホール内にネストしたタグ付きテンプレートも記録できる。
+        const string content = """
+            function demo(user) {
+                return outer`header ${inner`${user.name}`} footer`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "outer" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "inner" && r.ReferenceKind == "call");
+    }
 }

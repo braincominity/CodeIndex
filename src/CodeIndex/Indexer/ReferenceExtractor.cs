@@ -49,13 +49,20 @@ public static class ReferenceExtractor
             "instanceof", "super", "this", "assert", "throws", "extends", "implements", "synchronized",
         },
         // JavaScript / TypeScript contextual keywords / JavaScript / TypeScript 文脈キーワード
+        // `void` and `case` are listed because `void \`...\`` and `case \`...\`:` are legal
+        // expression forms that sit immediately before a template literal; without the
+        // entries here the tagged-template scanner (issue #268) would emit phantom `void` /
+        // `case` call rows for plain (untagged) templates in those positions.
+        // `void \`...\`` や `case \`...\`:` はタグ無しテンプレートの正当な前置形で、
+        // issue #268 のタグ付きテンプレート検出が `void` / `case` を誤って `call` として
+        // 発行しないようここに載せる。
         ["javascript"] = new HashSet<string>(StringComparer.Ordinal)
         {
-            "import", "super", "yield",
+            "import", "super", "yield", "void", "case",
         },
         ["typescript"] = new HashSet<string>(StringComparer.Ordinal)
         {
-            "import", "super", "yield",
+            "import", "super", "yield", "void", "case",
         },
         // Python contextual keywords / Python の文脈キーワード
         ["python"] = new HashSet<string>(StringComparer.Ordinal)
@@ -415,10 +422,32 @@ public static class ReferenceExtractor
         var language = lang!;
 
         var lines = content.Split('\n');
-        var structuralLines = StructuralLineMasker.MaskLines(language, lines);
+        var structuralLines = StructuralLineMasker.MaskLines(language, lines, out var jsTaggedTemplateHits);
         var preparedLines = new string[lines.Length];
         for (var pi = 0; pi < lines.Length; pi++)
             preparedLines[pi] = PrepareLine(language, structuralLines[pi]);
+        // Group JS/TS tagged template call sites by line for O(1) lookup in the per-line loop.
+        // Tagged templates like `gql\`...\`` / `styled.div\`...\`` / `sql\`...${x}...\`` have no
+        // trailing `(`, so CallRegex cannot see them. The structural masker already identifies
+        // template openers while walking JS/TS token state, and emits one hit per opener with
+        // the preceding tag identifier.
+        // JS/TS のタグ付きテンプレート呼び出し位置を行番号でグループ化し、ループ中の参照追加で即座に拾えるようにする。
+        // `gql\`...\`` / `styled.div\`...\`` / `sql\`...${x}...\`` は末尾 `(` がなく CallRegex で取れないが、
+        // 構造マスカーがテンプレート opener 検出時に先行する tag 識別子を併せて記録する。
+        Dictionary<int, List<JsTaggedTemplateHit>>? jsTaggedTemplatesByLine = null;
+        if (jsTaggedTemplateHits != null && jsTaggedTemplateHits.Count > 0)
+        {
+            jsTaggedTemplatesByLine = new Dictionary<int, List<JsTaggedTemplateHit>>();
+            foreach (var hit in jsTaggedTemplateHits)
+            {
+                if (!jsTaggedTemplatesByLine.TryGetValue(hit.Line, out var bucket))
+                {
+                    bucket = new List<JsTaggedTemplateHit>();
+                    jsTaggedTemplatesByLine[hit.Line] = bucket;
+                }
+                bucket.Add(hit);
+            }
+        }
         // Pre-pass C# attribute analysis so cross-line `[\n Foo("x")\n]` and parameter
         // attributes `void M([Attr] T x)` are classified consistently with same-line `[Foo]`.
         // 行を跨いだ `[\n Foo("x")\n]` やパラメータ属性 `void M([Attr] T x)` も、同一行の `[Foo]` と
@@ -697,6 +726,29 @@ public static class ReferenceExtractor
                     && IsInsideCSharpAttributeRange(csharpAttrRangesOnLine, callIndex);
                 var metadataKind = TryClassifyMetadataReference(language, preparedLine, callIndex, insideCSharpAttributeRange);
                 AddReference(references, seen, fileId, match, metadataKind ?? "call", context, lineNumber, callContainer);
+            }
+
+            // issue #268: JS/TS tagged template literal call sites. The structural masker
+            // already located each template opener and captured its preceding tag identifier;
+            // emit one `call` row per hit so `gql\`...\`` / `styled.div\`...\`` / `sql\`...${x}...\``
+            // surface in references / callers / callees / impact just like `fn()` call sites.
+            // issue #268: JS/TS タグ付きテンプレートリテラルの呼び出し位置。構造マスカーが
+            // テンプレート opener を検出済みで先行する tag 識別子を記録しているため、そのまま
+            // `call` として発行し、`gql\`...\``・`styled.div\`...\``・`sql\`...${x}...\`` を
+            // references / callers / callees / impact に反映する。
+            if (jsTaggedTemplatesByLine != null
+                && jsTaggedTemplatesByLine.TryGetValue(lineNumber, out var tagHitsOnLine))
+            {
+                foreach (var hit in tagHitsOnLine)
+                {
+                    var name = hit.Name;
+                    if (IsIgnoredCallName(language, name))
+                        continue;
+                    if (definitionNames != null && definitionNames.Contains(name))
+                        continue;
+                    var tagContainer = ResolveContainerForCall(hit.Column - 1);
+                    AddChainReference(references, seen, fileId, name, hit.Column, "call", context, lineNumber, tagContainer);
+                }
             }
 
             // issue #293: bare no-arg attributes / annotations are invisible to CallRegex because
