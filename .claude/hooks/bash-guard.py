@@ -219,7 +219,11 @@ def check_raw_command(command: str, project_root: Path) -> None:
         return
 
     # ===== exception =====
-    # codex
+    # codex CLI
+    if re.match(r"^\s*codex\s+exec\b", command):
+        return
+
+    # codex plugin
     if re.search(r"\bnode\b.*codex-companion\.mjs", command):
         if re.search(r"(curl|rm\s|ssh|scp|wget|nc|bash\s+-c)", command):
             emit_deny("codex plugin tried dangerous command")
