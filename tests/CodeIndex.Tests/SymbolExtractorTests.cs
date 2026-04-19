@@ -195,6 +195,92 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_HocBindingPatternSkipsPascalCaseNonHocConstants()
+    {
+        // PascalCase bindings whose RHS is NOT a known HOC prefix must not be
+        // silently promoted to `function` symbols — that would create phantom
+        // symbol rows and pollute `definition`, `symbols`, and `inspect` output.
+        // The narrow HOC-prefix gate (React./styled/connect/memo/forwardRef/
+        // lazy/observer/with<Pascal>) intentionally rejects ordinary constants,
+        // ALL_CAPS config values, and arbitrary call results. Closes #240.
+        // RHS が既知の HOC プレフィックスでない PascalCase / ALL_CAPS 束縛は
+        // `function` シンボルに昇格させてはいけない — 架空のシンボル行が出ると
+        // `definition` / `symbols` / `inspect` が汚染される。狭い HOC プレフィックス
+        // ゲート（React. / styled / connect / memo / forwardRef / lazy / observer /
+        // with<Pascal>）で通常定数、ALL_CAPS 設定値、任意の呼び出し結果を意図的に
+        // 弾く。Closes #240.
+        var content = """
+            const Config = loadConfig();
+            const ENV = process.env.NODE_ENV;
+            const API = 'https://example.com';
+            const Total = sum(a, b);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "Config");
+        Assert.DoesNotContain(symbols, s => s.Name == "ENV");
+        Assert.DoesNotContain(symbols, s => s.Name == "API");
+        Assert.DoesNotContain(symbols, s => s.Name == "Total");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_HocBindingPatternDoesNotCollideWithClassExpressionBinding()
+    {
+        // `const Widget = class extends React.Component {}` is a class-expression
+        // binding. It must produce a single `class Widget` symbol (from the
+        // synthetic class-expression pass), NOT both `function Widget` (from the
+        // HOC row) and `class Widget`. The narrow HOC-prefix regex excludes
+        // `= class` so the two passes do not collide. Closes #240.
+        // `const Widget = class extends React.Component {}` はクラス式束縛。
+        // `class Widget`（class expression 合成パス由来）だけが出るべきで、
+        // `function Widget`（HOC 行由来）と `class Widget` が二重に出てはいけない。
+        // 狭い HOC プレフィックス正規表現は `= class` を受け付けないため、2 つの
+        // パスが衝突しない。Closes #240.
+        var content = """
+            const Widget = class extends React.Component {
+                render() { return null; }
+            };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        var widgetSymbols = symbols.Where(s => s.Name == "Widget").ToList();
+        Assert.Single(widgetSymbols);
+        Assert.Equal("class", widgetSymbols[0].Kind);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_TypedArrowBindingPreservesBraceBody()
+    {
+        // A TypeScript arrow-function binding with an explicit function-type
+        // annotation (`const Callback: (x: number) => number = (x) => {...}`)
+        // must match the arrow row (BodyStyle.Brace) and keep its multi-line
+        // body range, even though the type annotation itself contains `=>`.
+        // The HOC row with BodyStyle.None must NOT shadow it. Closes #240.
+        // 関数型注釈付き TypeScript arrow 束縛（`const Callback: (x: number) =>
+        // number = (x) => {...}`）は arrow 行（BodyStyle.Brace）に一致し、型注釈に
+        // `=>` が含まれていても複数行の本体範囲が維持される必要がある。
+        // BodyStyle.None の HOC 行で上書きされてはいけない。Closes #240.
+        var content = """
+            const Callback: (x: number) => number = (x) => {
+                return x + 1;
+            };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var callback = Assert.Single(symbols.Where(s => s.Name == "Callback"));
+        Assert.Equal("function", callback.Kind);
+        // Arrow row (BodyStyle.Brace) pushes EndLine past StartLine for a multi-line body.
+        // HOC row (BodyStyle.None) would leave EndLine==StartLine.
+        // arrow 行は複数行本体で EndLine を StartLine より後ろへ伸ばす。HOC 行
+        // （BodyStyle.None）なら EndLine は StartLine のまま残るため、これで
+        // arrow 行が勝ったことを確認できる。
+        Assert.True(callback.EndLine > callback.StartLine);
+    }
+
+    [Fact]
     public void Extract_JavaScript_StringBraceDoesNotBreakFollowingContainerAssignment()
     {
         var content = """

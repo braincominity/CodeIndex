@@ -303,48 +303,63 @@ public static class SymbolExtractor
             // `const Connected = connect(...)(Component)`, `const Styled = styled.div`...``,
             // or `const WithAuth = withAuthentication(Home)`. The arrow pattern above does
             // not fire for these because the RHS is a call expression, tagged template,
-            // or plain identifier — there is no `=>` right after the `=`. Requiring the
-            // binding to start with an uppercase letter keeps the false-positive rate
-            // low (React / component naming convention) and still admits ALL_CAPS
-            // constants as a cosmetic misclassification, which the issue explicitly
-            // accepts. BodyStyle.None because the RHS body span is not line-trackable
+            // or plain identifier — there is no `=>` right after the `=`. The RHS is
+            // restricted to a known set of HOC prefixes (`React.`, `styled.`/`styled(`/
+            // `styled``, bare `connect(`/`memo(`/`forwardRef(`/`lazy(`/`observer(`, and
+            // `with<PascalCase>(`) so ordinary PascalCase constants like
+            // `const Config = loadConfig();` and class expressions like
+            // `const Widget = class extends ...` do NOT produce phantom `function`
+            // symbols — the class-expression synthetic pass owns the `= class` shape
+            // on its own. BodyStyle.None because the RHS body span is not line-trackable
             // from the declaration line alone; declaration-only visibility into the
             // symbol is still strictly better than dropping the binding. Place AFTER
             // the arrow-function pattern so a capitalized arrow binding wins that row
-            // via stopAfterFirstPatternMatch and is not shadowed here.
-            // Closes #240.
+            // via stopAfterFirstPatternMatch and is not shadowed here. Closes #240.
             // React.memo / React.forwardRef / connect(...)(Component) / styled.div`...` /
             // withAuthentication(Home) のような HOC ラップや呼び出し結果代入の
             // コンポーネント束縛を取り込む。上の arrow パターンは `=` 直後に `=>` を
             // 要求するため、RHS が呼び出し式・タグ付きテンプレート・プレーン識別子では
-            // 発火しない。名前を大文字始まりに限定して偽陽性（ALL_CAPS 定数など）を
-            // 抑えつつ、React / コンポーネントの命名慣習にも揃える。RHS 本体は
-            // 宣言行だけでは行単位に追えないため BodyStyle.None。宣言のみでも
-            // 束縛が消失するよりは実用的。arrow パターンより後に置き、大文字始まりの
-            // arrow 束縛は先に一致した段階で stopAfterFirstPatternMatch が立ち、
-            // こちらで上書きされないようにする。Closes #240.
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>[A-Z]\w*)\s*=\s*\S", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            // 発火しない。RHS を既知の HOC プレフィックス（`React.`、`styled.` /
+            // `styled(` / `styled``、素の `connect(` / `memo(` / `forwardRef(` /
+            // `lazy(` / `observer(`、`with<PascalCase>(`）に限定し、
+            // `const Config = loadConfig();` のような通常 PascalCase 定数や
+            // `const Widget = class extends ...` のクラス式束縛で架空の `function`
+            // シンボルが生えないようにする — `= class` 形は class expression の合成パス
+            // が単独で処理する。RHS 本体は宣言行だけでは行単位に追えないため
+            // BodyStyle.None。宣言のみでも束縛が消失するよりは実用的。arrow パターンより
+            // 後に置き、大文字始まりの arrow 束縛は先に一致した段階で
+            // stopAfterFirstPatternMatch が立ち、こちらで上書きされないようにする。
+            // Closes #240.
+            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>[A-Z]\w*)\s*=\s*(?:React\.|styled[.(`]|connect\s*\(|memo\s*\(|forwardRef\s*\(|lazy\s*\(|observer\s*\(|with[A-Z]\w*\s*\()", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:default\s+)?class\s+(?<name>(?!extends\b)\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+?)\s+from\s+", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["typescript"] =
         [
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:async\s+)?function\s+(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            // HOC-wrapped / call-result component bindings — same shape as the JavaScript
-            // row above, but TypeScript sources often carry a type annotation between the
-            // binding name and `=` (e.g. `const Connected: React.ComponentType<Props> =
-            // connect(...)(MyComponent);`). The optional `:` branch consumes the
-            // annotation lazily up to the first `=`; even when a type contains `=>` (as
-            // in `const F: () => void = fn;`), the lazy match back-tracks so the name
-            // group is still captured correctly. Closes #240.
+            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // HOC-wrapped / call-result component bindings — same narrow HOC-prefix set
+            // as the JavaScript row above. TypeScript sources often carry a type
+            // annotation between the binding name and `=` (e.g.
+            // `const Connected: React.ComponentType<Props> = connect(...)(MyComponent);`).
+            // The optional `:` branch consumes the annotation lazily up to the first `=`;
+            // even when a type contains `=>` (as in `const F: () => void = fn;`), the
+            // lazy match back-tracks so the name group is still captured correctly. The
+            // arrow-function row above also accepts the same optional annotation so a
+            // typed arrow binding (`const Callback: (x: number) => number = (x) =>
+            // x + 1;`) still wins with BodyStyle.Brace and is not shadowed here.
+            // Closes #240.
             // HOC ラップや呼び出し結果代入のコンポーネント束縛 — JavaScript 行と同じ
-            // 方針。TypeScript では束縛名と `=` の間に型注釈（例:
+            // 狭い HOC プレフィックス集合を使う。TypeScript では束縛名と `=` の間に
+            // 型注釈（例:
             // `const Connected: React.ComponentType<Props> = connect(...)(MyComponent);`）
             // が入ることが多いため、オプションの `:` 分岐で最初の `=` まで遅延一致する。
             // 型に `=>` が含まれる場合（例: `const F: () => void = fn;`）もバックトラックで
-            // 名前グループは正しく取得できる。Closes #240.
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>[A-Z]\w*)\s*(?::\s*[^=]+?)?\s*=\s*\S", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            // 名前グループは正しく取得できる。上の arrow 行も同じ型注釈を受け付けるため、
+            // 型注釈付き arrow 束縛（`const Callback: (x: number) => number = (x) =>
+            // x + 1;`）は BodyStyle.Brace 側で先勝ちし、こちらで上書きされない。
+            // Closes #240.
+            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>[A-Z]\w*)\s*(?::\s*.+?)?\s*=\s*(?:React\.|styled[.(`]|connect\s*\(|memo\s*\(|forwardRef\s*\(|lazy\s*\(|observer\s*\(|with[A-Z]\w*\s*\()", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             // Abstract class, declare class / 抽象クラス、declare クラス
             new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:default\s+)?(?:(?:abstract|declare)\s+)*class\s+(?<name>(?!(?:extends|implements)\b)\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // namespace/module — supports both identifier (namespace Foo) and quoted ambient (declare module 'express')
