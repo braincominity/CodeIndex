@@ -9575,4 +9575,175 @@ public class SymbolExtractorTests
         Assert.Equal(8, ctors[0].Line);
         Assert.Contains("public static extern G(string s)", ctors[0].Signature);
     }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsClassFieldArrowFunction()
+    {
+        var content = """
+            class Foo {
+                handleClick = () => { };
+                handleHover = (e) => { return e; };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        var handleClick = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "handleClick");
+        Assert.NotNull(handleClick);
+        Assert.Equal("class", handleClick.ContainerKind);
+        Assert.Equal("Foo", handleClick.ContainerName);
+
+        var handleHover = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "handleHover");
+        Assert.NotNull(handleHover);
+        Assert.Equal("class", handleHover.ContainerKind);
+        Assert.Equal("Foo", handleHover.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsClassFieldArrowFunctionWithTypes()
+    {
+        var content = """
+            class Foo {
+                handleClick = (): void => { };
+                transform = <T>(x: T): T => { return x; };
+                count: number = 0;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var handleClick = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "handleClick");
+        Assert.NotNull(handleClick);
+        Assert.Equal("class", handleClick.ContainerKind);
+        Assert.Equal("Foo", handleClick.ContainerName);
+        Assert.Equal("void", handleClick.ReturnType);
+
+        var transform = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "transform");
+        Assert.NotNull(transform);
+        Assert.Equal("T", transform.ReturnType);
+
+        // Plain value field (no arrow) must not be mis-classified as a function.
+        // 素の値フィールド（アロー関数ではない）は function として検出してはならない。
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "count");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DoesNotMisclassifyPlainClassFieldAsFunction()
+    {
+        var content = """
+            class Foo {
+                value = 42;
+                items = [1, 2, 3];
+                config = { key: "value" };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "value");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "items");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "config");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsTopLevelGeneratorFunctions()
+    {
+        var content = """
+            function* regularGen() { yield 1; }
+            async function* asyncGen() { yield 1; }
+            function* spacedGen () { yield 1; }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "regularGen");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "asyncGen");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "spacedGen");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsTopLevelGeneratorFunctions()
+    {
+        var content = """
+            function* regularGen(): Generator<number> { yield 1; }
+            async function* asyncGen(): AsyncGenerator<number> { yield 1; }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var regular = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "regularGen");
+        Assert.NotNull(regular);
+
+        var asyncGen = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "asyncGen");
+        Assert.NotNull(asyncGen);
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsObjectLiteralMethodShorthand()
+    {
+        var content = """
+            const obj = {
+                get foo() { return 1; },
+                set foo(v) { },
+                *bar() { yield 1; },
+                async baz() { return 1; },
+                qux() { return 1; },
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        var getFoo = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "foo" && s.Line == 2);
+        Assert.NotNull(getFoo);
+        Assert.Equal("object", getFoo.ContainerKind);
+        Assert.Equal("obj", getFoo.ContainerName);
+
+        var setFoo = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "foo" && s.Line == 3);
+        Assert.NotNull(setFoo);
+        Assert.Equal("object", setFoo.ContainerKind);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar" && s.ContainerKind == "object");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "baz" && s.ContainerKind == "object");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "qux" && s.ContainerKind == "object");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsObjectLiteralMethodShorthand()
+    {
+        var content = """
+            const obj = {
+                get foo(): number { return 1; },
+                set foo(v: number) { },
+                *bar(): Generator<number> { yield 1; },
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo" && s.ContainerKind == "object" && s.ContainerName == "obj");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar" && s.ContainerKind == "object" && s.ContainerName == "obj");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsModuleExportsObjectLiteralMembers()
+    {
+        var content = """
+            module.exports = {
+                run() { return 1; },
+                *gen() { yield 1; },
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerKind == "object");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "gen" && s.ContainerKind == "object");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DoesNotEmitObjectLiteralMembersForPlainValues()
+    {
+        var content = """
+            const obj = {
+                key: "value",
+                count: 42,
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "key");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "count");
+    }
 }
