@@ -413,7 +413,7 @@ Languages:
   javascript      4
 ```
 
-`status --json` also reports trust flags / availability fields such as `fold_ready`, `graph_table_available`, `issues_table_available`, and `csharp_symbol_name_ready`. If `csharp_symbol_name_ready` is `false`, run `cdidx index .` once to rewrite unchanged C# rows to the current canonical operator / conversion-operator / indexer names.
+`status --json` also reports trust flags / availability fields such as `fold_ready`, `graph_table_available`, `issues_table_available`, `csharp_symbol_name_ready`, and `csharp_metadata_target_ready`. If `csharp_symbol_name_ready` is `false`, run `cdidx index .` once to rewrite unchanged C# rows to the current canonical operator / conversion-operator / indexer names. If `csharp_metadata_target_ready` is `false`, the `deps` / `impact` metadata-attribute edges fall back to a signature-shape heuristic that can drop non-attribute impostors silently — run `cdidx index .` once to let the authoritative resolver stamp each C# class as attribute-derived or not.
 
 ### Map the repo before searching
 
@@ -1298,7 +1298,7 @@ Languages:
   javascript      4
 ```
 
-`status --json` には `fold_ready`、`graph_table_available`、`issues_table_available`、`csharp_symbol_name_ready` などの trust flag / availability field も含まれます。`csharp_symbol_name_ready` が `false` の場合は、`cdidx index .` を 1 回実行して unchanged な C# 行を現在の canonical operator / conversion operator / indexer 名へ書き換えてください。
+`status --json` には `fold_ready`、`graph_table_available`、`issues_table_available`、`csharp_symbol_name_ready`、`csharp_metadata_target_ready` などの trust flag / availability field も含まれます。`csharp_symbol_name_ready` が `false` の場合は、`cdidx index .` を 1 回実行して unchanged な C# 行を現在の canonical operator / conversion operator / indexer 名へ書き換えてください。`csharp_metadata_target_ready` が `false` の場合、`deps` / `impact` の metadata attribute edge 判定はシグネチャ形状ヒューリスティックへフォールバックし、attribute でない同名クラスを黙ってドロップしうるため、`cdidx index .` を 1 回実行して authoritative resolver に各 C# クラスが attribute 派生かどうかを永続化させてください。
 
 ### 検索前にリポジトリ全体を俯瞰する
 

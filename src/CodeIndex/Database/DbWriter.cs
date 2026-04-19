@@ -354,6 +354,7 @@ public class DbWriter
                     body_start_line, body_end_line, signature,
                     container_kind, container_name, container_qualified_name, family_key,
                     visibility, return_type,
+                    is_metadata_target,
                     name_folded
                 )
                 VALUES (
@@ -361,6 +362,7 @@ public class DbWriter
                     @bodyStartLine, @bodyEndLine, @signature,
                     @containerKind, @containerName, @containerQualifiedName, @familyKey,
                     @visibility, @returnType,
+                    @isMetadataTarget,
                     @nameFolded
                 )";
             var pFid = cmd.Parameters.Add("@fid", SqliteType.Integer);
@@ -378,6 +380,7 @@ public class DbWriter
             var pFamilyKey = cmd.Parameters.Add("@familyKey", SqliteType.Text);
             var pVisibility = cmd.Parameters.Add("@visibility", SqliteType.Text);
             var pReturnType = cmd.Parameters.Add("@returnType", SqliteType.Text);
+            var pIsMetadataTarget = cmd.Parameters.Add("@isMetadataTarget", SqliteType.Integer);
             var pNameFolded = cmd.Parameters.Add("@nameFolded", SqliteType.Text);
             cmd.Prepare();
 
@@ -401,6 +404,9 @@ public class DbWriter
                 pFamilyKey.Value = (object?)symbol.FamilyKey ?? DBNull.Value;
                 pVisibility.Value = (object?)symbol.Visibility ?? DBNull.Value;
                 pReturnType.Value = (object?)symbol.ReturnType ?? DBNull.Value;
+                pIsMetadataTarget.Value = symbol.IsMetadataTarget.HasValue
+                    ? (symbol.IsMetadataTarget.Value ? 1 : 0)
+                    : (object)DBNull.Value;
                 pNameFolded.Value = (object?)NameFold.Fold(symbol.Name) ?? DBNull.Value;
                 cmd.ExecuteNonQuery();
             }
@@ -846,6 +852,318 @@ public class DbWriter
             SetMeta(DbContext.GetHotspotFamilyVersionMetaKey(lang), null);
             SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang), null);
         }
+    }
+
+    /// <summary>
+    /// Stamp the per-language metadata-target version once the writer's resolver has finished
+    /// classifying every class-like row for that language. Readers consult this stamp before
+    /// trusting `symbols.is_metadata_target`. Issue #435.
+    /// 言語別 metadata-target version を stamp する。reader はこの stamp 一致時のみ
+    /// `symbols.is_metadata_target` を信頼する。Issue #435。
+    /// </summary>
+    public void MarkMetadataTargetReady(string lang)
+    {
+        SetMeta(
+            DbContext.GetMetadataTargetVersionMetaKey(lang),
+            DbContext.MetadataTargetVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>
+    /// Demote metadata-target trust for every known language. Called at the start of any
+    /// indexing run that may leave the resolver output partially stale so readers fall back
+    /// to the legacy heuristic until a successful run restamps the current version.
+    /// metadata-target trust を全言語まとめて縮退させる。index 開始時に呼び、成功時のみ
+    /// 再 stamp する。Issue #435。
+    /// </summary>
+    public void ClearMetadataTargetReady()
+    {
+        if (!TableExists("codeindex_meta"))
+            return;
+
+        SetMeta(DbContext.GetMetadataTargetVersionMetaKey("csharp"), null);
+    }
+
+    /// <summary>
+    /// Recompute `symbols.is_metadata_target` for every C# class-like row by parsing the
+    /// signature column for inheritance clauses and running a fixed-point iteration that
+    /// promotes any class transitively deriving from `System.Attribute`. Out-of-repo bases
+    /// whose name ends with `Attribute` (the BCL convention) are also treated as targets so
+    /// `class FooAttribute : SomeBaseAttribute` is captured even when `SomeBaseAttribute`
+    /// itself is in the BCL. Non-target rows are written as 0 so reader switching does not
+    /// confuse "no resolver pass yet" with "resolver decided not a target". Issue #435.
+    /// C# class-like 行の `is_metadata_target` を signature の継承句から再計算する。
+    /// `System.Attribute` 由来は再帰的に target、リポ外で末尾が `Attribute` の base 型も
+    /// target 扱い。target でない行は明示的に 0 で書き、reader で「未解決」と区別する。
+    /// </summary>
+    public void ResolveCSharpMetadataTargets()
+    {
+        var rows = LoadCSharpClassRows();
+        if (rows.Count == 0)
+            return;
+
+        var nameToIds = new Dictionary<string, List<long>>(StringComparer.Ordinal);
+        var bases = new Dictionary<long, List<string>>();
+        foreach (var row in rows)
+        {
+            if (!nameToIds.TryGetValue(row.Name, out var bucket))
+            {
+                bucket = new List<long>();
+                nameToIds[row.Name] = bucket;
+            }
+            bucket.Add(row.Id);
+            bases[row.Id] = ParseCSharpBaseIdentifiers(row.Signature);
+        }
+
+        var targets = new HashSet<long>();
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+            foreach (var row in rows)
+            {
+                if (targets.Contains(row.Id))
+                    continue;
+                if (IsMetadataTargetByBases(bases[row.Id], targets, nameToIds))
+                {
+                    targets.Add(row.Id);
+                    changed = true;
+                }
+            }
+        }
+
+        using var txn = !IsInTransaction() ? BeginTransaction() : null;
+        using var update = _conn.CreateCommand();
+        update.CommandText = "UPDATE symbols SET is_metadata_target = @flag WHERE id = @id";
+        var pFlag = update.Parameters.Add("@flag", SqliteType.Integer);
+        var pId = update.Parameters.Add("@id", SqliteType.Integer);
+        update.Prepare();
+        foreach (var row in rows)
+        {
+            pFlag.Value = targets.Contains(row.Id) ? 1 : 0;
+            pId.Value = row.Id;
+            update.ExecuteNonQuery();
+        }
+        txn?.Commit();
+    }
+
+    private List<(long Id, string Name, string? Signature)> LoadCSharpClassRows()
+    {
+        var rows = new List<(long Id, string Name, string? Signature)>();
+        if (!ColumnExists("symbols", "signature") || !ColumnExists("symbols", "is_metadata_target"))
+            return rows;
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.id, s.name, s.signature
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.lang = 'csharp' AND s.kind = 'class' AND s.name IS NOT NULL";
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            rows.Add((
+                reader.GetInt64(0),
+                reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2)));
+        }
+        return rows;
+    }
+
+    private static bool IsMetadataTargetByBases(
+        List<string> baseIdentifiers,
+        HashSet<long> resolvedTargets,
+        Dictionary<string, List<long>> nameToIds)
+    {
+        foreach (var baseName in baseIdentifiers)
+        {
+            if (baseName.Length == 0)
+                continue;
+            // Direct System.Attribute / Attribute reference / 直接 Attribute 派生
+            if (baseName == "Attribute" || baseName == "System.Attribute")
+                return true;
+
+            // Resolve the head identifier (strip namespace prefix) for in-repo lookup
+            // 名前空間プレフィクスを取り除いた末尾識別子で repo 内ルックアップ
+            var head = baseName;
+            int lastDot = head.LastIndexOf('.');
+            if (lastDot >= 0 && lastDot + 1 < head.Length)
+                head = head.Substring(lastDot + 1);
+
+            if (nameToIds.TryGetValue(head, out var ids))
+            {
+                bool anyResolved = false;
+                foreach (var id in ids)
+                {
+                    if (resolvedTargets.Contains(id))
+                    {
+                        anyResolved = true;
+                        break;
+                    }
+                }
+                if (anyResolved)
+                    return true;
+                // In-repo class with the same name exists but is not (yet) a target — wait
+                // for the next fixed-point iteration. Don't fall through to the BCL heuristic
+                // because that would incorrectly promote a non-attribute in-repo class.
+                // 同名の in-repo class があるなら BCL ヒューリスティックに落とさず、次回反復に委ねる。
+                continue;
+            }
+
+            // External base: BCL convention says any class ending in "Attribute" derives from
+            // System.Attribute. Used as a conservative fallback when the base type is not
+            // resolvable in-repo. / 外部基底は BCL 慣習で末尾 "Attribute" を target とみなす。
+            if (head.Length > "Attribute".Length && head.EndsWith("Attribute", StringComparison.Ordinal))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Extract base-type head identifiers from a C# class signature, respecting generic depth
+    /// so that `Foo<Bar, Baz> : IBase, IOther<Bar>` yields ["IBase", "IOther"]. Stops at the
+    /// first `where` clause (generic constraints are not bases) and trims modifiers like
+    /// `public sealed`.
+    /// C# class signature から基底/インターフェース識別子の頭を抜き出す。`<...>` の depth を
+    /// 数えて generic argument 内の `,` を区切りに誤認しないようにし、`where` 制約は除外する。
+    /// </summary>
+    internal static List<string> ParseCSharpBaseIdentifiers(string? signature)
+    {
+        var result = new List<string>();
+        if (string.IsNullOrEmpty(signature))
+            return result;
+
+        int colonIdx = FindBaseListColon(signature);
+        if (colonIdx < 0)
+            return result;
+
+        int start = colonIdx + 1;
+        int genericDepth = 0;
+        var current = new System.Text.StringBuilder();
+        for (int i = start; i < signature.Length; i++)
+        {
+            char c = signature[i];
+            if (c == '<')
+            {
+                genericDepth++;
+                current.Append(c);
+                continue;
+            }
+            if (c == '>')
+            {
+                if (genericDepth > 0)
+                    genericDepth--;
+                current.Append(c);
+                continue;
+            }
+            if (c == '{')
+                break;
+            if (genericDepth == 0 && c == ',')
+            {
+                AddBaseIfPresent(result, current.ToString());
+                current.Clear();
+                continue;
+            }
+            // `where T : ...` ends the base list
+            if (genericDepth == 0 && (c == 'w' || c == 'W'))
+            {
+                if (LooksLikeWhereKeyword(signature, i))
+                {
+                    AddBaseIfPresent(result, current.ToString());
+                    current.Clear();
+                    return result;
+                }
+            }
+            current.Append(c);
+        }
+        AddBaseIfPresent(result, current.ToString());
+        return result;
+    }
+
+    private static int FindBaseListColon(string signature)
+    {
+        int genericDepth = 0;
+        int parenDepth = 0;
+        for (int i = 0; i < signature.Length; i++)
+        {
+            char c = signature[i];
+            if (c == '<') { genericDepth++; continue; }
+            if (c == '>') { if (genericDepth > 0) genericDepth--; continue; }
+            if (c == '(') { parenDepth++; continue; }
+            if (c == ')') { if (parenDepth > 0) parenDepth--; continue; }
+            if (c == '{')
+                return -1;
+            if (c == ':' && genericDepth == 0 && parenDepth == 0)
+            {
+                // Skip `::` namespace alias separator / `::` 名前空間エイリアスは除外
+                if (i + 1 < signature.Length && signature[i + 1] == ':')
+                {
+                    i++;
+                    continue;
+                }
+                if (i > 0 && signature[i - 1] == ':')
+                    continue;
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static bool LooksLikeWhereKeyword(string signature, int i)
+    {
+        if (i + 5 > signature.Length)
+            return false;
+        if (string.Compare(signature, i, "where", 0, 5, StringComparison.OrdinalIgnoreCase) != 0)
+            return false;
+        if (i > 0)
+        {
+            char prev = signature[i - 1];
+            if (char.IsLetterOrDigit(prev) || prev == '_')
+                return false;
+        }
+        if (i + 5 < signature.Length)
+        {
+            char next = signature[i + 5];
+            if (char.IsLetterOrDigit(next) || next == '_')
+                return false;
+        }
+        return true;
+    }
+
+    private static void AddBaseIfPresent(List<string> result, string raw)
+    {
+        var trimmed = raw.Trim();
+        if (trimmed.Length == 0)
+            return;
+        // Take the head identifier (everything before `<` or whitespace) but preserve
+        // any namespace prefix so the caller can treat `System.Attribute` directly.
+        // `<` 以前と空白以前を頭とし、`System.Attribute` などの名前空間付きはそのまま残す。
+        int cut = trimmed.Length;
+        for (int i = 0; i < trimmed.Length; i++)
+        {
+            char c = trimmed[i];
+            if (c == '<' || char.IsWhiteSpace(c))
+            {
+                cut = i;
+                break;
+            }
+        }
+        var head = trimmed.Substring(0, cut);
+        if (head.Length > 0)
+            result.Add(head);
+    }
+
+    private bool ColumnExists(string table, string column)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = $"PRAGMA table_info({table})";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var name = reader.GetString(1);
+            if (string.Equals(name, column, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>

@@ -38,6 +38,15 @@ public partial class DbReader
     // #86: name_folded 列が全行埋まっているか（fold 経路を使えるか）。
     internal readonly bool _foldReady;
     internal readonly bool _csharpSymbolNameContractCurrent;
+    // #435: True when `symbols.is_metadata_target` has been populated for every C# class-like
+    // row by the writer's resolver and the stamp in `codeindex_meta` matches the current
+    // version. Readers that enforce metadata-target eligibility prefer this column over the
+    // legacy `signature LIKE '%: %'` heuristic when the flag is true; otherwise they continue
+    // to fall back to the heuristic so legacy / partial DBs do not silently miss edges.
+    // #435: C# の authoritative `is_metadata_target` が全行 populate されて stamp 一致したときのみ
+    // true。true なら reader は legacy ヒューリスティックではなく列を使う。false の DB では
+    // 従来どおり `signature LIKE '%: %'` にフォールバックする。
+    internal readonly bool _csharpMetadataTargetReady;
     // Tracks which languages have authoritative cross-file hotspot family semantics.
     // Mixed legacy/update states can therefore degrade only the affected language instead of
     // globally disabling families for unrelated marker types.
@@ -173,6 +182,11 @@ public partial class DbReader
             TryGetMetaString(_conn, DbContext.CSharpSymbolNameContractVersionMetaKey),
             DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
             StringComparison.Ordinal);
+        _csharpMetadataTargetReady = _symbolColumns.Contains("is_metadata_target")
+            && string.Equals(
+                TryGetMetaString(_conn, DbContext.GetMetadataTargetVersionMetaKey("csharp")),
+                DbContext.MetadataTargetVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                StringComparison.Ordinal);
         _hotspotFamilyReadyLanguages = LoadHotspotFamilyReadyLanguages(connection);
         // NOTE: row presence is intentionally NOT used as a fallback. A legacy DB or an
         // interrupted first-time / partial backfill can have one row while the rest of the
@@ -2649,9 +2663,25 @@ public partial class DbReader
         // NULL signature は C# 命名規約 `name LIKE '%Attribute'` に縮退 — 従来の
         // 無条件許容より厳密で、legacy-migration DB で任意の NULL-signature class が
         // metadata target 扱いされるのを防ぐ。signature 列欠落 DB も同じ命名規約を使う。
-        var csharpClause = _symbolColumns.Contains("signature")
-            ? $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND ((s.signature IS NOT NULL AND s.signature LIKE '%: %') OR (s.signature IS NULL AND s.name LIKE '%Attribute')))"
-            : $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND s.name LIKE '%Attribute')";
+        // Authoritative column takes precedence once the writer's resolver has stamped the
+        // current `metadata_target_version_csharp` version. Drops the `: %` heuristic for C#
+        // so non-attribute classes like `class MyAuditAttribute : BaseService` no longer fake
+        // ambiguity against a sibling real `class MyAuditAttribute : Attribute`. Issue #435.
+        // writer の resolver が current version を stamp 済みの DB では authoritative 列を優先し、
+        // `class MyAuditAttribute : BaseService` のような非 Attribute 派生を ambiguity から除外する。
+        string csharpClause;
+        if (_csharpMetadataTargetReady)
+        {
+            csharpClause = $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND s.is_metadata_target = 1)";
+        }
+        else if (_symbolColumns.Contains("signature"))
+        {
+            csharpClause = $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND ((s.signature IS NOT NULL AND s.signature LIKE '%: %') OR (s.signature IS NULL AND s.name LIKE '%Attribute')))";
+        }
+        else
+        {
+            csharpClause = $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND s.name LIKE '%Attribute')";
+        }
         // JS / TS clause — decorators target runtime entities (classes and factory
         // functions). TS `interface` is a type-only construct that cannot be a
         // decorator target, so excluding it avoids false ambiguity against a

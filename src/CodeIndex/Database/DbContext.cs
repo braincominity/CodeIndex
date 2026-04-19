@@ -294,6 +294,15 @@ public class DbContext : IDisposable
     public const int CSharpSymbolNameContractVersion = 1;
     public const string CSharpSymbolNameContractVersionMetaKey = "csharp_symbol_name_contract_version";
     public const string IndexedProjectRootMetaKey = "indexed_project_root";
+    // Authoritative `symbols.is_metadata_target` flag readiness, per language. Stamped at the
+    // end of a successful index pass once the writer's metadata-target resolver has classified
+    // every class-like row for that language. Readers fall back to the legacy heuristic when
+    // the per-language stamp is absent or its version does not match. Issue #435.
+    // 言語別 metadata-target 列の正式 readiness。index 終端で resolver が当該言語の class-like
+    // 行を全部分類した後にだけ stamp する。stamp が無い・version 不一致の言語については
+    // reader が legacy ヒューリスティックにフォールバックする。Issue #435。
+    public const int MetadataTargetVersion = 1;
+    public static string GetMetadataTargetVersionMetaKey(string lang) => $"metadata_target_version_{lang}";
 
     public int GetUserVersion()
     {
@@ -380,7 +389,8 @@ public class DbContext : IDisposable
                 container_qualified_name TEXT,
                 family_key      TEXT,
                 visibility      TEXT,
-                return_type     TEXT
+                return_type     TEXT,
+                is_metadata_target INTEGER
             )");
 
         // Indexed references table / 参照インデックステーブル
@@ -432,6 +442,7 @@ public class DbContext : IDisposable
         EnsureColumn("symbols", "family_key", "TEXT");
         EnsureColumn("symbols", "visibility", "TEXT");
         EnsureColumn("symbols", "return_type", "TEXT");
+        EnsureColumn("symbols", "is_metadata_target", "INTEGER");
         // #86: Unicode-aware folded name columns for `--exact` name matching across all
         // `--exact` command variants. Populated by the writer via NameFold.Fold; NULL on
         // legacy rows until a full reindex, in which case the reader falls back to the
@@ -584,6 +595,7 @@ public class DbContext : IDisposable
             EnsureColumn("symbols", "family_key", "TEXT");
             EnsureColumn("symbols", "visibility", "TEXT");
             EnsureColumn("symbols", "return_type", "TEXT");
+            EnsureColumn("symbols", "is_metadata_target", "INTEGER");
             Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_nocase ON symbols(name COLLATE NOCASE)");
             // #86: fold columns must be ensured BEFORE the folded indexes so CREATE INDEX does
             // not fail on legacy DBs where the column did not exist yet.

@@ -3176,6 +3176,154 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverExcludesNonAttributeImpostor()
+    {
+        // issue #435: a non-attribute class that happens to share the suffix-convention
+        // name (e.g. `class FooAttribute : BaseService`) must not fake ambiguity against
+        // a real `class FooAttribute : Attribute` elsewhere. Before the persisted
+        // `is_metadata_target` resolver, the `signature LIKE '%: %'` heuristic counted
+        // both as plausible candidates and the deps edge was silently dropped. With the
+        // resolver stamped, only the real attribute target is counted, so the edge from
+        // `[Foo]` consumers reaches the real attribute file.
+        // issue #435: `class FooAttribute : BaseService` のような suffix 規約の名前を
+        // 偶然持つ非 attribute class が、別ファイルの本物 `class FooAttribute : Attribute`
+        // との ambiguity を偽装してはならない。永続化された is_metadata_target resolver
+        // 以前は `signature LIKE '%: %'` ヒューリスティックで両方を候補に数えてしまい、
+        // deps エッジが暗黙に落ちていた。resolver stamp 後は本物の attribute target だけが
+        // 候補となり、`[Foo]` 利用側からのエッジが本物の attribute ファイルに届く。
+        InsertIndexedFile("src/RealFooAttribute.cs", "csharp",
+            """
+            using System;
+
+            [AttributeUsage(AttributeTargets.Class)]
+            public sealed class FooAttribute : Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/ImpostorFooAttribute.cs", "csharp",
+            """
+            public class FooAttribute : BaseService
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [Foo]
+            public class Svc
+            {
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        Assert.Contains(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/RealFooAttribute.cs");
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/ImpostorFooAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverHandlesTransitiveAttributeDerivation()
+    {
+        // issue #435: derivation can be transitive — `class FooAttribute : BaseAttr`
+        // where `class BaseAttr : Attribute`. The resolver's fixed-point iteration
+        // must mark FooAttribute as a metadata target. Otherwise the same-name
+        // impostor would re-introduce ambiguity and the metadata edge would drop.
+        // issue #435: 派生は推移的になり得る — `class FooAttribute : BaseAttr` で
+        // `class BaseAttr : Attribute` の場合、resolver の fixed-point iteration が
+        // FooAttribute を metadata target として印付ける必要がある。さもなければ
+        // 同名 impostor が ambiguity を再導入し、metadata エッジが落ちてしまう。
+        InsertIndexedFile("src/BaseAttr.cs", "csharp",
+            """
+            using System;
+
+            public abstract class BaseAttr : Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/RealFooAttribute.cs", "csharp",
+            """
+            public sealed class FooAttribute : BaseAttr
+            {
+            }
+            """);
+        InsertIndexedFile("src/ImpostorFooAttribute.cs", "csharp",
+            """
+            public class FooAttribute : BaseService
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [Foo]
+            public class Svc
+            {
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        Assert.Contains(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/RealFooAttribute.cs");
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/ImpostorFooAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverPreservesAmbiguityWhenMultipleRealAttributes()
+    {
+        // issue #435 invariant: the resolver fix narrows the candidate set, but it
+        // must NOT mask genuine ambiguity. When two REAL attribute classes share the
+        // same name (both transitively derive from Attribute), the metadata edge
+        // must still be dropped — namespace/using disambiguation is out of scope.
+        // issue #435 invariant: resolver は候補集合を絞るが、本物の曖昧さを隠してはならない。
+        // 2 つの本物 attribute class が同名で両方 Attribute 由来なら、従来どおり
+        // metadata エッジは落ちる必要がある（namespace / using 解析はスコープ外）。
+        InsertIndexedFile("src/A/FooAttribute.cs", "csharp",
+            """
+            using System;
+
+            namespace A
+            {
+                public sealed class FooAttribute : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/B/FooAttribute.cs", "csharp",
+            """
+            using System;
+
+            namespace B
+            {
+                public sealed class FooAttribute : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [Foo]
+            public class Svc
+            {
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/A/FooAttribute.cs");
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/B/FooAttribute.cs");
+    }
+
+    [Fact]
     public void SearchReferences_MatchesCSharpAttributeSuffixConvention_Substring()
     {
         // issue #293 follow-up: `references MyAuditAttribute` (substring mode) must
