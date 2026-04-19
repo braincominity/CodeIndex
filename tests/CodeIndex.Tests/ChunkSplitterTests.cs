@@ -167,4 +167,27 @@ public class ChunkSplitterTests
         var chunks = ChunkSplitter.Split(1, null!);
         Assert.Empty(chunks);
     }
+
+    [Fact]
+    public void Split_ConsecutiveLineLeadingBoms_AllStripped()
+    {
+        // A consecutive run of U+FEFF at a line start (either at offset 0 or
+        // immediately after `\n`) must all be stripped, not just the first one.
+        // Tools that repeatedly re-save a file or concatenate multiple BOM-bearing
+        // sources can produce two or more BOMs in a row; a 1-BOM-only strip would
+        // leak the rest as phantom glyphs into `search` / `excerpt` and still hide
+        // line-1 declarations from `^\s*`-anchored regex. Closes #183.
+        // 行頭に U+FEFF が連続して並ぶケース (オフセット 0 でも `\n` 直後でも)
+        // は先頭 1 個だけでなく全て剥がす必要がある。ファイルを繰り返し再保存
+        // したり BOM 付きソースを連結するツールで 2 連以上の BOM が発生しうる。
+        // 1 個のみ剥がす実装だと残りが search / excerpt に幽霊グリフとして漏れ、
+        // 1 行目宣言も `^\s*` 固定正規表現から消えたままになる。Closes #183.
+        var content = "\uFEFF\uFEFFusing System;\n\uFEFF\uFEFF\uFEFFnamespace Multi;\n";
+        var chunks = ChunkSplitter.Split(1, content);
+
+        Assert.Single(chunks);
+        Assert.DoesNotContain('\uFEFF', chunks[0].Content);
+        Assert.StartsWith("using System;", chunks[0].Content);
+        Assert.Contains("namespace Multi;", chunks[0].Content);
+    }
 }
