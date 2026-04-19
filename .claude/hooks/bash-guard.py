@@ -66,7 +66,6 @@ DANGEROUS_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(?i)\b(?:launchctl|security|tccutil|spctl|csrutil|tmutil)\b"), "macOS security/system command is blocked"),
     (re.compile(r"(?i)\bdefaults\s+write\b|\bplutil\s+-replace\b"), "macOS preference modification is blocked"),
 
-    (re.compile(r"(?i)\bgit\s+push\b"), "git push is blocked"),
     (re.compile(r"(?i)\bgit\s+tag\b"), "git tag is blocked unless explicitly performed by the user"),
     (re.compile(r"(?i)\bgit\s+reset\s+--hard\b"), "git reset --hard is blocked"),
     (re.compile(r"(?i)\bgit\s+(?:checkout|restore)\s+\.\b"), "checkout/restore of entire worktree is blocked"),
@@ -296,6 +295,11 @@ def check_raw_command(command: str, project_root: Path) -> None:
         return
 
     if re.match(r"^\s*git\s+status\b", command):
+        return
+
+    if re.match(r"^\s*git\s+push\b", command):
+        if re.search(r"\b(--force|-f|--force-with-lease)\b", command):
+            emit_deny("force push is not allowed")
         return
 
     # ===== fallback =====
