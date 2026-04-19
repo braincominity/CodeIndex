@@ -114,6 +114,10 @@ public class FileIndexer
         [".pgsql"]  = "sql",     // PostgreSQL dialect / PostgreSQL 方言
         [".tsql"]   = "sql",     // T-SQL (SQL Server) / T-SQL (SQL Server)
         [".plsql"]  = "sql",     // PL/SQL (Oracle) / PL/SQL (Oracle)
+        [".pls"]    = "sql",     // PL/SQL script (Oracle) / PL/SQL スクリプト (Oracle)
+        [".pks"]    = "sql",     // PL/SQL package spec (Oracle) / PL/SQL パッケージ仕様 (Oracle)
+        [".pkb"]    = "sql",     // PL/SQL package body (Oracle) / PL/SQL パッケージ本体 (Oracle)
+        [".plb"]    = "sql",     // PL/SQL wrapped source (Oracle) / PL/SQL ラップ済みソース (Oracle)
         [".psql"]   = "sql",     // psql scripts / psql スクリプト
         [".md"]     = "markdown",
         [".yaml"]   = "yaml",

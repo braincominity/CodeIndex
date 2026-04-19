@@ -491,7 +491,9 @@
         ".",
         "/tmp",
         "/private/tmp",
-        "~/.nuget/packages"
+        "~/.nuget/packages",
+        "~/.config/gh",
+        "~/.config/gh/**"
       ],
       "denyWrite": [
         "/Applications",
@@ -513,7 +515,9 @@
         "/private/tmp",
         "~/.nuget/packages",
         "~/.codex",
-        "~/.codex/**"
+        "~/.codex/**",
+        "~/.config/gh",
+        "~/.config/gh/**"
       ]
     },
     "network": {
@@ -523,7 +527,8 @@
         "globalcdn.nuget.org",
         "github.com",
         "api.github.com",
-        "uploads.github.com"
+        "uploads.github.com",
+        "api.openai.com"
       ],
       "allowLocalBinding": false,
       "allowAllUnixSockets": false
