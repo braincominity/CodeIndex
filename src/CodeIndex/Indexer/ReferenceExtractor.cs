@@ -199,6 +199,24 @@ public static class ReferenceExtractor
     // Java コンストラクタ連鎖文。`Leaf(int x){super(x);}` のように `{` 直後に連鎖文が続く
     // single-line body 形式にも対応する。
     private static readonly Regex JavaCtorChainRegex = new(@"(?:^\s*|\{\s*)(?<kind>this|super)\s*\(", RegexOptions.Compiled);
+    // C# / Java parenless object / collection / dictionary / array initializer such as
+    // `new Foo { X = 1 }`, `new List<int> { 1, 2, 3 }`, `new Dictionary<K, V> { [k] = v }`,
+    // `new Foo[] { ... }`, `new Foo[N] { ... }`, `new Foo[,] { ... }`, `new Foo[][] { ... }`,
+    // and qualified type names like `new N.Foo { X = 1 }` / `new global::N.Foo { X = 1 }`.
+    // CallRegex requires a trailing `(`, so these forms are otherwise dropped from the
+    // reference table even though the type is genuinely instantiated. Anonymous types
+    // (`new { Name = ... }`), target-typed `new()`, and collection expressions (`new[] { ... }`)
+    // intentionally do not match because they have no named target. Nested generics deeper than
+    // one `<...>` level (e.g. `new Dictionary<string, List<int>> { ... }`) follow the same
+    // limitation as the existing CallRegex generics handling. See issue #286.
+    // C# / Java の括弧省略インスタンス化（オブジェクト / コレクション / ディクショナリ /
+    // 配列イニシャライザ）。CallRegex は `(` が必須なため取りこぼすが、実体は型のインスタンス化なので
+    // `instantiate` として拾う。匿名型 `new { ... }`、target-typed `new()`、
+    // collection expression `new[] { ... }` は対象を持たないため意図的にマッチさせない。
+    // 1 段を超えるネストした generic（`Dictionary<string, List<int>>` 等）は既存 CallRegex と同様の制限。issue #286 参照。
+    private static readonly Regex CSharpJavaInitializerRegex = new(
+        @"\bnew\s+(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*))*(?<name>[A-Za-z_]\w*)(?:\s*<[^>\n]+>)?(?:\s*\[[^\[\]\n]*\])*\s*\{",
+        RegexOptions.Compiled);
     // Java access/method modifier set used by the same-line ctor scanner.
     // same-line ctor 本体のスキャナで使うアクセス / メソッド修飾子一覧。
     private static readonly HashSet<string> JavaCtorModifiers = new(StringComparer.Ordinal)
@@ -657,6 +675,35 @@ public static class ReferenceExtractor
                             references, seen, fileId, resolvedName, nameIndex + 1,
                             "call", context, lineNumber, sqlCallContainer);
                     }
+                }
+            }
+
+            // C# / Java parenless initializers: `new T { ... }` / `new T<U> { ... }` /
+            // `new T[] { ... }` etc. CallRegex requires a trailing `(`, so these forms slip
+            // through and the type is otherwise never recorded as instantiated. Emit an
+            // `instantiate` row here so `references` / `callers` / `impact` see the edge.
+            // See issue #286.
+            // 括弧省略の C# / Java インスタンス化 (`new T { ... }` 等) は CallRegex で拾えないため、
+            // 専用パスで `instantiate` を発行する。issue #286 参照。
+            if (language is "csharp" or "java")
+            {
+                foreach (Match match in CSharpJavaInitializerRegex.Matches(preparedLine))
+                {
+                    var name = match.Groups["name"].Value;
+                    var nameIndex = match.Groups["name"].Index;
+                    if (language == "csharp" && CSharpBuiltInTypeNames.Contains(name))
+                        continue;
+                    if (language == "java" && JavaPrimitiveTypeNames.Contains(name))
+                        continue;
+                    if (IsIgnoredCallName(language, name))
+                        continue;
+                    // Do NOT skip when the type is defined in the same file — the CallRegex
+                    // `IsConstructorCallName` path emits `instantiate` without a definitionNames
+                    // filter, so `new Foo { ... }` and `new Foo()` should behave the same way.
+                    // 同一ファイル内定義でもスキップしない。`IsConstructorCallName` 経路の
+                    // `instantiate` が同様の扱いをしているため、括弧あり/なしで挙動を揃える。
+                    var initContainer = ResolveContainerForCall(nameIndex);
+                    AddReference(references, seen, fileId, match, "instantiate", context, lineNumber, initContainer);
                 }
             }
 

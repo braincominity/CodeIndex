@@ -884,6 +884,113 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpParenlessInitializers_AreInstantiate()
+    {
+        // issue #286: object/collection/dictionary/array initializer syntax without `()`
+        // (`new Foo { ... }`, `new List<int> { ... }`, `new Dictionary<K,V> { [k] = v }`,
+        // `new Bar[] { ... }`) must be recorded as `instantiate` references.
+        // issue #286: 括弧省略のオブジェクト/コレクション/ディクショナリ/配列イニシャライザも
+        // `instantiate` として参照テーブルに記録される必要がある。
+        const string content = """
+            namespace App;
+
+            using System.Collections.Generic;
+
+            public class Bar { public int X { get; set; } }
+
+            public class Worker
+            {
+                public void M()
+                {
+                    var a = new Bar { X = 1 };
+                    var list = new List<int> { 1, 2, 3 };
+                    var dict = new Dictionary<string, int> { ["k"] = 1 };
+                    var arr = new int[] { 1, 2, 3 };
+                    var arr2 = new Bar[] { new Bar() { X = 9 } };
+                    if (true) { }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Bar" && r.ReferenceKind == "instantiate" && r.Line == 11);
+        Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "instantiate" && r.Line == 12);
+        Assert.Contains(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "instantiate" && r.Line == 13);
+        Assert.Contains(references, r => r.SymbolName == "Bar" && r.ReferenceKind == "instantiate" && r.Line == 15 && r.Column == 24);
+        Assert.Contains(references, r => r.SymbolName == "Bar" && r.ReferenceKind == "instantiate" && r.Line == 15 && r.Column == 36);
+        // Built-in `int` must not produce an `instantiate int` row from `new int[] { ... }`.
+        // 組み込み型 `int` は `instantiate int` を発行しない。
+        Assert.DoesNotContain(references, r => r.SymbolName == "int");
+        // The negative `if (true) { }` line must not match the initializer regex.
+        // `if (true) { }` のような `new` を含まない `{` 開始は initializer regex にマッチしない。
+        Assert.DoesNotContain(references, r => r.SymbolName == "if" && r.ReferenceKind == "instantiate");
+        // Same target on the same line/column must not double-emit instantiate + call.
+        // 同一行・同一列で `instantiate` と `call` を二重に出さない。
+        Assert.DoesNotContain(references, r => r.SymbolName == "Bar" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "List" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedParenlessInitializer_IsInstantiate()
+    {
+        // Qualified type names (`new N.Foo { ... }`, `new global::N.Foo { ... }`) must
+        // capture the trailing identifier as `instantiate`, mirroring the behavior of
+        // `new N.Foo()` which the existing CallRegex+IsConstructorCallName path already covers.
+        // 修飾された型名（`new N.Foo { ... }` / `new global::N.Foo { ... }`）でも、
+        // `new N.Foo()` と同様に末尾の識別子が `instantiate` として捕捉されること。
+        const string content = """
+            namespace N
+            {
+                public class Foo { public int X { get; set; } }
+                public class Bar { public int X { get; set; } }
+            }
+
+            public class Worker
+            {
+                public void M()
+                {
+                    var a = new N.Foo { X = 1 };
+                    var b = new global::N.Bar { X = 2 };
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Foo" && r.ReferenceKind == "instantiate" && r.Line == 11);
+        Assert.Contains(references, r => r.SymbolName == "Bar" && r.ReferenceKind == "instantiate" && r.Line == 12);
+    }
+
+    [Fact]
+    public void Extract_JavaParenlessArrayInitializer_IsInstantiate()
+    {
+        // issue #286 (Java side): `new String[] { "a", "b" }` is genuinely an array
+        // instantiation but CallRegex misses it because there is no `(`. Primitive
+        // types (`int`, `boolean`, ...) must continue to be skipped.
+        // issue #286 の Java 側: `new String[] { "a", "b" }` は配列インスタンス化だが
+        // `(` がないため CallRegex で取りこぼす。プリミティブ型（`int` 等）は引き続き除外する。
+        const string content = """
+            public class Demo {
+                public void run() {
+                    String[] s = new String[] { "a", "b" };
+                    int[] n = new int[] { 1, 2, 3 };
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "String" && r.ReferenceKind == "instantiate" && r.Line == 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "int");
+        Assert.DoesNotContain(references, r => r.SymbolName == "boolean");
+    }
+
+    [Fact]
     public void Extract_PhpIncludeRequireConstructs_AreIgnored()
     {
         const string content = """
