@@ -6546,6 +6546,73 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_ProcedureBodyRange_BodyInternalCreateTableDoesNotCloseBody()
+    {
+        // Regression for codex review iteration 1 finding #1: the body terminator heuristic must
+        // only react to *another* proc-like DDL header (`CREATE|ALTER|DROP PROCEDURE|PROC|FUNCTION|
+        // TRIGGER`), not to ordinary body-internal DDL like `CREATE TABLE #tmp` / `ALTER TABLE`.
+        // Otherwise issue #429 re-appears whenever a T-SQL procedure stages a temp table before its
+        // real work.
+        // codex レビュー iteration 1 指摘 #1 の回帰テスト: 本体終端の判定は別の proc 系ヘッダ
+        // （`CREATE|ALTER|DROP PROCEDURE|PROC|FUNCTION|TRIGGER`）のときだけ発火し、本体内の普通の
+        // DDL（`CREATE TABLE #tmp` / `ALTER TABLE` など）では閉じてはならない。そうしないと、T-SQL
+        // プロシージャが一時テーブルを用意してから実処理する典型パターンで issue #429 が再発する。
+        var content =
+            "CREATE PROCEDURE dbo.sp_Stage AS\n" +  // line 1
+            "BEGIN\n" +                              // line 2
+            "  CREATE TABLE #tmp(id INT);\n" +      // line 3 — body-internal DDL, must NOT close
+            "  ALTER TABLE #tmp ADD name NVARCHAR(100);\n" + // line 4 — same
+            "  EXEC dbo.sp_Inner;\n" +               // line 5 — real EXEC must be inside body
+            "END\n" +                                // line 6
+            "GO\n" +                                 // line 7
+            "CREATE PROCEDURE dbo.sp_Inner AS BEGIN SELECT 1; END\n" + // line 8
+            "GO\n";                                  // line 9
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        var stage = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "dbo.sp_Stage");
+        Assert.NotNull(stage.BodyStartLine);
+        Assert.NotNull(stage.BodyEndLine);
+        Assert.True(stage.BodyEndLine!.Value >= 5,
+            $"BodyEndLine={stage.BodyEndLine} must cover the EXEC on line 5; body-internal CREATE TABLE / ALTER TABLE must not close the body.");
+        Assert.True(stage.BodyEndLine!.Value < 8,
+            $"BodyEndLine={stage.BodyEndLine} must not leak into sp_Inner starting on line 8.");
+    }
+
+    [Fact]
+    public void Extract_SQL_ProcedureBodyRange_MultiLineBlockCommentDoesNotCloseBody()
+    {
+        // Regression for codex review iteration 1 finding #2: MaskSqlLineForBodyScan threads an
+        // `inBlockComment` state across lines, so a bare `GO` or `CREATE` appearing inside a
+        // multi-line `/* ... */` block must not close the enclosing procedure body.
+        // codex レビュー iteration 1 指摘 #2 の回帰テスト: MaskSqlLineForBodyScan は `inBlockComment`
+        // を行間に持ち越し、複数行の `/* ... */` ブロック内に現れる単独 `GO` / `CREATE` では
+        // 外側プロシージャ本体を閉じてはならない。
+        var content =
+            "CREATE PROCEDURE dbo.sp_CommentHeavy AS\n" + // line 1
+            "BEGIN\n" +                                     // line 2
+            "  /*\n" +                                      // line 3 — block comment opens
+            "   GO\n" +                                     // line 4 — bare GO inside comment
+            "   CREATE PROCEDURE dbo.sp_FakeInner AS SELECT 0;\n" + // line 5 — fake header inside comment
+            "  */\n" +                                      // line 6 — block comment closes
+            "  EXEC dbo.sp_Real;\n" +                       // line 7 — real EXEC must be inside body
+            "END\n" +                                       // line 8
+            "GO\n" +                                        // line 9 — real terminator
+            "CREATE PROCEDURE dbo.sp_Real AS BEGIN SELECT 1; END\n" + // line 10
+            "GO\n";                                         // line 11
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        var heavy = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "dbo.sp_CommentHeavy");
+        Assert.NotNull(heavy.BodyStartLine);
+        Assert.NotNull(heavy.BodyEndLine);
+        Assert.True(heavy.BodyEndLine!.Value >= 7,
+            $"BodyEndLine={heavy.BodyEndLine} must cover the real EXEC on line 7; multi-line block comment must not close the body.");
+        Assert.True(heavy.BodyEndLine!.Value < 10,
+            $"BodyEndLine={heavy.BodyEndLine} must not leak into sp_Real starting on line 10.");
+    }
+
+    [Fact]
     public void Extract_Terraform_DetectsResources()
     {
         var content = "resource \"aws_s3_bucket\" \"my_bucket\" {\n  bucket = \"my-bucket\"\n}\n\nvariable \"region\" {\n  default = \"us-east-1\"\n}\n\noutput \"bucket_arn\" {\n  value = aws_s3_bucket.my_bucket.arn\n}\n\nmodule \"vpc\" {\n  source = \"./modules/vpc\"\n}";

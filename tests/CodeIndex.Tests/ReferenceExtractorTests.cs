@@ -4881,7 +4881,11 @@ public class ReferenceExtractorTests
         Assert.All(bodyCalls, r =>
         {
             Assert.Equal("function", r.ContainerKind);
-            Assert.Equal("sp_Outer", r.ContainerName);
+            // SymbolExtractor stores SQL proc names with their schema prefix (e.g. `dbo.sp_Outer`),
+            // so ContainerName surfaces the qualified name too.
+            // SymbolExtractor は SQL プロシージャ名をスキーマ修飾付き（例: `dbo.sp_Outer`）で保持するため、
+            // ContainerName にも修飾付きの名前が載る。
+            Assert.Equal("dbo.sp_Outer", r.ContainerName);
         });
 
         // The post-GO call (line 9) is outside any procedure body and must carry no container.
@@ -4916,7 +4920,11 @@ public class ReferenceExtractorTests
 
         var bodyCall = Assert.Single(innerCalls.Where(r => r.Line == 3));
         Assert.Equal("function", bodyCall.ContainerKind);
-        Assert.Equal("fn_outer", bodyCall.ContainerName);
+        // Postgres function names are captured with their schema (e.g. `public.fn_outer`),
+        // so ContainerName surfaces the qualified name too.
+        // Postgres の関数名はスキーマ付き（例: `public.fn_outer`）で取られるため、ContainerName にも
+        // 修飾付きの名前が載る。
+        Assert.Equal("public.fn_outer", bodyCall.ContainerName);
 
         var outsideCall = Assert.Single(innerCalls.Where(r => r.Line == 7));
         Assert.Null(outsideCall.ContainerKind);
