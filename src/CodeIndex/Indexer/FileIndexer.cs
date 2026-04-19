@@ -1473,17 +1473,26 @@ public class FileIndexer
         // Closes #183.
         if (content.Contains('\uFEFF'))
             content = content.Replace("\uFEFF", string.Empty);
-        // Accurate line count: ignore trailing newline / 正確な行数: 末尾改行を無視
-        var lines = content.EndsWith('\n')
-            ? content[..^1].Split('\n')
-            : content.Split('\n');
+        // Accurate line count: ignore trailing newline, and treat content that became
+        // empty after CRLF / BOM stripping as zero lines (not `"".Split('\n') == [""]`'s
+        // off-by-one of 1) so `files.lines` stays consistent with the 0-chunk contract
+        // ChunkSplitter.Split applies to the same content. Closes #183.
+        // 正確な行数: 末尾改行を無視し、CRLF / BOM 剥がしの結果として空になった
+        // コンテンツは 0 行として扱う (`"".Split('\n') == [""]` の 1 件ずれを避ける)。
+        // これにより `files.lines` が ChunkSplitter.Split が同じ内容に対して適用する
+        // 0 チャンク契約と整合する。Closes #183.
+        var lineCount = content.Length == 0
+            ? 0
+            : (content.EndsWith('\n')
+                ? content[..^1].Split('\n').Length
+                : content.Split('\n').Length);
 
         var record = new FileRecord
         {
             Path = NormalizePathSeparators(relativePath),
             Lang = TryDetectLanguage(absolutePath).Language,
             Size = info.Length,
-            Lines = lines.Length,
+            Lines = lineCount,
             Checksum = checksum,
             Modified = info.LastWriteTimeUtc,
         };

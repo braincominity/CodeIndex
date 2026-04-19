@@ -1643,6 +1643,37 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void BuildRecord_BomOnlyFile_ReportsZeroLines()
+    {
+        // A file whose on-disk bytes are exactly the UTF-8 BOM (EF BB BF) and
+        // nothing else must report `Lines == 0` so `files --json` stays consistent
+        // with ChunkSplitter.Split's 0-chunk contract for the same content. Before
+        // the fix the line count came from `"".Split('\n') == [""]`, yielding
+        // a phantom `Lines = 1`. Closes #183.
+        // オンディスクバイト列が UTF-8 BOM (EF BB BF) のみのファイルは Lines == 0 と
+        // すべき。そうしないと `files --json` が同じ内容に対する ChunkSplitter.Split の
+        // 0 チャンク契約と矛盾する。修正前は `"".Split('\n') == [""]` 由来で
+        // 幽霊の Lines = 1 を返していた。Closes #183.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var filePath = Path.Combine(tempDir, "bomonly.cs");
+            File.WriteAllBytes(filePath, new byte[] { 0xEF, 0xBB, 0xBF });
+
+            var indexer = new FileIndexer(tempDir);
+            var (record, content, _) = indexer.BuildRecord(filePath);
+
+            Assert.Equal(string.Empty, content);
+            Assert.Equal(0, record.Lines);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void BuildRecord_MidFileBom_StrippedFromContent()
     {
         // Mid-file UTF-8 BOM (e.g. from accidental file concatenation or tool insertion)
