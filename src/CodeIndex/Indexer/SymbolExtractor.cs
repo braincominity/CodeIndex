@@ -61,6 +61,7 @@ public static class SymbolExtractor
         Indent,
         RubyEnd,
         VisualBasicEnd,
+        SqlProcBody,
     }
 
     private sealed record SymbolPattern(
@@ -403,22 +404,38 @@ public static class SymbolExtractor
             new("class",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*(?:record\s+class\s+|record\s+|class\s+)(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Implicit/explicit conversion operator — must come before general operator pattern.
             // Visibility may appear before or after `static` / `unsafe` / `extern`. Closes #355.
+            // Modifier slot also accepts `abstract|virtual|sealed|override|new` so C# 11
+            // `static abstract` / `abstract static` interface conversion operators (generic
+            // math: `System.Numerics.INumber<TSelf>` etc.) and default-implementation /
+            // member-hiding forms on interfaces are not silently dropped. Closes #244.
             // 暗黙的/明示的変換演算子 — 一般のoperatorパターンより先に配置。
             // visibility は `static` / `unsafe` / `extern` のどちら側にも置ける。Closes #355.
+            // 修飾子スロットは `abstract|virtual|sealed|override|new` も受け付ける。
+            // これにより C# 11 の `static abstract` / `abstract static` interface 変換演算子
+            // （generic math: `System.Numerics.INumber<TSelf>` など）と、interface 上の
+            // default implementation / member hiding 形態を黙って取りこぼさない。Closes #244.
             new("function",  new Regex(
                 $@"^\s*"
-              + $@"(?=(?:(?:{CSharpVisibilityPattern}|static|unsafe|extern)\s+)*static\s+)"
-              + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern)\s+)+"
+              + $@"(?=(?:(?:{CSharpVisibilityPattern}|static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)*static\s+)"
+              + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)+"
               + $@"(?<conversionKind>implicit|explicit)\s+operator\b",
                 RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Operator overload (+ - * / == != < > etc.) — must come before method pattern.
             // Visibility may appear before or after `static`. Closes #355.
+            // Modifier slot also accepts `abstract|virtual|sealed|override|new` so C# 11
+            // `static abstract` / `abstract static` interface operators (generic math:
+            // `IAdditionOperators<T>`, `IComparisonOperators<T>`, etc.) are not silently
+            // dropped. Closes #244.
             // 演算子オーバーロード — メソッドパターンより前に配置。
             // visibility は `static` のどちら側にも置ける。Closes #355.
+            // 修飾子スロットは `abstract|virtual|sealed|override|new` も受け付ける。
+            // これにより C# 11 の `static abstract` / `abstract static` interface 演算子
+            // （generic math: `IAdditionOperators<T>`、`IComparisonOperators<T>` など）を
+            // 黙って取りこぼさない。Closes #244.
             new("function",  new Regex(
                 $@"^\s*"
-              + $@"(?=(?:(?:{CSharpVisibilityPattern}|static|unsafe|extern)\s+)*static\s+)"
-              + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern)\s+)+"
+              + $@"(?=(?:(?:{CSharpVisibilityPattern}|static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)*static\s+)"
+              + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)+"
               + @".+?\s+(?<name>operator\s+(?:checked\s+)?\S+)\s*\(",
                 RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Method with return type — visibility optional for explicit interface impl and nested members.
@@ -798,32 +815,53 @@ public static class SymbolExtractor
         ],
         ["sql"] =
         [
-            // Identifier shape accepts PG double-quoted ("name"), T-SQL bracketed ([name]), or bare (\w+),
-            // optionally qualified with dots (schema.name, [dbo].[sp_X], "s"."n").
-            // 識別子形式は PG の "name"、T-SQL の [name]、裸 (\w+) を受け入れ、ドットで修飾可能
+            // Identifier shape accepts PG double-quoted ("name"), T-SQL bracketed ([name]), or bare
+            // ([\w$#]+) to cover Oracle identifiers such as SYS$LINK / USER#1, optionally qualified
+            // with dots (schema.name, [dbo].[sp_X], "s"."n").
+            // 識別子形式は PG の "name"、T-SQL の [name]、裸 ([\w$#]+) を受け入れる。裸 ID は
+            // SYS$LINK / USER#1 のような Oracle 識別子も拾える。ドットで修飾可能
             //（schema.name、[dbo].[sp_X]、"s"."n"）。
             // CREATE TABLE / VIEW — Postgres TEMP/UNLOGGED + MATERIALIZED VIEW, T-SQL `CREATE OR ALTER` (2016+)
             // CREATE TABLE / VIEW — Postgres の TEMP/UNLOGGED や MATERIALIZED VIEW、T-SQL の `CREATE OR ALTER`（2016+）に対応
-            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:(?:(?:GLOBAL|LOCAL)\s+)?(?:TEMP|TEMPORARY)\s+|UNLOGGED\s+)?(?:TABLE|(?:MATERIALIZED\s+)?VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:(?:(?:GLOBAL|LOCAL)\s+)?(?:TEMP|TEMPORARY)\s+|UNLOGGED\s+)?(?:TABLE|(?:MATERIALIZED\s+)?VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // CREATE PROCEDURE / PROC / FUNCTION / TRIGGER — Postgres `OR REPLACE` and T-SQL `OR ALTER` / `PROC` short form
+            // Uses BodyStyle.SqlProcBody so the body range covers the BEGIN...END / dollar-quoted body,
+            // letting ReferenceExtractor.ResolveContainerForCall attribute calls inside the body to the
+            // enclosing procedure (see issue #429).
             // CREATE PROCEDURE / PROC / FUNCTION / TRIGGER — Postgres の `OR REPLACE` と T-SQL の `OR ALTER` / 短縮形 `PROC` に対応
-            new("function", new Regex(@"^\s*CREATE\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:PROCEDURE|PROC|FUNCTION|TRIGGER)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("enum",     new Regex(@"^\s*CREATE\s+TYPE\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)\s+AS\s+ENUM\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*CREATE\s+TYPE\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("namespace", new Regex(@"^\s*CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:(?<name>(?!AUTHORIZATION\b)(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)|AUTHORIZATION\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*))", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*CREATE\s+(?:SEQUENCE|DOMAIN)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("import",   new Regex(@"^\s*CREATE\s+EXTENSION\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            // T-SQL SYNONYM
-            new("class",    new Regex(@"^\s*CREATE\s+SYNONYM\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            // T-SQL server-level / database-level principals and objects
-            // T-SQL のサーバ/データベースレベルのプリンシパル・オブジェクト
-            new("class",    new Regex(@"^\s*CREATE\s+(?:DATABASE|LOGIN|USER|ROLE|CERTIFICATE)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // BodyStyle.SqlProcBody により BEGIN...END / dollar-quoted の本体範囲を求め、ReferenceExtractor の
+            // ResolveContainerForCall が本体内の呼び出しを外側のプロシージャに帰属させられるようにする（issue #429）。
+            new("function", new Regex(@"^\s*CREATE\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:PROCEDURE|PROC|FUNCTION|TRIGGER)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.SqlProcBody),
+            new("enum",     new Regex(@"^\s*CREATE\s+TYPE\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)\s+AS\s+ENUM\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // Oracle: CREATE [OR REPLACE] TYPE BODY <name> and CREATE [OR REPLACE] PACKAGE [BODY] <name>.
+            // These must precede the bare CREATE TYPE / CREATE PACKAGE rows so the `BODY` keyword is
+            // not absorbed as the object name.
+            // Oracle: CREATE [OR REPLACE] TYPE BODY <name> と CREATE [OR REPLACE] PACKAGE [BODY] <name>。
+            // 裸の CREATE TYPE / CREATE PACKAGE 行より前に置き、`BODY` キーワードを name として
+            // 飲み込まないようにする。
+            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?TYPE\s+BODY\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:EDITIONABLE\s+|NONEDITIONABLE\s+)?PACKAGE\s+BODY\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:EDITIONABLE\s+|NONEDITIONABLE\s+)?PACKAGE\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?TYPE\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("namespace", new Regex(@"^\s*CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:(?<name>(?!AUTHORIZATION\b)(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)|AUTHORIZATION\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*))", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*CREATE\s+(?:SEQUENCE|DOMAIN)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("import",   new Regex(@"^\s*CREATE\s+EXTENSION\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // T-SQL SYNONYM (also Oracle / DB2)
+            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:PUBLIC\s+)?SYNONYM\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // Oracle: CREATE [SHARED] [PUBLIC] DATABASE LINK <name> — must precede the bare CREATE DATABASE row
+            // so the `LINK` token is not taken as a name. SHARED and PUBLIC may appear together in that order.
+            // Oracle: CREATE [SHARED] [PUBLIC] DATABASE LINK <name> — 裸の CREATE DATABASE 行より前に置き、
+            // `LINK` を name として飲み込まないようにする。SHARED と PUBLIC はこの順で 2 語並ぶことがある。
+            new("class",    new Regex(@"^\s*CREATE\s+(?:SHARED\s+)?(?:PUBLIC\s+)?DATABASE\s+LINK\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // T-SQL server-level / database-level principals and objects, plus Oracle-only DIRECTORY / CONTEXT / PROFILE.
+            // T-SQL のサーバ/データベースレベルのプリンシパル・オブジェクトと、Oracle 固有の DIRECTORY / CONTEXT / PROFILE。
+            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:DATABASE|LOGIN|USER|ROLE|CERTIFICATE|DIRECTORY|CONTEXT|PROFILE)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // T-SQL partitioning and full-text catalogs
             // T-SQL のパーティション関連と全文検索カタログ
-            new("function", new Regex(@"^\s*CREATE\s+PARTITION\s+FUNCTION\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*CREATE\s+PARTITION\s+SCHEME\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*CREATE\s+FULLTEXT\s+CATALOG\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(?!ON\b)(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("function", new Regex(@"^\s*CREATE\s+PARTITION\s+FUNCTION\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*CREATE\s+PARTITION\s+SCHEME\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*CREATE\s+FULLTEXT\s+CATALOG\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(?!ON\b)(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // ALTER covers the same object kinds we create above, so migration scripts remain visible.
             // Kinds are split to match the CREATE side (procedure-like → function, schema → namespace,
             // extension → import, everything else → class) so `symbols --kind` / `definition` / `inspect`
@@ -832,10 +870,26 @@ public static class SymbolExtractor
             // CREATE 側に合わせて kind を分割し（プロシージャ類 → function、SCHEMA → namespace、
             // EXTENSION → import、その他 → class）、同じオブジェクトに対する CREATE と ALTER で
             // `symbols --kind` / `definition` / `inspect` の種別が揃うようにする。
-            new("function", new Regex(@"^\s*ALTER\s+(?:PROCEDURE|PROC|FUNCTION|TRIGGER|PARTITION\s+FUNCTION)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("namespace", new Regex(@"^\s*ALTER\s+SCHEMA\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("import",   new Regex(@"^\s*ALTER\s+EXTENSION\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*ALTER\s+(?:TABLE|(?:MATERIALIZED\s+)?VIEW|SEQUENCE|SYNONYM|LOGIN|USER|ROLE|DATABASE|CERTIFICATE|INDEX|TYPE|DOMAIN|PARTITION\s+SCHEME|FULLTEXT\s+CATALOG)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // ALTER PROCEDURE / PROC / FUNCTION / TRIGGER share the body shape with CREATE so they
+            // also get BodyStyle.SqlProcBody. ALTER PARTITION FUNCTION is body-less (it modifies the
+            // partition boundary, not code), so it keeps BodyStyle.None via a separate pattern below.
+            // ALTER PROCEDURE / PROC / FUNCTION / TRIGGER は CREATE と同じ本体形状を持つため
+            // BodyStyle.SqlProcBody を使う。ALTER PARTITION FUNCTION は本体を持たない
+            // （パーティション境界の変更のみ）ため、下の別パターンで BodyStyle.None のままにする。
+            new("function", new Regex(@"^\s*ALTER\s+(?:PROCEDURE|PROC|FUNCTION|TRIGGER)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.SqlProcBody),
+            new("function", new Regex(@"^\s*ALTER\s+PARTITION\s+FUNCTION\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("namespace", new Regex(@"^\s*ALTER\s+SCHEMA\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("import",   new Regex(@"^\s*ALTER\s+EXTENSION\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // Oracle: ALTER DATABASE LINK <name> — must precede the bare ALTER DATABASE row so `LINK`
+            // is not absorbed as the object name. Real Oracle body compilation is expressed as
+            // `ALTER PACKAGE <name> COMPILE BODY` / `ALTER TYPE <name> COMPILE BODY` and falls through
+            // to the generic ALTER row below; there is no `ALTER PACKAGE BODY <name>` syntax in Oracle.
+            // Oracle: ALTER DATABASE LINK <name> — 裸の ALTER DATABASE 行より前に置き `LINK` を name
+            // として飲み込まないようにする。Oracle の body コンパイルは実際には
+            // `ALTER PACKAGE <name> COMPILE BODY` / `ALTER TYPE <name> COMPILE BODY` の形で、下の
+            // generic ALTER 行で拾う。`ALTER PACKAGE BODY <name>` のような構文は Oracle に存在しない。
+            new("class",    new Regex(@"^\s*ALTER\s+DATABASE\s+LINK\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*ALTER\s+(?:TABLE|(?:MATERIALIZED\s+)?VIEW|SEQUENCE|SYNONYM|LOGIN|USER|ROLE|DATABASE|CERTIFICATE|INDEX|PACKAGE|TYPE|DOMAIN|DIRECTORY|PROFILE|PARTITION\s+SCHEME|FULLTEXT\s+CATALOG)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
         ],
         ["terraform"] =
         [
@@ -898,6 +952,45 @@ public static class SymbolExtractor
             new("enum",     new Regex(@"^\s*enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.Brace),
             // Import-Module / using module / モジュールインポート
             new("import",   new Regex(@"^\s*(?:Import-Module|using\s+module)\s+(?<name>\S+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+        ],
+        ["batch"] =
+        [
+            // Labels — goto :X / call :X targets, the only navigation anchors in a batch script.
+            // `::` comment form has no label name, so the name character class naturally rejects it.
+            // Dotted labels like `:build.release` are real batch label names, so accept `.` too.
+            // `:EOF` is a reserved batch target used by `goto :EOF` / `call :EOF`, not a user-defined
+            // label, so exclude it — but only the literal full-name `eof`. Labels that merely begin
+            // with `eof` such as `:eof2` / `:eofish` / `:end-of-file` / `:eof.x` must still surface,
+            // which is why the negative lookahead checks for name-terminating characters instead of `\b`.
+            // ラベル — goto :X / call :X の着地点であり、batch スクリプト内で唯一のナビゲーションアンカー。
+            // `::` コメント形式はラベル名を持たないため名前文字クラスが自然に弾く。
+            // `:build.release` のようなドット付きラベルも正規のラベル名として受け入れる。
+            // `:EOF` は `goto :EOF` / `call :EOF` 用の予約ターゲットであってユーザー定義ラベルではないため除外するが、
+            // 除外するのは名前全体が `eof` のときだけ。`:eof2` / `:eofish` / `:end-of-file` / `:eof.x` のように
+            // 単に `eof` で始まるだけのラベルは通す必要があるため、`\b` ではなく名前終端文字を見る negative lookahead を使う。
+            new("function", new Regex(@"^\s*:(?!eof(?![\w.-]))(?<name>[\w.\-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // Variable assignment — set VAR=value, set /a VAR=expr, set /p VAR=prompt, set "VAR=value".
+            // Also handles `@set VAR=...` (echo suppression prefix), `set /a VAR+=1` (compound
+            // assignment operators), `if ... set VAR=...` (inline assignment inside a one-line
+            // control statement), and same-line multi-statement forms `set A=1 & set B=2`,
+            // `( set X=1 )`, `if ... ( set P=1 ) else set Q=2`, `for ... do set LOOPVAR=...`.
+            // Boundary alternation: line-leading `^`, or after `&` / `(` / `\belse` / `\bdo` so
+            // the regex (paired with the batch multi-match advance in the extractor loop) can
+            // emit one symbol per `set` occurrence on the same line instead of dropping every
+            // assignment after the first match. `rem` / `@rem` / `::` comment lines can also
+            // contain those boundary tokens (e.g. `REM & set FAKE=1`), so they are short-
+            // circuited by `IsBatchCommentLine` before this pattern ever runs — the boundary
+            // alternation alone is not enough to keep comment bodies out of the capture.
+            // 変数代入 — set VAR=value、set /a VAR=expr、set /p VAR=prompt、set "VAR=value" に対応。
+            // 併せて `@set VAR=...` (echo 抑止プレフィクス) 、`set /a VAR+=1` (複合代入演算子) 、
+            // `if ... set VAR=...` (1 行制御文内の代入) 、および `set A=1 & set B=2` / `( set X=1 )` /
+            // `if ... ( set P=1 ) else set Q=2` / `for ... do set LOOPVAR=...` のような同一行複数ステートメント形も拾う。
+            // 境界は `^` / `&` / `(` / `\belse` / `\bdo` のいずれかで、extractor 側の batch 専用
+            // multi-match advance と組み合わせて 1 行中の `set` ごとに 1 シンボルを出す。
+            // `rem` / `@rem` / `::` コメント行にもこれらの境界トークンが入りうる
+            // (`REM & set FAKE=1` 等) ため、この正規表現が走る前に `IsBatchCommentLine` で
+            // 行ごと早期スキップしている — 境界 alternation だけではコメント本文を弾ききれない。
+            new("property", new Regex(@"(?:(?:^|&|\()\s*|(?:\belse|\bdo)\s+)(?:@\s*)?(?:if\s+.+?\s+)?set\s+(?:/[aApP]\s+)?""?(?<name>[A-Za-z_][\w]*)\s*(?:[+\-*/%&^|]|<<|>>)?=", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
         ],
         ["zig"] =
         [
@@ -1065,6 +1158,20 @@ public static class SymbolExtractor
             {
                 matchLine = csharpMatchLines![i];
             }
+
+            // Batch `rem` / `@rem` / `::` comment lines contain the same `&` / `(` / `else` /
+            // `do` boundary tokens that the property regex now accepts for inline `set`
+            // capture, so `REM & set FAKE=1` or `:: else set FAKE=2` would otherwise leak a
+            // phantom property. Short-circuit those lines before any pattern fires — batch
+            // labels never match on `::` / `rem` lines anyway because the label regex
+            // requires `:<name-char>`, not `::` or `r`.
+            // batch の `rem` / `@rem` / `::` コメント行は、inline `set` 捕捉のために property 正規表現が
+            // 受け付ける `&` / `(` / `else` / `do` の境界トークンを含みうるため、`REM & set FAKE=1` や
+            // `:: else set FAKE=2` が偽 property を出す恐れがある。パターン適用前に当該行ごと
+            // 早期スキップする — batch ラベル側は `::` / `rem` 行ではそもそも `:<名前文字>` の要件を
+            // 満たさないため影響を受けない。
+            if (lang == "batch" && IsBatchCommentLine(line))
+                continue;
 
             var stopAfterFirstPatternMatch = false;
             foreach (var pattern in patterns)
@@ -1602,6 +1709,29 @@ public static class SymbolExtractor
 
                     if (!CanContinueScanningSameLineBraceBody(lang, kind, pattern.BodyStyle, bodyEndLine, startLine, sameLineEndColumn, absoluteStartColumn))
                     {
+                        // Batch `set` assignments can legitimately repeat on a single line via
+                        // `&` command-chaining (`set A=1 & set B=2`), parenthesized grouping
+                        // (`if ... ( set P=1 ) else set Q=2`), or `for`-loop bodies
+                        // (`for %%I in (1) do set LOOPVAR=%%I`). The brace-body rescan path
+                        // above is JS/TS/CSS/C#-only, so drive the advance explicitly for the
+                        // batch property pattern instead of short-circuiting after the first
+                        // match. Forward progress is guaranteed because `match.Length >= 1`
+                        // (the regex requires a literal `set\s+NAME=` tail).
+                        // batch の `set` 代入は `&` 連結や `( ... ) else ... `、`for ... do ...` で
+                        // 1 行に複数回現れうる。上の brace-body 再スキャンは JS/TS/CSS/C# 限定なので、
+                        // batch の property パターンだけは explicit に advance して追加マッチも拾う。
+                        // 前進は `match.Length >= 1` (正規表現が `set\s+NAME=` を要求するため) で保証される。
+                        if (lang == "batch"
+                            && pattern.BodyStyle == BodyStyle.None
+                            && pattern.Kind == "property")
+                        {
+                            var nextBatchOffset = absoluteStartColumn + Math.Max(1, match.Length);
+                            if (nextBatchOffset <= lineOffset)
+                                break;
+                            lineOffset = nextBatchOffset;
+                            continue;
+                        }
+
                         // Stop after first match per line to avoid duplicate symbols
                         // (e.g. C# method pattern + constructor pattern both matching)
                         // 1行につき最初のマッチのみ採用し重複を防ぐ
@@ -6281,6 +6411,7 @@ public static class SymbolExtractor
             BodyStyle.Indent => FindIndentRange(lines, startIndex),
             BodyStyle.RubyEnd => FindRubyRange(lines, startIndex),
             BodyStyle.VisualBasicEnd => FindVisualBasicRange(lines, startIndex),
+            BodyStyle.SqlProcBody => FindSqlProcBodyRange(lines, startIndex),
             _ => (startIndex + 1, null, null),
         };
     }
@@ -8340,6 +8471,286 @@ public static class SymbolExtractor
             : (lines.Length, bodyStartLine, lines.Length);
     }
 
+    // Regex helpers for SQL procedure body scanning / SQL プロシージャ本体走査用の正規表現ヘルパー
+    private static readonly Regex SqlGoSeparatorRegex = new(
+        @"^\s*GO\s*(?:;[\s;]*)?(?:--.*)?$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // Only close a SQL proc body when the next top-level statement looks like another proc-like
+    // header (`CREATE|ALTER|DROP PROCEDURE|PROC|FUNCTION|TRIGGER`, optionally with `OR REPLACE` for
+    // PostgreSQL or `OR ALTER` for T-SQL / SQL Server 2016+). Body-internal `CREATE TABLE` /
+    // `ALTER TABLE` / `GRANT` / `USE` etc. must not prematurely close the enclosing procedure body.
+    // The `OR REPLACE` / `OR ALTER` alternation must match the CREATE-side symbol regex above so a
+    // `CREATE OR ALTER PROCEDURE` sibling actually terminates the previous body range. See issue #429.
+    // 次のトップレベル文が別の proc 系ヘッダ（`CREATE|ALTER|DROP` + `PROCEDURE|PROC|FUNCTION|TRIGGER`、
+    // PostgreSQL の `OR REPLACE` / T-SQL・SQL Server 2016+ の `OR ALTER` 付きも許容）だった場合のみ
+    // SQL の proc 本体を閉じる。本体内の `CREATE TABLE` / `ALTER TABLE` / `GRANT` / `USE` などで
+    // 先走って閉じないこと。`OR REPLACE` / `OR ALTER` の分岐は上の CREATE 側シンボル正規表現と揃え、
+    // `CREATE OR ALTER PROCEDURE` の隣接宣言でも前の body 範囲を確実に終端させる。issue #429 参照。
+    private static readonly Regex SqlTopLevelDdlStartRegex = new(
+        @"^\s*(?:CREATE|ALTER|DROP)\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:PROCEDURE|PROC|FUNCTION|TRIGGER)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // Dollar-quoted body tags: `$$` or `$tagname$` (PostgreSQL). Tag must be empty or an identifier.
+    // Dollar-quoted の本体タグ: `$$` または `$タグ名$`（PostgreSQL）。タグは空か識別子のみ。
+    private static readonly Regex SqlDollarTagRegex = new(
+        @"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$",
+        RegexOptions.Compiled);
+
+    /// <summary>
+    /// Resolve the body range of a SQL `CREATE|ALTER PROCEDURE|FUNCTION|TRIGGER` symbol.
+    /// Closes the body at: balanced dollar-quoted (`$$ ... $$`), `GO` batch separator at line start,
+    /// a new top-level DDL statement (`CREATE`/`ALTER`/`DROP`/...) at line start, or end-of-file.
+    /// Multi-line scanning respects SQL string literals (`'...'` / `"..."`) and line/block comments
+    /// so terminators embedded in comments or strings do not prematurely close the body.
+    /// Body boundaries are best-effort — they only need to contain calls inside the procedure for
+    /// ReferenceExtractor's container attribution, not reconstruct the exact parser-level body.
+    /// See issue #429.
+    /// SQL の `CREATE|ALTER PROCEDURE|FUNCTION|TRIGGER` シンボルの本体範囲を求める。
+    /// 本体は、`$$ ... $$` 等のドル引用の閉じ、行頭の `GO` バッチ区切り、行頭の新たなトップレベル DDL
+    /// （`CREATE`/`ALTER`/`DROP`/...）、または EOF で閉じる。文字列リテラル（`'...'` / `"..."`）と
+    /// 行/ブロックコメントは尊重するため、これらの中に入った終端語で誤って閉じない。
+    /// 本体境界は ReferenceExtractor のコンテナ帰属のためにプロシージャ内部の呼び出しを包含できれば
+    /// 十分で、パーサレベルの正確な本体を再構築する必要はない。issue #429 参照。
+    /// </summary>
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindSqlProcBodyRange(string[] lines, int startIndex)
+    {
+        int bodyStartLine = startIndex + 1;
+        int endLine = startIndex + 1;
+        string? openDollarTag = null;
+        int blockCommentDepth = 0;
+
+        for (int i = startIndex; i < lines.Length; i++)
+        {
+            var raw = lines[i];
+
+            if (openDollarTag != null)
+            {
+                // Inside a dollar-quoted body; look for the matching close tag on any column.
+                // ドル引用ボディ内。どの列にあっても閉じタグを探す。
+                if (raw.IndexOf(openDollarTag, StringComparison.Ordinal) >= 0)
+                {
+                    openDollarTag = null;
+                    endLine = i + 1;
+                    return (endLine, bodyStartLine, endLine);
+                }
+                endLine = i + 1;
+                continue;
+            }
+
+            var masked = MaskSqlLineForBodyScan(raw, ref blockCommentDepth);
+
+            // Detect any unpaired dollar-quote opening on this line. Paired openings on the same
+            // line (e.g. `AS $$ SELECT 1 $$`) are consumed without opening cross-line state.
+            // 同一行でペアにならない dollar-quote 開きを検出する。同じ行で開閉が揃う（`AS $$ SELECT 1 $$`）
+            // 場合はクロス行状態を開かずそのまま消費する。
+            var dollarMatches = SqlDollarTagRegex.Matches(masked);
+            if (dollarMatches.Count > 0)
+            {
+                var tagCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+                foreach (Match m in dollarMatches)
+                    tagCounts[m.Value] = tagCounts.TryGetValue(m.Value, out var c) ? c + 1 : 1;
+
+                string? stillOpen = null;
+                foreach (var kv in tagCounts)
+                {
+                    if (kv.Value % 2 != 0)
+                    {
+                        stillOpen = kv.Key;
+                        break;
+                    }
+                }
+
+                if (stillOpen != null)
+                {
+                    openDollarTag = stillOpen;
+                    endLine = i + 1;
+                    continue;
+                }
+            }
+
+            if (i > startIndex)
+            {
+                // Use `masked` for GO detection too so a bare `GO` appearing inside a multi-line
+                // block comment does not prematurely close the body (the mask blanks out
+                // comment-interior content). See issue #429 follow-up.
+                // `GO` 判定にも `masked` を使い、複数行ブロックコメント内の `GO` 単独行で本体を
+                // 早期終了させない（マスクでコメント内部は空白化される）。issue #429 追補参照。
+                if (SqlGoSeparatorRegex.IsMatch(masked))
+                {
+                    // `GO` is a T-SQL batch separator that is not part of the body; close at the
+                    // previous line so the `GO` line itself is outside the procedure.
+                    // `GO` は本体の一部ではない T-SQL のバッチ区切り。前行で本体を閉じ、`GO` 行自体は
+                    // プロシージャの外に置く。
+                    return (i, bodyStartLine, i);
+                }
+
+                if (SqlTopLevelDdlStartRegex.IsMatch(masked))
+                {
+                    // A new top-level DDL statement on the next line always closes the previous
+                    // procedure's body (even without `GO`).
+                    // 次の行に新しいトップレベル DDL が来たら、`GO` が無くても前のプロシージャ本体は
+                    // ここで閉じる。
+                    return (i, bodyStartLine, i);
+                }
+            }
+
+            endLine = i + 1;
+        }
+
+        return (endLine, bodyStartLine, endLine);
+    }
+
+    /// <summary>
+    /// Strip SQL line comments (`--`), block comments (`/* ... */`, including multi-line and
+    /// PostgreSQL-style nested `/* /* ... */ ... */`), and string literals (`'...'` / `"..."`)
+    /// from a single line so body-terminator checks do not trip on text inside comments or
+    /// strings. Bracket identifiers (`[name]`) and backtick identifiers (`` `name` ``) are left
+    /// untouched since they never contain SQL tokens.
+    /// `blockCommentDepth` is threaded across lines by the caller so a `/* ... */` block opened on
+    /// one line continues to mask terminators like bare `GO` / `CREATE` appearing on subsequent
+    /// lines until all open `/*` are balanced. PostgreSQL allows nested block comments; T-SQL /
+    /// MySQL / Oracle do not, but using depth here is strictly safer for the dialects that do not
+    /// (every outer `*/` still closes when depth returns to 0). See issue #429 follow-up.
+    /// SQL の行コメント（`--`）、ブロックコメント（`/* ... */`、複数行にまたがるものと PostgreSQL 風の
+    /// ネスト `/* /* ... */ ... */` を含む）、および文字列リテラル（`'...'` / `"..."`）を除去して、
+    /// コメントや文字列中の語で本体終端が誤検出されないようにする。角括弧識別子 `[name]` と
+    /// バッククォート識別子 `` `name` `` はそのまま残す（SQL トークンを含まないため）。
+    /// `blockCommentDepth` は呼び出し側で行間に持ち越し、ある行で開いた `/* ... */` がすべての `/*`
+    /// と均衡するまで、後続行の `GO` / `CREATE` のような終端語をマスクし続ける。PostgreSQL は
+    /// ブロックコメントのネストを許容する一方、T-SQL / MySQL / Oracle は許容しないが、ここで depth を
+    /// 使っても後者では単に外側の `*/` で depth が 0 に戻って閉じるだけなので、厳密に safer。
+    /// issue #429 追補参照。
+    /// </summary>
+    private static string MaskSqlLineForBodyScan(string line, ref int blockCommentDepth)
+    {
+        if (string.IsNullOrEmpty(line))
+            return line;
+
+        var sb = new StringBuilder(line.Length);
+        bool inSingle = false;
+        bool inDouble = false;
+        int i = 0;
+
+        while (i < line.Length)
+        {
+            if (blockCommentDepth > 0)
+            {
+                // Inside a (possibly nested) block comment. Look for the next `/*` (increases depth)
+                // or `*/` (decreases depth), whichever comes first. Blank every column until we
+                // either close back to depth 0 or hit end of line.
+                // ブロックコメント内（ネスト可）。次に来る `/*`（深さ増）か `*/`（深さ減）のうち早い方を探し、
+                // depth が 0 に戻るか行末に到達するまで各列を空白化する。
+                int open = line.IndexOf("/*", i, StringComparison.Ordinal);
+                int close = line.IndexOf("*/", i, StringComparison.Ordinal);
+
+                if (close < 0 && open < 0)
+                {
+                    for (int k = i; k < line.Length; k++)
+                        sb.Append(' ');
+                    return sb.ToString();
+                }
+
+                if (close >= 0 && (open < 0 || close < open))
+                {
+                    for (int k = i; k <= close + 1; k++)
+                        sb.Append(' ');
+                    blockCommentDepth--;
+                    i = close + 2;
+                    continue;
+                }
+
+                // `/*` comes first (or is tied — but `close < open` already handles the tie in favor
+                // of `*/`, so here we know `open <= close` strictly and `/*` is the next token).
+                // `/*` が先に現れる（`close < open` の場合は close 優先で既に分岐済みなので、ここでは
+                // `open <= close` かつ `/*` が次のトークン）。
+                for (int k = i; k <= open + 1; k++)
+                    sb.Append(' ');
+                blockCommentDepth++;
+                i = open + 2;
+                continue;
+            }
+
+            char c = line[i];
+
+            if (!inSingle && !inDouble)
+            {
+                if (c == '-' && i + 1 < line.Length && line[i + 1] == '-')
+                {
+                    for (int k = i; k < line.Length; k++)
+                        sb.Append(' ');
+                    return sb.ToString();
+                }
+                if (c == '/' && i + 1 < line.Length && line[i + 1] == '*')
+                {
+                    // Open a block comment; let the `blockCommentDepth > 0` branch close it on this
+                    // or a later line.
+                    // ブロックコメントを開始する。閉じ処理は `blockCommentDepth > 0` 分岐で同じ行か
+                    // 後続行のどちらかが担当する。
+                    sb.Append(' ');
+                    sb.Append(' ');
+                    blockCommentDepth = 1;
+                    i += 2;
+                    continue;
+                }
+                if (c == '\'')
+                {
+                    inSingle = true;
+                    sb.Append(' ');
+                    i++;
+                    continue;
+                }
+                if (c == '"')
+                {
+                    inDouble = true;
+                    sb.Append(' ');
+                    i++;
+                    continue;
+                }
+                sb.Append(c);
+                i++;
+            }
+            else if (inSingle)
+            {
+                if (c == '\'' && i + 1 < line.Length && line[i + 1] == '\'')
+                {
+                    sb.Append(' ');
+                    sb.Append(' ');
+                    i += 2;
+                    continue;
+                }
+                if (c == '\'')
+                {
+                    inSingle = false;
+                    sb.Append(' ');
+                    i++;
+                    continue;
+                }
+                sb.Append(' ');
+                i++;
+            }
+            else
+            {
+                if (c == '"' && i + 1 < line.Length && line[i + 1] == '"')
+                {
+                    sb.Append(' ');
+                    sb.Append(' ');
+                    i += 2;
+                    continue;
+                }
+                if (c == '"')
+                {
+                    inDouble = false;
+                    sb.Append(' ');
+                    i++;
+                    continue;
+                }
+                sb.Append(' ');
+                i++;
+            }
+        }
+
+        return sb.ToString();
+    }
+
     private static string StripLeadingCSharpAttributeLists(
         string line,
         ref bool inLeadingAttributeBlock,
@@ -8451,6 +8862,67 @@ public static class SymbolExtractor
         return insideEnumBody
             && attributeParenDepth == 0
             && CSharpEnumMemberNameRegex.IsMatch(line);
+    }
+
+    /// <summary>
+    /// Return true when a batch (.bat / .cmd) line is a comment, i.e. `::` / `:::` / `rem` /
+    /// `@rem` (with optional leading whitespace and case-insensitive `rem`). Comment lines
+    /// must not contribute `set` property symbols even when they contain the boundary tokens
+    /// (`&`, `(`, `else`, `do`) that the new inline-set-capture regex accepts.
+    /// batch (.bat / .cmd) のコメント行 (`::` / `:::` / `rem` / `@rem`、先頭空白可、`rem` は大小文字不問) のときに
+    /// true を返す。新しい inline `set` 捕捉正規表現が受け付ける境界トークン (`&` / `(` / `else` / `do`) を
+    /// 含んでいても、コメント行からは `set` property を拾わない。
+    /// </summary>
+    private static bool IsBatchCommentLine(string line)
+    {
+        var i = 0;
+        while (i < line.Length && (line[i] == ' ' || line[i] == '\t'))
+            i++;
+
+        if (i >= line.Length)
+            return false;
+
+        // `::` (and therefore also `:::`, `::: ...`) opens a batch comment that consumes the
+        // rest of the line. The label regex does not match these because it requires a name
+        // char after the first `:`, but the property regex could match their inline tokens.
+        // `::` 以降はコメント (`:::`、`::: ...` も同様)。ラベル正規表現は `:` の後ろに名前文字を
+        // 要求するため影響を受けないが、property 正規表現は inline トークンを拾ってしまう。
+        if (line[i] == ':' && i + 1 < line.Length && line[i + 1] == ':')
+            return true;
+
+        // `@rem` (echo-suppression prefix + rem). Accept optional whitespace between `@` and
+        // `rem` to mirror how the property regex tolerates `@ set`.
+        // `@rem` (echo 抑止プレフィクス + rem) 。property 正規表現が `@ set` を許すのに合わせて
+        // `@` と `rem` の間の空白も許容する。
+        if (line[i] == '@')
+        {
+            var j = i + 1;
+            while (j < line.Length && (line[j] == ' ' || line[j] == '\t'))
+                j++;
+            return IsBatchRemKeyword(line, j);
+        }
+
+        return IsBatchRemKeyword(line, i);
+    }
+
+    private static bool IsBatchRemKeyword(string line, int start)
+    {
+        // A bare `rem` or `rem` followed by whitespace / end-of-line is a comment.
+        // Case-insensitive: `REM`, `rem`, `Rem`, `rEM`, etc. are all comments.
+        // 単独の `rem` または `rem` の直後が空白か行末ならコメント扱い。
+        // 大小文字不問 — `REM` / `rem` / `Rem` / `rEM` などすべてコメント。
+        if (start + 3 > line.Length)
+            return false;
+        if ((line[start] | 0x20) != 'r')
+            return false;
+        if ((line[start + 1] | 0x20) != 'e')
+            return false;
+        if ((line[start + 2] | 0x20) != 'm')
+            return false;
+        if (start + 3 == line.Length)
+            return true;
+        var next = line[start + 3];
+        return next == ' ' || next == '\t' || next == '\r' || next == '\n';
     }
 
     private static bool CanContinueScanningSameLineBraceBody(

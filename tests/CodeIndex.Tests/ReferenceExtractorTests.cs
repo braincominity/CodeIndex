@@ -5026,6 +5026,93 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "proc#1" && r.ReferenceKind == "call" && r.Line == 1);
         Assert.Contains(references, r => r.SymbolName == "proc#sqlserver" && r.ReferenceKind == "call" && r.Line == 2);
     }
+
+    [Fact]
+    public void Extract_SqlCallInsideProcedureBody_AttributesCallerToEnclosingProcedure()
+    {
+        // issue #429: CREATE / ALTER PROCEDURE | FUNCTION | TRIGGER symbols used to have null body ranges,
+        // so FindInnermostContainer could not attribute EXEC / CALL sites inside the body to the enclosing
+        // procedure. callers / callees / impact consequently returned zero for every SQL procedure even
+        // though graph_supported reported true. With BodyStyle.SqlProcBody, calls inside the proc body now
+        // surface with ContainerKind = "function" and ContainerName equal to the owning proc.
+        // issue #429: CREATE/ALTER PROCEDURE 等は本体範囲が null だったため本体内の EXEC/CALL を外側プロシージャに帰属できず、
+        // SQL プロシージャの callers/callees/impact が常に 0 件になっていた。BodyStyle.SqlProcBody により、
+        // 本体内の呼び出しが ContainerKind="function"/ContainerName=外側プロシージャ名で参照に載ることを固定する。
+        const string content = """
+            CREATE PROCEDURE dbo.sp_Outer
+            AS
+            BEGIN
+                EXEC dbo.sp_Inner;
+                EXEC sp_Inner;
+            END
+            GO
+
+            EXEC dbo.sp_Inner;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var innerCalls = references.Where(r => r.SymbolName == "sp_Inner" && r.ReferenceKind == "call").ToList();
+        Assert.Equal(3, innerCalls.Count);
+
+        // Calls inside the proc body (lines 4 and 5) must attribute to sp_Outer.
+        // プロシージャ本体内 (4 行目・5 行目) の呼び出しは sp_Outer に帰属する。
+        var bodyCalls = innerCalls.Where(r => r.Line == 4 || r.Line == 5).ToList();
+        Assert.Equal(2, bodyCalls.Count);
+        Assert.All(bodyCalls, r =>
+        {
+            Assert.Equal("function", r.ContainerKind);
+            // SymbolExtractor stores SQL proc names with their schema prefix (e.g. `dbo.sp_Outer`),
+            // so ContainerName surfaces the qualified name too.
+            // SymbolExtractor は SQL プロシージャ名をスキーマ修飾付き（例: `dbo.sp_Outer`）で保持するため、
+            // ContainerName にも修飾付きの名前が載る。
+            Assert.Equal("dbo.sp_Outer", r.ContainerName);
+        });
+
+        // The post-GO call (line 9) is outside any procedure body and must carry no container.
+        // GO 以降の呼び出し (9 行目) はどのプロシージャ本体にも属さず、コンテナは null でなければならない。
+        var topLevelCall = Assert.Single(innerCalls.Where(r => r.Line == 9));
+        Assert.Null(topLevelCall.ContainerKind);
+        Assert.Null(topLevelCall.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_SqlPostgresDollarQuotedBody_AttributesCallerToEnclosingFunction()
+    {
+        // PostgreSQL dollar-quoted function bodies also rely on FindSqlProcBodyRange to balance `$$ ... $$`
+        // so PERFORM / call-like statements inside attach to the enclosing function rather than leaking out.
+        // PostgreSQL の dollar-quoted 本体でも `$$ ... $$` を FindSqlProcBodyRange が閉じるため、本体内の
+        // PERFORM / 呼び出しが外側関数に帰属することを固定する。
+        const string content = """
+            CREATE OR REPLACE FUNCTION public.fn_outer() RETURNS void AS $$
+            BEGIN
+                PERFORM public.fn_inner();
+            END;
+            $$ LANGUAGE plpgsql;
+
+            SELECT public.fn_inner();
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var innerCalls = references.Where(r => r.SymbolName == "fn_inner" && r.ReferenceKind == "call").ToList();
+        Assert.Equal(2, innerCalls.Count);
+
+        var bodyCall = Assert.Single(innerCalls.Where(r => r.Line == 3));
+        Assert.Equal("function", bodyCall.ContainerKind);
+        // Postgres function names are captured with their schema (e.g. `public.fn_outer`),
+        // so ContainerName surfaces the qualified name too.
+        // Postgres の関数名はスキーマ付き（例: `public.fn_outer`）で取られるため、ContainerName にも
+        // 修飾付きの名前が載る。
+        Assert.Equal("public.fn_outer", bodyCall.ContainerName);
+
+        var outsideCall = Assert.Single(innerCalls.Where(r => r.Line == 7));
+        Assert.Null(outsideCall.ContainerKind);
+        Assert.Null(outsideCall.ContainerName);
+    }
+
     [Fact]
     public void Extract_CsharpAttribute_ClassifiedAsAttribute()
     {
