@@ -992,6 +992,146 @@ public class QueryCommandRunnerTests
         }
     }
 
+    // Regression lock for #184 follow-up: options that legitimately accept separated
+    // dash-prefixed literal values (`--db`, `--path`, `--exclude-path`) must preserve the
+    // pre-existing "requires a value" error WITH the inline-form hint when followed by a
+    // double-dash token. The recognized-option guard added for `--lang --limit 5` style
+    // cases must NOT short-circuit these dashed-literal options; instead their error must
+    // still guide the user to the `--db=<value>` disambiguation form. `--query` keeps
+    // accepting dashed literals as query text (no hint needed).
+    // #184 のフォローアップ回帰ロック: separated dashed literal を正当に受け入れる
+    // `--db` / `--path` / `--exclude-path` は、double-dash 値が続いた場合 "requires a value" と
+    // 同時に inline-form ヒントを返す既存契約を維持する。`--lang --limit 5` 系のために追加した
+    // recognized-option guard でこれらを早期に短絡させてはならず、ヒントで `--db=<value>` 形式を
+    // ユーザーに案内する。`--query` は引き続き dashed literal を query テキストとして受け入れる。
+    [Theory]
+    [InlineData("--db")]
+    [InlineData("--path")]
+    [InlineData("--exclude-path")]
+    public void QueryEntrypoints_DashedLiteralOptionsKeepHint_Issue184(string optionName)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_issue184_dashed_literal_{optionName.TrimStart('-')}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Issue184.cs",
+                "csharp",
+                "namespace Issue184; public class T { public void M() { } }");
+
+            string[] args = optionName == "--db"
+                ? ["Issue184", optionName, "--json"]
+                : ["Issue184", "--db", dbPath, optionName, "--json"];
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(args, _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains($"{optionName} requires a value", stderr);
+            Assert.Contains($"pass it as `{optionName}=<value>`", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    // Regression lock for #184 follow-up: `--query` accepts dashed literals including
+    // recognized flags (e.g. `--json`) as query text, because FTS-style queries can
+    // legitimately contain dash-prefixed tokens. The recognized-option guard must NOT
+    // short-circuit `--query`, and the downstream IsRejectedSeparatedStringValue check
+    // must also skip `--query` so the flag-shaped token flows through as a literal.
+    // #184 のフォローアップ回帰ロック: `--query` は `--json` のような既知フラグを含む dashed
+    // literal をクエリ本文として受け入れる（FTS 風クエリには dash 付きトークンが現れ得る）。
+    // recognized-option guard で `--query` を早期に短絡してはならず、後段の
+    // IsRejectedSeparatedStringValue も `--query` を素通りさせて flag 形状のトークンをリテラルと
+    // して扱う契約を維持する。
+    [Fact]
+    public void RunFind_QueryAcceptsDashedLiteralValue_Issue184()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue184_query_dashed_literal");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Issue184.cs",
+                "csharp",
+                "namespace Issue184; public class T { public void M() { } }");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["--query", "--json", "--path", "src/**", "--db", dbPath, "--json"], _jsonOptions));
+
+            // Accepting `--json` as query text is the success contract; the query may or may not
+            // match, but parsing must NOT fail with a "requires a value" error for --query.
+            // `--json` をクエリテキストとして受け入れるのが成功契約。ヒットの有無は問わないが、
+            // --query が "requires a value" で失敗してはならない。
+            Assert.NotEqual(CommandExitCodes.UsageError, exitCode);
+            Assert.DoesNotContain("--query requires a value", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    // Regression lock for #184 follow-up: `--focus-column` and `--max-line-width` are
+    // positive-integer options. Zero, negative, and non-numeric values must fail closed with
+    // UsageError and the "requires a positive integer" error message. Earlier tests only
+    // covered the missing-value case (which now short-circuits before TryParsePositiveInt),
+    // leaving the positive-integer contract uncovered for these two options specifically.
+    // #184 のフォローアップ回帰ロック: `--focus-column` と `--max-line-width` は正の整数オプション。
+    // 0・負数・非数値は UsageError と "requires a positive integer" メッセージで fail-close する。
+    // 以前のテストは値欠如（今は TryParsePositiveInt 前に短絡する）しかカバーしていなかったため、
+    // この 2 つのオプション固有の正の整数契約を明示的にロックする。
+    [Theory]
+    [InlineData("0")]
+    [InlineData("abc")]
+    public void RunExcerpt_RejectsInvalidFocusColumnValue(string invalidValue)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_excerpt_invalid_focus_column_{invalidValue}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "sample");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["README.md", "--db", dbPath, "--start", "1", "--focus-column", invalidValue, "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--focus-column requires a positive integer", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("abc")]
+    public void RunReferences_RejectsInvalidMaxLineWidthValue(string invalidValue)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_references_invalid_max_line_width_{invalidValue}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["target", "--db", dbPath, "--max-line-width", invalidValue, "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("--max-line-width requires a positive integer", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     // Regression lock for #196 follow-up: CLI `--max-line-width` above the shared ceiling
     // (LineWidthFormatter.MaxAllowedLineWidth = 4096) must fail closed with UsageError and
     // empty stdout, matching the MCP `maxLineWidth` contract. Previously the CLI silently

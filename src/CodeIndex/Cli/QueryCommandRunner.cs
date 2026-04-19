@@ -3528,14 +3528,20 @@ public static class QueryCommandRunner
         }
 
         var candidate = args[index + 1];
-        // Apply the recognized-option guard before the dash-prefix heuristic so `--lang --limit 5`
-        // stops at `--limit` instead of consuming a known CLI flag as the `--lang` value. `--query`
-        // intentionally accepts dashed literals (including recognized flags like `--json`) as query
-        // text — use `--query=<value>` to disambiguate, so the guard skips `--query`.
-        // dash-prefix ヒューリスティックより前に既知オプション判定を置き、`--lang --limit 5` のとき
-        // `--limit` を `--lang` の値として飲み込まず、値欠如として扱う。`--query` は意図的に dashed
-        // literal（`--json` 等の既知フラグを含む）を query テキストとして受け入れる設計のため対象外。
-        if (optionName != "--query" && IsRecognizedOptionToken(candidate))
+        // Apply the recognized-option guard only when the option does NOT legitimately accept
+        // separated dash-prefixed literal values. For flags like `--lang` / `--kind` / `--since`
+        // / `--name` (allowSeparatedDashPrefixedLiteralValue=false), `--lang --limit 5` must stop
+        // at `--limit` instead of consuming a known CLI flag as the `--lang` value. For flags like
+        // `--db` / `--path` / `--exclude-path` / `--query` (allowSeparatedDashPrefixedLiteralValue=true),
+        // skip this guard so the downstream `IsRejectedSeparatedStringValue` can emit the
+        // inline-form hint for double-dash literals, preserving the pre-existing contract.
+        // dash-prefix ヒューリスティックより前に既知オプション判定を置くが、この guard は
+        // `allowSeparatedDashPrefixedLiteralValue=false` の時だけ適用する。`--lang` / `--kind` /
+        // `--since` / `--name` は `--lang --limit 5` のとき `--limit` を値として飲み込まず値欠如
+        // として扱う。`--db` / `--path` / `--exclude-path` / `--query` は dashed literal を受け入れる
+        // 設計なので対象外とし、後段の `IsRejectedSeparatedStringValue` 側で double-dash に対する
+        // inline-form ヒントを返して既存契約を維持する。
+        if (!allowSeparatedDashPrefixedLiteralValue && IsRecognizedOptionToken(candidate))
         {
             value = null;
             error = $"Error: {optionName} requires a value.";
