@@ -6541,6 +6541,8 @@ public class SymbolExtractorTests
             "CREATE SEQUENCE hr.order_seq START WITH 1 INCREMENT BY 1;\n" +
             "CREATE PUBLIC SYNONYM customer_v FOR schema1.customers;\n" +
             "CREATE PUBLIC DATABASE LINK remote_db CONNECT TO app IDENTIFIED BY \"x\" USING 'REMOTE';\n" +
+            "CREATE SHARED PUBLIC DATABASE LINK remote_shared_pub_db CONNECT TO app IDENTIFIED BY \"x\" USING 'REMOTE';\n" +
+            "CREATE SHARED DATABASE LINK remote_shared_db CONNECT TO app IDENTIFIED BY \"x\" USING 'REMOTE';\n" +
             "CREATE DIRECTORY data_dir AS '/var/oracle/data';\n" +
             "CREATE CONTEXT app_ctx USING app_pkg;\n" +
             "CREATE PROFILE app_profile LIMIT SESSIONS_PER_USER 5;\n" +
@@ -6565,6 +6567,10 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "hr.order_seq");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "customer_v");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "remote_db" && s.Signature != null && s.Signature.Contains("DATABASE LINK", StringComparison.OrdinalIgnoreCase));
+        // Oracle allows `CREATE [SHARED] [PUBLIC] DATABASE LINK` — both modifiers may appear together.
+        // Oracle は `CREATE [SHARED] [PUBLIC] DATABASE LINK` で両修飾子の 2 語並びも取る。
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "remote_shared_pub_db" && s.Signature != null && s.Signature.Contains("SHARED PUBLIC DATABASE LINK", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "remote_shared_db" && s.Signature != null && s.Signature.Contains("SHARED DATABASE LINK", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "data_dir" && s.Signature != null && s.Signature.StartsWith("CREATE DIRECTORY", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "app_ctx" && s.Signature != null && s.Signature.StartsWith("CREATE CONTEXT", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "app_profile" && s.Signature != null && s.Signature.StartsWith("CREATE PROFILE", StringComparison.OrdinalIgnoreCase));

@@ -826,11 +826,11 @@ public static class SymbolExtractor
             new("import",   new Regex(@"^\s*CREATE\s+EXTENSION\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // T-SQL SYNONYM (also Oracle / DB2)
             new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:PUBLIC\s+)?SYNONYM\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            // Oracle: CREATE [SHARED|PUBLIC] DATABASE LINK <name> — must precede the bare CREATE DATABASE row
-            // so the `LINK` token is not taken as a name.
-            // Oracle: CREATE [SHARED|PUBLIC] DATABASE LINK <name> — 裸の CREATE DATABASE 行より前に置き、
-            // `LINK` を name として飲み込まないようにする。
-            new("class",    new Regex(@"^\s*CREATE\s+(?:(?:PUBLIC|SHARED)\s+)?DATABASE\s+LINK\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // Oracle: CREATE [SHARED] [PUBLIC] DATABASE LINK <name> — must precede the bare CREATE DATABASE row
+            // so the `LINK` token is not taken as a name. SHARED and PUBLIC may appear together in that order.
+            // Oracle: CREATE [SHARED] [PUBLIC] DATABASE LINK <name> — 裸の CREATE DATABASE 行より前に置き、
+            // `LINK` を name として飲み込まないようにする。SHARED と PUBLIC はこの順で 2 語並ぶことがある。
+            new("class",    new Regex(@"^\s*CREATE\s+(?:SHARED\s+)?(?:PUBLIC\s+)?DATABASE\s+LINK\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // T-SQL server-level / database-level principals and objects, plus Oracle-only DIRECTORY / CONTEXT / PROFILE.
             // T-SQL のサーバ/データベースレベルのプリンシパル・オブジェクトと、Oracle 固有の DIRECTORY / CONTEXT / PROFILE。
             new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:DATABASE|LOGIN|USER|ROLE|CERTIFICATE|DIRECTORY|CONTEXT|PROFILE)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
