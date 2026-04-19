@@ -3366,6 +3366,133 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsPartialIndexers()
+    {
+        // issue #350: `partial` is a valid indexer modifier as of C# 13's extended partial
+        // member support. Expression-body (`public partial int this[int i] => _arr[i];`),
+        // block-body (`public partial string this[string key] { get => key; }`), and
+        // partial-implementation (`public partial int this[long key] => 0;`) shapes must all
+        // be captured as `function` rows with C#'s metadata name `Item` and `visibility` /
+        // `returnType` populated, not dropped because `partial` is missing from the indexer
+        // regex modifier slot. The non-partial baseline indexer must continue to extract as
+        // before.
+        // issue #350: C# 13 の partial member 拡張で `partial` はインデクサ修飾子として有効。
+        // 式本体 (`public partial int this[int i] => _arr[i];`)、ブロック本体
+        // (`public partial string this[string key] { get => key; }`)、実装側 partial
+        // (`public partial int this[long key] => 0;`) のいずれも、C# メタデータ名 `Item` の
+        // `function` 行として `visibility` / `returnType` を保持したまま抽出される必要が
+        // ある。インデクサ regex の修飾子スロットに `partial` が無いことで silent drop されて
+        // はならない。非 partial なインデクサは従来どおり抽出される。
+        var content = """
+            namespace Demo;
+
+            public partial class Store
+            {
+                public partial int this[int i] { get; }
+
+                public partial string this[string key]
+                {
+                    get;
+                }
+
+                public int this[long key] => 0;
+            }
+
+            public partial class Store
+            {
+                private int[] _arr = new int[0];
+                private System.Collections.Generic.Dictionary<string, string> _map = new();
+
+                public partial int this[int i] => _arr[i];
+
+                public partial string this[string key]
+                {
+                    get => _map[key];
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var indexerItems = symbols.Where(s => s.Kind == "function" && s.Name == "Item").ToList();
+        Assert.Equal(5, indexerItems.Count);
+
+        // Two partial indexer declarations with `int` return type (declaration + implementation).
+        // `int` 戻り値型の partial インデクサ宣言は 2 件 (宣言 + 実装) 検出される。
+        var partialIntIndexers = indexerItems.Where(s => s.ReturnType == "int" && s.Signature != null && s.Signature.Contains("this[int i]")).ToList();
+        Assert.Equal(2, partialIntIndexers.Count);
+        Assert.All(partialIntIndexers, s => Assert.Equal("public", s.Visibility));
+        Assert.All(partialIntIndexers, s => Assert.Contains("partial", s.Signature));
+
+        // Two partial indexer declarations with `string` return type (declaration + implementation).
+        // `string` 戻り値型の partial インデクサ宣言も 2 件 (宣言 + 実装) 検出される。
+        var partialStringIndexers = indexerItems.Where(s => s.ReturnType == "string").ToList();
+        Assert.Equal(2, partialStringIndexers.Count);
+        Assert.All(partialStringIndexers, s => Assert.Equal("public", s.Visibility));
+        Assert.All(partialStringIndexers, s => Assert.Contains("partial", s.Signature));
+
+        // Non-partial baseline indexer (int this[long key]).
+        // 非 partial ベースラインインデクサ (int this[long key])。
+        var baselineIntLong = Assert.Single(indexerItems.Where(s => s.Signature != null && s.Signature.Contains("this[long key]")));
+        Assert.Equal("public", baselineIntLong.Visibility);
+        Assert.Equal("int", baselineIntLong.ReturnType);
+        Assert.DoesNotContain("partial", baselineIntLong.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsPartialEvents()
+    {
+        // issue #350: `partial` is a valid event modifier as of C# 14's partial event support.
+        // Field-like partial events (`public partial event Action E;`) and accessor-based
+        // partial events (`public partial event Action<int> OnLog { add { ... } remove { ... } }`)
+        // must be captured as `event` rows with `visibility` / `returnType` populated, not
+        // dropped because `partial` is missing from the event-regex modifier slot. Non-partial
+        // events must continue to extract as before.
+        // issue #350: C# 14 の partial event サポートで `partial` は event 修飾子として有効。
+        // field-like partial event (`public partial event Action E;`) と accessor ベースの
+        // partial event (`public partial event Action<int> OnLog { add { ... } remove { ... } }`)
+        // のいずれも、`event` 行として `visibility` / `returnType` を保持したまま抽出される必要が
+        // ある。event regex の修飾子スロットに `partial` が無いことで silent drop されては
+        // ならない。非 partial event は従来どおり抽出される。
+        var content = """
+            namespace Demo;
+
+            public partial class Emitter
+            {
+                public partial event System.Action Click;
+                public partial event System.Action<string> OnLog;
+                public event System.Action Plain;
+            }
+
+            public partial class Emitter
+            {
+                public partial event System.Action Click { add { } remove { } }
+                public partial event System.Action<string> OnLog { add { } remove { } }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        // Two partial event declarations with name `Click` (declaration + accessor-body implementation).
+        // 名前 `Click` の partial event 宣言が 2 件 (宣言 + アクセサ本体実装) 検出される。
+        var clickEvents = symbols.Where(s => s.Kind == "event" && s.Name == "Click").ToList();
+        Assert.Equal(2, clickEvents.Count);
+        Assert.All(clickEvents, s => Assert.Equal("public", s.Visibility));
+        Assert.All(clickEvents, s => Assert.Contains("partial", s.Signature ?? string.Empty));
+
+        // Two partial event declarations with name `OnLog` (generic Action<string>).
+        // 名前 `OnLog` の partial event 宣言 (ジェネリック Action<string>) も 2 件検出される。
+        var onLogEvents = symbols.Where(s => s.Kind == "event" && s.Name == "OnLog").ToList();
+        Assert.Equal(2, onLogEvents.Count);
+        Assert.All(onLogEvents, s => Assert.Equal("public", s.Visibility));
+        Assert.All(onLogEvents, s => Assert.Contains("partial", s.Signature ?? string.Empty));
+
+        // Non-partial baseline event (`public event System.Action Plain;`) still extracts.
+        // 非 partial ベースライン event (`public event System.Action Plain;`) は従来どおり抽出。
+        var plain = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "Plain"));
+        Assert.Equal("public", plain.Visibility);
+        Assert.DoesNotContain("partial", plain.Signature ?? string.Empty);
+    }
+
+    [Fact]
     public void Extract_CSharp_MultilinePropertyHeader_DoesNotCreatePhantomFunctionAndKeepsSignature()
     {
         var content = """
