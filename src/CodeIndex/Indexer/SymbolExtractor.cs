@@ -7026,14 +7026,18 @@ public static class SymbolExtractor
         @"^\s*GO\s*(?:;[\s;]*)?(?:--.*)?$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // Only close a SQL proc body when the next top-level statement looks like another proc-like
-    // header (`CREATE|ALTER|DROP PROCEDURE|PROC|FUNCTION|TRIGGER`, optionally with `OR REPLACE`).
-    // Body-internal `CREATE TABLE` / `ALTER TABLE` / `GRANT` / `USE` etc. must not prematurely
-    // close the enclosing procedure body. See issue #429.
+    // header (`CREATE|ALTER|DROP PROCEDURE|PROC|FUNCTION|TRIGGER`, optionally with `OR REPLACE` for
+    // PostgreSQL or `OR ALTER` for T-SQL / SQL Server 2016+). Body-internal `CREATE TABLE` /
+    // `ALTER TABLE` / `GRANT` / `USE` etc. must not prematurely close the enclosing procedure body.
+    // The `OR REPLACE` / `OR ALTER` alternation must match the CREATE-side symbol regex above so a
+    // `CREATE OR ALTER PROCEDURE` sibling actually terminates the previous body range. See issue #429.
     // 次のトップレベル文が別の proc 系ヘッダ（`CREATE|ALTER|DROP` + `PROCEDURE|PROC|FUNCTION|TRIGGER`、
-    // `OR REPLACE` 付きも許容）だった場合のみ、SQL の proc 本体を閉じる。本体内の `CREATE TABLE` /
-    // `ALTER TABLE` / `GRANT` / `USE` などで先走って閉じないこと。issue #429 参照。
+    // PostgreSQL の `OR REPLACE` / T-SQL・SQL Server 2016+ の `OR ALTER` 付きも許容）だった場合のみ
+    // SQL の proc 本体を閉じる。本体内の `CREATE TABLE` / `ALTER TABLE` / `GRANT` / `USE` などで
+    // 先走って閉じないこと。`OR REPLACE` / `OR ALTER` の分岐は上の CREATE 側シンボル正規表現と揃え、
+    // `CREATE OR ALTER PROCEDURE` の隣接宣言でも前の body 範囲を確実に終端させる。issue #429 参照。
     private static readonly Regex SqlTopLevelDdlStartRegex = new(
-        @"^\s*(?:CREATE|ALTER|DROP)\s+(?:OR\s+REPLACE\s+)?(?:PROCEDURE|PROC|FUNCTION|TRIGGER)\b",
+        @"^\s*(?:CREATE|ALTER|DROP)\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:PROCEDURE|PROC|FUNCTION|TRIGGER)\b",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // Dollar-quoted body tags: `$$` or `$tagname$` (PostgreSQL). Tag must be empty or an identifier.
     // Dollar-quoted の本体タグ: `$$` または `$タグ名$`（PostgreSQL）。タグは空か識別子のみ。
@@ -7062,7 +7066,7 @@ public static class SymbolExtractor
         int bodyStartLine = startIndex + 1;
         int endLine = startIndex + 1;
         string? openDollarTag = null;
-        bool inBlockComment = false;
+        int blockCommentDepth = 0;
 
         for (int i = startIndex; i < lines.Length; i++)
         {
@@ -7082,7 +7086,7 @@ public static class SymbolExtractor
                 continue;
             }
 
-            var masked = MaskSqlLineForBodyScan(raw, ref inBlockComment);
+            var masked = MaskSqlLineForBodyScan(raw, ref blockCommentDepth);
 
             // Detect any unpaired dollar-quote opening on this line. Paired openings on the same
             // line (e.g. `AS $$ SELECT 1 $$`) are consumed without opening cross-line state.
@@ -7146,21 +7150,27 @@ public static class SymbolExtractor
     }
 
     /// <summary>
-    /// Strip SQL line comments (`--`), block comments (`/* ... */`, including multi-line), and
-    /// string literals (`'...'` / `"..."`) from a single line so body-terminator checks do not trip
-    /// on text inside comments or strings. Bracket identifiers (`[name]`) and backtick identifiers
-    /// (`` `name` ``) are left untouched since they never contain SQL tokens.
-    /// `inBlockComment` is threaded across lines by the caller so a `/* ... */` block opened on one
-    /// line continues to mask terminators like bare `GO` / `CREATE` appearing on subsequent lines
-    /// until the closing `*/` is reached. See issue #429 follow-up.
-    /// SQL の行コメント（`--`）、ブロックコメント（`/* ... */`、複数行にまたがるものを含む）、
-    /// および文字列リテラル（`'...'` / `"..."`）を除去して、コメントや文字列中の語で本体終端が
-    /// 誤検出されないようにする。角括弧識別子 `[name]` とバッククォート識別子 `` `name` `` はそのまま
-    /// 残す（SQL トークンを含まないため）。`inBlockComment` は呼び出し側で行間に持ち越し、ある行で
-    /// 開いた `/* ... */` ブロックが後続行にまたがって閉じるまで、`GO` / `CREATE` のような終端語を
-    /// マスクし続ける。issue #429 追補参照。
+    /// Strip SQL line comments (`--`), block comments (`/* ... */`, including multi-line and
+    /// PostgreSQL-style nested `/* /* ... */ ... */`), and string literals (`'...'` / `"..."`)
+    /// from a single line so body-terminator checks do not trip on text inside comments or
+    /// strings. Bracket identifiers (`[name]`) and backtick identifiers (`` `name` ``) are left
+    /// untouched since they never contain SQL tokens.
+    /// `blockCommentDepth` is threaded across lines by the caller so a `/* ... */` block opened on
+    /// one line continues to mask terminators like bare `GO` / `CREATE` appearing on subsequent
+    /// lines until all open `/*` are balanced. PostgreSQL allows nested block comments; T-SQL /
+    /// MySQL / Oracle do not, but using depth here is strictly safer for the dialects that do not
+    /// (every outer `*/` still closes when depth returns to 0). See issue #429 follow-up.
+    /// SQL の行コメント（`--`）、ブロックコメント（`/* ... */`、複数行にまたがるものと PostgreSQL 風の
+    /// ネスト `/* /* ... */ ... */` を含む）、および文字列リテラル（`'...'` / `"..."`）を除去して、
+    /// コメントや文字列中の語で本体終端が誤検出されないようにする。角括弧識別子 `[name]` と
+    /// バッククォート識別子 `` `name` `` はそのまま残す（SQL トークンを含まないため）。
+    /// `blockCommentDepth` は呼び出し側で行間に持ち越し、ある行で開いた `/* ... */` がすべての `/*`
+    /// と均衡するまで、後続行の `GO` / `CREATE` のような終端語をマスクし続ける。PostgreSQL は
+    /// ブロックコメントのネストを許容する一方、T-SQL / MySQL / Oracle は許容しないが、ここで depth を
+    /// 使っても後者では単に外側の `*/` で depth が 0 に戻って閉じるだけなので、厳密に safer。
+    /// issue #429 追補参照。
     /// </summary>
-    private static string MaskSqlLineForBodyScan(string line, ref bool inBlockComment)
+    private static string MaskSqlLineForBodyScan(string line, ref int blockCommentDepth)
     {
         if (string.IsNullOrEmpty(line))
             return line;
@@ -7168,66 +7178,85 @@ public static class SymbolExtractor
         var sb = new StringBuilder(line.Length);
         bool inSingle = false;
         bool inDouble = false;
+        int i = 0;
 
-        int startIndex = 0;
-        if (inBlockComment)
+        while (i < line.Length)
         {
-            // Line starts inside a multi-line block comment opened by a previous line.
-            // Find its close (`*/`) or blank out the whole line if the comment continues.
-            // 前行で開かれた複数行ブロックコメントの途中から始まる行。`*/` を探すか、閉じが無ければ
-            // この行全体を空白化する。
-            int end = line.IndexOf("*/", 0, StringComparison.Ordinal);
-            if (end < 0)
+            if (blockCommentDepth > 0)
             {
-                for (int k = 0; k < line.Length; k++)
-                    sb.Append(' ');
-                return sb.ToString();
-            }
-            for (int k = 0; k <= end + 1; k++)
-                sb.Append(' ');
-            inBlockComment = false;
-            startIndex = end + 2;
-        }
+                // Inside a (possibly nested) block comment. Look for the next `/*` (increases depth)
+                // or `*/` (decreases depth), whichever comes first. Blank every column until we
+                // either close back to depth 0 or hit end of line.
+                // ブロックコメント内（ネスト可）。次に来る `/*`（深さ増）か `*/`（深さ減）のうち早い方を探し、
+                // depth が 0 に戻るか行末に到達するまで各列を空白化する。
+                int open = line.IndexOf("/*", i, StringComparison.Ordinal);
+                int close = line.IndexOf("*/", i, StringComparison.Ordinal);
 
-        for (int i = startIndex; i < line.Length; i++)
-        {
+                if (close < 0 && open < 0)
+                {
+                    for (int k = i; k < line.Length; k++)
+                        sb.Append(' ');
+                    return sb.ToString();
+                }
+
+                if (close >= 0 && (open < 0 || close < open))
+                {
+                    for (int k = i; k <= close + 1; k++)
+                        sb.Append(' ');
+                    blockCommentDepth--;
+                    i = close + 2;
+                    continue;
+                }
+
+                // `/*` comes first (or is tied — but `close < open` already handles the tie in favor
+                // of `*/`, so here we know `open <= close` strictly and `/*` is the next token).
+                // `/*` が先に現れる（`close < open` の場合は close 優先で既に分岐済みなので、ここでは
+                // `open <= close` かつ `/*` が次のトークン）。
+                for (int k = i; k <= open + 1; k++)
+                    sb.Append(' ');
+                blockCommentDepth++;
+                i = open + 2;
+                continue;
+            }
+
             char c = line[i];
 
             if (!inSingle && !inDouble)
             {
                 if (c == '-' && i + 1 < line.Length && line[i + 1] == '-')
-                    break;
+                {
+                    for (int k = i; k < line.Length; k++)
+                        sb.Append(' ');
+                    return sb.ToString();
+                }
                 if (c == '/' && i + 1 < line.Length && line[i + 1] == '*')
                 {
-                    int end = line.IndexOf("*/", i + 2, StringComparison.Ordinal);
-                    if (end < 0)
-                    {
-                        // Unterminated block comment on this line — carry the state into the next
-                        // line so its contents remain masked for body-terminator checks.
-                        // この行で閉じない場合は次行へ状態を持ち越し、終端判定用にマスクを継続する。
-                        for (int k = i; k < line.Length; k++)
-                            sb.Append(' ');
-                        inBlockComment = true;
-                        return sb.ToString();
-                    }
-                    for (int k = i; k <= end + 1; k++)
-                        sb.Append(' ');
-                    i = end + 1;
+                    // Open a block comment; let the `blockCommentDepth > 0` branch close it on this
+                    // or a later line.
+                    // ブロックコメントを開始する。閉じ処理は `blockCommentDepth > 0` 分岐で同じ行か
+                    // 後続行のどちらかが担当する。
+                    sb.Append(' ');
+                    sb.Append(' ');
+                    blockCommentDepth = 1;
+                    i += 2;
                     continue;
                 }
                 if (c == '\'')
                 {
                     inSingle = true;
                     sb.Append(' ');
+                    i++;
                     continue;
                 }
                 if (c == '"')
                 {
                     inDouble = true;
                     sb.Append(' ');
+                    i++;
                     continue;
                 }
                 sb.Append(c);
+                i++;
             }
             else if (inSingle)
             {
@@ -7235,16 +7264,18 @@ public static class SymbolExtractor
                 {
                     sb.Append(' ');
                     sb.Append(' ');
-                    i++;
+                    i += 2;
                     continue;
                 }
                 if (c == '\'')
                 {
                     inSingle = false;
                     sb.Append(' ');
+                    i++;
                     continue;
                 }
                 sb.Append(' ');
+                i++;
             }
             else
             {
@@ -7252,16 +7283,18 @@ public static class SymbolExtractor
                 {
                     sb.Append(' ');
                     sb.Append(' ');
-                    i++;
+                    i += 2;
                     continue;
                 }
                 if (c == '"')
                 {
                     inDouble = false;
                     sb.Append(' ');
+                    i++;
                     continue;
                 }
                 sb.Append(' ');
+                i++;
             }
         }
 

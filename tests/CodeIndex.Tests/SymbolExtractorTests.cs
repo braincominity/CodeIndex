@@ -6613,6 +6613,85 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_ProcedureBodyRange_CreateOrAlterClosesPriorBody()
+    {
+        // Regression for codex review iteration 2 finding #1: SqlTopLevelDdlStartRegex must accept
+        // both PostgreSQL `CREATE OR REPLACE PROCEDURE` and T-SQL `CREATE OR ALTER PROCEDURE`
+        // (SQL Server 2016+) so a sibling `CREATE OR ALTER PROCEDURE` declaration without an
+        // intervening `GO` actually terminates the previous procedure's body range.
+        // codex レビュー iteration 2 指摘 #1 の回帰テスト: SqlTopLevelDdlStartRegex は PostgreSQL の
+        // `CREATE OR REPLACE PROCEDURE` と T-SQL（SQL Server 2016+）の `CREATE OR ALTER PROCEDURE`
+        // の両方を受理し、`GO` 区切りなしの隣接 `CREATE OR ALTER PROCEDURE` 宣言で前 proc の
+        // body 範囲を確実に閉じなければならない。
+        var content =
+            "CREATE OR ALTER PROCEDURE dbo.sp_First AS\n" + // line 1
+            "BEGIN\n" +                                     // line 2
+            "  EXEC dbo.sp_Inner;\n" +                      // line 3 — must be inside sp_First body
+            "END\n" +                                       // line 4
+            "CREATE OR ALTER PROCEDURE dbo.sp_Second AS\n" +// line 5 — sibling must close sp_First
+            "BEGIN\n" +                                     // line 6
+            "  EXEC dbo.sp_Other;\n" +                      // line 7 — must be inside sp_Second body
+            "END\n";                                        // line 8
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        var first = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "dbo.sp_First");
+        Assert.NotNull(first.BodyStartLine);
+        Assert.NotNull(first.BodyEndLine);
+        Assert.True(first.BodyEndLine!.Value >= 3,
+            $"BodyEndLine={first.BodyEndLine} must cover sp_First's EXEC on line 3.");
+        Assert.True(first.BodyEndLine!.Value < 5,
+            $"BodyEndLine={first.BodyEndLine} must close before sp_Second begins on line 5; CREATE OR ALTER PROCEDURE sibling must terminate the prior body.");
+
+        var second = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "dbo.sp_Second");
+        Assert.NotNull(second.BodyStartLine);
+        Assert.NotNull(second.BodyEndLine);
+        Assert.True(second.BodyStartLine!.Value >= 5,
+            $"BodyStartLine={second.BodyStartLine} for sp_Second must start at or after line 5.");
+        Assert.True(second.BodyEndLine!.Value >= 7,
+            $"BodyEndLine={second.BodyEndLine} must cover sp_Second's EXEC on line 7.");
+    }
+
+    [Fact]
+    public void Extract_SQL_ProcedureBodyRange_NestedBlockCommentDoesNotCloseBody()
+    {
+        // Regression for codex review iteration 2 finding #2: MaskSqlLineForBodyScan must track
+        // block-comment depth instead of a plain bool so PostgreSQL-style nested
+        // `/* /* ... */ ... */` block comments do not exit on the inner `*/` and re-expose comment-
+        // interior `GO` / `CREATE PROCEDURE` tokens that would prematurely close the body.
+        // codex レビュー iteration 2 指摘 #2 の回帰テスト: MaskSqlLineForBodyScan は plain bool ではなく
+        // ブロックコメント depth を追う必要があり、PostgreSQL 風のネスト `/* /* ... */ ... */` を
+        // 内側の `*/` で誤って抜けてはならない。抜けるとコメント内部の `GO` / `CREATE PROCEDURE` が
+        // 露出し、本体を早期に閉じてしまう。
+        var content =
+            "CREATE PROCEDURE dbo.sp_NestedComment AS\n" +    // line 1
+            "BEGIN\n" +                                         // line 2
+            "  /*\n" +                                          // line 3 — outer block opens
+            "   /*\n" +                                         // line 4 — inner block opens
+            "     GO\n" +                                       // line 5 — bare GO in nested comment
+            "     CREATE PROCEDURE dbo.sp_FakeNested AS SELECT 0;\n" + // line 6 — fake header
+            "   */\n" +                                         // line 7 — inner closes; outer still open
+            "   GO\n" +                                         // line 8 — still inside outer comment
+            "   CREATE PROCEDURE dbo.sp_FakeOuter AS SELECT 0;\n" + // line 9 — still inside outer
+            "  */\n" +                                          // line 10 — outer closes
+            "  EXEC dbo.sp_RealCall;\n" +                       // line 11 — real EXEC must be inside body
+            "END\n" +                                           // line 12
+            "GO\n" +                                            // line 13 — real terminator
+            "CREATE PROCEDURE dbo.sp_AfterNested AS BEGIN SELECT 1; END\n" + // line 14
+            "GO\n";                                             // line 15
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        var nested = Assert.Single(symbols, s => s.Kind == "function" && s.Name == "dbo.sp_NestedComment");
+        Assert.NotNull(nested.BodyStartLine);
+        Assert.NotNull(nested.BodyEndLine);
+        Assert.True(nested.BodyEndLine!.Value >= 11,
+            $"BodyEndLine={nested.BodyEndLine} must cover the real EXEC on line 11; nested block comment must not close the body via the inner `*/`.");
+        Assert.True(nested.BodyEndLine!.Value < 14,
+            $"BodyEndLine={nested.BodyEndLine} must not leak into sp_AfterNested starting on line 14.");
+    }
+
+    [Fact]
     public void Extract_Terraform_DetectsResources()
     {
         var content = "resource \"aws_s3_bucket\" \"my_bucket\" {\n  bucket = \"my-bucket\"\n}\n\nvariable \"region\" {\n  default = \"us-east-1\"\n}\n\noutput \"bucket_arn\" {\n  value = aws_s3_bucket.my_bucket.arn\n}\n\nmodule \"vpc\" {\n  source = \"./modules/vpc\"\n}";
