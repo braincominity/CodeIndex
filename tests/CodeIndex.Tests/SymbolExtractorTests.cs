@@ -4015,6 +4015,79 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_PropertyWithFirstAccessorVisibility_IsDetected()
+    {
+        // issue #332: `public int X { internal get; set; }` と、`{ private get; public set; }` /
+        // `{ protected internal get; set; }` / `{ private protected get; set; }` のように
+        // 先頭の accessor に独自の可視性修飾子が付く形も property として抽出されること。
+        // accessor の属性プレフィックス (`[Obsolete]` / `[field: NonSerialized]`)、
+        // accessor 本体付き (`internal get { ... } set { ... }`)、単独の accessor
+        // (`{ private init; }`) も同じパスで拾えることを併せて固定する。
+        // issue #332: properties whose FIRST accessor carries its own visibility
+        // modifier (`{ internal get; set; }`, `{ private get; public set; }`,
+        // `{ protected internal get; set; }`, `{ private protected get; set; }`)
+        // must still be captured as properties. Also pins attribute-prefixed
+        // accessors (`[Obsolete]` / `[field: NonSerialized]`), body-bearing
+        // accessors (`internal get { ... } set { ... }`), and a standalone
+        // accessor with visibility (`{ private init; }`).
+        var content = """
+            using System;
+            namespace AccessorVis;
+
+            public class Svc
+            {
+                public int PubPrivSet { get; private set; }
+                public string Name { get; private init; } = "";
+                public int Count { get; protected set; }
+                public int Internal { internal get; set; }
+                public int PrivGetPubSet { private get; public set; }
+                public int ProtIntGet { protected internal get; set; }
+                public int PrivProtGet { private protected get; set; }
+                public int AttrFirstAccessor { [Obsolete] internal get; set; }
+                public int FieldAttrFirstAccessor { [field: NonSerialized] private get; set; }
+                public int BodyBearing { internal get { return 0; } set { _ = value; } }
+                public int PrivInitOnly { private init; }
+                public int Prop => 0;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var expected = new[]
+        {
+            "PubPrivSet",
+            "Name",
+            "Count",
+            "Internal",
+            "PrivGetPubSet",
+            "ProtIntGet",
+            "PrivProtGet",
+            "AttrFirstAccessor",
+            "FieldAttrFirstAccessor",
+            "BodyBearing",
+            "PrivInitOnly",
+            "Prop",
+        };
+        foreach (var name in expected)
+            Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == name));
+
+        // The first-accessor-visibility rows must not leak as phantom functions either.
+        // 先頭 accessor 可視性付きの行が phantom function としても重複抽出されないこと。
+        var phantomCandidates = new[]
+        {
+            "Internal",
+            "PrivGetPubSet",
+            "ProtIntGet",
+            "PrivProtGet",
+            "AttrFirstAccessor",
+            "FieldAttrFirstAccessor",
+            "BodyBearing",
+            "PrivInitOnly",
+        };
+        Assert.DoesNotContain(symbols, s => s.Kind == "function"
+            && Array.IndexOf(phantomCandidates, s.Name) >= 0);
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsInlineAttributedProperty()
     {
         var content = """
