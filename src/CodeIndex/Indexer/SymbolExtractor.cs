@@ -851,15 +851,16 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*ALTER\s+(?:PROCEDURE|PROC|FUNCTION|TRIGGER|PARTITION\s+FUNCTION)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             new("namespace", new Regex(@"^\s*ALTER\s+SCHEMA\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             new("import",   new Regex(@"^\s*ALTER\s+EXTENSION\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            // Oracle: ALTER TYPE BODY / PACKAGE BODY / PACKAGE / DATABASE LINK — must precede the bare
-            // ALTER row so the trailing keyword is not absorbed as the name.
-            // Oracle: ALTER TYPE BODY / PACKAGE BODY / PACKAGE / DATABASE LINK — 裸の ALTER 行より
-            // 前に置き、末尾キーワードを name として飲み込まないようにする。
-            new("class",    new Regex(@"^\s*ALTER\s+TYPE\s+BODY\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*ALTER\s+PACKAGE\s+BODY\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*ALTER\s+PACKAGE\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // Oracle: ALTER DATABASE LINK <name> — must precede the bare ALTER DATABASE row so `LINK`
+            // is not absorbed as the object name. Real Oracle body compilation is expressed as
+            // `ALTER PACKAGE <name> COMPILE BODY` / `ALTER TYPE <name> COMPILE BODY` and falls through
+            // to the generic ALTER row below; there is no `ALTER PACKAGE BODY <name>` syntax in Oracle.
+            // Oracle: ALTER DATABASE LINK <name> — 裸の ALTER DATABASE 行より前に置き `LINK` を name
+            // として飲み込まないようにする。Oracle の body コンパイルは実際には
+            // `ALTER PACKAGE <name> COMPILE BODY` / `ALTER TYPE <name> COMPILE BODY` の形で、下の
+            // generic ALTER 行で拾う。`ALTER PACKAGE BODY <name>` のような構文は Oracle に存在しない。
             new("class",    new Regex(@"^\s*ALTER\s+DATABASE\s+LINK\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*ALTER\s+(?:TABLE|(?:MATERIALIZED\s+)?VIEW|SEQUENCE|SYNONYM|LOGIN|USER|ROLE|DATABASE|CERTIFICATE|INDEX|TYPE|DOMAIN|DIRECTORY|PROFILE|PARTITION\s+SCHEME|FULLTEXT\s+CATALOG)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex(@"^\s*ALTER\s+(?:TABLE|(?:MATERIALIZED\s+)?VIEW|SEQUENCE|SYNONYM|LOGIN|USER|ROLE|DATABASE|CERTIFICATE|INDEX|PACKAGE|TYPE|DOMAIN|DIRECTORY|PROFILE|PARTITION\s+SCHEME|FULLTEXT\s+CATALOG)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
         ],
         ["terraform"] =
         [

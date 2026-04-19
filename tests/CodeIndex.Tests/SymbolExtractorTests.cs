@@ -6548,8 +6548,8 @@ public class SymbolExtractorTests
             "CREATE PROFILE app_profile LIMIT SESSIONS_PER_USER 5;\n" +
             "CREATE TABLE SYS$ITEMS#1 (id NUMBER);\n" +
             "ALTER PACKAGE orders_pkg COMPILE;\n" +
-            "ALTER PACKAGE BODY orders_pkg COMPILE;\n" +
-            "ALTER TYPE BODY address_t COMPILE;\n" +
+            "ALTER PACKAGE orders_pkg COMPILE BODY;\n" +
+            "ALTER TYPE address_t COMPILE BODY;\n" +
             "ALTER DATABASE LINK remote_db;\n" +
             "ALTER DIRECTORY data_dir AS '/var/oracle/data2';\n" +
             "ALTER PROFILE app_profile LIMIT SESSIONS_PER_USER 10;\n";
@@ -6589,11 +6589,13 @@ public class SymbolExtractorTests
         // `LINK` が generic な CREATE DATABASE 行に食われないこと
         Assert.DoesNotContain(symbols, s => s.Name == "LINK");
 
-        // ALTER counterparts
-        // ALTER 側
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "orders_pkg" && s.Signature != null && s.Signature.StartsWith("ALTER PACKAGE BODY", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "orders_pkg" && s.Signature != null && s.Signature.StartsWith("ALTER PACKAGE ", StringComparison.OrdinalIgnoreCase) && !s.Signature.StartsWith("ALTER PACKAGE BODY", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "address_t" && s.Signature != null && s.Signature.StartsWith("ALTER TYPE BODY", StringComparison.OrdinalIgnoreCase));
+        // ALTER counterparts — Oracle body compilation uses `ALTER PACKAGE <name> COMPILE BODY` /
+        // `ALTER TYPE <name> COMPILE BODY`, not a `BODY <name>` keyword position.
+        // ALTER 側 — Oracle の body コンパイルは `ALTER PACKAGE <name> COMPILE BODY` /
+        // `ALTER TYPE <name> COMPILE BODY` であり、`BODY <name>` という位置取りではない。
+        Assert.Equal(2, symbols.Count(s => s.Kind == "class" && s.Name == "orders_pkg" && s.Signature != null && s.Signature.StartsWith("ALTER PACKAGE ", StringComparison.OrdinalIgnoreCase)));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "orders_pkg" && s.Signature != null && s.Signature.Contains("COMPILE BODY", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "address_t" && s.Signature != null && s.Signature.StartsWith("ALTER TYPE ", StringComparison.OrdinalIgnoreCase) && s.Signature.Contains("COMPILE BODY", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "remote_db" && s.Signature != null && s.Signature.StartsWith("ALTER DATABASE LINK", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "data_dir" && s.Signature != null && s.Signature.StartsWith("ALTER DIRECTORY", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "app_profile" && s.Signature != null && s.Signature.StartsWith("ALTER PROFILE", StringComparison.OrdinalIgnoreCase));
