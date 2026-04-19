@@ -527,7 +527,8 @@
         "globalcdn.nuget.org",
         "github.com",
         "api.github.com",
-        "uploads.github.com"
+        "uploads.github.com",
+        "api.openai.com"
       ],
       "allowLocalBinding": false,
       "allowAllUnixSockets": false

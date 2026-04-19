@@ -392,7 +392,7 @@ Supported symbol kinds by language (33 languages with symbol extraction):
 | Scala | def | class, object | -- | trait | enum | -- | -- | import | yes |
 | Elixir | def, defp | defmodule | -- | defprotocol | -- | -- | -- | import, alias, use, require | yes |
 | Shell | function declarations | -- | -- | -- | -- | -- | -- | -- | -- |
-| SQL | PROCEDURE/PROC, FUNCTION, TRIGGER, PARTITION FUNCTION | TABLE, VIEW, INDEX, TYPE, SEQUENCE, DOMAIN, SYNONYM, DATABASE, LOGIN, USER, ROLE, CERTIFICATE, PARTITION SCHEME, FULLTEXT CATALOG | -- | -- | enum (`CREATE TYPE ... AS ENUM`) | -- | -- | EXTENSION | yes |
+| SQL | PROCEDURE/PROC, FUNCTION, TRIGGER, PARTITION FUNCTION | TABLE, VIEW, INDEX, TYPE, TYPE BODY, PACKAGE, PACKAGE BODY, SEQUENCE, DOMAIN, SYNONYM, DATABASE, DATABASE LINK, LOGIN, USER, ROLE, CERTIFICATE, DIRECTORY, CONTEXT, PROFILE, PARTITION SCHEME, FULLTEXT CATALOG | -- | -- | enum (`CREATE TYPE ... AS ENUM`) | -- | -- | EXTENSION | yes |
 | Terraform | variable, output, locals | resource, data, module | -- | -- | -- | -- | -- | -- | -- |
 | Protobuf | rpc | message, service | -- | -- | enum | -- | -- | import | -- |
 | GraphQL | query, mutation, subscription | type, union, scalar, input | -- | interface | enum | -- | -- | -- | -- |
@@ -1455,7 +1455,7 @@ LIMIT 20;
 | Scala | def | class, object | -- | trait | enum | -- | -- | import | yes |
 | Elixir | def, defp | defmodule | -- | defprotocol | -- | -- | -- | import, alias, use, require | yes |
 | Shell | 関数宣言 | -- | -- | -- | -- | -- | -- | -- | -- |
-| SQL | PROCEDURE/PROC, FUNCTION, TRIGGER, PARTITION FUNCTION | TABLE, VIEW, INDEX, TYPE, SEQUENCE, DOMAIN, SYNONYM, DATABASE, LOGIN, USER, ROLE, CERTIFICATE, PARTITION SCHEME, FULLTEXT CATALOG | -- | -- | enum (`CREATE TYPE ... AS ENUM`) | -- | -- | EXTENSION | yes |
+| SQL | PROCEDURE/PROC, FUNCTION, TRIGGER, PARTITION FUNCTION | TABLE, VIEW, INDEX, TYPE, TYPE BODY, PACKAGE, PACKAGE BODY, SEQUENCE, DOMAIN, SYNONYM, DATABASE, DATABASE LINK, LOGIN, USER, ROLE, CERTIFICATE, DIRECTORY, CONTEXT, PROFILE, PARTITION SCHEME, FULLTEXT CATALOG | -- | -- | enum (`CREATE TYPE ... AS ENUM`) | -- | -- | EXTENSION | yes |
 | Terraform | variable, output, locals | resource, data, module | -- | -- | -- | -- | -- | -- | -- |
 | Protobuf | rpc | message, service | -- | -- | enum | -- | -- | import | -- |
 | GraphQL | query, mutation, subscription | type, union, scalar, input | -- | interface | enum | -- | -- | -- | -- |
