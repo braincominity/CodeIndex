@@ -4015,6 +4015,53 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_PropertyWithFirstAccessorVisibility_IsDetected()
+    {
+        // issue #332: `public int X { internal get; set; }` と、`{ private get; public set; }` /
+        // `{ protected internal get; set; }` / `{ private protected get; set; }` のように
+        // 先頭の accessor に独自の可視性修飾子が付く形も property として抽出されること。
+        // issue #332: properties whose FIRST accessor carries its own visibility
+        // modifier (`{ internal get; set; }`, `{ private get; public set; }`,
+        // `{ protected internal get; set; }`, `{ private protected get; set; }`)
+        // must still be captured as properties.
+        var content = """
+            namespace AccessorVis;
+
+            public class Svc
+            {
+                public int PubPrivSet { get; private set; }
+                public string Name { get; private init; } = "";
+                public int Count { get; protected set; }
+                public int Internal { internal get; set; }
+                public int PrivGetPubSet { private get; public set; }
+                public int ProtIntGet { protected internal get; set; }
+                public int PrivProtGet { private protected get; set; }
+                public int Prop => 0;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var expected = new[]
+        {
+            "PubPrivSet",
+            "Name",
+            "Count",
+            "Internal",
+            "PrivGetPubSet",
+            "ProtIntGet",
+            "PrivProtGet",
+            "Prop",
+        };
+        foreach (var name in expected)
+            Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == name));
+
+        // The first-accessor-visibility rows must not leak as phantom functions either.
+        // 先頭 accessor 可視性付きの行が phantom function としても重複抽出されないこと。
+        Assert.DoesNotContain(symbols, s => s.Kind == "function"
+            && (s.Name == "Internal" || s.Name == "PrivGetPubSet" || s.Name == "ProtIntGet" || s.Name == "PrivProtGet"));
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsInlineAttributedProperty()
     {
         var content = """
