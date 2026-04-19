@@ -407,12 +407,14 @@ Supported symbol kinds by language (33 languages with symbol extraction):
 | Zig | fn, pub fn, test | union, error | struct | -- | enum | -- | -- | @import | -- |
 | PowerShell | function, filter | class | -- | -- | enum | -- | -- | Import-Module, using module | -- |
 | CSS/SCSS | @mixin, @keyframes, `@font-face` (`font-family`), #id | `.class`, `:root`, pseudo/attribute selectors, `%placeholder` | -- | -- | -- | `$variable`, `--custom-property` | -- | `@import`, `@use` | -- |
+| Batch | labels (`:name`, `:name.sub`), goto/call targets (reserved `:EOF` excluded) | -- | -- | -- | -- | `set VAR=`, `set /a VAR=` (also `VAR+=`, `VAR-=`, `VAR*=`, `VAR/=`, `VAR%=`, `VAR&=`, `VAR^=`, `VAR\|=`, `VAR<<=`, `VAR>>=`), `set /p VAR=`, `set "VAR=..."`, `@set VAR=`, `if ... set VAR=`, same-line multi-statement forms `set A=1 & set B=2`, `( set X=1 )`, `if ... ( set P=1 ) else set Q=2`, `for ... do set VAR=` (`rem` / `::` comment lines still excluded) | -- | -- | -- |
 | HTML | -- | custom Web Component tag names from a dedicated tag-structure state machine (opening tags containing a hyphen, e.g. `<my-button>` / `<app-sidebar>`; reserved SVG/MathML hyphenated tags like `font-face` / `color-profile` / `annotation-xml` are excluded) | -- | -- | -- | `id="..."` / `id='...'` attributes (state machine walks tag openers, quoted/unquoted values, multi-line quoted values, and only accepts the `id` attribute — so `data-id=` / `aria-*id=` / `xml:id=` are ignored structurally rather than by regex lookbehind) | -- | external `<script src="...">` and `<link href="...">` (raw-text bodies of `<script>` / `<style>` / `<textarea>` / `<title>` and `<!-- ... -->` comments are masked so attribute-lookalike strings inside them do not leak phantom symbols) | -- |
 
 For C#, the `Graph = yes` column applies to callable/reference extraction and event subscriptions. Enum members are indexed as symbols, but enum-member access edges such as `Nested.A` are not indexed yet; when the active scope includes those enum-member candidates, `inspect` keeps `graph_supported` aligned with any callable candidates while exposing `graph_degraded=true` / `unsupported_symbol_kind=enum_member`, exact `references` / `callers` / `callees` surface the same gap on zero/count payloads plus successful JSON rows, and `unused` marks the active scope as degraded because C# enum members are excluded while enum declarations may still be false positives until those edges exist.
 
 SQL also emits `namespace` symbols for `CREATE SCHEMA`, but the summary table above does not have a dedicated namespace column.
 
+Additionally, 13 languages are detected and indexed as raw text without symbol extraction: cmake, dockerignore, editorconfig, gitignore, html, json, justfile, markdown, svelte, toml, vue, xml, yaml.
 Additionally, 13 languages are detected and indexed as raw text without symbol extraction: batch, cmake, dockerignore, editorconfig, gitignore, json, justfile, markdown, svelte, toml, vue, xml, yaml.
 
 VB.NET container patterns use `RegexOptions.IgnoreCase` plus `VisualBasicEnd`-based range tracking, so `Partial` spelling differences and multi-file type families still receive stable definition ranges and hotspot-family metadata.
@@ -1468,12 +1470,14 @@ LIMIT 20;
 | Zig | fn, pub fn, test | union, error | struct | -- | enum | -- | -- | @import | -- |
 | PowerShell | function, filter | class | -- | -- | enum | -- | -- | Import-Module, using module | -- |
 | CSS/SCSS | @mixin, @keyframes, `@font-face` (`font-family`), #id | `.class`, `:root`, 疑似/属性セレクタ, `%placeholder` | -- | -- | -- | `$variable`, `--custom-property` | -- | `@import`, `@use` | -- |
+| Batch | ラベル (`:name`、`:name.sub`)、goto/call の着地点 (予約 `:EOF` は除外) | -- | -- | -- | -- | `set VAR=`、`set /a VAR=` (`VAR+=`、`VAR-=`、`VAR*=`、`VAR/=`、`VAR%=`、`VAR&=`、`VAR^=`、`VAR\|=`、`VAR<<=`、`VAR>>=` も)、`set /p VAR=`、`set "VAR=..."`、`@set VAR=`、`if ... set VAR=`、同一行複数ステートメント形 `set A=1 & set B=2` / `( set X=1 )` / `if ... ( set P=1 ) else set Q=2` / `for ... do set VAR=` (`rem` / `::` コメント行は引き続き除外) | -- | -- | -- |
 | HTML | -- | 専用のタグ構造 state machine で抽出するカスタム Web Component のタグ名（ハイフンを含む開始タグ、例: `<my-button>` / `<app-sidebar>`。`font-face` / `color-profile` / `annotation-xml` のような予約済み SVG / MathML のハイフン入りタグは除外） | -- | -- | -- | `id="..."` / `id='...'` 属性（state machine がタグの開始、引用符付き/なし値、複数行の引用符付き値を走査し、`id` 属性のみ採用するため、`data-id=` / `aria-*id=` / `xml:id=` は正規表現の lookbehind ではなく構造的に除外される） | -- | 外部 `<script src="...">` と `<link href="...">`（`<script>` / `<style>` / `<textarea>` / `<title>` の raw-text 本体と `<!-- ... -->` コメントはマスクされ、本体内の属性名に似た文字列から phantom シンボルが漏れない） | -- |
 
 C# の `Graph = yes` は callable/reference extraction と event subscription を指します。enum member 自体は symbol として索引されますが、`Nested.A` のような enum-member access edge はまだ索引していません。そのため active scope にその enum member 候補が含まれる場合、`inspect` は callable 候補があれば `graph_supported` を維持したまま `graph_degraded=true` / `unsupported_symbol_kind=enum_member` を返し、exact `references` / `callers` / `callees` も zero/count payload と成功した JSON row の両方で同じ制約を示します。`unused` もその理由で active scope を degraded として扱い、C# enum member は除外しつつ enum declaration は偽陽性になりうるものとして残します。
 
 SQL は `CREATE SCHEMA` から `namespace` シンボルも出力しますが、上の要約表には namespace 専用の列がありません。
 
+他に13言語がテキスト検索用に検出されるがシンボル抽出パターンは未対応: cmake, dockerignore, editorconfig, gitignore, html, json, justfile, markdown, svelte, toml, vue, xml, yaml。
 他に13言語がテキスト検索用に検出されるがシンボル抽出パターンは未対応: batch, cmake, dockerignore, editorconfig, gitignore, json, justfile, markdown, svelte, toml, vue, xml, yaml。
 
 正規表現ベースの抽出は意図的にシンプルです。AST精度よりも速度とポータビリティを優先しています。

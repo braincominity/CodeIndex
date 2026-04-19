@@ -8533,6 +8533,82 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Batch_DetectsLabelsAndSetAssignments()
+    {
+        // Covers issue #217: batch (.bat / .cmd) labels are the only navigation anchors
+        // in a batch script (goto :X / call :X targets). Without label symbols every batch
+        // file indexed with zero symbol rows. Also pins:
+        //   - `:EOF` is the reserved `goto :EOF` / `call :EOF` target and must NOT surface.
+        //   - `::` / `:::` comment lines must not produce bogus symbols.
+        //   - `SET` / `Set` / `SET /A` / `SET /P` variations are all picked up.
+        //   - CRLF line endings behave the same as LF.
+        //   - Echo-suppression `@set VAR=...` (with or without whitespace after `@`).
+        //   - `set /a VAR+=1` and other compound arithmetic operators (`-=`, `*=`, `/=`,
+        //     `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`).
+        //   - `if <cond> set VAR=...` style one-line conditional assignments.
+        //   - Same-line multi-statement forms emit one symbol per `set`: `&`-chained
+        //     (`set A=1 & set B=2`), `if ... & set` (`if exist x set C=3 & set D=4`),
+        //     parenthesized + `else` (`if exist x ( set E=5 ) else set F=6`), and
+        //     `for ... do set` (`for %%I in (1) do set LOOPVAR=%%I`).
+        //   - `rem` / `@rem` / `::` comment lines do NOT emit phantom `set` symbols even when
+        //     the comment body contains the new boundary tokens (`&`, `(`, `else`, `do`).
+        //   - Dotted labels such as `:build.release` are captured in full, not truncated.
+        // issue #217 対応: batch (.bat / .cmd) のラベルは batch スクリプトにおける唯一の
+        // ナビゲーションアンカー (goto :X / call :X の着地点)。ラベルシンボルが無いと
+        // 全ての batch ファイルがシンボル 0 件のまま索引されてしまっていた。あわせて以下を固定:
+        //   - `:EOF` は `goto :EOF` / `call :EOF` 用の予約ターゲットなのでシンボル化しない。
+        //   - `::` / `:::` コメント行は偽シンボルを生成しない。
+        //   - `SET` / `Set` / `SET /A` / `SET /P` の大小文字混在・オプション違いも拾う。
+        //   - CRLF 行末でも LF と同じ結果になる。
+        //   - echo 抑止プレフィクス付きの `@set VAR=...` (`@` 直後の空白有無を含む) を拾う。
+        //   - `set /a VAR+=1` および `-=` / `*=` / `/=` / `%=` / `&=` / `|=` / `^=` / `<<=` / `>>=`
+        //     の複合演算子も拾う。
+        //   - `if <cond> set VAR=...` 形式の 1 行条件付き代入も拾う。
+        //   - 同一行複数ステートメント形を 1 `set` ごとに 1 シンボルとして拾う:
+        //     `&` 連結 (`set A=1 & set B=2`) 、`if ... & set` (`if exist x set C=3 & set D=4`) 、
+        //     括弧 + `else` (`if exist x ( set E=5 ) else set F=6`) 、
+        //     `for ... do set` (`for %%I in (1) do set LOOPVAR=%%I`)。
+        //   - `rem` / `@rem` / `::` コメント行は、本文に新しい境界トークン (`&` / `(` / `else` / `do`) を
+        //     含んでいても偽の `set` シンボルを出さない。
+        //   - `:build.release` のようなドット付きラベルは切り詰めずフル名で取得する。
+        // Fixture also includes `:eof2` / `:eofish` / `:end-of-file` so the `(?!eof(?![\w.-]))`
+        // boundary is explicitly pinned — only the reserved `:EOF` token is rejected, not
+        // labels that merely start with `eof`.
+        // `:eof2` / `:eofish` / `:end-of-file` も fixture に含め、`(?!eof(?![\w.-]))` の境界条件を固定する
+        // (予約トークン `:EOF` だけが除外され、`eof` で始まる別名は通る)。
+        var content = "@echo off\r\nREM Build script\r\nsetlocal\r\n\r\nset VERSION=1.0.0\r\nSET OUTPUT_DIR=%~dp0out\r\nSet /A COUNT=1\r\nSET /P INPUT=Enter: \r\nset \"QUOTED=value with spaces\"\r\n@set AT_PREFIX=1\r\n@ SET AT_SPACED=2\r\nset /a COMPOUND+=1\r\nset /A SHIFTED<<=2\r\nif not defined INLINE_DEF set INLINE_DEF=inline_default\r\nif \"%1\"==\"\" set INLINE_EQ=empty\r\nset CHAIN_A=1 & set CHAIN_B=2\r\nif exist foo.txt set IF_CHAIN_X=3 & set IF_CHAIN_Y=4\r\nif exist foo.txt ( set PAREN_P=5 ) else set ELSE_Q=6\r\nfor %%I in (1) do set LOOPVAR=%%I\r\nREM set FROM_REM=ignored\r\nREM & set FROM_REM_AMP=ignored\r\nREM ( set FROM_REM_PAREN=ignored )\r\nREM else set FROM_REM_ELSE=ignored\r\nREM do set FROM_REM_DO=ignored\r\n@REM & set FROM_AT_REM_AMP=ignored\r\n:: set FROM_DOUBLE_COLON=ignored\r\n:: & set FROM_DC_AMP=ignored\r\n:: ( set FROM_DC_PAREN=ignored )\r\n:: else set FROM_DC_ELSE=ignored\r\n:: do set FROM_DC_DO=ignored\r\n\r\n:main\r\ncall :compile\r\nif errorlevel 1 goto :error\r\ncall :test\r\ngoto :end\r\n\r\n:compile\r\necho Compiling...\r\ndotnet build\r\nexit /b %ERRORLEVEL%\r\n\r\n:test\r\necho Testing...\r\nexit /b %ERRORLEVEL%\r\n\r\n:error\r\necho Build failed\r\ngoto :EOF\r\n\r\n:end\r\ncall :eOf\r\ncall :eof2\r\ncall :eofish\r\ncall :end-of-file\r\ncall :build.release\r\nendlocal\r\n\r\n:eof2\r\nexit /b 0\r\n\r\n:eofish\r\nexit /b 0\r\n\r\n:end-of-file\r\nexit /b 0\r\n\r\n:build.release\r\nexit /b 0\r\n\r\n:: This is a batch comment and must not produce a symbol\r\n::: triple-colon comment must not produce a symbol either\r\n";
+        var symbols = SymbolExtractor.Extract(1, "batch", content);
+
+        // Exact function label set — nothing extra (no `:EOF`, no comment-derived names),
+        // but the `eof`-prefixed user labels (`eof2`, `eofish`, `end-of-file`) pass, and
+        // dotted labels (`build.release`) are captured in full rather than truncated.
+        // function ラベル集合は厳密一致 — `:EOF` / コメント由来の偽名は混ざらないが、
+        // `eof` で始まるユーザーラベル (`eof2` / `eofish` / `end-of-file`) は通り、
+        // ドット付きラベル (`build.release`) も切り詰めず全体が取得される。
+        var functionNames = symbols.Where(s => s.Kind == "function").Select(s => s.Name).ToHashSet();
+        Assert.Equal(new HashSet<string> { "main", "compile", "test", "error", "end", "eof2", "eofish", "end-of-file", "build.release" }, functionNames);
+
+        // Exact property name set — nothing extra from comments / echo lines, and the new
+        // `@set`, compound-operator, and inline-`if` variants all produce a symbol.
+        // property 名集合は厳密一致 — コメントや echo 行由来の偽名は混ざらず、新しく対応した
+        // `@set` / 複合演算子 / インライン `if` の各形もすべてシンボル化される。
+        var propertyNames = symbols.Where(s => s.Kind == "property").Select(s => s.Name).ToHashSet();
+        Assert.Equal(
+            new HashSet<string>
+            {
+                "VERSION", "OUTPUT_DIR", "COUNT", "INPUT", "QUOTED",
+                "AT_PREFIX", "AT_SPACED",
+                "COMPOUND", "SHIFTED",
+                "INLINE_DEF", "INLINE_EQ",
+                "CHAIN_A", "CHAIN_B",
+                "IF_CHAIN_X", "IF_CHAIN_Y",
+                "PAREN_P", "ELSE_Q",
+                "LOOPVAR",
+            },
+            propertyNames);
+    }
+
+    [Fact]
     public void Extract_Zig_DetectsSymbols()
     {
         var content = "const std = @import(\"std\");\n\npub fn main() !void {\n    std.debug.print(\"hello\", .{});\n}\n\nfn helper(x: u32) u32 {\n    return x + 1;\n}\n\npub const Config = struct {\n    name: []const u8,\n};\n\nconst Direction = enum {\n    north,\n    south,\n};\n\ntest \"basic test\" {\n    try std.testing.expect(true);\n}";

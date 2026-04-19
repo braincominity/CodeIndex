@@ -899,6 +899,45 @@ public static class SymbolExtractor
             // Import-Module / using module / モジュールインポート
             new("import",   new Regex(@"^\s*(?:Import-Module|using\s+module)\s+(?<name>\S+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
         ],
+        ["batch"] =
+        [
+            // Labels — goto :X / call :X targets, the only navigation anchors in a batch script.
+            // `::` comment form has no label name, so the name character class naturally rejects it.
+            // Dotted labels like `:build.release` are real batch label names, so accept `.` too.
+            // `:EOF` is a reserved batch target used by `goto :EOF` / `call :EOF`, not a user-defined
+            // label, so exclude it — but only the literal full-name `eof`. Labels that merely begin
+            // with `eof` such as `:eof2` / `:eofish` / `:end-of-file` / `:eof.x` must still surface,
+            // which is why the negative lookahead checks for name-terminating characters instead of `\b`.
+            // ラベル — goto :X / call :X の着地点であり、batch スクリプト内で唯一のナビゲーションアンカー。
+            // `::` コメント形式はラベル名を持たないため名前文字クラスが自然に弾く。
+            // `:build.release` のようなドット付きラベルも正規のラベル名として受け入れる。
+            // `:EOF` は `goto :EOF` / `call :EOF` 用の予約ターゲットであってユーザー定義ラベルではないため除外するが、
+            // 除外するのは名前全体が `eof` のときだけ。`:eof2` / `:eofish` / `:end-of-file` / `:eof.x` のように
+            // 単に `eof` で始まるだけのラベルは通す必要があるため、`\b` ではなく名前終端文字を見る negative lookahead を使う。
+            new("function", new Regex(@"^\s*:(?!eof(?![\w.-]))(?<name>[\w.\-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // Variable assignment — set VAR=value, set /a VAR=expr, set /p VAR=prompt, set "VAR=value".
+            // Also handles `@set VAR=...` (echo suppression prefix), `set /a VAR+=1` (compound
+            // assignment operators), `if ... set VAR=...` (inline assignment inside a one-line
+            // control statement), and same-line multi-statement forms `set A=1 & set B=2`,
+            // `( set X=1 )`, `if ... ( set P=1 ) else set Q=2`, `for ... do set LOOPVAR=...`.
+            // Boundary alternation: line-leading `^`, or after `&` / `(` / `\belse` / `\bdo` so
+            // the regex (paired with the batch multi-match advance in the extractor loop) can
+            // emit one symbol per `set` occurrence on the same line instead of dropping every
+            // assignment after the first match. `rem` / `@rem` / `::` comment lines can also
+            // contain those boundary tokens (e.g. `REM & set FAKE=1`), so they are short-
+            // circuited by `IsBatchCommentLine` before this pattern ever runs — the boundary
+            // alternation alone is not enough to keep comment bodies out of the capture.
+            // 変数代入 — set VAR=value、set /a VAR=expr、set /p VAR=prompt、set "VAR=value" に対応。
+            // 併せて `@set VAR=...` (echo 抑止プレフィクス) 、`set /a VAR+=1` (複合代入演算子) 、
+            // `if ... set VAR=...` (1 行制御文内の代入) 、および `set A=1 & set B=2` / `( set X=1 )` /
+            // `if ... ( set P=1 ) else set Q=2` / `for ... do set LOOPVAR=...` のような同一行複数ステートメント形も拾う。
+            // 境界は `^` / `&` / `(` / `\belse` / `\bdo` のいずれかで、extractor 側の batch 専用
+            // multi-match advance と組み合わせて 1 行中の `set` ごとに 1 シンボルを出す。
+            // `rem` / `@rem` / `::` コメント行にもこれらの境界トークンが入りうる
+            // (`REM & set FAKE=1` 等) ため、この正規表現が走る前に `IsBatchCommentLine` で
+            // 行ごと早期スキップしている — 境界 alternation だけではコメント本文を弾ききれない。
+            new("property", new Regex(@"(?:(?:^|&|\()\s*|(?:\belse|\bdo)\s+)(?:@\s*)?(?:if\s+.+?\s+)?set\s+(?:/[aApP]\s+)?""?(?<name>[A-Za-z_][\w]*)\s*(?:[+\-*/%&^|]|<<|>>)?=", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+        ],
         ["zig"] =
         [
             // Public and private function declarations / 公開・非公開の関数宣言
@@ -1065,6 +1104,20 @@ public static class SymbolExtractor
             {
                 matchLine = csharpMatchLines![i];
             }
+
+            // Batch `rem` / `@rem` / `::` comment lines contain the same `&` / `(` / `else` /
+            // `do` boundary tokens that the property regex now accepts for inline `set`
+            // capture, so `REM & set FAKE=1` or `:: else set FAKE=2` would otherwise leak a
+            // phantom property. Short-circuit those lines before any pattern fires — batch
+            // labels never match on `::` / `rem` lines anyway because the label regex
+            // requires `:<name-char>`, not `::` or `r`.
+            // batch の `rem` / `@rem` / `::` コメント行は、inline `set` 捕捉のために property 正規表現が
+            // 受け付ける `&` / `(` / `else` / `do` の境界トークンを含みうるため、`REM & set FAKE=1` や
+            // `:: else set FAKE=2` が偽 property を出す恐れがある。パターン適用前に当該行ごと
+            // 早期スキップする — batch ラベル側は `::` / `rem` 行ではそもそも `:<名前文字>` の要件を
+            // 満たさないため影響を受けない。
+            if (lang == "batch" && IsBatchCommentLine(line))
+                continue;
 
             var stopAfterFirstPatternMatch = false;
             foreach (var pattern in patterns)
@@ -1602,6 +1655,29 @@ public static class SymbolExtractor
 
                     if (!CanContinueScanningSameLineBraceBody(lang, kind, pattern.BodyStyle, bodyEndLine, startLine, sameLineEndColumn, absoluteStartColumn))
                     {
+                        // Batch `set` assignments can legitimately repeat on a single line via
+                        // `&` command-chaining (`set A=1 & set B=2`), parenthesized grouping
+                        // (`if ... ( set P=1 ) else set Q=2`), or `for`-loop bodies
+                        // (`for %%I in (1) do set LOOPVAR=%%I`). The brace-body rescan path
+                        // above is JS/TS/CSS/C#-only, so drive the advance explicitly for the
+                        // batch property pattern instead of short-circuiting after the first
+                        // match. Forward progress is guaranteed because `match.Length >= 1`
+                        // (the regex requires a literal `set\s+NAME=` tail).
+                        // batch の `set` 代入は `&` 連結や `( ... ) else ... `、`for ... do ...` で
+                        // 1 行に複数回現れうる。上の brace-body 再スキャンは JS/TS/CSS/C# 限定なので、
+                        // batch の property パターンだけは explicit に advance して追加マッチも拾う。
+                        // 前進は `match.Length >= 1` (正規表現が `set\s+NAME=` を要求するため) で保証される。
+                        if (lang == "batch"
+                            && pattern.BodyStyle == BodyStyle.None
+                            && pattern.Kind == "property")
+                        {
+                            var nextBatchOffset = absoluteStartColumn + Math.Max(1, match.Length);
+                            if (nextBatchOffset <= lineOffset)
+                                break;
+                            lineOffset = nextBatchOffset;
+                            continue;
+                        }
+
                         // Stop after first match per line to avoid duplicate symbols
                         // (e.g. C# method pattern + constructor pattern both matching)
                         // 1行につき最初のマッチのみ採用し重複を防ぐ
@@ -8451,6 +8527,67 @@ public static class SymbolExtractor
         return insideEnumBody
             && attributeParenDepth == 0
             && CSharpEnumMemberNameRegex.IsMatch(line);
+    }
+
+    /// <summary>
+    /// Return true when a batch (.bat / .cmd) line is a comment, i.e. `::` / `:::` / `rem` /
+    /// `@rem` (with optional leading whitespace and case-insensitive `rem`). Comment lines
+    /// must not contribute `set` property symbols even when they contain the boundary tokens
+    /// (`&`, `(`, `else`, `do`) that the new inline-set-capture regex accepts.
+    /// batch (.bat / .cmd) のコメント行 (`::` / `:::` / `rem` / `@rem`、先頭空白可、`rem` は大小文字不問) のときに
+    /// true を返す。新しい inline `set` 捕捉正規表現が受け付ける境界トークン (`&` / `(` / `else` / `do`) を
+    /// 含んでいても、コメント行からは `set` property を拾わない。
+    /// </summary>
+    private static bool IsBatchCommentLine(string line)
+    {
+        var i = 0;
+        while (i < line.Length && (line[i] == ' ' || line[i] == '\t'))
+            i++;
+
+        if (i >= line.Length)
+            return false;
+
+        // `::` (and therefore also `:::`, `::: ...`) opens a batch comment that consumes the
+        // rest of the line. The label regex does not match these because it requires a name
+        // char after the first `:`, but the property regex could match their inline tokens.
+        // `::` 以降はコメント (`:::`、`::: ...` も同様)。ラベル正規表現は `:` の後ろに名前文字を
+        // 要求するため影響を受けないが、property 正規表現は inline トークンを拾ってしまう。
+        if (line[i] == ':' && i + 1 < line.Length && line[i + 1] == ':')
+            return true;
+
+        // `@rem` (echo-suppression prefix + rem). Accept optional whitespace between `@` and
+        // `rem` to mirror how the property regex tolerates `@ set`.
+        // `@rem` (echo 抑止プレフィクス + rem) 。property 正規表現が `@ set` を許すのに合わせて
+        // `@` と `rem` の間の空白も許容する。
+        if (line[i] == '@')
+        {
+            var j = i + 1;
+            while (j < line.Length && (line[j] == ' ' || line[j] == '\t'))
+                j++;
+            return IsBatchRemKeyword(line, j);
+        }
+
+        return IsBatchRemKeyword(line, i);
+    }
+
+    private static bool IsBatchRemKeyword(string line, int start)
+    {
+        // A bare `rem` or `rem` followed by whitespace / end-of-line is a comment.
+        // Case-insensitive: `REM`, `rem`, `Rem`, `rEM`, etc. are all comments.
+        // 単独の `rem` または `rem` の直後が空白か行末ならコメント扱い。
+        // 大小文字不問 — `REM` / `rem` / `Rem` / `rEM` などすべてコメント。
+        if (start + 3 > line.Length)
+            return false;
+        if ((line[start] | 0x20) != 'r')
+            return false;
+        if ((line[start + 1] | 0x20) != 'e')
+            return false;
+        if ((line[start + 2] | 0x20) != 'm')
+            return false;
+        if (start + 3 == line.Length)
+            return true;
+        var next = line[start + 3];
+        return next == ' ' || next == '\t' || next == '\r' || next == '\n';
     }
 
     private static bool CanContinueScanningSameLineBraceBody(
