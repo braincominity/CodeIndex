@@ -5686,6 +5686,8 @@ public class SymbolExtractorTests
                 static abstract implicit operator T(int x);
                 abstract static explicit operator int(T t);
                 abstract static int Compare(T a, T b);
+                static abstract T operator checked +(T a, T b);
+                abstract static explicit operator checked int(T t);
             }
 
             public struct N
@@ -5704,6 +5706,18 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator int");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Zero");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Compare");
+        // Widening the modifier slot also incidentally covers C# 11 user-defined checked
+        // operator variants on `static abstract` / `abstract static` interface members,
+        // because the existing operator-name group already accepts `checked`. Pin both the
+        // binary `operator checked +` and the conversion `explicit operator checked int`
+        // so a future narrowing of the modifier slot cannot silently drop these shapes.
+        // modifier スロットを広げたことで C# 11 の `operator checked` 変換演算子 /
+        // 二項演算子の interface 形態も副次的に抽出されるようになる。既存の
+        // operator 名キャプチャが `checked` を含む形を受け入れているため、
+        // ここでは二項 `operator checked +` と変換 `explicit operator checked int` の
+        // 両方を固定し、将来 modifier スロットが狭められても無言で落ちないようにする。
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "operator checked +");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator checked int");
     }
 
     [Fact]
