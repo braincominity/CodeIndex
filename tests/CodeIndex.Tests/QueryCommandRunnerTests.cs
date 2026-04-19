@@ -192,7 +192,12 @@ public class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("--focus-column requires a positive integer", stderr);
+            // The recognized-option guard in TryReadRawOptionValue short-circuits `--focus-column --json`
+            // as a missing-value case before TryParsePositiveInt runs, so the error is "requires a value"
+            // rather than the older TryParsePositiveInt-level "requires a positive integer" message.
+            // `--focus-column --json` は TryReadRawOptionValue の既知オプション判定で TryParsePositiveInt
+            // 実行前に値欠如として短絡するため、旧メッセージではなく "requires a value" となる。
+            Assert.Contains("--focus-column requires a value", stderr);
         }
         finally
         {
@@ -213,7 +218,10 @@ public class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("--max-line-width requires a positive integer", stderr);
+            // Missing-value guard short-circuits before TryParsePositiveInt; see
+            // RunExcerpt_RejectsMissingFocusColumnValue for the matching contract note.
+            // TryParsePositiveInt より前で値欠如として短絡する。契約の詳細は上記テスト参照。
+            Assert.Contains("--max-line-width requires a value", stderr);
         }
         finally
         {
@@ -234,7 +242,10 @@ public class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("--max-line-width requires a positive integer", stderr);
+            // Missing-value guard short-circuits before TryParsePositiveInt; see
+            // RunExcerpt_RejectsMissingFocusColumnValue for the matching contract note.
+            // TryParsePositiveInt より前で値欠如として短絡する。契約の詳細は上記テスト参照。
+            Assert.Contains("--max-line-width requires a value", stderr);
         }
         finally
         {
@@ -861,6 +872,119 @@ public class QueryCommandRunnerTests
             Assert.Contains($"got '{value}'", stderr);
             Assert.Contains("Hint: fix the invalid or missing option value", stderr);
             Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    // Regression lock for #184: when a value-taking option is followed by the next recognized
+    // `--flag` token (e.g. `--limit --lang rust`), the parser must NOT consume the next flag as
+    // this option's value. Previously `--limit --lang rust` silently stole `--lang` as the
+    // `--limit` value, failed TryParsePositiveInt, and surfaced a confusing error — while
+    // `--lang` itself was dropped. Now the parser detects the recognized-option token and
+    // reports "requires a value" cleanly, matching the contract that a missing value fails
+    // closed instead of swallowing neighboring flags.
+    // #184 の回帰ロック: value-taking オプションの直後に別の `--flag` が来た場合
+    // （例: `--limit --lang rust`）、パーサはその次のフラグを値として取り込んではならない。
+    // 以前は `--limit --lang rust` が silent に `--lang` を `--limit` の値として奪っており、
+    // TryParsePositiveInt が失敗して分かりにくいエラーが出る一方で `--lang` も落ちていた。
+    // 今は recognized-option token を検知して "requires a value" でクリーンに失敗させ、値欠落は
+    // 黙って隣接フラグを飲み込まず fail-close する、という契約に合わせる。
+    [Theory]
+    [InlineData(new[] { "search", "hello", "--limit", "--lang", "rust" }, "--limit requires a value.")]
+    [InlineData(new[] { "search", "hello", "--lang", "--limit", "5" }, "--lang requires a value.")]
+    [InlineData(new[] { "search", "hello", "--snippet-lines", "--limit", "5" }, "--snippet-lines requires a value.")]
+    [InlineData(new[] { "search", "hello", "--max-line-width", "--limit", "5" }, "--max-line-width requires a value.")]
+    [InlineData(new[] { "symbols", "hello", "--kind", "--lang", "rust" }, "--kind requires a value.")]
+    [InlineData(new[] { "impact", "hello", "--depth", "--lang", "rust" }, "--depth requires a value.")]
+    public void QueryEntrypoints_RecognizedOptionAsValueFailsClosed_Issue184(string[] commandAndArgs, string expectedFragment)
+    {
+        var command = commandAndArgs[0];
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_issue184_{command}_{expectedFragment.GetHashCode():x}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Issue184.cs",
+                "csharp",
+                "namespace Issue184; public class T { public void M() { } }");
+            MarkGraphAndFoldReady(dbPath);
+
+            var args = commandAndArgs.Skip(1).Concat(new[] { "--db", dbPath, "--json" }).ToArray();
+            var (exitCode, stdout, stderr) = CaptureConsole(() => command switch
+            {
+                "search" => QueryCommandRunner.RunSearch(args, _jsonOptions),
+                "symbols" => QueryCommandRunner.RunSymbols(args, _jsonOptions),
+                "impact" => QueryCommandRunner.RunImpact(args, _jsonOptions),
+                _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+            });
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains(expectedFragment, stderr);
+            Assert.Contains("Hint: fix the invalid or missing option value", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    // Regression lock for #184: non-repeatable value-taking options specified more than once
+    // (e.g. `--db /A --db /B`, `--limit 5 --limit 10`) must emit a stderr warning so the
+    // override is visible. The last value wins (backward compatible), but users and AI callers
+    // can spot a copy/paste or scripted mistake instead of the previous silent take-last.
+    // `--top` is canonicalized to `--limit`, so `--limit 5 --top 10` also triggers.
+    // Repeatable options (`--path`, `--exclude-path`, `--name`) must NOT warn.
+    // #184 の回帰ロック: 非 repeatable な value-taking オプションが 2 回以上指定された場合
+    // （例: `--db /A --db /B`、`--limit 5 --limit 10`）、上書きを stderr に警告する。最後の値が
+    // 採用されるのは後方互換だが、従来の silent な take-last ではスクリプトやコピペのミスに
+    // ユーザーや AI 呼び出し側が気付けない。`--top` は `--limit` と canonical 共有。repeatable
+    // な `--path` / `--exclude-path` / `--name` は警告しない。
+    [Fact]
+    public void QueryEntrypoints_DuplicateSingleValueOptionsWarn_Issue184()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue184_dup_single_value");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Issue184.cs",
+                "csharp",
+                "namespace Issue184; public class T { public void M() { } }");
+
+            // Warnings must fire even when the command itself returns zero results (NotFound);
+            // the duplicate flag warning is an argv-parsing concern, not a result-set concern.
+            // NotFound 等のゼロ件応答でも warn は出るべき。重複フラグは argv 解析段階の関心事で、
+            // 検索結果の有無とは独立している。
+
+            // --limit appears twice with different values: last value wins, warning emitted.
+            var (exitLimit, _, stderrLimit) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Issue184", "--db", dbPath, "--json", "--limit", "5", "--limit", "10"], _jsonOptions));
+            Assert.NotEqual(CommandExitCodes.UsageError, exitLimit);
+            Assert.Contains("Warning: --limit specified more than once; using the last value '10'.", stderrLimit);
+
+            // --top is canonicalized to --limit, so `--limit 5 --top 10` also warns.
+            var (exitTop, _, stderrTop) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Issue184", "--db", dbPath, "--json", "--limit", "5", "--top", "10"], _jsonOptions));
+            Assert.NotEqual(CommandExitCodes.UsageError, exitTop);
+            Assert.Contains("Warning: --limit specified more than once; using the last value '10'.", stderrTop);
+
+            // Single --limit must NOT warn.
+            var (exitSingle, _, stderrSingle) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Issue184", "--db", dbPath, "--json", "--limit", "10"], _jsonOptions));
+            Assert.NotEqual(CommandExitCodes.UsageError, exitSingle);
+            Assert.DoesNotContain("specified more than once", stderrSingle);
+
+            // Repeatable --path must NOT warn on repetition.
+            var (exitPath, _, stderrPath) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["Issue184", "--db", dbPath, "--json", "--path", "src/**", "--path", "tests/**"], _jsonOptions));
+            Assert.NotEqual(CommandExitCodes.UsageError, exitPath);
+            Assert.DoesNotContain("specified more than once", stderrPath);
         }
         finally
         {
