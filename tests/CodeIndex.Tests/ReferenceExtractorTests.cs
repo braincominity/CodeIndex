@@ -2415,6 +2415,59 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JsOptionalChainingCall_CapturesCallReference()
+    {
+        // issue #294: `callback?.()` is an optional chaining call; the `?.` sits between the
+        // identifier and the argument-list `(`, so the old CallRegex never reached the `(` and
+        // silently dropped the `callback` call reference. Covers bare and argumented forms
+        // plus a chained `obj?.handler?.()` where the captured identifier itself is only
+        // reached by the call regex once `(?:\?\.)?` is in place.
+        // issue #294: `callback?.()` は optional chaining 呼び出し。識別子と `(` の間に `?.` が入るため、
+        // 旧 CallRegex では末尾 `(` まで到達できず `callback` への call 参照が欠落していた。
+        // 引数なし・引数あり・プロパティチェーン末端で optional call される `obj?.handler?.()` の 3 形を検証する
+        // （`handler` は `(?:\?\.)?` 追加後にだけ CallRegex にマッチする形）。
+        const string content = """
+            function caller(callback, onSuccess, obj) {
+                callback?.();
+                onSuccess?.(data);
+                obj?.handler?.();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "callback" && r.ReferenceKind == "call" && r.ContainerName == "caller");
+        Assert.Contains(references, r =>
+            r.SymbolName == "onSuccess" && r.ReferenceKind == "call" && r.ContainerName == "caller");
+        Assert.Contains(references, r =>
+            r.SymbolName == "handler" && r.ReferenceKind == "call" && r.ContainerName == "caller");
+    }
+
+    [Fact]
+    public void Extract_TsOptionalChainingCallWithTypeArgs_CapturesCallReference()
+    {
+        // issue #294 follow-up: TypeScript allows type arguments after `?.` in
+        // `callback?.<T>(...)`. The regex must keep matching when the optional chaining
+        // is followed by a generic argument list before `(`.
+        // issue #294 補足: TypeScript では optional chaining の直後に型引数が続く
+        // `callback?.<T>(...)` が許容される。optional chaining と generic 引数が連続しても
+        // regex が call 参照を取り逃がさないことを検証する。
+        const string content = """
+            function caller(callback: (<T>(value: T) => void) | undefined) {
+                callback?.<number>(42);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "callback" && r.ReferenceKind == "call" && r.ContainerName == "caller");
+    }
+
+    [Fact]
     public void Extract_CsharpNameofTypeofDefault_CapturesArgumentAsTypeReference()
     {
         // issue #253: nameof/typeof/sizeof/default arguments are first-class compile-time
