@@ -281,6 +281,50 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_HocBindingPatternSkipsNonHocReactApiCalls()
+    {
+        // `React.` on the RHS is not a HOC marker on its own — only
+        // `React.memo(` / `React.forwardRef(` / `React.lazy(` are real HOCs.
+        // Other React APIs (`React.createContext(...)`, hooks like
+        // `React.useCallback(...)` / `React.useMemo(...)`, `React.createRef(...)`)
+        // return plain values and must NOT produce phantom `function` symbols.
+        // Pins the strict allowlist on both JS and TS sides. Closes #240.
+        // RHS の `React.` だけでは HOC ではない — 真の HOC は
+        // `React.memo(` / `React.forwardRef(` / `React.lazy(` のみ。それ以外の
+        // React API（`React.createContext(...)`、`React.useCallback(...)` / `React.useMemo(...)`
+        // などの hooks、`React.createRef(...)`）は素の値を返すだけで、phantom
+        // `function` シンボルを生やしてはいけない。JS / TS の両行で厳格な allowlist を
+        // pin する。Closes #240.
+        var jsContent = """
+            const Theme = React.createContext(null);
+            const Stable = React.useCallback(() => 1, []);
+            const Derived = React.useMemo(() => compute(), [dep]);
+            const Ref = React.createRef();
+            """;
+
+        var jsSymbols = SymbolExtractor.Extract(1, "javascript", jsContent);
+
+        Assert.DoesNotContain(jsSymbols, s => s.Name == "Theme");
+        Assert.DoesNotContain(jsSymbols, s => s.Name == "Stable");
+        Assert.DoesNotContain(jsSymbols, s => s.Name == "Derived");
+        Assert.DoesNotContain(jsSymbols, s => s.Name == "Ref");
+
+        var tsContent = """
+            const Theme = React.createContext<string | null>(null);
+            const Stable = React.useCallback(() => 1, []);
+            const Derived: number = React.useMemo(() => compute(), [dep]);
+            const Ref = React.createRef<HTMLDivElement>();
+            """;
+
+        var tsSymbols = SymbolExtractor.Extract(2, "typescript", tsContent);
+
+        Assert.DoesNotContain(tsSymbols, s => s.Name == "Theme");
+        Assert.DoesNotContain(tsSymbols, s => s.Name == "Stable");
+        Assert.DoesNotContain(tsSymbols, s => s.Name == "Derived");
+        Assert.DoesNotContain(tsSymbols, s => s.Name == "Ref");
+    }
+
+    [Fact]
     public void Extract_JavaScript_StringBraceDoesNotBreakFollowingContainerAssignment()
     {
         var content = """
