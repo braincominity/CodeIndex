@@ -217,6 +217,15 @@ public static class ReferenceExtractor
     private static readonly Regex CSharpJavaInitializerRegex = new(
         @"\bnew\s+(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*))*(?<name>[A-Za-z_]\w*)(?:\s*<[^>\n]+>)?(?:\s*\[[^\[\]\n]*\])*\s*\{",
         RegexOptions.Compiled);
+    // Allman-style C# / Java parenless initializer where `{` sits on the next non-empty
+    // line. The trailing regex captures `new <Type>` ending the current line (with optional
+    // generic + array shape), and the caller peeks forward to confirm the next non-blank
+    // prepared line begins with `{` before emitting an `instantiate` edge. See issue #286.
+    // Allman スタイルの多行 parenless initializer。`new <Type>` が行末で終わり、次の非空 prepared line が
+    // `{` から始まる場合にだけ `instantiate` を発行する。issue #286 参照。
+    private static readonly Regex CSharpJavaInitializerTrailingRegex = new(
+        @"\bnew\s+(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*))*(?<name>[A-Za-z_]\w*)(?:\s*<[^>\n]+>)?(?:\s*\[[^\[\]\n]*\])*\s*$",
+        RegexOptions.Compiled);
     // Java access/method modifier set used by the same-line ctor scanner.
     // same-line ctor 本体のスキャナで使うアクセス / メソッド修飾子一覧。
     private static readonly HashSet<string> JavaCtorModifiers = new(StringComparer.Ordinal)
@@ -704,6 +713,43 @@ public static class ReferenceExtractor
                     // `instantiate` が同様の扱いをしているため、括弧あり/なしで挙動を揃える。
                     var initContainer = ResolveContainerForCall(nameIndex);
                     AddReference(references, seen, fileId, match, "instantiate", context, lineNumber, initContainer);
+                }
+
+                // Allman-style multi-line form: `new T` at end of current line with the
+                // opening `{` on the next non-blank prepared line. Peek forward to confirm
+                // before emitting, so trailing `new T` patterns that are not followed by `{`
+                // (e.g. `var a = new Foo\n;` or `var a = new Foo\n(1, 2);`) do not produce
+                // phantom `instantiate` rows.
+                // Allman スタイルの多行形式: 現在行末の `new T` と次の非空 prepared line 冒頭の
+                // `{` を合わせて 1 つの instantiate として扱う。`{` が続かない場合（`;` や `(` が
+                // 後続する等）には幻行を出さないため、peek で確認してから発行する。
+                var trailingMatch = CSharpJavaInitializerTrailingRegex.Match(preparedLine);
+                if (trailingMatch.Success)
+                {
+                    var peek = i + 1;
+                    while (peek < preparedLines.Length && string.IsNullOrWhiteSpace(preparedLines[peek]))
+                        peek++;
+                    if (peek < preparedLines.Length)
+                    {
+                        var nextContent = preparedLines[peek].TrimStart();
+                        if (nextContent.Length > 0 && nextContent[0] == '{')
+                        {
+                            var name = trailingMatch.Groups["name"].Value;
+                            var nameIndex = trailingMatch.Groups["name"].Index;
+                            var accept = true;
+                            if (language == "csharp" && CSharpBuiltInTypeNames.Contains(name))
+                                accept = false;
+                            else if (language == "java" && JavaPrimitiveTypeNames.Contains(name))
+                                accept = false;
+                            else if (IsIgnoredCallName(language, name))
+                                accept = false;
+                            if (accept)
+                            {
+                                var initContainer = ResolveContainerForCall(nameIndex);
+                                AddReference(references, seen, fileId, trailingMatch, "instantiate", context, lineNumber, initContainer);
+                            }
+                        }
+                    }
                 }
             }
 

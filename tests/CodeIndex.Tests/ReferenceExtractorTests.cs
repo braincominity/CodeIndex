@@ -991,6 +991,75 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpAllmanParenlessInitializers_AreInstantiate()
+    {
+        // issue #286 (multi-line): the common Allman-style form places `{` on the next
+        // physical line. The same-line regex cannot see that `{`, so add a trailing-shape
+        // path that matches `new T` at end of line and peeks forward to a `{`-starting line.
+        // issue #286 の多行形式: Allman スタイルでは `{` が次行にあるため、行末の `new T` を
+        // 末尾マッチ regex で拾い、次の非空 prepared line が `{` で始まる時だけ `instantiate` を発行する。
+        const string content = """
+            namespace App;
+
+            using System.Collections.Generic;
+
+            public class Foo { public int X { get; set; } }
+            public class Bag { public List<Foo> Items { get; set; } = new(); }
+
+            public static class Helper
+            {
+                public static Bag BuildBagAllman()
+                {
+                    return new Bag
+                    {
+                        Items = new List<Foo>
+                        {
+                            new Foo
+                            {
+                                X = 6
+                            }
+                        }
+                    };
+                }
+
+                public static Foo[] BuildArrayAllman()
+                {
+                    return new Foo[]
+                    {
+                        new Foo { X = 4 }
+                    };
+                }
+
+                public static Foo NotAnInstantiate()
+                {
+                    // `new Foo` here is not followed by `{` — it is a compile error in
+                    // real code, but the extractor must not emit a phantom instantiate.
+                    // This exercises the peek-ahead negative path.
+                    var f = new Foo
+                    ;
+                    return f;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        // new Bag (line 12) with `{` on line 13
+        Assert.Contains(references, r => r.SymbolName == "Bag" && r.ReferenceKind == "instantiate" && r.Line == 12);
+        // new List<Foo> (line 14) with `{` on line 15
+        Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "instantiate" && r.Line == 14);
+        // new Foo (line 16) with `{` on line 17
+        Assert.Contains(references, r => r.SymbolName == "Foo" && r.ReferenceKind == "instantiate" && r.Line == 16);
+        // new Foo[] (line 26) with `{` on line 27
+        Assert.Contains(references, r => r.SymbolName == "Foo" && r.ReferenceKind == "instantiate" && r.Line == 26);
+        // The negative `var f = new Foo` (line 37) followed by `;` (line 38) must NOT
+        // emit an instantiate at that line via the trailing peek path.
+        // ネガティブ: `var f = new Foo` (行 37) の次行は `;` なので trailing peek は発行しない。
+        Assert.DoesNotContain(references, r => r.SymbolName == "Foo" && r.ReferenceKind == "instantiate" && r.Line == 37);
+    }
+
+    [Fact]
     public void Extract_PhpIncludeRequireConstructs_AreIgnored()
     {
         const string content = """
