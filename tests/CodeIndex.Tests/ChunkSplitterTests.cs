@@ -105,4 +105,32 @@ public class ChunkSplitterTests
         Assert.Equal(1, chunks[0].StartLine);
         Assert.Equal(3, chunks[0].EndLine);
     }
+
+    [Fact]
+    public void Split_MidFileBom_StrippedFromChunkContent()
+    {
+        // Mid-file UTF-8 BOM (e.g. file concatenation / tool insertion) must also be
+        // stripped from chunk content; otherwise `search` / `excerpt` leak a phantom
+        // glyph on the affected line. Closes #183.
+        // mid-file UTF-8 BOM (ファイル連結 / ツール挿入) もチャンク内容から剥がす。
+        // 剥がさないと search / excerpt が該当行に幽霊グリフを漏らす。Closes #183.
+        var content = "using System;\n\uFEFFnamespace MidBom;\n";
+        var chunks = ChunkSplitter.Split(1, content);
+
+        Assert.Single(chunks);
+        Assert.DoesNotContain('\uFEFF', chunks[0].Content);
+        Assert.Contains("namespace MidBom;", chunks[0].Content);
+    }
+
+    [Fact]
+    public void Split_BomOnlyInput_ReturnsNoChunks()
+    {
+        // BOM-only input has no real content, so it must follow the empty-file
+        // contract (0 chunks) rather than producing a phantom empty chunk.
+        // Closes #183.
+        // BOM のみの入力は実コンテンツを持たないので、空ファイル契約 (0 チャンク) に
+        // 従わせる。空内容のチャンクを作らない。Closes #183.
+        var chunks = ChunkSplitter.Split(1, "\uFEFF");
+        Assert.Empty(chunks);
+    }
 }

@@ -1627,7 +1627,45 @@ public class FileIndexerTests
             // 文字列オーバーロードではなくコードポイントで確認する。
             Assert.DoesNotContain('\uFEFF', content);
             Assert.Equal(2, record.Lines);
-            Assert.NotNull(record.Checksum);
+            // Pin the backward-compatibility requirement: checksum must be SHA256 over the
+            // raw on-disk bytes (BOM included) so that adding or removing a BOM is detected
+            // as a file change by incremental re-indexing. Closes #183.
+            // 後方互換性の要件を固定: checksum は生のオンディスクバイト（BOM 含む）の
+            // SHA256 で、BOM の追加 / 削除をインクリメンタル再索引で検知できること。Closes #183.
+            var expectedChecksum = Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(rawBytes)).ToLowerInvariant();
+            Assert.Equal(expectedChecksum, record.Checksum);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void BuildRecord_MidFileBom_StrippedFromContent()
+    {
+        // Mid-file UTF-8 BOM (e.g. from accidental file concatenation or tool insertion)
+        // must also be stripped from decoded content so `search` / `excerpt` do not emit
+        // a phantom glyph. Closes #183.
+        // mid-file UTF-8 BOM (ファイル連結やツール挿入) もデコード後の content から
+        // 剥がし、search / excerpt に幽霊グリフを漏らさないようにする。Closes #183.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var filePath = Path.Combine(tempDir, "midbom.cs");
+            var rawBytes = System.Text.Encoding.UTF8.GetBytes("using System;\n")
+                .Concat(new byte[] { 0xEF, 0xBB, 0xBF })
+                .Concat(System.Text.Encoding.UTF8.GetBytes("namespace MidBom;\n"))
+                .ToArray();
+            File.WriteAllBytes(filePath, rawBytes);
+
+            var indexer = new FileIndexer(tempDir);
+            var (_, content, _) = indexer.BuildRecord(filePath);
+
+            Assert.DoesNotContain('\uFEFF', content);
+            Assert.Contains("namespace MidBom;", content);
         }
         finally
         {

@@ -1454,20 +1454,25 @@ public class FileIndexer
         }
         // Normalize line endings to LF / 改行をLFに正規化
         content = content.Replace("\r\n", "\n").Replace("\r", "\n");
-        // Strip the leading UTF-8 BOM (U+FEFF) once per file so downstream consumers
-        // (ChunkSplitter, FTS chunks, SymbolExtractor, ReferenceExtractor, `excerpt`,
-        // `search`) never see a phantom glyph or a non-`\s` line-start character. Real
-        // compilers drop the BOM transparently; cdidx's line-oriented regexes anchored
-        // with `^\s*` would otherwise silently miss any declaration on the first line
-        // of a BOM-prefixed Windows-authored source file. Closes #183.
-        // 先頭のUTF-8 BOM (U+FEFF) を1回だけ剥がす。下流 (ChunkSplitter / FTS /
-        // SymbolExtractor / ReferenceExtractor / excerpt / search) に幽霊グリフや
-        // `\s` に該当しない行頭文字が漏れないようにする。実コンパイラは BOM を
-        // 透過的に落とすが、行指向の正規表現を `^\s*` で先頭固定している cdidx では
-        // BOM 付き Windows 作成ソースの 1 行目の宣言を黙って取りこぼしてしまう。
+        // Strip every UTF-8 BOM (U+FEFF) so downstream consumers (ChunkSplitter,
+        // FTS chunks, SymbolExtractor, ReferenceExtractor, `excerpt`, `search`)
+        // never see a phantom glyph. Leading BOM alone would make `^\s*`-anchored
+        // regexes silently miss line-1 declarations in BOM-prefixed Windows-authored
+        // sources; mid-file BOM (e.g. accidental file concatenation, tool insertion)
+        // would additionally leak a phantom glyph through `search` / `excerpt`
+        // chunk output. The raw-byte checksum is computed above and remains
+        // BOM-inclusive so incremental re-index still detects BOM add / removal.
         // Closes #183.
-        if (content.Length > 0 && content[0] == '\uFEFF')
-            content = content[1..];
+        // UTF-8 BOM (U+FEFF) を全箇所から剥がし、下流 (ChunkSplitter / FTS /
+        // SymbolExtractor / ReferenceExtractor / excerpt / search) に幽霊グリフが
+        // 漏れないようにする。先頭 BOM だけでも行指向の `^\s*` 固定正規表現で
+        // BOM 付き Windows 作成ソースの 1 行目宣言を黙って取りこぼすが、mid-file
+        // BOM (ファイル連結やツール挿入) は `search` / `excerpt` のチャンク出力に
+        // そのまま幽霊グリフを漏らす。checksum は BOM を含む生バイトから上で算出
+        // 済みで、インクリメンタル更新判定は BOM 追加 / 削除を引き続き検知する。
+        // Closes #183.
+        if (content.Contains('\uFEFF'))
+            content = content.Replace("\uFEFF", string.Empty);
         // Accurate line count: ignore trailing newline / 正確な行数: 末尾改行を無視
         var lines = content.EndsWith('\n')
             ? content[..^1].Split('\n')

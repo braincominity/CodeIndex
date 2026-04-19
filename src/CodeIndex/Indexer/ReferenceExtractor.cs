@@ -414,22 +414,16 @@ public static class ReferenceExtractor
 
         var language = lang!;
 
-        // Strip leading UTF-8 BOM (U+FEFF) defensively so tests / direct callers
-        // that bypass FileIndexer still match `^\s*`-anchored patterns on line 1.
-        // Closes #183.
-        // 先頭のUTF-8 BOM (U+FEFF) を防御的に剥がす。FileIndexer を経由しない
-        // テスト / 直接呼び出しでも 1 行目の `^\s*` 固定パターンが成立する。Closes #183.
-        if (content.Length > 0 && content[0] == '\uFEFF')
-            content = content[1..];
+        // Strip every UTF-8 BOM (U+FEFF) defensively so tests / direct callers
+        // that bypass FileIndexer still match `^\s*`-anchored patterns on line 1
+        // and on any mid-file line that happens to start with a BOM (e.g. from
+        // file concatenation or tool insertion). Closes #183.
+        // UTF-8 BOM (U+FEFF) を全箇所から防御的に剥がす。FileIndexer を経由しない
+        // テスト / 直接呼び出しでも 1 行目および mid-file BOM を持つ任意の行で
+        // `^\s*` 固定パターンが成立する。Closes #183.
+        if (content.Contains('\uFEFF'))
+            content = content.Replace("\uFEFF", string.Empty);
         var lines = content.Split('\n');
-        // Strip leading UTF-8 BOM from each line for mid-file BOM cases
-        // (e.g. files concatenated together). Closes #183.
-        // 各行先頭のUTF-8 BOMも剥がす。ファイル連結など mid-file BOM への対応。Closes #183.
-        for (int li = 0; li < lines.Length; li++)
-        {
-            if (lines[li].Length > 0 && lines[li][0] == '\uFEFF')
-                lines[li] = lines[li][1..];
-        }
         var structuralLines = StructuralLineMasker.MaskLines(language, lines);
         var preparedLines = new string[lines.Length];
         for (var pi = 0; pi < lines.Length; pi++)

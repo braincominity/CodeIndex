@@ -23,8 +23,7 @@ public static class ChunkSplitter
     /// <returns>List of chunk records / チャンクレコードのリスト</returns>
     public static List<ChunkRecord> Split(long fileId, string content)
     {
-        // Empty file produces no chunks / 空ファイルはチャンクなし
-        if (string.IsNullOrEmpty(content))
+        if (content.Length == 0)
             return [];
 
         // Defensive CRLF normalization — FileIndexer.BuildRecord already normalizes,
@@ -32,13 +31,22 @@ public static class ChunkSplitter
         // 防御的CRLF正規化 — BuildRecordで正規化済みだが、直接呼び出し時の安全策。
         if (content.Contains('\r'))
             content = content.Replace("\r\n", "\n").Replace("\r", "\n");
-        // Defensive leading UTF-8 BOM strip — FileIndexer.BuildRecord already strips,
-        // but this method is public and may be called directly with raw content.
+        // Defensive UTF-8 BOM strip — FileIndexer.BuildRecord already strips every
+        // U+FEFF, but this method is public and may be called directly with raw
+        // content. Strip all occurrences (not just leading) so mid-file BOM does
+        // not leak into chunk content and from there into `search` / `excerpt`.
         // Closes #183.
-        // 防御的な先頭UTF-8 BOM剥離 — FileIndexer.BuildRecordで既に剥がしているが、
-        // 直接呼び出し時の安全策。Closes #183.
-        if (content.Length > 0 && content[0] == '\uFEFF')
-            content = content[1..];
+        // 防御的UTF-8 BOM剥離 — FileIndexer.BuildRecordで全U+FEFFを除去済みだが、
+        // 本メソッドはpublicで直接呼び出される可能性がある。mid-file BOMが
+        // チャンク内容経由で search / excerpt に漏れないよう全箇所を除去する。
+        // Closes #183.
+        if (content.Contains('\uFEFF'))
+            content = content.Replace("\uFEFF", string.Empty);
+        // Re-check for empty after BOM/CRLF strip so BOM-only input yields no chunks,
+        // matching the no-chunks contract for empty files.
+        // BOM/CRLF剥離後に再度空判定し、BOMのみの入力が空ファイルと同じく0チャンクになるようにする。
+        if (content.Length == 0)
+            return [];
         // Remove trailing newline to avoid phantom empty line / 末尾改行による空行を除去
         var lines = content.EndsWith('\n')
             ? content[..^1].Split('\n')
