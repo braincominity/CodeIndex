@@ -307,7 +307,16 @@ public static class SymbolExtractor
             // restricted to a known set of HOC call shapes — `React.memo(` /
             // `React.forwardRef(` / `React.lazy(`, `styled.`/`styled(`/`styled``,
             // bare `connect(`/`memo(`/`forwardRef(`/`lazy(`/`observer(`, and
-            // `with<PascalCase>(` — so ordinary PascalCase constants like
+            // `with<PascalCase>(`. Each HOC call-name branch also accepts an
+            // optional TypeScript-style generic token `<TypeArgs>` between the
+            // name and the `(` (one level of nested `<<...>>` is supported) so
+            // `React.forwardRef<HTMLDivElement, Props>(...)` / `React.memo<Props>(...)` /
+            // `connect<State, Dispatch>(...)` / `with<Pascal><T>(...)` and nested-
+            // generic forms like `React.memo<Map<string, Props>>(...)` still match
+            // — the same regex is used by the JavaScript and TypeScript rows so
+            // the two stay in lock-step, and JavaScript sources happen never to
+            // carry generic syntax so the extra optional token is a no-op for
+            // real JS code — so ordinary PascalCase constants like
             // `const Config = loadConfig();` and `const Theme = React.createContext(null);`
             // (non-HOC React API calls — `createContext`, hooks, etc.) and class
             // expressions like `const Widget = class extends ...` do NOT produce phantom
@@ -324,7 +333,14 @@ public static class SymbolExtractor
             // 発火しない。RHS を既知の HOC 呼び出し形 — `React.memo(` / `React.forwardRef(`
             // / `React.lazy(`、`styled.` / `styled(` / `styled``、素の `connect(` /
             // `memo(` / `forwardRef(` / `lazy(` / `observer(`、`with<PascalCase>(` — に
-            // 限定し、`const Config = loadConfig();` のような通常 PascalCase 定数や、
+            // 限定する。各 HOC 呼び出し名の直後には TypeScript の `<型引数>` 付きの形
+            // もオプションとして許容する（ネスト 1 段まで）ため、
+            // `React.forwardRef<HTMLDivElement, Props>(...)` / `React.memo<Props>(...)` /
+            // `connect<State, Dispatch>(...)` / `with<Pascal><T>(...)`、および
+            // `React.memo<Map<string, Props>>(...)` のようなネスト generic も引き続き
+            // マッチする。同じ regex を JavaScript 行と TypeScript 行の両方で使うため
+            // 実装が一致する（JavaScript ソースに generic 構文はないので、
+            // JS 側では何も影響しない）。`const Config = loadConfig();` のような通常 PascalCase 定数や、
             // `const Theme = React.createContext(null);` のような非 HOC の React API 呼び出し
             // （`createContext` や hooks 等）、`const Widget = class extends ...` の
             // クラス式束縛で架空の `function` シンボルが生えないようにする。`= class` 形は
@@ -333,7 +349,7 @@ public static class SymbolExtractor
             // arrow パターンより後に置き、大文字始まりの arrow 束縛は先に一致した段階で
             // stopAfterFirstPatternMatch が立ち、こちらで上書きされないようにする。
             // Closes #240.
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>[A-Z]\w*)\s*=\s*(?:React\.(?:memo|forwardRef|lazy)\s*\(|styled[.(`]|connect\s*\(|memo\s*\(|forwardRef\s*\(|lazy\s*\(|observer\s*\(|with[A-Z]\w*\s*\()", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>[A-Z]\w*)\s*=\s*(?:React\.(?:memo|forwardRef|lazy)\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\(|styled[.(`]|connect\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\(|memo\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\(|forwardRef\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\(|lazy\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\(|observer\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\(|with[A-Z]\w*\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\()", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:default\s+)?class\s+(?<name>(?!extends\b)\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+?)\s+from\s+", RegexOptions.Compiled), BodyStyle.None),
         ],
@@ -371,7 +387,7 @@ public static class SymbolExtractor
             // 型注釈付き arrow 束縛（`const Callback: (x: number) => number = (x) =>
             // x + 1;`）は BodyStyle.Brace 側で先勝ちし、こちらで上書きされない。
             // Closes #240.
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>[A-Z]\w*)\s*(?::\s*.+?)?\s*=\s*(?:React\.(?:memo|forwardRef|lazy)\s*\(|styled[.(`]|connect\s*\(|memo\s*\(|forwardRef\s*\(|lazy\s*\(|observer\s*\(|with[A-Z]\w*\s*\()", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>[A-Z]\w*)\s*(?::\s*.+?)?\s*=\s*(?:React\.(?:memo|forwardRef|lazy)\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\(|styled[.(`]|connect\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\(|memo\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\(|forwardRef\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\(|lazy\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\(|observer\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\(|with[A-Z]\w*\s*(?:<[^<>()]*(?:<[^<>()]*>[^<>()]*)*>\s*)?\()", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             // Abstract class, declare class / 抽象クラス、declare クラス
             new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:default\s+)?(?:(?:abstract|declare)\s+)*class\s+(?<name>(?!(?:extends|implements)\b)\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // namespace/module — supports both identifier (namespace Foo) and quoted ambient (declare module 'express')

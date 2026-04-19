@@ -195,20 +195,73 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_HocBindingPatternAcceptsGenericTypeArgumentsOnReactHoc()
+    {
+        // TypeScript HOCs very frequently carry type arguments directly on the
+        // HOC call itself — `React.forwardRef<HTMLDivElement, Props>(...)`,
+        // `React.memo<Props>(...)`, `React.lazy<typeof X>(...)`, and the same
+        // shape on bare `forwardRef<T>(...)` / `memo<T>(...)` / `lazy<T>(...)` /
+        // `connect<State, Dispatch>(...)` / `observer<Props>(...)` / any
+        // `with<Pascal><T>(...)` call. The narrow HOC allowlist must still
+        // accept them; the earlier revision dropped every generic shape because
+        // the `<...>` tokens pushed the `(` away from the HOC name. Closes #240.
+        // TypeScript の HOC には HOC 呼び出し自身に型引数が付く形が非常に多い
+        // — `React.forwardRef<HTMLDivElement, Props>(...)`、`React.memo<Props>(...)`、
+        // `React.lazy<typeof X>(...)`、素の `forwardRef<T>(...)` /
+        // `memo<T>(...)` / `lazy<T>(...)` / `connect<State, Dispatch>(...)` /
+        // `observer<Props>(...)` / `with<Pascal><T>(...)` のいずれも同じ形。
+        // narrow な HOC allowlist でこの形を落としてはいけない。以前のリビジョンは
+        // `<...>` トークンが `(` を HOC 名から離してしまい、generic 形が全部
+        // 落ちていた。Closes #240.
+        var content = """
+            import React from 'react';
+
+            const Box = React.forwardRef<HTMLDivElement, Props>((props, ref) => <div ref={ref} />);
+            const MemoBox = React.memo<Props>(Box);
+            const LazyBox = React.lazy<typeof Box>(() => import('./Box'));
+
+            const BareBox = forwardRef<HTMLDivElement, Props>((props, ref) => <div ref={ref} />);
+            const BareMemo = memo<Props>(BareBox);
+            const BareLazy = lazy<typeof BareBox>(() => import('./BareBox'));
+
+            const ConnectedGeneric = connect<State, Dispatch>(mapState, mapDispatch)(MyComponent);
+            const Observed = observer<Props>(MyComponent);
+            const WithAuthGeneric = withAuthentication<Props>(Home);
+
+            const NestedMemo = React.memo<Map<string, Props>>(Box);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Box");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MemoBox");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "LazyBox");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "BareBox");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "BareMemo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "BareLazy");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ConnectedGeneric");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Observed");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "WithAuthGeneric");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "NestedMemo");
+    }
+
+    [Fact]
     public void Extract_JavaScript_HocBindingPatternSkipsPascalCaseNonHocConstants()
     {
         // PascalCase bindings whose RHS is NOT a known HOC prefix must not be
         // silently promoted to `function` symbols — that would create phantom
         // symbol rows and pollute `definition`, `symbols`, and `inspect` output.
-        // The narrow HOC-prefix gate (React./styled/connect/memo/forwardRef/
+        // The narrow HOC-prefix gate (React.memo/React.forwardRef/React.lazy
+        // only — bare `React.` is NOT accepted — styled/connect/memo/forwardRef/
         // lazy/observer/with<Pascal>) intentionally rejects ordinary constants,
         // ALL_CAPS config values, and arbitrary call results. Closes #240.
         // RHS が既知の HOC プレフィックスでない PascalCase / ALL_CAPS 束縛は
         // `function` シンボルに昇格させてはいけない — 架空のシンボル行が出ると
         // `definition` / `symbols` / `inspect` が汚染される。狭い HOC プレフィックス
-        // ゲート（React. / styled / connect / memo / forwardRef / lazy / observer /
-        // with<Pascal>）で通常定数、ALL_CAPS 設定値、任意の呼び出し結果を意図的に
-        // 弾く。Closes #240.
+        // ゲート（`React.memo` / `React.forwardRef` / `React.lazy` のみで、素の
+        // `React.` は受け付けない。`styled` / `connect` / `memo` / `forwardRef` /
+        // `lazy` / `observer` / `with<Pascal>`）で通常定数、ALL_CAPS 設定値、任意の
+        // 呼び出し結果を意図的に弾く。Closes #240.
         var content = """
             const Config = loadConfig();
             const ENV = process.env.NODE_ENV;
