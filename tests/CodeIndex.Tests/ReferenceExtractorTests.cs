@@ -6059,4 +6059,34 @@ public class ReferenceExtractorTests
         var test = Assert.Single(references.Where(r => r.SymbolName == "Test"));
         Assert.Equal("annotation", test.ReferenceKind);
     }
+
+    [Fact]
+    public void Extract_Csharp_LeadingBom_ExtractsReferencesOnFirstLine()
+    {
+        // BOM-prefixed C# source: reference extraction on line 1 must still work.
+        // Closes #183.
+        // BOM 付き C# ソース: 1 行目の参照抽出も機能する。Closes #183.
+        const string content = "\uFEFFusing System;\n\nnamespace BomRef;\n\npublic class C\n{\n    public void Run() { Helper(); }\n    public void Helper() { }\n}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System" && s.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Helper");
+    }
+
+    [Fact]
+    public void Extract_Csharp_MidFileBom_ExtractsReferencesOnAffectedLine()
+    {
+        // Mid-file BOM right before a call site: the reference must still be captured
+        // on its real line number. Closes #183.
+        // mid-file BOM が呼び出し行直前に挟まっても、実際の行番号で参照を拾う。Closes #183.
+        const string content = "namespace BomRef;\npublic class C\n{\n    public void Run()\n    {\n\uFEFF        Helper();\n    }\n    public void Helper() { }\n}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var helperRef = Assert.Single(references.Where(r => r.SymbolName == "Helper"));
+        Assert.Equal(6, helperRef.Line);
+    }
 }

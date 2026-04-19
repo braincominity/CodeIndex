@@ -1598,6 +1598,44 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void BuildRecord_LeadingBomStrippedFromContent()
+    {
+        // Files whose on-disk bytes begin with UTF-8 BOM (EF BB BF) must have the BOM
+        // stripped from the decoded content so downstream consumers never see a phantom
+        // U+FEFF glyph on line 1. The raw-byte checksum must still reflect the on-disk
+        // file (BOM included) so incremental change detection keeps working. Closes #183.
+        // オンディスク先頭に UTF-8 BOM (EF BB BF) を持つファイルは、デコード後の content
+        // から BOM を剥がし、下流に幽霊 U+FEFF を渡さないようにする。checksum は生バイト
+        // ベース（BOM を含む）のまま維持し、インクリメンタル更新判定が壊れないようにする。Closes #183.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var filePath = Path.Combine(tempDir, "bom.cs");
+            var rawBytes = new byte[] { 0xEF, 0xBB, 0xBF }
+                .Concat(System.Text.Encoding.UTF8.GetBytes("using System;\nnamespace BomTest;\n"))
+                .ToArray();
+            File.WriteAllBytes(filePath, rawBytes);
+
+            var indexer = new FileIndexer(tempDir);
+            var (record, content, _) = indexer.BuildRecord(filePath);
+
+            Assert.StartsWith("using System;", content);
+            // Culture-aware IndexOf treats U+FEFF as ignorable and spuriously matches at pos 0,
+            // so assert on the raw code-point instead of the string overload.
+            // カルチャ依存の IndexOf は U+FEFF を無視扱いで pos 0 に誤マッチするため、
+            // 文字列オーバーロードではなくコードポイントで確認する。
+            Assert.DoesNotContain('\uFEFF', content);
+            Assert.Equal(2, record.Lines);
+            Assert.NotNull(record.Checksum);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void BuildRecord_ThrowsForOversizedFile()
     {
         // Files exceeding 10 MB should throw InvalidOperationException

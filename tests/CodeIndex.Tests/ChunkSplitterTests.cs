@@ -84,4 +84,25 @@ public class ChunkSplitterTests
         Assert.Equal(3, chunks[0].EndLine);
         Assert.DoesNotContain("\r", chunks[0].Content);
     }
+
+    [Fact]
+    public void Split_LeadingBom_StrippedFromChunkContent()
+    {
+        // Leading UTF-8 BOM (U+FEFF) must be stripped before chunking so `excerpt`
+        // and `search` do not emit a phantom glyph on line 1. Closes #183.
+        // 先頭の UTF-8 BOM (U+FEFF) は分割前に剥がし、excerpt / search が 1 行目に
+        // 幽霊グリフを出さないようにする。Closes #183.
+        var content = "\uFEFFusing System;\n\nnamespace BomTest;\n";
+        var chunks = ChunkSplitter.Split(1, content);
+
+        Assert.Single(chunks);
+        // Culture-aware IndexOf treats U+FEFF as ignorable and spuriously matches at pos 0,
+        // so assert on the raw code-point instead of the string overload.
+        // カルチャ依存の IndexOf は U+FEFF を無視扱いで pos 0 に誤マッチするため、
+        // 文字列オーバーロードではなくコードポイントで確認する。
+        Assert.DoesNotContain('\uFEFF', chunks[0].Content);
+        Assert.StartsWith("using System;", chunks[0].Content);
+        Assert.Equal(1, chunks[0].StartLine);
+        Assert.Equal(3, chunks[0].EndLine);
+    }
 }

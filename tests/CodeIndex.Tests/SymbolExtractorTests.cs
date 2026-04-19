@@ -9575,4 +9575,54 @@ public class SymbolExtractorTests
         Assert.Equal(8, ctors[0].Line);
         Assert.Contains("public static extern G(string s)", ctors[0].Signature);
     }
+
+    [Fact]
+    public void Extract_Csharp_LeadingBom_IndexesFirstLineImport()
+    {
+        // BOM-prefixed C# source: `using System;` on line 1 must still be captured.
+        // Closes #183.
+        // BOM 付き C# ソース: 1 行目の `using System;` も取りこぼさない。Closes #183.
+        const string content = "\uFEFFusing System;\n\nnamespace BomTest;\n\npublic class WithBom {\n    public void Run() { }\n}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var bomLess = SymbolExtractor.Extract(2, "csharp", content[1..]);
+        Assert.Equal(bomLess.Count, symbols.Count);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System" && s.Line == 1);
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "BomTest");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "WithBom");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Run");
+    }
+
+    [Fact]
+    public void Extract_Python_LeadingBom_IndexesFirstLineDef()
+    {
+        // BOM-prefixed Python: `def at_start():` on line 1 must still be captured.
+        // Closes #183.
+        // BOM 付き Python: 1 行目の `def at_start():` も取りこぼさない。Closes #183.
+        const string content = "\uFEFFdef at_start():\n    pass\n";
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "at_start" && s.Line == 1);
+    }
+
+    [Fact]
+    public void Extract_Csharp_MidFileBom_IndexesAffectedLine()
+    {
+        // Mid-file BOM (e.g. from file concatenation): the `\uFEFFnamespace MidBom;` line
+        // must still yield a namespace symbol, on its real line number. Closes #183.
+        // ファイル連結などで挟まった mid-file BOM: `\uFEFFnamespace MidBom;` 行も
+        // 実際の行番号で namespace として拾う。Closes #183.
+        const string content = "using System;\n\n\uFEFFnamespace MidBom;\n\npublic class X { }\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var ns = Assert.Single(symbols.Where(s => s.Kind == "namespace"));
+        Assert.Equal("MidBom", ns.Name);
+        Assert.Equal(3, ns.Line);
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "X");
+    }
 }

@@ -1454,6 +1454,20 @@ public class FileIndexer
         }
         // Normalize line endings to LF / 改行をLFに正規化
         content = content.Replace("\r\n", "\n").Replace("\r", "\n");
+        // Strip the leading UTF-8 BOM (U+FEFF) once per file so downstream consumers
+        // (ChunkSplitter, FTS chunks, SymbolExtractor, ReferenceExtractor, `excerpt`,
+        // `search`) never see a phantom glyph or a non-`\s` line-start character. Real
+        // compilers drop the BOM transparently; cdidx's line-oriented regexes anchored
+        // with `^\s*` would otherwise silently miss any declaration on the first line
+        // of a BOM-prefixed Windows-authored source file. Closes #183.
+        // 先頭のUTF-8 BOM (U+FEFF) を1回だけ剥がす。下流 (ChunkSplitter / FTS /
+        // SymbolExtractor / ReferenceExtractor / excerpt / search) に幽霊グリフや
+        // `\s` に該当しない行頭文字が漏れないようにする。実コンパイラは BOM を
+        // 透過的に落とすが、行指向の正規表現を `^\s*` で先頭固定している cdidx では
+        // BOM 付き Windows 作成ソースの 1 行目の宣言を黙って取りこぼしてしまう。
+        // Closes #183.
+        if (content.Length > 0 && content[0] == '\uFEFF')
+            content = content[1..];
         // Accurate line count: ignore trailing newline / 正確な行数: 末尾改行を無視
         var lines = content.EndsWith('\n')
             ? content[..^1].Split('\n')

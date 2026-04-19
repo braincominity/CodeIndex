@@ -32,6 +32,13 @@ public static class ChunkSplitter
         // 防御的CRLF正規化 — BuildRecordで正規化済みだが、直接呼び出し時の安全策。
         if (content.Contains('\r'))
             content = content.Replace("\r\n", "\n").Replace("\r", "\n");
+        // Defensive leading UTF-8 BOM strip — FileIndexer.BuildRecord already strips,
+        // but this method is public and may be called directly with raw content.
+        // Closes #183.
+        // 防御的な先頭UTF-8 BOM剥離 — FileIndexer.BuildRecordで既に剥がしているが、
+        // 直接呼び出し時の安全策。Closes #183.
+        if (content.Length > 0 && content[0] == '\uFEFF')
+            content = content[1..];
         // Remove trailing newline to avoid phantom empty line / 末尾改行による空行を除去
         var lines = content.EndsWith('\n')
             ? content[..^1].Split('\n')
