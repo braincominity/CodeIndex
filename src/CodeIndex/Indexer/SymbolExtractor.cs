@@ -551,12 +551,20 @@ public static class SymbolExtractor
             // so alias-qualified types like `global::System.String` and `Alias::Type` still match.
             // LINQ query-expression keywords are also excluded from the negative lookahead so that
             // continuation lines like `where Validator.Check(x)` / `select Mapper.Convert(x)` /
-            // `orderby Math.Abs(x)` do not match as `returnType + interface.member`. Closes #377.
+            // `orderby Math.Abs(x)` do not match as `returnType + interface.member`. `new` is also
+            // excluded so expression statements like `new System.Text.StringBuilder().Append(...)`
+            // or `new System.Net.Http.HttpClient().Dispose()` do not masquerade as an explicit
+            // interface method (returnType=`new`, interface=qualified type, name=trailing member).
+            // Closes #362, #377.
             // 明示的インターフェース実装 (例: void IDisposable.Dispose())
             // 有効な戻り値型（ステートメントキーワードではない）とドット前のインターフェース名を要求。
             // qualified call site を伴う named-argument label のみ除外し、
             // `global::System.String` や `Alias::Type` のような alias-qualified 型は許可する。
-            new("function",  new Regex($@"^\s*(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\w+\s*:\s*(?:global::)?[\w.<>:]+\.\w+\s*(?:<[^>]+>\s*)?[\(\[])(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>\w+)\s*(?:<[^>]+>\s*)?[\(\[]", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            // `new` も除外して、`new System.Text.StringBuilder().Append(...)` や
+            // `new System.Net.Http.HttpClient().Dispose()` のような式文が
+            // returnType=`new` / interface=qualified 型 / name=末尾メンバー
+            // として明示的インターフェースメソッドに化けないようにする。
+            new("function",  new Regex($@"^\s*(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|new|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\w+\s*:\s*(?:global::)?[\w.<>:]+\.\w+\s*(?:<[^>]+>\s*)?[\(\[])(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>\w+)\s*(?:<[^>]+>\s*)?[\(\[]", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             // Explicit interface property implementation (brace body), e.g. int IThing.Value { get; set; }
             // Mirrors the explicit-interface method row above: the qualifier is non-capturing so the
             // short property name (Value) is recorded as name, consistent with how the method row

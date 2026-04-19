@@ -8378,6 +8378,37 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DoesNotMatchNewExpressionStatementsAsExplicitInterfaceDefinitions()
+    {
+        // Issue #362: `new System.Text.StringBuilder().Append(...)` などの式文が
+        // returnType=`new` / interface=qualified 型 / name=末尾メンバーとして
+        // 明示的インターフェースメソッド定義に化けないこと。
+        // Issue #362: expression statements like `new System.Text.StringBuilder().Append(...)`
+        // must not masquerade as explicit interface method definitions where returnType=`new`,
+        // interface=qualified type, name=trailing member.
+        var content = "public class Svc\n{\n    public int Real() => 42;\n\n    public void ChainedNew()\n    {\n        new System.Text.StringBuilder().Append(\"a\").Append(\"b\").ToString();\n    }\n\n    public void DiscardNew()\n    {\n        _ = new System.Text.RegularExpressions.Regex(\"pattern\");\n    }\n\n    public void UseNew()\n    {\n        new System.Net.Http.HttpClient().Dispose();\n    }\n}\n\npublic class Consumer : System.IDisposable\n{\n    void System.IDisposable.Dispose() { }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        // Real definitions should be extracted / 実際の定義は抽出されるべき
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Svc");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Real");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ChainedNew");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "DiscardNew");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "UseNew");
+        // Explicit interface impl on Consumer class must still be captured (regression guard)
+        // Consumer クラスの明示的インターフェース実装は引き続き抽出されること（回帰防止）
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Dispose" && s.ReturnType == "void");
+        // Phantom function rows from new-expression statements must NOT be produced
+        // new 式文から phantom function 行が生成されないこと
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "StringBuilder");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Regex");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "HttpClient");
+        // The `new` keyword itself must not become a function name either
+        // `new` キーワード自体が function 名になっても困る
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "new");
+    }
+
+    [Fact]
     public void Extract_CSharp_DoesNotMatchNamedArgumentFrameworkCallsAsDefinitions()
     {
         // Named-argument labels preceding qualified framework calls must not look like explicit interface impls.
