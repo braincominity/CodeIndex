@@ -5402,11 +5402,25 @@ public class SymbolExtractorTests
         var events = symbols.Where(s => s.Kind == "event").ToList();
 
         Assert.Equal(10, events.Count);
-        Assert.Equal(2, events.Count(s => s.Name == "Ping"));
-        Assert.Equal(2, events.Count(s => s.Name == "Ring"));
-        Assert.Contains(events, s => s.Name == "Hide" && s.Visibility == "public" && s.ReturnType == "EventHandler");
-        Assert.Contains(events, s => s.Name == "Peek" && s.Visibility == "protected" && s.ReturnType == "EventHandler");
-        Assert.Contains(events, s => s.Name == "Plain" && s.Visibility == "public" && s.ReturnType == "EventHandler");
+        var basePing = Assert.Single(events.Where(s => s.Name == "Ping" && s.ContainerKind == "class" && s.ContainerName == "Base"));
+        Assert.Equal("public", basePing.Visibility);
+        Assert.Equal("EventHandler", basePing.ReturnType);
+
+        var derivedPing = Assert.Single(events.Where(s => s.Name == "Ping" && s.ContainerKind == "class" && s.ContainerName == "Derived"));
+        Assert.Equal("public", derivedPing.Visibility);
+        Assert.Equal("EventHandler", derivedPing.ReturnType);
+
+        var baseRing = Assert.Single(events.Where(s => s.Name == "Ring" && s.ContainerKind == "class" && s.ContainerName == "Base"));
+        Assert.Equal("public", baseRing.Visibility);
+        Assert.Equal("EventHandler", baseRing.ReturnType);
+
+        var derivedRing = Assert.Single(events.Where(s => s.Name == "Ring" && s.ContainerKind == "class" && s.ContainerName == "Derived"));
+        Assert.Equal("public", derivedRing.Visibility);
+        Assert.Equal("EventHandler", derivedRing.ReturnType);
+
+        Assert.Contains(events, s => s.Name == "Hide" && s.ContainerKind == "class" && s.ContainerName == "Base" && s.Visibility == "public" && s.ReturnType == "EventHandler");
+        Assert.Contains(events, s => s.Name == "Peek" && s.ContainerKind == "class" && s.ContainerName == "Base" && s.Visibility == "protected" && s.ReturnType == "EventHandler");
+        Assert.Contains(events, s => s.Name == "Plain" && s.ContainerKind == "class" && s.ContainerName == "Base" && s.Visibility == "public" && s.ReturnType == "EventHandler");
         Assert.Contains(events, s => s.Name == "Regular" && string.IsNullOrEmpty(s.Visibility) && s.ReturnType == "EventHandler");
         Assert.Contains(events, s => s.Name == "StaticAbs" && string.IsNullOrEmpty(s.Visibility) && s.ReturnType == "EventHandler");
         Assert.Contains(events, s => s.Name == "StaticVirt" && string.IsNullOrEmpty(s.Visibility) && s.ReturnType == "EventHandler");
