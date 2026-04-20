@@ -1035,7 +1035,7 @@ public static class SymbolExtractor
 
     private static readonly HashSet<string> ContainerKinds =
     [
-        "class", "namespace", "enum"
+        "class", "struct", "interface", "namespace", "enum"
     ];
 
     private static readonly Regex RubyBlockStartRegex = new(@"^\s*(?:class|module|def|if|unless|case|begin|do|while|until|for)\b", RegexOptions.Compiled);
