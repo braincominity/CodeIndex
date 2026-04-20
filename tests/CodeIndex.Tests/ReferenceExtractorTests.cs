@@ -959,6 +959,44 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpNestedGenericParenlessInitializers_AreInstantiate()
+    {
+        // Regression follow-up for issue #263: nested generic parenless initializers such as
+        // `new Dictionary<string, List<int>> { ... }` and Allman-style `new Dictionary<...>\n{`
+        // must keep the outer instantiate edge instead of indexing only the inner flat ctor calls.
+        // issue #263 の追補: `new Dictionary<string, List<int>> { ... }` や
+        // Allman 形式の `new Dictionary<...>\n{` でも、内側の平坦な ctor 呼び出しだけでなく
+        // 外側型の instantiate edge を維持しなければならない。
+        const string content = """
+            using System.Collections.Generic;
+
+            namespace Demo;
+
+            public class Builder
+            {
+                public void Build()
+                {
+                    var a = new Dictionary<string, List<int>> { ["k"] = new List<int>() };
+                    var b = new List<Dictionary<string, int>> { new Dictionary<string, int>() };
+                    var c = new Dictionary<int, List<int>>
+                    {
+                        [1] = new List<int>()
+                    };
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "instantiate" && r.Line == 9);
+        Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "instantiate" && r.Line == 10);
+        Assert.Contains(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "instantiate" && r.Line == 11);
+        Assert.DoesNotContain(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "List" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_CsharpParenlessInitializers_AreInstantiate()
     {
         // issue #286: object/collection/dictionary/array initializer syntax without `()`
@@ -1029,6 +1067,7 @@ public class ReferenceExtractorTests
                 {
                     var a = new N.Foo { X = 1 };
                     var b = new global::N.Bar { X = 2 };
+                    var c = new global::System.Collections.Generic.Dictionary<string, global::System.Collections.Generic.List<int>> { ["k"] = new global::System.Collections.Generic.List<int>() };
                 }
             }
             """;
@@ -1038,6 +1077,7 @@ public class ReferenceExtractorTests
 
         Assert.Contains(references, r => r.SymbolName == "Foo" && r.ReferenceKind == "instantiate" && r.Line == 11);
         Assert.Contains(references, r => r.SymbolName == "Bar" && r.ReferenceKind == "instantiate" && r.Line == 12);
+        Assert.Contains(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "instantiate" && r.Line == 13);
     }
 
     [Fact]

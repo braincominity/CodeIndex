@@ -711,15 +711,13 @@ public static class ReferenceExtractor
             // 専用パスで `instantiate` を発行する。issue #286 参照。
             if (language is "csharp" or "java")
             {
+                var matchedInitializerIndices = new HashSet<int>();
                 foreach (Match match in CSharpJavaInitializerRegex.Matches(preparedLine))
                 {
                     var name = match.Groups["name"].Value;
                     var nameIndex = match.Groups["name"].Index;
-                    if (language == "csharp" && CSharpBuiltInTypeNames.Contains(name))
-                        continue;
-                    if (language == "java" && JavaPrimitiveTypeNames.Contains(name))
-                        continue;
-                    if (IsIgnoredCallName(language, name))
+                    matchedInitializerIndices.Add(nameIndex);
+                    if (ShouldSkipInitializerName(language, name))
                         continue;
                     // Do NOT skip when the type is defined in the same file — the CallRegex
                     // `IsConstructorCallName` path emits `instantiate` without a definitionNames
@@ -728,6 +726,33 @@ public static class ReferenceExtractor
                     // `instantiate` が同様の扱いをしているため、括弧あり/なしで挙動を揃える。
                     var initContainer = ResolveContainerForCall(nameIndex);
                     AddReference(references, seen, fileId, match, "instantiate", context, lineNumber, initContainer);
+                }
+
+                // The initializer regex has the same one-level generic ceiling as CallRegex,
+                // so nested generic targets like `new Dictionary<string, List<int>> { ... }`
+                // need a depth-aware fallback to keep the outer `instantiate` edge.
+                // initializer regex も CallRegex と同じく generic を 1 段までしか見ないため、
+                // `new Dictionary<string, List<int>> { ... }` の外側型は depth-aware fallback
+                // で補って `instantiate` を落とさないようにする。
+                foreach (var candidate in EnumerateNestedGenericInitializerCandidates(
+                             preparedLine,
+                             matchedInitializerIndices,
+                             requireOpeningBrace: true))
+                {
+                    if (ShouldSkipInitializerName(language, candidate.Name))
+                        continue;
+
+                    var initContainer = ResolveContainerForCall(candidate.NameIndex);
+                    AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        candidate.Name,
+                        candidate.NameIndex,
+                        "instantiate",
+                        context,
+                        lineNumber,
+                        initContainer);
                 }
 
                 // Allman-style multi-line form: `new T` at end of current line with the
@@ -739,30 +764,46 @@ public static class ReferenceExtractor
                 // `{` を合わせて 1 つの instantiate として扱う。`{` が続かない場合（`;` や `(` が
                 // 後続する等）には幻行を出さないため、peek で確認してから発行する。
                 var trailingMatch = CSharpJavaInitializerTrailingRegex.Match(preparedLine);
-                if (trailingMatch.Success)
+                var peek = i + 1;
+                while (peek < preparedLines.Length && string.IsNullOrWhiteSpace(preparedLines[peek]))
+                    peek++;
+                if (peek < preparedLines.Length)
                 {
-                    var peek = i + 1;
-                    while (peek < preparedLines.Length && string.IsNullOrWhiteSpace(preparedLines[peek]))
-                        peek++;
-                    if (peek < preparedLines.Length)
+                    var nextContent = preparedLines[peek].TrimStart();
+                    if (nextContent.Length > 0 && nextContent[0] == '{')
                     {
-                        var nextContent = preparedLines[peek].TrimStart();
-                        if (nextContent.Length > 0 && nextContent[0] == '{')
+                        if (trailingMatch.Success)
                         {
                             var name = trailingMatch.Groups["name"].Value;
                             var nameIndex = trailingMatch.Groups["name"].Index;
-                            var accept = true;
-                            if (language == "csharp" && CSharpBuiltInTypeNames.Contains(name))
-                                accept = false;
-                            else if (language == "java" && JavaPrimitiveTypeNames.Contains(name))
-                                accept = false;
-                            else if (IsIgnoredCallName(language, name))
-                                accept = false;
-                            if (accept)
+                            matchedInitializerIndices.Add(nameIndex);
+                            if (!ShouldSkipInitializerName(language, name))
                             {
                                 var initContainer = ResolveContainerForCall(nameIndex);
                                 AddReference(references, seen, fileId, trailingMatch, "instantiate", context, lineNumber, initContainer);
                             }
+
+                        }
+
+                        foreach (var candidate in EnumerateNestedGenericInitializerCandidates(
+                                     preparedLine,
+                                     matchedInitializerIndices,
+                                     requireOpeningBrace: false))
+                        {
+                            if (ShouldSkipInitializerName(language, candidate.Name))
+                                continue;
+
+                            var initContainer = ResolveContainerForCall(candidate.NameIndex);
+                            AddReference(
+                                references,
+                                seen,
+                                fileId,
+                                candidate.Name,
+                                candidate.NameIndex,
+                                "instantiate",
+                                context,
+                                lineNumber,
+                                initContainer);
                         }
                     }
                 }
@@ -2859,6 +2900,149 @@ public static class ReferenceExtractor
 
             i--;
         }
+    }
+
+    private static IEnumerable<NestedGenericCallCandidate> EnumerateNestedGenericInitializerCandidates(
+        string preparedLine,
+        HashSet<int> matchedInitializerIndices,
+        bool requireOpeningBrace)
+    {
+        for (var i = 0; i < preparedLine.Length; i++)
+        {
+            if (!IsStandaloneNewKeyword(preparedLine, i))
+                continue;
+
+            var scan = i + 3;
+            if (!TryReadQualifiedTypeName(preparedLine, ref scan, out var name, out var nameIndex))
+            {
+                i += 2;
+                continue;
+            }
+
+            if (matchedInitializerIndices.Contains(nameIndex))
+            {
+                i = scan - 1;
+                continue;
+            }
+
+            if (!TrySkipBalancedGenericArgs(preparedLine, ref scan, out var sawNestedGeneric) || !sawNestedGeneric)
+            {
+                i = scan - 1;
+                continue;
+            }
+
+            if (!TrySkipArraySuffixes(preparedLine, ref scan))
+            {
+                i = scan - 1;
+                continue;
+            }
+
+            while (scan < preparedLine.Length && char.IsWhiteSpace(preparedLine[scan]))
+                scan++;
+
+            if (requireOpeningBrace)
+            {
+                if (scan < preparedLine.Length && preparedLine[scan] == '{')
+                    yield return new NestedGenericCallCandidate(name, nameIndex);
+            }
+            else if (scan == preparedLine.Length)
+            {
+                yield return new NestedGenericCallCandidate(name, nameIndex);
+            }
+
+            i = scan - 1;
+        }
+    }
+
+    private static bool TryReadQualifiedTypeName(
+        string preparedLine,
+        ref int scan,
+        out string name,
+        out int nameIndex)
+    {
+        name = string.Empty;
+        nameIndex = -1;
+
+        while (true)
+        {
+            while (scan < preparedLine.Length && char.IsWhiteSpace(preparedLine[scan]))
+                scan++;
+
+            if (scan >= preparedLine.Length || !IsAsciiIdentifierStartChar(preparedLine[scan]))
+                return false;
+
+            var segmentStart = scan;
+            scan++;
+            while (scan < preparedLine.Length && IsIdentifierChar(preparedLine[scan]))
+                scan++;
+
+            name = preparedLine[segmentStart..scan];
+            nameIndex = segmentStart;
+
+            var separatorScan = scan;
+            while (separatorScan < preparedLine.Length && char.IsWhiteSpace(preparedLine[separatorScan]))
+                separatorScan++;
+
+            if (separatorScan + 1 < preparedLine.Length
+                && preparedLine[separatorScan] == ':'
+                && preparedLine[separatorScan + 1] == ':')
+            {
+                scan = separatorScan + 2;
+                continue;
+            }
+
+            if (separatorScan < preparedLine.Length && preparedLine[separatorScan] == '.')
+            {
+                scan = separatorScan + 1;
+                continue;
+            }
+
+            scan = separatorScan;
+            return true;
+        }
+    }
+
+    private static bool TrySkipArraySuffixes(string preparedLine, ref int scan)
+    {
+        while (true)
+        {
+            while (scan < preparedLine.Length && char.IsWhiteSpace(preparedLine[scan]))
+                scan++;
+
+            if (scan >= preparedLine.Length || preparedLine[scan] != '[')
+                return true;
+
+            scan++;
+            while (scan < preparedLine.Length && preparedLine[scan] != ']')
+                scan++;
+
+            if (scan >= preparedLine.Length || preparedLine[scan] != ']')
+                return false;
+
+            scan++;
+        }
+    }
+
+    private static bool ShouldSkipInitializerName(string language, string name) =>
+        (language == "csharp" && CSharpBuiltInTypeNames.Contains(name))
+        || (language == "java" && JavaPrimitiveTypeNames.Contains(name))
+        || IsIgnoredCallName(language, name);
+
+    private static bool IsStandaloneNewKeyword(string preparedLine, int index)
+    {
+        if (index < 0 || index + 3 > preparedLine.Length)
+            return false;
+        if (preparedLine[index] != 'n'
+            || preparedLine[index + 1] != 'e'
+            || preparedLine[index + 2] != 'w')
+        {
+            return false;
+        }
+
+        if (index > 0 && IsIdentifierChar(preparedLine[index - 1]))
+            return false;
+
+        return index + 3 >= preparedLine.Length || !IsIdentifierChar(preparedLine[index + 3]);
     }
 
     private static bool TrySkipBalancedGenericArgs(string preparedLine, ref int scan, out bool sawNestedGeneric)
