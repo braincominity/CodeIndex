@@ -5162,6 +5162,80 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbolsAndOutline_CSharpLongRawStringFields_PreserveFullSignature()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_long_raw_string_fields");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            var content = string.Join(
+                "\n",
+                [
+                    "namespace Demo;",
+                    "",
+                    "public class Fixture",
+                    "{",
+                    "    private static readonly string",
+                    "        StaticScript = \"\"\"",
+                    .. Enumerable.Range(1, 18).Select(i => $"line{i:00}"),
+                    "\"\"\";",
+                    "",
+                    "    private const string ConstScript = \"\"\"",
+                    .. Enumerable.Range(1, 18).Select(i => $"const{i:00}"),
+                    "\"\"\";",
+                    "}"
+                ]);
+            File.WriteAllText(Path.Combine(projectRoot, "src", "fixture.cs"), content);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (staticExitCode, staticStdout, staticStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "StaticScript", "--exact-name"],
+                _jsonOptions));
+            var (constExitCode, constStdout, constStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "ConstScript", "--exact-name"],
+                _jsonOptions));
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/fixture.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var staticDocument = ParseJsonOutput(staticStdout);
+            using var constDocument = ParseJsonOutput(constStdout);
+            using var outlineDocument = ParseJsonOutput(outlineStdout);
+
+            var staticSignature = staticDocument.RootElement.GetProperty("signature").GetString();
+            var constSignature = constDocument.RootElement.GetProperty("signature").GetString();
+            var outlineSymbols = outlineDocument.RootElement.GetProperty("symbols").EnumerateArray().ToArray();
+            var outlineStatic = Assert.Single(outlineSymbols.Where(symbol => symbol.GetProperty("name").GetString() == "StaticScript"));
+            var outlineConst = Assert.Single(outlineSymbols.Where(symbol => symbol.GetProperty("name").GetString() == "ConstScript"));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, staticExitCode);
+            Assert.Equal(string.Empty, staticStderr);
+            Assert.Equal(CommandExitCodes.Success, constExitCode);
+            Assert.Equal(string.Empty, constStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+
+            Assert.Contains("StaticScript = \"\"\"", staticSignature);
+            Assert.Contains("\"\"\";", staticSignature);
+            Assert.Contains("ConstScript = \"\"\"", constSignature);
+            Assert.Contains("\"\"\";", constSignature);
+            Assert.Contains("StaticScript = \"\"\"", outlineStatic.GetProperty("signature").GetString());
+            Assert.Contains("\"\"\";", outlineStatic.GetProperty("signature").GetString());
+            Assert.Contains("ConstScript = \"\"\"", outlineConst.GetProperty("signature").GetString());
+            Assert.Contains("\"\"\";", outlineConst.GetProperty("signature").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunOutline_CSharpBraceOnNextLinePropertyHeader_KeepsHeaderSignature()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_brace_property_header");

@@ -8229,10 +8229,42 @@ public class SymbolExtractorTests
             ]);
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function"
+        var script = Assert.Single(symbols.Where(s => s.Kind == "function"
             && s.Name == "Script"
             && s.Visibility == "private"
-            && s.ReturnType == "string");
+            && s.ReturnType == "string"));
+        Assert.Contains("Script = \"\"\"", script.Signature);
+        Assert.Contains("\"\"\";", script.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsSameLineConstRawStringFieldBeyondLookaheadBudget()
+    {
+        // Same-line `const string Name = """` must also enter the confirmed continuation
+        // path immediately; otherwise the long raw-string body falls past the bounded
+        // lookahead window and the stored signature truncates at the opener line.
+        // 同一行の `const string Name = """` も確認済み継続へ即時に入らないと、
+        // 長い raw string 本体が bounded な先読み窓の外へ落ち、保存 signature が
+        // opener 行で途切れてしまう。
+        var content = string.Join(
+            "\n",
+            [
+                "namespace Demo;",
+                "public class Fixtures",
+                "{",
+                "    private const string ConstScript = \"\"\"",
+                .. Enumerable.Range(1, 18).Select(i => $"line{i:00}"),
+                "\"\"\";",
+                "}"
+            ]);
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var constScript = Assert.Single(symbols.Where(s => s.Kind == "function"
+            && s.Name == "ConstScript"
+            && s.Visibility == "private"
+            && s.ReturnType == "string"));
+        Assert.Contains("ConstScript = \"\"\"", constScript.Signature);
+        Assert.Contains("\"\"\";", constScript.Signature);
     }
 
     [Fact]
@@ -8263,10 +8295,12 @@ public class SymbolExtractorTests
             ]);
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        Assert.Contains(symbols, s => s.Kind == "property"
+        var map = Assert.Single(symbols.Where(s => s.Kind == "property"
             && s.Name == "_map"
             && s.Visibility == "private"
-            && s.ReturnType == "Dictionary<string,int>");
+            && s.ReturnType == "Dictionary<string,int>"));
+        Assert.Contains("_map = new()", map.Signature);
+        Assert.Contains("};", map.Signature);
     }
 
     [Fact]

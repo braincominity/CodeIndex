@@ -1474,7 +1474,24 @@ public static class SymbolExtractor
                     {
                         signature = line[absoluteStartColumn..(sameLineEndColumn + 1)].Trim();
                     }
-                    else if (lang == "csharp" && pattern.Kind == "property" && csharpPropertyCandidate.LastConsumedLineIndex > i)
+                    else if (lang == "csharp"
+                        && pattern.BodyStyle == BodyStyle.None
+                        && TryFindCSharpFieldSignatureExtent(
+                            lines,
+                            i,
+                            csharpGateRawStartColumn,
+                            out var csharpFieldSignatureLastLineIndex,
+                            out var csharpFieldSignatureLastLineExclusiveEndColumn)
+                        && csharpFieldSignatureLastLineIndex > i)
+                    {
+                        signature = BuildCSharpMultilineSignature(
+                            lines,
+                            i,
+                            csharpGateRawStartColumn,
+                            csharpFieldSignatureLastLineIndex,
+                            csharpFieldSignatureLastLineExclusiveEndColumn);
+                    }
+                    else if (lang == "csharp" && csharpPropertyCandidate.LastConsumedLineIndex > i)
                     {
                         signature = BuildCSharpMultilineSignature(
                             lines,
@@ -9371,6 +9388,20 @@ public static class SymbolExtractor
             ? ResolveCSharpBraceColumn(lines[startLineIndex], csharpMatchLines[startLineIndex]) + 1
             : (int?)null;
 
+        if (HasCSharpTopLevelFieldInitializer(matchLine)
+            || openBraceLineIndex >= 0 && CSharpConfirmedMemberPrefixRegex.IsMatch(matchLine))
+        {
+            return ContinueConfirmedCSharpPropertyMatch(
+                lines,
+                csharpMatchLines,
+                builder,
+                startLineIndex,
+                startLineIndex,
+                matchLine,
+                openBraceLineIndex,
+                openBraceExclusiveEndColumn);
+        }
+
         var lookaheadLimitExclusive = Math.Min(csharpMatchLines.Length, startLineIndex + CSharpPropertyMatchLookaheadLineLimit + 1);
         for (int i = startLineIndex + 1; i < lookaheadLimitExclusive; i++)
         {
@@ -9882,6 +9913,66 @@ public static class SymbolExtractor
         }
 
         return builder.ToString().Trim();
+    }
+
+    private static bool TryFindCSharpFieldSignatureExtent(
+        string[] lines,
+        int startLineIndex,
+        int startColumn,
+        out int lastLineIndex,
+        out int? lastLineExclusiveEndColumn)
+    {
+        var lexState = new CSharpLexState();
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+
+        for (int i = startLineIndex; i < lines.Length; i++)
+        {
+            var lexedLine = LexCSharpLine(lines[i], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+            var fromColumn = i == startLineIndex
+                ? Math.Min(Math.Max(0, startColumn), sanitizedLine.Length)
+                : 0;
+
+            for (int column = fromColumn; column < sanitizedLine.Length; column++)
+            {
+                switch (sanitizedLine[column])
+                {
+                    case '(':
+                        parenDepth++;
+                        break;
+                    case ')' when parenDepth > 0:
+                        parenDepth--;
+                        break;
+                    case '[':
+                        bracketDepth++;
+                        break;
+                    case ']' when bracketDepth > 0:
+                        bracketDepth--;
+                        break;
+                    case '{':
+                        braceDepth++;
+                        break;
+                    case '}' when braceDepth > 0:
+                        braceDepth--;
+                        break;
+                    case '}' when parenDepth == 0 && bracketDepth == 0 && braceDepth == 0:
+                        lastLineIndex = i;
+                        lastLineExclusiveEndColumn = column;
+                        return true;
+                    case ';' when parenDepth == 0 && bracketDepth == 0 && braceDepth == 0:
+                        lastLineIndex = i;
+                        lastLineExclusiveEndColumn = column + 1;
+                        return true;
+                }
+            }
+        }
+
+        lastLineIndex = startLineIndex;
+        lastLineExclusiveEndColumn = null;
+        return false;
     }
 
     // Scan forward from a C# type declaration header (`class` / `struct` / `interface` /
