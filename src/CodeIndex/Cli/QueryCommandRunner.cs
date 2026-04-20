@@ -1559,6 +1559,11 @@ public static class QueryCommandRunner
                     Console.WriteLine("WARN    : symbol_references table missing — reference / caller / callee / unused counts are degraded to 0.");
                 if (!status.IssuesTableAvailable)
                     Console.WriteLine("WARN    : file_issues table missing — validate output is degraded to empty.");
+                if (!status.HotspotFamilyReady && status.HotspotFamilyDegradedReason != null)
+                {
+                    Console.WriteLine($"WARN    : {status.HotspotFamilyDegradedReason}");
+                    Console.WriteLine("Hint    : rerun `cdidx index <projectPath>` to restore authoritative cross-file hotspot families.");
+                }
                 if (!status.CSharpSymbolNameReady)
                     Console.WriteLine($"WARN    : C# exact-name for operators / conversion operators / indexers is degraded. Run `{BuildCSharpCanonicalNameRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to upgrade canonical symbol names in place.");
                 // #86: tell the user when `--exact` is running on the ASCII NOCASE fallback.

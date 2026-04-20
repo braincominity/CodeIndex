@@ -6071,6 +6071,28 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunStatus_HumanOutput_WarnsWhenHotspotFamilyTrustIsDegraded()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_hotspots_family_human");
+        try
+        {
+            var dbPath = CreateHotspotFamilyFixtureDb(projectRoot, markHotspotFamilyReady: false);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("cross-file hotspot family grouping", stdout);
+            Assert.Contains("authoritative cross-file hotspot families", stdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunHotspots_ZeroJson_ReportsMissingMarkerFingerprintAsDegraded()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_family_missing_fingerprint_zero_json");
