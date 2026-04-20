@@ -734,25 +734,28 @@ public static class ReferenceExtractor
                 // initializer regex も CallRegex と同じく generic を 1 段までしか見ないため、
                 // `new Dictionary<string, List<int>> { ... }` の外側型は depth-aware fallback
                 // で補って `instantiate` を落とさないようにする。
-                foreach (var candidate in EnumerateNestedGenericInitializerCandidates(
-                             preparedLine,
-                             matchedInitializerIndices,
-                             requireOpeningBrace: true))
+                if (language == "csharp")
                 {
-                    if (ShouldSkipInitializerName(language, candidate.Name))
-                        continue;
+                    foreach (var candidate in EnumerateNestedGenericInitializerCandidates(
+                                 preparedLine,
+                                 matchedInitializerIndices,
+                                 requireOpeningBrace: true))
+                    {
+                        if (ShouldSkipInitializerName(language, candidate.Name))
+                            continue;
 
-                    var initContainer = ResolveContainerForCall(candidate.NameIndex);
-                    AddReference(
-                        references,
-                        seen,
-                        fileId,
-                        candidate.Name,
-                        candidate.NameIndex,
-                        "instantiate",
-                        context,
-                        lineNumber,
-                        initContainer);
+                        var initContainer = ResolveContainerForCall(candidate.NameIndex);
+                        AddReference(
+                            references,
+                            seen,
+                            fileId,
+                            candidate.Name,
+                            candidate.NameIndex,
+                            "instantiate",
+                            context,
+                            lineNumber,
+                            initContainer);
+                    }
                 }
 
                 // Allman-style multi-line form: `new T` at end of current line with the
@@ -785,25 +788,28 @@ public static class ReferenceExtractor
 
                         }
 
-                        foreach (var candidate in EnumerateNestedGenericInitializerCandidates(
-                                     preparedLine,
-                                     matchedInitializerIndices,
-                                     requireOpeningBrace: false))
+                        if (language == "csharp")
                         {
-                            if (ShouldSkipInitializerName(language, candidate.Name))
-                                continue;
+                            foreach (var candidate in EnumerateNestedGenericInitializerCandidates(
+                                         preparedLine,
+                                         matchedInitializerIndices,
+                                         requireOpeningBrace: false))
+                            {
+                                if (ShouldSkipInitializerName(language, candidate.Name))
+                                    continue;
 
-                            var initContainer = ResolveContainerForCall(candidate.NameIndex);
-                            AddReference(
-                                references,
-                                seen,
-                                fileId,
-                                candidate.Name,
-                                candidate.NameIndex,
-                                "instantiate",
-                                context,
-                                lineNumber,
-                                initContainer);
+                                var initContainer = ResolveContainerForCall(candidate.NameIndex);
+                                AddReference(
+                                    references,
+                                    seen,
+                                    fileId,
+                                    candidate.Name,
+                                    candidate.NameIndex,
+                                    "instantiate",
+                                    context,
+                                    lineNumber,
+                                    initContainer);
+                            }
                         }
                     }
                 }

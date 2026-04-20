@@ -959,6 +959,36 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaInvalidNestedGenericParenlessInitializer_DoesNotEmitInstantiate()
+    {
+        // Java does not have collection/object initializer syntax, so the C#-only nested
+        // initializer fallback must not manufacture a phantom `instantiate` edge from
+        // invalid Java like `new HashMap<String, List<Integer>> { }`.
+        // Java には C# のようなコレクション/オブジェクト initializer 構文がないため、
+        // `new HashMap<String, List<Integer>> { }` のような不正構文から
+        // phantom な `instantiate` edge を作ってはいけない。
+        const string content = """
+            import java.util.HashMap;
+            import java.util.List;
+
+            class Worker {
+                void run() {
+                    var a = new HashMap<String, List<Integer>>();
+                    var b = new HashMap<String, List<Integer>>
+                    {
+                    };
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "HashMap" && r.ReferenceKind == "instantiate" && r.Line == 6);
+        Assert.DoesNotContain(references, r => r.SymbolName == "HashMap" && r.ReferenceKind == "instantiate" && r.Line == 7);
+    }
+
+    [Fact]
     public void Extract_CsharpNestedGenericParenlessInitializers_AreInstantiate()
     {
         // Regression follow-up for issue #263: nested generic parenless initializers such as
