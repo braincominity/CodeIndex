@@ -6708,6 +6708,70 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_Issue374_ObjectInitializerNumericAssignmentsDoNotCreatePhantomSymbols()
+    {
+        // Closes #374: the full issue repro uses both multiline and inline object initializers
+        // with numeric assignments like `Age = 30,` and `Priority = 2`. Those lines must not
+        // reappear as phantom enum-member symbols just because they share the old `Name = 1,`
+        // surface shape.
+        // Closes #374: issue 本文の再現ケースでは `Age = 30,` や `Priority = 2` のような
+        // 数値代入を含む multiline / inline object initializer が混在する。旧来の
+        // `Name = 1,` 形に見えても phantom enum-member symbol を再発させてはいけない。
+        var content = """
+            using System.Collections.Generic;
+
+            namespace CsObjInitPhantom;
+
+            public class Person
+            {
+                public string Name { get; set; } = "";
+                public int Age { get; set; }
+                public int Priority { get; set; }
+            }
+
+            public class Creator
+            {
+                public Person CreatePerson() => new Person
+                {
+                    Name = "Alice",
+                    Age = 30,
+                    Priority = 1
+                };
+
+                public List<Person> CreateMany() => new()
+                {
+                    new Person { Name = "Bob", Age = 25, Priority = 2 },
+                    new Person
+                    {
+                        Name = "Carol",
+                        Age = 45,
+                        Priority = 3
+                    }
+                };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var ageSymbols = symbols.Where(s => s.Name == "Age").ToList();
+        Assert.Single(ageSymbols);
+        Assert.Equal("property", ageSymbols[0].Kind);
+        Assert.Equal("Person", ageSymbols[0].ContainerName);
+
+        var prioritySymbols = symbols.Where(s => s.Name == "Priority").ToList();
+        Assert.Single(prioritySymbols);
+        Assert.Equal("property", prioritySymbols[0].Kind);
+        Assert.Equal("Person", prioritySymbols[0].ContainerName);
+
+        var nameSymbols = symbols.Where(s => s.Name == "Name").ToList();
+        Assert.Single(nameSymbols);
+        Assert.Equal("property", nameSymbols[0].Kind);
+        Assert.Equal("Person", nameSymbols[0].ContainerName);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "CreatePerson" && s.ContainerName == "Creator");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "CreateMany" && s.ContainerName == "Creator");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsRegionDirectives()
     {
         var content = "#region Private Methods\nvoid Helper() { }\n#endregion\n\n#region Properties\npublic int X { get; set; }\n#endregion";
