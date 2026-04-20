@@ -895,6 +895,9 @@ public partial class McpServer
             status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
             status.Version = _version;
             var structured = JsonSerializer.SerializeToNode(status, _jsonOptions)!.AsObject();
+            structured["hotspotFamilyReady"] = status.HotspotFamilyReady;
+            if (status.HotspotFamilyDegradedReason != null)
+                structured["hotspotFamilyDegradedReason"] = status.HotspotFamilyDegradedReason;
             return CreateToolResult(id, "Database stats returned.", structured);
         });
     }

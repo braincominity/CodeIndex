@@ -2680,6 +2680,7 @@ public class McpServerTests : IDisposable
         Assert.NotNull(response["result"]!["structuredContent"]!["latestModified"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["projectRoot"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["hotspot_family_ready"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["hotspotFamilyReady"]);
     }
 
     [Fact]
@@ -2708,7 +2709,9 @@ public class McpServerTests : IDisposable
             Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
             var structured = response["result"]!["structuredContent"]!;
             Assert.False(structured["hotspot_family_ready"]!.GetValue<bool>());
+            Assert.False(structured["hotspotFamilyReady"]!.GetValue<bool>());
             Assert.Contains("csharp", structured["hotspot_family_degraded_reason"]!.GetValue<string>());
+            Assert.Contains("csharp", structured["hotspotFamilyDegradedReason"]!.GetValue<string>());
         }
         finally
         {
