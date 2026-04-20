@@ -5837,6 +5837,7 @@ public class SymbolExtractorTests
             public interface IFoo
             {
                 System.Collections.Generic.List<(int, int)> GetList();
+                System.Threading.Tasks.Task<((int A, int B), string Name)> Nested();
             }
 
             public class Service : IFoo
@@ -5845,6 +5846,8 @@ public class SymbolExtractorTests
                 public System.Collections.Generic.Dictionary<string, (int x, int y)> Coords() => new();
                 public System.Collections.Generic.IEnumerable<(string Key, int Value)> Items() => [];
                 System.Collections.Generic.List<(int, int)> IFoo.GetList() => [];
+                public System.Threading.Tasks.Task<((int A, int B), string Name)> NestedAsync() => System.Threading.Tasks.Task.FromResult(((1, 2), "n"));
+                System.Threading.Tasks.Task<((int A, int B), string Name)> IFoo.Nested() => System.Threading.Tasks.Task.FromResult(((1, 2), "n"));
             }
             """;
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
@@ -5862,6 +5865,15 @@ public class SymbolExtractorTests
         Assert.Equal(2, getListDeclarations.Count);
         Assert.Contains(getListDeclarations, s => s.ContainerKind == "interface" && s.ContainerName == "IFoo" && s.ReturnType == "System.Collections.Generic.List<(int,int)>");
         Assert.Contains(getListDeclarations, s => s.ContainerKind == "class" && s.ContainerName == "Service" && s.ReturnType == "System.Collections.Generic.List<(int,int)>");
+
+        var nestedAsync = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "NestedAsync"));
+        Assert.Equal("System.Threading.Tasks.Task<((intA,intB),stringName)>", nestedAsync.ReturnType);
+        Assert.Contains("System.Threading.Tasks.Task<((int A, int B), string Name)> NestedAsync()", nestedAsync.Signature);
+
+        var nestedDeclarations = symbols.Where(s => s.Kind == "function" && s.Name == "Nested").ToList();
+        Assert.Equal(2, nestedDeclarations.Count);
+        Assert.Contains(nestedDeclarations, s => s.ContainerKind == "interface" && s.ContainerName == "IFoo" && s.ReturnType == "System.Threading.Tasks.Task<((intA,intB),stringName)>");
+        Assert.Contains(nestedDeclarations, s => s.ContainerKind == "class" && s.ContainerName == "Service" && s.ReturnType == "System.Threading.Tasks.Task<((intA,intB),stringName)>");
     }
 
     [Fact]

@@ -57,13 +57,15 @@ public static class SymbolExtractor
     // Embedded tuple groups must contain at least one comma so method-call argument lists
     // (`Make()`, `Parent(value)`) and primary-ctor parameter lists (`Child(int x)`) do not
     // get reinterpreted as return-type segments when the shared C# type matcher is reused by
-    // method / property rows. Plain tuple returns also always contain a comma, so this
-    // restriction does not exclude any legal tuple type syntax.
+    // method / property rows. Allow one nested paren level inside the tuple so generic return
+    // types like `Task<((int A, int B), string Name)>` still count as tuple-shaped while
+    // single-call parens without commas keep falling through to the existing non-match path.
     // 埋め込み tuple group は最低 1 個の comma を必須にし、`Make()` / `Parent(value)` のような
     // 呼び出し引数や `Child(int x)` のような primary ctor パラメータ列を、共有 C# 型 matcher が
-    // 戻り値型 segment と誤認しないようにする。素の tuple 戻り値型も必ず comma を含むため、
-    // 合法な tuple 型構文はこの制約で落ちない。
-    private const string CSharpTupleGroupPattern = @"\([^)]*,[^)]*\)";
+    // 戻り値型 segment と誤認しないようにする。さらに 1 段だけ入れ子括弧を許容し、
+    // `Task<((int A, int B), string Name)>` のような nested tuple も tuple 形状として扱える
+    // 一方、comma の無い通常の call paren は従来どおり不一致に落とす。
+    private const string CSharpTupleGroupPattern = @"\((?:[^()]|\([^()]*\))*?,(?:[^()]|\([^()]*\))*\)";
     private const string CSharpTypeTokenCharsPattern = @"[\w?.<>\[\],:*]";
     private const string CSharpTypeSegmentPattern =
         @"(?:" + CSharpTypeTokenCharsPattern + @"+(?:" + CSharpTupleGroupPattern + CSharpTypeTokenCharsPattern + @"*)*|" + CSharpTupleGroupPattern + CSharpTypeTokenCharsPattern + @"*)";
