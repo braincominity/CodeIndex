@@ -5823,6 +5823,48 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsGenericOverTupleReturnTypes()
+    {
+        // Issue #241 / #344: the shared C# return-type matcher must allow tuple groups
+        // inside generic arguments so ordinary methods, interface declarations, and
+        // explicit-interface implementations do not silently disappear.
+        // Issue #241 / #344: 共有の C# 戻り値型 matcher は generic 引数内の tuple を
+        // 許容し、通常メソッド・interface 宣言・明示的インターフェース実装が
+        // 無言で消えないようにしなければならない。
+        var content = """
+            namespace Demo;
+
+            public interface IFoo
+            {
+                System.Collections.Generic.List<(int, int)> GetList();
+            }
+
+            public class Service : IFoo
+            {
+                public System.Threading.Tasks.Task<(int, string)> MultiAsync() => System.Threading.Tasks.Task.FromResult((1, "x"));
+                public System.Collections.Generic.Dictionary<string, (int x, int y)> Coords() => new();
+                public System.Collections.Generic.IEnumerable<(string Key, int Value)> Items() => [];
+                System.Collections.Generic.List<(int, int)> IFoo.GetList() => [];
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var multiAsync = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "MultiAsync"));
+        Assert.Equal("System.Threading.Tasks.Task<(int,string)>", multiAsync.ReturnType);
+
+        var coords = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Coords"));
+        Assert.Equal("System.Collections.Generic.Dictionary<string,(intx,inty)>", coords.ReturnType);
+
+        var items = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Items"));
+        Assert.Equal("System.Collections.Generic.IEnumerable<(stringKey,intValue)>", items.ReturnType);
+
+        var getListDeclarations = symbols.Where(s => s.Kind == "function" && s.Name == "GetList").ToList();
+        Assert.Equal(2, getListDeclarations.Count);
+        Assert.Contains(getListDeclarations, s => s.ContainerKind == "interface" && s.ContainerName == "IFoo" && s.ReturnType == "System.Collections.Generic.List<(int,int)>");
+        Assert.Contains(getListDeclarations, s => s.ContainerKind == "class" && s.ContainerName == "Service" && s.ReturnType == "System.Collections.Generic.List<(int,int)>");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsExplicitInterfacePropertyImpl()
     {
         // Issue #333: explicit-interface property implementations must be indexed just like
