@@ -6772,6 +6772,67 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_Issue357_EnumMembersWithComplexConstantExpressionsStayIndexed()
+    {
+        // Current main already captures these enum members, but the open issue fixture was not
+        // pinned in tests. Keep the exact value-shape mix here so future regex tightening does
+        // not silently re-drop member-access, cast, or parenthesized constant expressions.
+        // 現在の main はこれらの enum member を抽出できるが、open issue の fixture 自体は
+        // テストで固定されていなかった。将来の regex 調整で member access / cast /
+        // parenthesized constant expression が黙って再脱落しないよう、この value-shape
+        // の混在をここで固定する。
+        var content = """
+            namespace CsEnumComplexValue;
+
+            public class K
+            {
+                public const int Foo = 1;
+            }
+
+            public enum E1
+            {
+                Plain = 0,
+                Hex = 0xFF,
+                Combined = Plain | 0,
+                Shifted = 1 << 3,
+                Arith = 1 + 2,
+                ConstRef = K.Foo,
+                Casted = (int)1.5,
+                Paren = (1 + 2),
+                CharCast = (int)'A',
+                MemberAccess = System.Int32.MaxValue,
+            }
+
+            [System.Flags]
+            public enum Permissions
+            {
+                None = 0,
+                Read = 1,
+                Write = 2,
+                All = Read | Write,
+                Execute = K.Foo,
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        foreach (var name in new[] { "Plain", "Hex", "Combined", "Shifted", "Arith", "ConstRef", "Casted", "Paren", "CharCast", "MemberAccess" })
+        {
+            var symbol = Assert.Single(symbols.Where(s => s.Name == name));
+            Assert.Equal("enum", symbol.Kind);
+            Assert.Equal("E1", symbol.ContainerName);
+            Assert.Equal("enum", symbol.ContainerKind);
+        }
+
+        foreach (var name in new[] { "None", "Read", "Write", "All", "Execute" })
+        {
+            var symbol = Assert.Single(symbols.Where(s => s.Name == name));
+            Assert.Equal("enum", symbol.Kind);
+            Assert.Equal("Permissions", symbol.ContainerName);
+            Assert.Equal("enum", symbol.ContainerKind);
+        }
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsRegionDirectives()
     {
         var content = "#region Private Methods\nvoid Helper() { }\n#endregion\n\n#region Properties\npublic int X { get; set; }\n#endregion";
