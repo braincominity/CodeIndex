@@ -5360,6 +5360,59 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_EventModifierCombinations_Issue334Repro()
+    {
+        // Closes #334: the full issue repro must survive extraction, including class events
+        // with `abstract` / `virtual` / `override` / `sealed override` / `new`, plus interface
+        // events with `static abstract` and accessor-bodied `static virtual`. The current main
+        // branch already accepts these modifier sequences; this test locks the exact dogfood
+        // fixture in place so the open issue cannot regress silently.
+        // Closes #334: issue 本文の再現ケース全体を固定する。`abstract` / `virtual` /
+        // `override` / `sealed override` / `new` 付き class event と、`static abstract` /
+        // accessor 本体付き `static virtual` interface event の両方が抽出され続ける必要がある。
+        // 現行 main はこれらを受理できるため、このテストは open issue の dogfood fixture を
+        // そのまま回帰防止として固定する。
+        var content = """
+            using System;
+            namespace EventMods;
+
+            public abstract class Base
+            {
+                public abstract event EventHandler Ping;
+                public virtual event EventHandler Ring;
+                public new event EventHandler Hide;
+                protected event EventHandler Peek;
+                public event EventHandler Plain;
+            }
+
+            public sealed class Derived : Base
+            {
+                public override event EventHandler Ping;
+                public sealed override event EventHandler Ring;
+            }
+
+            public interface IBus
+            {
+                event EventHandler Regular;
+                static abstract event EventHandler StaticAbs;
+                static virtual event EventHandler StaticVirt { add { } remove { } }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var events = symbols.Where(s => s.Kind == "event").ToList();
+
+        Assert.Equal(10, events.Count);
+        Assert.Equal(2, events.Count(s => s.Name == "Ping"));
+        Assert.Equal(2, events.Count(s => s.Name == "Ring"));
+        Assert.Contains(events, s => s.Name == "Hide" && s.Visibility == "public" && s.ReturnType == "EventHandler");
+        Assert.Contains(events, s => s.Name == "Peek" && s.Visibility == "protected" && s.ReturnType == "EventHandler");
+        Assert.Contains(events, s => s.Name == "Plain" && s.Visibility == "public" && s.ReturnType == "EventHandler");
+        Assert.Contains(events, s => s.Name == "Regular" && string.IsNullOrEmpty(s.Visibility) && s.ReturnType == "EventHandler");
+        Assert.Contains(events, s => s.Name == "StaticAbs" && string.IsNullOrEmpty(s.Visibility) && s.ReturnType == "EventHandler");
+        Assert.Contains(events, s => s.Name == "StaticVirt" && string.IsNullOrEmpty(s.Visibility) && s.ReturnType == "EventHandler");
+    }
+
+    [Fact]
     public void Extract_CSharp_NewNestedInterface_MemberHiding()
     {
         // Closes #376: a nested `new interface` that hides a base-class nested interface must
