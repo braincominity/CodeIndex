@@ -2960,12 +2960,14 @@ public class IndexCommandRunnerTests
             Assert.Equal("success", json.GetProperty("status").GetString());
             Assert.True(json.GetProperty("graph_table_available").GetBoolean());
             Assert.True(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.True(json.GetProperty("hotspot_family_ready").GetBoolean());
             Assert.True(json.GetProperty("fold_ready").GetBoolean());
 
             var (humanExitCode, output) = RunAndCaptureOutput([projectRoot]);
             Assert.Equal(CommandExitCodes.Success, humanExitCode);
             Assert.Contains("Graph   : ready", output);
             Assert.Contains("Issues  : ready", output);
+            Assert.Contains("Hotspots: ready", output);
             Assert.Contains("Fold    : ready", output);
         }
         finally
@@ -3858,6 +3860,7 @@ public class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, rerunExitCode);
             Assert.Equal("success", rerunJson.GetProperty("status").GetString());
             Assert.True(rerunJson.GetProperty("summary").GetProperty("files_skipped").GetInt32() > 0);
+            Assert.True(rerunJson.GetProperty("hotspot_family_ready").GetBoolean());
 
             using (var verifyDb = new DbContext(dbPath))
             {
@@ -3873,6 +3876,54 @@ public class IndexCommandRunnerTests
             Assert.Equal(1, hotspotsJson.GetProperty("count").GetInt32());
             if (hotspotsJson.TryGetProperty("degraded", out var degraded))
                 Assert.False(degraded.GetBoolean());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_Update_WhenHotspotFamilyMetadataCannotBeRestamped_ReportsDegradedReadiness()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "App.csproj"), "<Project />");
+            var callerPath = Path.Combine(projectRoot, "src", "Caller.cs");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part1.cs"), "public partial class Api { public void Run() { } }");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part2.cs"), "public partial class Api { public void Run(int value) { } }");
+            File.WriteAllText(callerPath, "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); } }");
+
+            var (initialExitCode, initialJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal("success", initialJson.GetProperty("status").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.GetHotspotFamilyVersionMetaKey("csharp"), null);
+                writer.SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"), null);
+            }
+
+            File.WriteAllText(callerPath, "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); api.Run(); } }");
+            File.SetLastWriteTimeUtc(callerPath, DateTime.UtcNow.AddSeconds(2));
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRoot, "--files", "src/Caller.cs", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.False(updateJson.GetProperty("hotspot_family_ready").GetBoolean());
+            Assert.Contains("csharp", updateJson.GetProperty("hotspot_family_degraded_reason").GetString());
+
+            File.WriteAllText(callerPath, "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); api.Run(); api.Run(1); } }");
+            File.SetLastWriteTimeUtc(callerPath, DateTime.UtcNow.AddSeconds(4));
+
+            var (subprocessExitCode, _, errorOutput) = RunCliInSubprocess([projectRoot, "--files", "src/Caller.cs"], projectRoot);
+            Assert.Equal(CommandExitCodes.Success, subprocessExitCode);
+            Assert.Contains("Index completed with degraded readiness", errorOutput);
+            Assert.Contains("hotspot_family_ready=false", errorOutput);
         }
         finally
         {
