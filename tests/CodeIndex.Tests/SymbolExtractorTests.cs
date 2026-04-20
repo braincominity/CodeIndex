@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using CodeIndex.Indexer;
 
 namespace CodeIndex.Tests;
@@ -8207,6 +8208,102 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsWrappedRawStringFieldBeyondLookaheadBudget()
+    {
+        // issue #447 follow-up: once the declaration is confirmed at `Script = """`,
+        // the extractor must continue linearly to the real `""";` terminator instead of
+        // dropping the symbol at the 16-line confirmation cap.
+        // issue #447 follow-up: `Script = """` で宣言確定後は、16 行の確認上限で
+        // 打ち切らず、実際の `""";` 終端まで線形に継続してシンボルを保持する。
+        var content = string.Join(
+            "\n",
+            [
+                "namespace Demo;",
+                "public class Fixtures",
+                "{",
+                "    private static readonly string",
+                "        Script = \"\"\"",
+                .. Enumerable.Range(1, 18).Select(i => $"line{i:00}"),
+                "\"\"\";",
+                "}"
+            ]);
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var script = Assert.Single(symbols.Where(s => s.Kind == "function"
+            && s.Name == "Script"
+            && s.Visibility == "private"
+            && s.ReturnType == "string"));
+        Assert.Contains("Script = \"\"\"", script.Signature);
+        Assert.Contains("\"\"\";", script.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsSameLineConstRawStringFieldBeyondLookaheadBudget()
+    {
+        // Same-line `const string Name = """` must also enter the confirmed continuation
+        // path immediately; otherwise the long raw-string body falls past the bounded
+        // lookahead window and the stored signature truncates at the opener line.
+        // 同一行の `const string Name = """` も確認済み継続へ即時に入らないと、
+        // 長い raw string 本体が bounded な先読み窓の外へ落ち、保存 signature が
+        // opener 行で途切れてしまう。
+        var content = string.Join(
+            "\n",
+            [
+                "namespace Demo;",
+                "public class Fixtures",
+                "{",
+                "    private const string ConstScript = \"\"\"",
+                .. Enumerable.Range(1, 18).Select(i => $"line{i:00}"),
+                "\"\"\";",
+                "}"
+            ]);
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var constScript = Assert.Single(symbols.Where(s => s.Kind == "function"
+            && s.Name == "ConstScript"
+            && s.Visibility == "private"
+            && s.ReturnType == "string"));
+        Assert.Contains("ConstScript = \"\"\"", constScript.Signature);
+        Assert.Contains("\"\"\";", constScript.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsLongObjectInitializerBeyondLookaheadBudget()
+    {
+        // issue #447 follow-up: long object/collection initializers must keep consuming
+        // lines after the declaration is confirmed at `_map = new()`, rather than falling
+        // back to the raw header once the bounded confirmation phase expires.
+        // issue #447 follow-up: `_map = new()` で宣言確定後は、長い object/collection
+        // initializer でも bounded な確認フェーズ満了で raw header に戻らず、そのまま
+        // 継続して終端 `;` まで追跡しなければならない。
+        var initializerLines = Enumerable.Range(1, 18)
+            .Select(i => $"            [\"k{i:00}\"] = {i}")
+            .ToArray();
+        var content = string.Join(
+            "\n",
+            [
+                "using System.Collections.Generic;",
+                "namespace Demo;",
+                "public class Containers",
+                "{",
+                "    private Dictionary<string, int>",
+                "        _map = new()",
+                "        {",
+                .. initializerLines,
+                "        };",
+                "}"
+            ]);
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var map = Assert.Single(symbols.Where(s => s.Kind == "property"
+            && s.Name == "_map"
+            && s.Visibility == "private"
+            && s.ReturnType == "Dictionary<string,int>"));
+        Assert.Contains("_map = new()", map.Signature);
+        Assert.Contains("};", map.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_MultiLineFieldIgnoresBraceInsideStringLiteral()
     {
         // Brace detection must use the sanitized match line, not the raw source, so a
@@ -10380,5 +10477,42 @@ public class SymbolExtractorTests
         Assert.Single(ctors);
         Assert.Equal(8, ctors[0].Line);
         Assert.Contains("public static extern G(string s)", ctors[0].Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget()
+    {
+        // issue #447 regression: the real InstallScriptTests fixture previously drove C#
+        // symbol extraction into super-linear CPU time. Use the repository's current copy so
+        // the regression test keeps exercising the same realistic raw-string + heredoc shape
+        // that broke self-indexing, but keep the budget generous enough for slower CI hosts.
+        // issue #447 回帰: 実ファイル InstallScriptTests.cs が C# シンボル抽出を super-linear に
+        // 悪化させていた。自己ホストを壊した raw-string + heredoc の実形を継続的に踏むため、
+        // リポジトリ内の現行ファイルをそのまま使う。時間予算は遅い CI でも耐えるよう広めに取る。
+        var path = Path.Combine(GetRepositoryRoot(), "tests", "CodeIndex.Tests", "InstallScriptTests.cs");
+        var content = File.ReadAllText(path);
+
+        var stopwatch = Stopwatch.StartNew();
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        stopwatch.Stop();
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "InstallScriptTests");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Main_WithoutExplicitVersion_DoesNotShortCircuitBrokenZeroVersionInstall");
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromSeconds(10),
+            $"InstallScriptTests.cs extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < 10s.");
+    }
+
+    private static string GetRepositoryRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null)
+        {
+            if (File.Exists(Path.Combine(dir.FullName, "CodeIndex.sln")))
+                return dir.FullName;
+            dir = dir.Parent;
+        }
+
+        throw new InvalidOperationException("Could not locate repository root / リポジトリルートを特定できませんでした");
     }
 }
