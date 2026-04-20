@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using CodeIndex.Indexer;
 
 namespace CodeIndex.Tests;
@@ -10380,5 +10381,42 @@ public class SymbolExtractorTests
         Assert.Single(ctors);
         Assert.Equal(8, ctors[0].Line);
         Assert.Contains("public static extern G(string s)", ctors[0].Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget()
+    {
+        // issue #447 regression: the real InstallScriptTests fixture previously drove C#
+        // symbol extraction into super-linear CPU time. Use the repository's current copy so
+        // the regression test keeps exercising the same realistic raw-string + heredoc shape
+        // that broke self-indexing, but keep the budget generous enough for slower CI hosts.
+        // issue #447 回帰: 実ファイル InstallScriptTests.cs が C# シンボル抽出を super-linear に
+        // 悪化させていた。自己ホストを壊した raw-string + heredoc の実形を継続的に踏むため、
+        // リポジトリ内の現行ファイルをそのまま使う。時間予算は遅い CI でも耐えるよう広めに取る。
+        var path = Path.Combine(GetRepositoryRoot(), "tests", "CodeIndex.Tests", "InstallScriptTests.cs");
+        var content = File.ReadAllText(path);
+
+        var stopwatch = Stopwatch.StartNew();
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        stopwatch.Stop();
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "InstallScriptTests");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Main_WithoutExplicitVersion_DoesNotShortCircuitBrokenZeroVersionInstall");
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromSeconds(10),
+            $"InstallScriptTests.cs extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < 10s.");
+    }
+
+    private static string GetRepositoryRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null)
+        {
+            if (File.Exists(Path.Combine(dir.FullName, "CodeIndex.sln")))
+                return dir.FullName;
+            dir = dir.Parent;
+        }
+
+        throw new InvalidOperationException("Could not locate repository root / リポジトリルートを特定できませんでした");
     }
 }

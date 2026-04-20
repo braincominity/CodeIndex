@@ -1073,6 +1073,22 @@ public static class SymbolExtractor
     // 複数行宣言も 1 つのマッチ行に結合できるようにする。複数行 const フィールド向けに
     // `const` も他の field 対応修飾子と一緒に列挙する。Closes #355.
     private static readonly Regex CSharpPropertyHeaderPrefixRegex = new($@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|volatile|unsafe|extern|const|ref(?:\s+readonly)?)\s+)*(?:{CSharpTypePattern})\s*(?:\w+)?\s*\{{?\s*$", RegexOptions.Compiled);
+    // Multi-line field/property declarations are real, but they remain short in practice:
+    // a handful of wrapped generic / attribute / accessor lines, not dozens of lines of
+    // unrelated method-body content. BuildCSharpPropertyMatchLine re-normalizes the joined
+    // candidate after each appended line, so letting a false-positive "header prefix" scan
+    // arbitrarily far can turn one bad candidate into super-linear work on large C# files.
+    // Cap both the physical-line lookahead and the joined candidate length so pathological
+    // call-site shapes (issue #447's raw-string test fixture) bail out early while legitimate
+    // wrapped declarations still fit comfortably inside the limit.
+    // 複数行 field/property 宣言は存在するが、実用上は数行の wrapped generic / attribute /
+    // accessor であり、無関係なメソッド本体を何十行も跨がない。BuildCSharpPropertyMatchLine は
+    // 行を足すたびに連結候補を再正規化するため、誤って header prefix と見なした行を無制限に
+    // 先読みすると、大きい C# ファイルで super-linear な仕事量になる。physical line 数と
+    // 連結候補長の両方に上限を入れ、issue #447 の raw-string 系 false positive は早期打ち切りしつつ、
+    // 正常な wrapped 宣言は余裕を持って通す。
+    private const int CSharpPropertyMatchLookaheadLineLimit = 16;
+    private const int CSharpPropertyMatchLookaheadCharLimit = 4096;
 
     // Detect physical lines that consist solely of C# modifier keywords (no identifier,
     // no parentheses, no punctuation). Used by TryFindCSharpWrappedHeaderModifier to
@@ -9339,11 +9355,15 @@ public static class SymbolExtractor
             ? ResolveCSharpBraceColumn(lines[startLineIndex], csharpMatchLines[startLineIndex]) + 1
             : (int?)null;
 
-        for (int i = startLineIndex + 1; i < csharpMatchLines.Length; i++)
+        var lookaheadLimitExclusive = Math.Min(csharpMatchLines.Length, startLineIndex + CSharpPropertyMatchLookaheadLineLimit + 1);
+        for (int i = startLineIndex + 1; i < lookaheadLimitExclusive; i++)
         {
             var nextLine = csharpMatchLines[i].Trim();
             if (nextLine.Length == 0)
                 continue;
+
+            if (builder.Length + 1 + nextLine.Length > CSharpPropertyMatchLookaheadCharLimit)
+                break;
 
             builder.Append(' ').Append(nextLine);
             var normalizedCombined = CollapseCSharpGenericTypeWhitespace(builder.ToString());
