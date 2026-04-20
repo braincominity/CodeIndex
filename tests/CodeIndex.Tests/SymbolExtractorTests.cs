@@ -8459,6 +8459,35 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_SameLineAutoPropertyAfterExpressionBodiedMethodIsCaptured()
+    {
+        // Outer-type false positives must still be skipped even when a later same-line
+        // member introduces `=>`. Before the follow-up fix for #470, the brace-property
+        // guard looked for `=>` anywhere in the remaining line, so
+        // `public class C { public int M() => 1; public int P { get; set; } }`
+        // treated the outer class header as an "expression-bodied property" and broke
+        // before reaching `P`. Closes #470.
+        // 同一行後半の member が `=>` を含んでいても、outer type 由来の偽陽性は
+        // 引き続き弾かれなければならない。#470 の追修正前は brace-property guard が
+        // 行末までのどこかに `=>` があるだけで式本体 property 扱いしてしまい、
+        // `public class C { public int M() => 1; public int P { get; set; } }`
+        // で outer class header を誤許可し、`P` まで到達できなかった。Closes #470.
+        var content = "public class C { public int M() => 1; public int P { get; set; } }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "C"));
+
+        var method = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "M"));
+        Assert.Equal("class", method.ContainerKind);
+        Assert.Equal("C", method.ContainerName);
+
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("class", property.ContainerKind);
+        Assert.Equal("C", property.ContainerName);
+        Assert.Equal("public int P { get; set; }", property.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineMultipleFieldsAreAllCaptured()
     {
         // `public class Multi { public int A; public int B; public int C; }` must

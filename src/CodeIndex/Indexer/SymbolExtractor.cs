@@ -1297,7 +1297,12 @@ public static class SymbolExtractor
 
                     var absoluteStartColumn = lineOffset + match.Index;
                     if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, patternMatchLine, csharpSwitchExpressionLines, i)
-                        || ShouldSkipCSharpBracePropertyCandidate(lang, pattern, patternMatchLine, absoluteStartColumn))
+                        || ShouldSkipCSharpBracePropertyCandidate(
+                            lang,
+                            pattern,
+                            patternMatchLine,
+                            absoluteStartColumn,
+                            match.Value.Contains("=>", StringComparison.Ordinal)))
                     {
                         // False-positive C# property matches can happen at the start of a
                         // same-line type header (`public class C { ... }`) because the
@@ -1785,6 +1790,36 @@ public static class SymbolExtractor
 
                     if (!CanContinueScanningSameLineBraceBody(lang, kind, pattern.BodyStyle, bodyEndLine, startLine, sameLineEndColumn, absoluteStartColumn))
                     {
+                        if (lang == "csharp"
+                            && kind == "function"
+                            && pattern.BodyStyle == BodyStyle.Brace
+                            && pattern.ReturnTypeGroup != null
+                            && bodyEndLine == startLine
+                            && sameLineEndColumn >= absoluteStartColumn)
+                        {
+                            // Same-line C# methods can be followed by later sibling declarations
+                            // (`M() => 1; public int P { get; set; }`) that should still reach
+                            // their own patterns. Advance past the current same-line function
+                            // body when another brace-delimited statement exists, but keep the
+                            // old stop-after-first-match behavior when this really is the last
+                            // declaration on the line so we do not re-open duplicate-matching
+                            // paths for ordinary single-declaration lines. Closes #470 review
+                            // follow-up.
+                            // 同一行の C# method の後ろに別の sibling 宣言
+                            // (`M() => 1; public int P { get; set; }`) が続く場合、その後続も
+                            // 各自の pattern に到達できる必要がある。別の brace 区切り宣言が
+                            // 存在するときだけ現在の same-line function 本体の後ろへ進め、
+                            // 行末の単独宣言では従来どおり stop-after-first-match を維持して
+                            // 通常行の duplicate match 経路を再び開かないようにする。Closes #470
+                            // review follow-up.
+                            var nextSameLineOffset = FindNextSameLineBraceStatementStart(matchLine, sameLineEndColumn + 1, lang);
+                            if (nextSameLineOffset > sameLineEndColumn)
+                            {
+                                lineOffset = nextSameLineOffset;
+                                continue;
+                            }
+                        }
+
                         // Batch `set` assignments can legitimately repeat on a single line via
                         // `&` command-chaining (`set A=1 & set B=2`), parenthesized grouping
                         // (`if ... ( set P=1 ) else set Q=2`), or `for`-loop bodies
@@ -10695,7 +10730,8 @@ public static class SymbolExtractor
         string? lang,
         SymbolPattern pattern,
         string matchLine,
-        int matchStartColumn)
+        int matchStartColumn,
+        bool matchedExpressionArrow)
     {
         if (lang != "csharp"
             || pattern.Kind != "property"
@@ -10713,13 +10749,18 @@ public static class SymbolExtractor
         // first `{` on the line can belong to the enclosing class / struct / interface
         // rather than the matched property declaration. Anchor the guard to the actual match
         // start so `{ get; set; }` inside `class C { int P { get; set; } }` is judged from
-        // the property's `{`, not the outer type's `{`. Closes #470.
+        // the property's `{`, not the outer type's `{`. Only the regex match itself may
+        // bless an expression-bodied property; a later same-line `=>` from a method such as
+        // `public int M() => 1; public int P { get; set; }` must not keep an outer-type
+        // false positive alive. Closes #470.
         // 同一行の型本体では物理行全体を候補文字列として再利用するため、行内最初の `{` が
         // マッチ対象の property ではなく外側 class / struct / interface のものになりうる。
         // ガードは実際のマッチ開始列から判定し、`class C { int P { get; set; } }` では
-        // 外側型の `{` ではなく property 自身の `{ get; set; }` を見て判断する。Closes #470.
+        // 外側型の `{` ではなく property 自身の `{ get; set; }` を見て判断する。式本体
+        // property の許可判定も regex の実マッチ範囲だけで行い、同一行後半の method の
+        // `=>` で outer-type 偽陽性が生き残らないようにする。Closes #470.
         var matchedDeclaration = matchLine[matchStartColumn..];
-        return !matchedDeclaration.Contains("=>", StringComparison.Ordinal)
+        return !matchedExpressionArrow
             && !HasCSharpPropertyAccessorStart(matchedDeclaration);
     }
 
