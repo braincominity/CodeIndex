@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Changed
+- **Interactive indexing/output no longer goes visually silent after `Indexing...`** — `IndexCommandRunner` now keeps a live `Indexing...` spinner active on interactive terminals during full-scan indexing work instead of stopping it before the first file and leaving the user with a fixed line until the next 50-file progress redraw or warning. Scoped update runs now also keep a live `Updating...` spinner under the same interactive-only contract, pausing only long enough to print `[WARN]`, `[OK]`, `[SKIP]`, `[DEL]`, `[ERR]`, or progress-bar output cleanly and then resuming immediately. Redirected stdout behavior is intentionally unchanged in shape: stdout still gets a single `Indexing...` banner plus line-based progress, while warnings stay on stderr, so logs/pipes do not collect spinner-frame noise. README examples now document both the interactive and redirected-output behavior, and `SELF_IMPROVEMENT.md` now explicitly treats visible liveness for long-running human-facing CLI flows as a regression bar. Added regression coverage ensuring redirected full-scan output prints `Indexing...` exactly once and redirected verbose update output does not duplicate the `Updating ... file(s)...` banner. Affected: `src/CodeIndex/Cli/IndexCommandRunner.cs`, `tests/CodeIndex.Tests/IndexCommandRunnerTests.cs`, `README.md`, `SELF_IMPROVEMENT.md`.
+
 ### [1.12.0] - 2026-04-19
 
 #### Changed
@@ -745,6 +748,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 変更
+- **対話ターミナルで `Indexing...` の後に視覚的に無音化しないよう改善** — `IndexCommandRunner` は、フルスキャン index の最初のファイル処理前に `Indexing...` スピナーを止めて次の 50 ファイル進捗更新または警告まで固定行のまま放置するのではなく、対話ターミナルでは重い処理中も `Indexing...` スピナーを維持するようになった。`--files` / `--commits` の scoped update も同じ interactive-only 契約で `Updating...` スピナーを維持し、`[WARN]` / `[OK]` / `[SKIP]` / `[DEL]` / `[ERR]` / プログレスバーを表示する直前だけ一時停止し、表示後すぐ再開する。stdout をリダイレクトした場合の形は意図的に維持しており、stdout には従来どおり `Indexing...` を 1 回だけ出し、その後は行ベースの進捗だけを出し、警告は引き続き stderr に分離するため、ログや pipe にスピナーフレームが混ざらない。README には interactive / redirected の両挙動を追記し、`SELF_IMPROVEMENT.md` にも「長時間の人間向け CLI では visible liveness を保つ」ことを回帰基準として明文化した。加えて、redirected full-scan 出力で `Indexing...` が 1 回だけ出ること、redirected verbose update で `Updating ... file(s)...` バナーが重複しないことを固定する回帰テストを追加。対象: `src/CodeIndex/Cli/IndexCommandRunner.cs`、`tests/CodeIndex.Tests/IndexCommandRunnerTests.cs`、`README.md`、`SELF_IMPROVEMENT.md`。
 
 ### [1.12.0] - 2026-04-19
 
