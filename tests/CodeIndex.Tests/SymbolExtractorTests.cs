@@ -8480,11 +8480,51 @@ public class SymbolExtractorTests
         var method = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "M"));
         Assert.Equal("class", method.ContainerKind);
         Assert.Equal("C", method.ContainerName);
+        Assert.Equal("public int M() => 1;", method.Signature);
 
         var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
         Assert.Equal("class", property.ContainerKind);
         Assert.Equal("C", property.ContainerName);
         Assert.Equal("public int P { get; set; }", property.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineAutoPropertyAfterConstructorsIsCaptured()
+    {
+        // Same-line C# constructors must not stop later sibling declarations from
+        // reaching their own patterns. The #470 follow-up initially only resumed
+        // after method-like patterns with a return type, so
+        // `public class C { public C() { } public int P { get; set; } }`
+        // still dropped `P` while the same shape after a normal method worked.
+        // Lock both instance and static constructor forms because they share the
+        // same function-kind same-line stop path, even though the static ctor itself
+        // is not guaranteed to surface as a separate symbol in every shape here.
+        // Closes #470 review follow-up.
+        // 同一行の C# constructor は、その後ろに続く sibling 宣言の pattern 到達を
+        // 止めてはならない。#470 の追修正当初は戻り値型を持つ method 系だけを再開
+        // していたため、`public class C { public C() { } public int P { get; set; } }`
+        // では通常 method 後と違って `P` がまだ落ちていた。instance / static ctor は
+        // 同じ function-kind の same-line stop 経路を共有するため、後続 property を
+        // 両方固定する。Closes #470 review follow-up.
+        var content = string.Join(
+            "\n",
+            "public class C { public C() { } public int P { get; set; } }",
+            "public class D { static D() { } public int Q { get; set; } }");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var ctor = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "C"));
+        Assert.Equal("class", ctor.ContainerKind);
+        Assert.Equal("C", ctor.ContainerName);
+
+        var p = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("class", p.ContainerKind);
+        Assert.Equal("C", p.ContainerName);
+        Assert.Equal("public int P { get; set; }", p.Signature);
+
+        var q = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Q"));
+        Assert.Equal("class", q.ContainerKind);
+        Assert.Equal("D", q.ContainerName);
+        Assert.Equal("public int Q { get; set; }", q.Signature);
     }
 
     [Fact]
