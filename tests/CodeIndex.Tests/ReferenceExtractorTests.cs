@@ -884,6 +884,149 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpNestedGenericConstructorAndMethodCalls_AreIndexed()
+    {
+        // Regression (issue #263): nested generic tails such as `>>(` previously broke the
+        // flat CallRegex generic segment, so constructor calls like
+        // `new Dictionary<string, List<int>>()` and generic method calls like
+        // `Helper.DoWork<List<int>>()` were silently dropped from the reference index.
+        // リグレッション (issue #263): `>>(` を含む nested generic 呼び出しは平坦な
+        // CallRegex の generic segment が壊れ、`new Dictionary<string, List<int>>()` や
+        // `Helper.DoWork<List<int>>()` が reference index から黙って脱落していた。
+        const string content = """
+            using System.Collections.Generic;
+
+            namespace Demo;
+
+            public static class Helper
+            {
+                public static void DoWork<T>() { }
+                public static void Process<T>() { }
+            }
+
+            public class Builder
+            {
+                public void Build()
+                {
+                    var a = new Dictionary<string, List<int>>();
+                    var b = new List<Dictionary<string, int>>();
+                    var c = new Dictionary<int, Dictionary<string, List<int>>>();
+                    Helper.DoWork<List<int>>();
+                    Helper.Process<Dictionary<string, int>>();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "instantiate" && r.Line == 15);
+        Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "instantiate" && r.Line == 16);
+        Assert.Contains(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "instantiate" && r.Line == 17);
+        Assert.Contains(references, r => r.SymbolName == "DoWork" && r.ReferenceKind == "call" && r.Line == 18);
+        Assert.Contains(references, r => r.SymbolName == "Process" && r.ReferenceKind == "call" && r.Line == 19);
+        Assert.DoesNotContain(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "List" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_JavaNestedGenericConstructors_AreInstantiate()
+    {
+        // Regression (issue #263): Java constructor calls with nested generic type args
+        // such as `new HashMap<String, List<Integer>>()` must still emit instantiate rows.
+        // リグレッション (issue #263): `new HashMap<String, List<Integer>>()` のような
+        // Java の nested generic コンストラクタ呼び出しも `instantiate` を発行する必要がある。
+        const string content = """
+            import java.util.ArrayList;
+            import java.util.HashMap;
+            import java.util.List;
+
+            class Worker {
+                void run() {
+                    var a = new HashMap<String, List<Integer>>();
+                    var b = new ArrayList<HashMap<String, Integer>>();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "HashMap" && r.ReferenceKind == "instantiate" && r.Line == 7);
+        Assert.Contains(references, r => r.SymbolName == "ArrayList" && r.ReferenceKind == "instantiate" && r.Line == 8);
+        Assert.DoesNotContain(references, r => r.SymbolName == "HashMap" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ArrayList" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_JavaInvalidNestedGenericParenlessInitializer_DoesNotEmitInstantiate()
+    {
+        // Java does not have collection/object initializer syntax, so the C#-only nested
+        // initializer fallback must not manufacture a phantom `instantiate` edge from
+        // invalid Java like `new HashMap<String, List<Integer>> { }`.
+        // Java には C# のようなコレクション/オブジェクト initializer 構文がないため、
+        // `new HashMap<String, List<Integer>> { }` のような不正構文から
+        // phantom な `instantiate` edge を作ってはいけない。
+        const string content = """
+            import java.util.HashMap;
+            import java.util.List;
+
+            class Worker {
+                void run() {
+                    var a = new HashMap<String, List<Integer>>();
+                    var b = new HashMap<String, List<Integer>>
+                    {
+                    };
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "HashMap" && r.ReferenceKind == "instantiate" && r.Line == 6);
+        Assert.DoesNotContain(references, r => r.SymbolName == "HashMap" && r.ReferenceKind == "instantiate" && r.Line == 7);
+    }
+
+    [Fact]
+    public void Extract_CsharpNestedGenericParenlessInitializers_AreInstantiate()
+    {
+        // Regression follow-up for issue #263: nested generic parenless initializers such as
+        // `new Dictionary<string, List<int>> { ... }` and Allman-style `new Dictionary<...>\n{`
+        // must keep the outer instantiate edge instead of indexing only the inner flat ctor calls.
+        // issue #263 の追補: `new Dictionary<string, List<int>> { ... }` や
+        // Allman 形式の `new Dictionary<...>\n{` でも、内側の平坦な ctor 呼び出しだけでなく
+        // 外側型の instantiate edge を維持しなければならない。
+        const string content = """
+            using System.Collections.Generic;
+
+            namespace Demo;
+
+            public class Builder
+            {
+                public void Build()
+                {
+                    var a = new Dictionary<string, List<int>> { ["k"] = new List<int>() };
+                    var b = new List<Dictionary<string, int>> { new Dictionary<string, int>() };
+                    var c = new Dictionary<int, List<int>>
+                    {
+                        [1] = new List<int>()
+                    };
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "instantiate" && r.Line == 9);
+        Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "instantiate" && r.Line == 10);
+        Assert.Contains(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "instantiate" && r.Line == 11);
+        Assert.DoesNotContain(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "List" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_CsharpParenlessInitializers_AreInstantiate()
     {
         // issue #286: object/collection/dictionary/array initializer syntax without `()`
@@ -954,6 +1097,7 @@ public class ReferenceExtractorTests
                 {
                     var a = new N.Foo { X = 1 };
                     var b = new global::N.Bar { X = 2 };
+                    var c = new global::System.Collections.Generic.Dictionary<string, global::System.Collections.Generic.List<int>> { ["k"] = new global::System.Collections.Generic.List<int>() };
                 }
             }
             """;
@@ -963,6 +1107,7 @@ public class ReferenceExtractorTests
 
         Assert.Contains(references, r => r.SymbolName == "Foo" && r.ReferenceKind == "instantiate" && r.Line == 11);
         Assert.Contains(references, r => r.SymbolName == "Bar" && r.ReferenceKind == "instantiate" && r.Line == 12);
+        Assert.Contains(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "instantiate" && r.Line == 13);
     }
 
     [Fact]
