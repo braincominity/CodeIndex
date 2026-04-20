@@ -5421,9 +5421,17 @@ public class SymbolExtractorTests
         Assert.Contains(events, s => s.Name == "Hide" && s.ContainerKind == "class" && s.ContainerName == "Base" && s.Visibility == "public" && s.ReturnType == "EventHandler");
         Assert.Contains(events, s => s.Name == "Peek" && s.ContainerKind == "class" && s.ContainerName == "Base" && s.Visibility == "protected" && s.ReturnType == "EventHandler");
         Assert.Contains(events, s => s.Name == "Plain" && s.ContainerKind == "class" && s.ContainerName == "Base" && s.Visibility == "public" && s.ReturnType == "EventHandler");
-        Assert.Contains(events, s => s.Name == "Regular" && string.IsNullOrEmpty(s.Visibility) && s.ReturnType == "EventHandler");
-        Assert.Contains(events, s => s.Name == "StaticAbs" && string.IsNullOrEmpty(s.Visibility) && s.ReturnType == "EventHandler");
-        Assert.Contains(events, s => s.Name == "StaticVirt" && string.IsNullOrEmpty(s.Visibility) && s.ReturnType == "EventHandler");
+        var regular = Assert.Single(events.Where(s => s.Name == "Regular" && s.ContainerKind == "interface" && s.ContainerName == "IBus"));
+        Assert.True(string.IsNullOrEmpty(regular.Visibility));
+        Assert.Equal("EventHandler", regular.ReturnType);
+
+        var staticAbs = Assert.Single(events.Where(s => s.Name == "StaticAbs" && s.ContainerKind == "interface" && s.ContainerName == "IBus"));
+        Assert.True(string.IsNullOrEmpty(staticAbs.Visibility));
+        Assert.Equal("EventHandler", staticAbs.ReturnType);
+
+        var staticVirt = Assert.Single(events.Where(s => s.Name == "StaticVirt" && s.ContainerKind == "interface" && s.ContainerName == "IBus"));
+        Assert.True(string.IsNullOrEmpty(staticVirt.Visibility));
+        Assert.Equal("EventHandler", staticVirt.ReturnType);
     }
 
     [Fact]
