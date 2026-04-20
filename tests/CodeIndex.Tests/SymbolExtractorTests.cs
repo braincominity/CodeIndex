@@ -8413,6 +8413,52 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_SameLineAutoPropertiesInsideTypeBodiesAreCaptured()
+    {
+        // Same-line C# type bodies already recover methods, events, and plain fields, so
+        // brace-body auto-properties must also survive when nested inside the same
+        // `class/struct/interface { ... }` physical line. Before #470, the brace-property
+        // skip guard inspected the line's first `{`, which belongs to the enclosing type
+        // body, and silently discarded `P { get; set; }` / `R { get; }` as "not a
+        // property". Closes #470.
+        // 同一行 C# 型本体では method / event / plain field は既に復元できるため、
+        // `class/struct/interface { ... }` と同じ物理行にある brace-body auto-property も
+        // 抽出されなければならない。#470 前は brace-property の skip guard が行頭側の
+        // 最初の `{`（外側型本体）を見てしまい、`P { get; set; }` / `R { get; }` を
+        // 「property ではない」と誤判定して無言で捨てていた。Closes #470.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public class C { public int P { get; set; } }",
+            "public struct S { public int Q { get; set; } }",
+            "public interface I { int R { get; } }",
+            "public class MethodsOk { public void M() { } }",
+            "public class EventsOk { public event System.EventHandler E; }");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var p = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("class", p.ContainerKind);
+        Assert.Equal("C", p.ContainerName);
+        Assert.Equal("public int P { get; set; }", p.Signature);
+
+        var q = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Q"));
+        Assert.Equal("struct", q.ContainerKind);
+        Assert.Equal("S", q.ContainerName);
+        Assert.Equal("public int Q { get; set; }", q.Signature);
+
+        var r = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "R"));
+        Assert.Equal("interface", r.ContainerKind);
+        Assert.Equal("I", r.ContainerName);
+        Assert.Equal("int R { get; }", r.Signature);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M"
+            && s.ContainerKind == "class" && s.ContainerName == "MethodsOk");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "E"
+            && s.ContainerKind == "class" && s.ContainerName == "EventsOk");
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineMultipleFieldsAreAllCaptured()
     {
         // `public class Multi { public int A; public int B; public int C; }` must

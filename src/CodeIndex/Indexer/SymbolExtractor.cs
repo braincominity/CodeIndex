@@ -1035,7 +1035,7 @@ public static class SymbolExtractor
 
     private static readonly HashSet<string> ContainerKinds =
     [
-        "class", "namespace", "enum"
+        "class", "struct", "interface", "namespace", "enum"
     ];
 
     private static readonly Regex RubyBlockStartRegex = new(@"^\s*(?:class|module|def|if|unless|case|begin|do|while|until|for)\b", RegexOptions.Compiled);
@@ -1295,11 +1295,28 @@ public static class SymbolExtractor
                         break;
                     }
 
-                    if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, patternMatchLine, csharpSwitchExpressionLines, i))
-                        break;
-
-                    if (ShouldSkipCSharpBracePropertyCandidate(lang, pattern, patternMatchLine))
-                        break;
+                    var absoluteStartColumn = lineOffset + match.Index;
+                    if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, patternMatchLine, csharpSwitchExpressionLines, i)
+                        || ShouldSkipCSharpBracePropertyCandidate(lang, pattern, patternMatchLine, absoluteStartColumn))
+                    {
+                        // False-positive C# property matches can happen at the start of a
+                        // same-line type header (`public class C { ... }`) because the
+                        // property regex allows omitted visibility/modifier runs and can
+                        // initially treat the header as `returnType + name + {`. Do not break
+                        // the whole same-line scan on that rejection — advance to the next
+                        // brace-delimited statement so a real nested property later on the
+                        // same physical line still gets a chance to match. Closes #470.
+                        // C# の property 正規表現は visibility / modifier 省略を許すため、
+                        // 同一行の型ヘッダ先頭 (`public class C { ... }`) を一旦
+                        // `returnType + name + {` と誤認することがある。この偽候補を弾いた
+                        // ときに同一行スキャン全体を break せず、次の brace 区切り宣言へ進めて
+                        // 後続の本物 property にもマッチ機会を残す。Closes #470.
+                        lineOffset = FindNextSameLineBraceStatementStart(
+                            matchLine,
+                            absoluteStartColumn + Math.Max(1, match.Length),
+                            lang);
+                        continue;
+                    }
 
                     // Gate the C# plain-field pattern (kind `property`, BodyStyle.None) to
                     // lines that sit directly inside a type body. Without this gate, local
@@ -1316,7 +1333,6 @@ public static class SymbolExtractor
                     if (ShouldSkipCssNestedSelectorCandidate(lang, pattern, patternMatchLine, cssQualifiedRuleAncestors, i))
                         break;
 
-                    var absoluteStartColumn = lineOffset + match.Index;
                     // For C#, collapsed-space column (from CollapseCSharpGenericTypeWhitespace)
                     // has to be translated back to raw-space before it can be compared against
                     // CSharpTypeBodyScope's per-line transitions, which were built from
@@ -10678,12 +10694,34 @@ public static class SymbolExtractor
     private static bool ShouldSkipCSharpBracePropertyCandidate(
         string? lang,
         SymbolPattern pattern,
-        string matchLine) =>
-        lang == "csharp"
-        && pattern.Kind == "property"
-        && pattern.BodyStyle == BodyStyle.Brace
-        && !matchLine.Contains("=>", StringComparison.Ordinal)
-        && !HasCSharpPropertyAccessorStart(matchLine);
+        string matchLine,
+        int matchStartColumn)
+    {
+        if (lang != "csharp"
+            || pattern.Kind != "property"
+            || pattern.BodyStyle != BodyStyle.Brace)
+        {
+            return false;
+        }
+
+        if (matchStartColumn < 0)
+            matchStartColumn = 0;
+        if (matchStartColumn > matchLine.Length)
+            matchStartColumn = matchLine.Length;
+
+        // Same-line type bodies reuse the full physical line as the candidate text, so the
+        // first `{` on the line can belong to the enclosing class / struct / interface
+        // rather than the matched property declaration. Anchor the guard to the actual match
+        // start so `{ get; set; }` inside `class C { int P { get; set; } }` is judged from
+        // the property's `{`, not the outer type's `{`. Closes #470.
+        // 同一行の型本体では物理行全体を候補文字列として再利用するため、行内最初の `{` が
+        // マッチ対象の property ではなく外側 class / struct / interface のものになりうる。
+        // ガードは実際のマッチ開始列から判定し、`class C { int P { get; set; } }` では
+        // 外側型の `{` ではなく property 自身の `{ get; set; }` を見て判断する。Closes #470.
+        var matchedDeclaration = matchLine[matchStartColumn..];
+        return !matchedDeclaration.Contains("=>", StringComparison.Ordinal)
+            && !HasCSharpPropertyAccessorStart(matchedDeclaration);
+    }
 
     // Mark every line that sits directly inside a C# type body (class / struct /
     // interface / record / enum). Used to gate the plain-field pattern so that
