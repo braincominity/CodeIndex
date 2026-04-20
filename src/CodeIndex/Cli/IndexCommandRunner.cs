@@ -1012,6 +1012,9 @@ public static class IndexCommandRunner
         }
         stopwatch.Stop();
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
+        var hotspotFamilySignalAfter = new DbReader(writer.Connection).GetHotspotFamilySignal(lang: null);
+        var hotspotFamilyReadyAfter = hotspotFamilySignalAfter.Ready;
+        var hotspotFamilyDegradedReasonAfter = hotspotFamilySignalAfter.DegradedReason;
 
         if (options.Json)
         {
@@ -1033,6 +1036,8 @@ public static class IndexCommandRunner
                 },
                 graph_table_available = graphTableAvailableAfter,
                 issues_table_available = issuesTableAvailableAfter,
+                hotspot_family_ready = hotspotFamilyReadyAfter,
+                hotspot_family_degraded_reason = hotspotFamilyDegradedReasonAfter,
                 csharp_symbol_name_ready = csharpSymbolNameReadyAfter,
                 // #86 codex review: expose fold-readiness so AI clients can decide whether
                 // `--exact` will use the Unicode fold path or fall back to ASCII NOCASE.
@@ -1060,14 +1065,15 @@ public static class IndexCommandRunner
             if (errors > 0) Console.WriteLine($"  Errors  : {errors:N0}");
             Console.WriteLine($"  Graph   : {(graphTableAvailableAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Issues  : {(issuesTableAvailableAfter ? "ready" : "degraded")}");
+            Console.WriteLine($"  Hotspots: {(hotspotFamilyReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  C# names: {(csharpSymbolNameReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Fold    : {(foldReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Elapsed : {stopwatch.Elapsed:hh\\:mm\\:ss}");
             Console.WriteLine();
             if (errors > 0)
                 ConsoleUi.PrintWarning($"Some files failed to update. Fix the reported files or permissions, then rerun `cdidx index \"{projectRoot}\"` to restore a fully ready index.");
-            if (!graphTableAvailableAfter || !issuesTableAvailableAfter || !csharpSymbolNameReadyAfter || !foldReadyAfter)
-                ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, csharpSymbolNameReadyAfter, foldReadyAfter, resolvedDbPath));
+            if (!graphTableAvailableAfter || !issuesTableAvailableAfter || !hotspotFamilyReadyAfter || !csharpSymbolNameReadyAfter || !foldReadyAfter)
+                ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, hotspotFamilyReadyAfter, csharpSymbolNameReadyAfter, foldReadyAfter, resolvedDbPath));
         }
 
         return CommandExitCodes.Success;
@@ -1653,6 +1659,9 @@ public static class IndexCommandRunner
         }
         stopwatch.Stop();
         var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
+        var hotspotFamilySignalAfter = new DbReader(writer.Connection).GetHotspotFamilySignal(lang: null);
+        var hotspotFamilyReadyAfter = hotspotFamilySignalAfter.Ready;
+        var hotspotFamilyDegradedReasonAfter = hotspotFamilySignalAfter.DegradedReason;
 
         if (options.Json)
         {
@@ -1674,6 +1683,8 @@ public static class IndexCommandRunner
                 },
                 graph_table_available = graphTableAvailableAfter,
                 issues_table_available = issuesTableAvailableAfter,
+                hotspot_family_ready = hotspotFamilyReadyAfter,
+                hotspot_family_degraded_reason = hotspotFamilyDegradedReasonAfter,
                 csharp_symbol_name_ready = csharpSymbolNameReadyAfter,
                 // #86 codex review: expose fold-readiness so AI clients can decide whether
                 // `--exact` will use the Unicode fold path or fall back to ASCII NOCASE.
@@ -1699,14 +1710,15 @@ public static class IndexCommandRunner
             if (errors > 0) Console.WriteLine($"  Errors  : {errors:N0}");
             Console.WriteLine($"  Graph   : {(graphTableAvailableAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Issues  : {(issuesTableAvailableAfter ? "ready" : "degraded")}");
+            Console.WriteLine($"  Hotspots: {(hotspotFamilyReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  C# names: {(csharpSymbolNameReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Fold    : {(foldReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Elapsed : {stopwatch.Elapsed:hh\\:mm\\:ss}");
             Console.WriteLine();
             if (errors > 0)
                 ConsoleUi.PrintWarning($"Some files failed to index. Fix the reported files or permissions, then rerun `cdidx index \"{projectRoot}\"` to restore a fully ready index.");
-            if (!graphTableAvailableAfter || !issuesTableAvailableAfter || !csharpSymbolNameReadyAfter || !foldReadyAfter)
-                ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, csharpSymbolNameReadyAfter, foldReadyAfter, resolvedDbPath));
+            if (!graphTableAvailableAfter || !issuesTableAvailableAfter || !hotspotFamilyReadyAfter || !csharpSymbolNameReadyAfter || !foldReadyAfter)
+                ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, hotspotFamilyReadyAfter, csharpSymbolNameReadyAfter, foldReadyAfter, resolvedDbPath));
         }
 
         return CommandExitCodes.Success;
@@ -1743,13 +1755,15 @@ public static class IndexCommandRunner
         return "--exact Unicode fold path not stamped: some folded keys were not regenerated under the current runtime. Run `cdidx backfill-fold` to rewrite folded keys in place, or use `cdidx index . --rebuild` to regenerate the whole DB.";
     }
 
-    private static string GetIndexReadinessWarning(bool graphTableAvailable, bool issuesTableAvailable, bool csharpSymbolNameReady, bool foldReady, string resolvedDbPath)
+    private static string GetIndexReadinessWarning(bool graphTableAvailable, bool issuesTableAvailable, bool hotspotFamilyReady, bool csharpSymbolNameReady, bool foldReady, string resolvedDbPath)
     {
         var degradedParts = new List<string>();
         if (!graphTableAvailable)
             degradedParts.Add("graph_table_available=false");
         if (!issuesTableAvailable)
             degradedParts.Add("issues_table_available=false");
+        if (!hotspotFamilyReady)
+            degradedParts.Add("hotspot_family_ready=false");
         if (!csharpSymbolNameReady)
             degradedParts.Add("csharp_symbol_name_ready=false");
         if (!foldReady)

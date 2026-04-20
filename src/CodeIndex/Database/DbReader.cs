@@ -2461,6 +2461,7 @@ public partial class DbReader
         var freshness = GetWorkspaceFreshness();
         var hasCSharpFiles = ScopeMayIncludeCSharpFiles("csharp", pathPatterns: null, excludePathPatterns: null, excludeTests: false, since: null);
         var csharpSymbolNameReady = !hasCSharpFiles || _csharpSymbolNameContractCurrent;
+        var hotspotFamilySignal = GetHotspotFamilySignal(lang: null);
 
         // Language breakdown / 言語別内訳
         var langs = new Dictionary<string, long>();
@@ -2481,6 +2482,8 @@ public partial class DbReader
             Languages = langs,
             GraphTableAvailable = _hasReferencesTable,
             IssuesTableAvailable = _hasIssuesTable,
+            HotspotFamilyReady = hotspotFamilySignal.Ready,
+            HotspotFamilyDegradedReason = hotspotFamilySignal.DegradedReason,
             CSharpSymbolNameReady = csharpSymbolNameReady,
             FoldReady = _foldReady,
         };

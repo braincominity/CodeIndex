@@ -234,6 +234,20 @@ public class StatusResult
     public bool GraphTableAvailable { get; set; } = true;
     public bool IssuesTableAvailable { get; set; } = true;
     /// <summary>
+    /// True when authoritative cross-file hotspot-family grouping metadata is current for every
+    /// marker-capable language currently indexed in this DB. False means `hotspots` can still
+    /// run, but duplicate-name families may be conservatively degraded until `cdidx index .`
+    /// restamps the hotspot-family metadata.
+    /// 現在 index 済みの marker-capable 言語すべてで authoritative な hotspot-family metadata
+    /// が最新なら true。false の間も `hotspots` は動くが、duplicate-name family は保守的
+    /// fallback に縮退しうるため、`cdidx index .` で metadata を restamp する必要がある。
+    /// </summary>
+    [JsonPropertyName("hotspot_family_ready")]
+    public bool HotspotFamilyReady { get; set; } = true;
+    [JsonPropertyName("hotspot_family_degraded_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? HotspotFamilyDegradedReason { get; set; }
+    /// <summary>
     /// True when C# canonical symbol-name upgrades (for operators, conversion operators,
     /// indexers) have been applied to all indexed C# rows in this DB. False means exact-name
     /// lookup for those C# symbol families may still require an upgrade pass via `cdidx index .`.
