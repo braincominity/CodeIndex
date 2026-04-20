@@ -5186,6 +5186,56 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_InterfaceEventsUseInterfaceContainer()
+    {
+        var content = """
+            using System;
+            namespace EventMods;
+
+            public interface IBus
+            {
+                event EventHandler Regular;
+                static abstract event EventHandler StaticAbs;
+                static virtual event EventHandler StaticVirt { add { } remove { } }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        foreach (var name in new[] { "Regular", "StaticAbs", "StaticVirt" })
+        {
+            var evt = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == name));
+            Assert.Equal("interface", evt.ContainerKind);
+            Assert.Equal("IBus", evt.ContainerName);
+            Assert.Equal("EventMods.IBus", evt.ContainerQualifiedName);
+        }
+    }
+
+    [Fact]
+    public void Extract_CSharp_StructMembersUseStructContainer()
+    {
+        var content = """
+            namespace Demo;
+
+            public struct S
+            {
+                public int P { get; set; }
+                public event System.EventHandler E;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("struct", property.ContainerKind);
+        Assert.Equal("S", property.ContainerName);
+        Assert.Equal("Demo.S", property.ContainerQualifiedName);
+
+        var evt = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E"));
+        Assert.Equal("struct", evt.ContainerKind);
+        Assert.Equal("S", evt.ContainerName);
+        Assert.Equal("Demo.S", evt.ContainerQualifiedName);
+    }
+
+    [Fact]
     public void Extract_CSharp_TypeDeclarations_FreeModifierOrder()
     {
         // Closes #355: type declarations (class / struct / interface / record) also accept
@@ -5357,6 +5407,93 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "B" && s.Visibility == "public");
         Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "C" && s.Visibility == "public");
         Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "D" && s.Visibility == "public");
+    }
+
+    [Fact]
+    public void Extract_CSharp_EventModifierCombinations_Issue334Repro()
+    {
+        // Closes #334: the full issue repro must survive extraction, including class events
+        // with `abstract` / `virtual` / `override` / `sealed override` / `new`, plus interface
+        // events with `static abstract` and accessor-bodied `static virtual`. The current main
+        // branch already accepts these modifier sequences; this test locks the exact dogfood
+        // fixture in place so the open issue cannot regress silently. The same container
+        // walk now also treats `struct` as a real parent, so keep one struct-owned event in
+        // the fixture to ensure the broader container fix stays covered too.
+        // Closes #334: issue 本文の再現ケース全体を固定する。`abstract` / `virtual` /
+        // `override` / `sealed override` / `new` 付き class event と、`static abstract` /
+        // accessor 本体付き `static virtual` interface event の両方が抽出され続ける必要がある。
+        // 現行 main はこれらを受理できるため、このテストは open issue の dogfood fixture を
+        // そのまま回帰防止として固定する。同じ container 走査は `struct` も親として扱うよう
+        // になったため、より広い親子付け修正も 1 件の struct event で固定する。
+        var content = """
+            using System;
+            namespace EventMods;
+
+            public abstract class Base
+            {
+                public abstract event EventHandler Ping;
+                public virtual event EventHandler Ring;
+                public new event EventHandler Hide;
+                protected event EventHandler Peek;
+                public event EventHandler Plain;
+            }
+
+            public sealed class Derived : Base
+            {
+                public override event EventHandler Ping;
+                public sealed override event EventHandler Ring;
+            }
+
+            public struct Box
+            {
+                public event EventHandler Sent;
+            }
+
+            public interface IBus
+            {
+                event EventHandler Regular;
+                static abstract event EventHandler StaticAbs;
+                static virtual event EventHandler StaticVirt { add { } remove { } }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var events = symbols.Where(s => s.Kind == "event").ToList();
+
+        Assert.Equal(11, events.Count);
+        var basePing = Assert.Single(events.Where(s => s.Name == "Ping" && s.ContainerKind == "class" && s.ContainerName == "Base"));
+        Assert.Equal("public", basePing.Visibility);
+        Assert.Equal("EventHandler", basePing.ReturnType);
+
+        var derivedPing = Assert.Single(events.Where(s => s.Name == "Ping" && s.ContainerKind == "class" && s.ContainerName == "Derived"));
+        Assert.Equal("public", derivedPing.Visibility);
+        Assert.Equal("EventHandler", derivedPing.ReturnType);
+
+        var baseRing = Assert.Single(events.Where(s => s.Name == "Ring" && s.ContainerKind == "class" && s.ContainerName == "Base"));
+        Assert.Equal("public", baseRing.Visibility);
+        Assert.Equal("EventHandler", baseRing.ReturnType);
+
+        var derivedRing = Assert.Single(events.Where(s => s.Name == "Ring" && s.ContainerKind == "class" && s.ContainerName == "Derived"));
+        Assert.Equal("public", derivedRing.Visibility);
+        Assert.Equal("EventHandler", derivedRing.ReturnType);
+
+        Assert.Contains(events, s => s.Name == "Hide" && s.ContainerKind == "class" && s.ContainerName == "Base" && s.Visibility == "public" && s.ReturnType == "EventHandler");
+        Assert.Contains(events, s => s.Name == "Peek" && s.ContainerKind == "class" && s.ContainerName == "Base" && s.Visibility == "protected" && s.ReturnType == "EventHandler");
+        Assert.Contains(events, s => s.Name == "Plain" && s.ContainerKind == "class" && s.ContainerName == "Base" && s.Visibility == "public" && s.ReturnType == "EventHandler");
+        var sent = Assert.Single(events.Where(s => s.Name == "Sent" && s.ContainerKind == "struct" && s.ContainerName == "Box"));
+        Assert.Equal("public", sent.Visibility);
+        Assert.Equal("EventHandler", sent.ReturnType);
+
+        var regular = Assert.Single(events.Where(s => s.Name == "Regular" && s.ContainerKind == "interface" && s.ContainerName == "IBus"));
+        Assert.True(string.IsNullOrEmpty(regular.Visibility));
+        Assert.Equal("EventHandler", regular.ReturnType);
+
+        var staticAbs = Assert.Single(events.Where(s => s.Name == "StaticAbs" && s.ContainerKind == "interface" && s.ContainerName == "IBus"));
+        Assert.True(string.IsNullOrEmpty(staticAbs.Visibility));
+        Assert.Equal("EventHandler", staticAbs.ReturnType);
+
+        var staticVirt = Assert.Single(events.Where(s => s.Name == "StaticVirt" && s.ContainerKind == "interface" && s.ContainerName == "IBus"));
+        Assert.True(string.IsNullOrEmpty(staticVirt.Visibility));
+        Assert.Equal("EventHandler", staticVirt.ReturnType);
     }
 
     [Fact]
