@@ -1510,7 +1510,12 @@ public static class QueryCommandRunner
                 ? (DateTime.UtcNow - status.IndexedAt.Value).TotalMinutes < 5 ? "fresh" : "stale"
                 : "unknown";
             var dirty = status.GitIsDirty == true ? ", dirty" : "";
-            var degraded = (!status.GraphTableAvailable || !status.IssuesTableAvailable || !status.CSharpSymbolNameReady) ? ", DEGRADED" : "";
+            var degraded = (!status.GraphTableAvailable
+                            || !status.IssuesTableAvailable
+                            || !status.HotspotFamilyReady
+                            || !status.CSharpSymbolNameReady)
+                ? ", DEGRADED"
+                : "";
             status.Summary = $"{status.Files} files, {status.Symbols} symbols, {status.References} refs across {status.Languages.Count} languages ({string.Join(", ", topLangs)}); index {freshness}{dirty}{degraded}";
 
             if (options.Json)

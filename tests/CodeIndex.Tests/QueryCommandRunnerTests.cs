@@ -6045,6 +6045,32 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunStatus_Json_ReportsHotspotFamilyTrustSignals()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_hotspots_family_signal");
+        try
+        {
+            var dbPath = CreateHotspotFamilyFixtureDb(projectRoot, markHotspotFamilyReady: false);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.GetProperty("hotspot_family_ready").GetBoolean());
+            Assert.Contains("csharp", json.GetProperty("hotspot_family_degraded_reason").GetString());
+            Assert.Contains("DEGRADED", json.GetProperty("summary").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunHotspots_ZeroJson_ReportsMissingMarkerFingerprintAsDegraded()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_family_missing_fingerprint_zero_json");
