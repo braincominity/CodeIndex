@@ -166,6 +166,12 @@ public static class ReferenceExtractor
     // `callback?.<T>()`) を捕捉するための segment。これが無いと `?.` の存在で末尾 `(` に到達できず、
     // `callback` への call 参照が黙って欠落する。C# / Kotlin / Swift / Dart などの `?.` は後ろに
     // 識別子が続くため、従来通り識別子自身が CallRegex にマッチして影響を受けない。issue #294 参照。
+    // Nested generic call sites such as `Foo<Bar<int>>()` / `new Dict<K, List<V>>()` are
+    // recovered by a depth-aware fallback scanner because the flat `<[^>\n]+>` segment cannot
+    // balance the closing `>>`. See issue #263.
+    // `Foo<Bar<int>>()` や `new Dict<K, List<V>>()` のようなネスト generic 呼び出しは、
+    // 平坦な `<[^>\n]+>` では末尾 `>>` を釣り合わせられないため、depth-aware な fallback scanner
+    // で補完する。issue #263 参照。
     private static readonly Regex CallRegex = new(@"(?<![\w$])(?<name>[A-Za-z_]\w*)(?:\?\.)?(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
     // SQL stored-procedure call without parentheses: T-SQL `EXEC` / `EXECUTE` and MySQL / MariaDB `CALL`.
     // The shared CallRegex requires a trailing `(`, which misses the dominant real-world form such as
@@ -762,11 +768,8 @@ public static class ReferenceExtractor
                 }
             }
 
-            foreach (Match match in CallRegex.Matches(preparedLine))
+            void AddCallLikeReference(string name, int callIndex)
             {
-                var name = match.Groups["name"].Value;
-                var callIndex = match.Groups["name"].Index;
-
                 // Suppress the same-line Java ctor declarator's self-call. CallRegex matches
                 // `CtorName(` at the declarator once per same-line ctor, but it is a declaration
                 // site — not a call — so attributing it to `class:CtorName` produces a phantom
@@ -777,19 +780,19 @@ public static class ReferenceExtractor
                     && callIndex == javaSameLineCtor.Value.NameIndex
                     && string.Equals(name, javaSameLineCtor.Value.Synthetic.Name, StringComparison.Ordinal))
                 {
-                    continue;
+                    return;
                 }
 
                 var callContainer = ResolveContainerForCall(callIndex);
                 if (IsConstructorCallName(language, preparedLine, callIndex))
                 {
-                    AddReference(references, seen, fileId, match, "instantiate", context, lineNumber, callContainer);
-                    continue;
+                    AddReference(references, seen, fileId, name, callIndex, "instantiate", context, lineNumber, callContainer);
+                    return;
                 }
                 if (IsIgnoredCallName(language, name))
-                    continue;
+                    return;
                 if (definitionNames != null && definitionNames.Contains(name))
-                    continue;
+                    return;
 
                 // issue #293: reclassify C# attribute / Java/Kotlin/Scala/TypeScript annotation
                 // usages with arguments so they do not pollute the call-graph as phantom `call` rows.
@@ -798,8 +801,26 @@ public static class ReferenceExtractor
                 var insideCSharpAttributeRange = csharpAttrRangesOnLine != null
                     && IsInsideCSharpAttributeRange(csharpAttrRangesOnLine, callIndex);
                 var metadataKind = TryClassifyMetadataReference(language, preparedLine, callIndex, insideCSharpAttributeRange);
-                AddReference(references, seen, fileId, match, metadataKind ?? "call", context, lineNumber, callContainer);
+                AddReference(references, seen, fileId, name, callIndex, metadataKind ?? "call", context, lineNumber, callContainer);
             }
+
+            var matchedCallIndices = new HashSet<int>();
+            foreach (Match match in CallRegex.Matches(preparedLine))
+            {
+                var name = match.Groups["name"].Value;
+                var callIndex = match.Groups["name"].Index;
+                matchedCallIndices.Add(callIndex);
+                AddCallLikeReference(name, callIndex);
+            }
+
+            // The flat CallRegex misses nested generic tails like `>>(` because `<[^>\n]+>`
+            // stops at the first `>`. Add a depth-aware fallback so `Foo<Bar<int>>()` and
+            // `new Dict<K, List<V>>()` still emit call/instantiate rows. See issue #263.
+            // 平坦な CallRegex は `<[^>\n]+>` が最初の `>` で止まるため `>>(` 形を取りこぼす。
+            // depth-aware な fallback を足し、`Foo<Bar<int>>()` や `new Dict<K, List<V>>()` でも
+            // `call` / `instantiate` を発行する。issue #263 参照。
+            foreach (var candidate in EnumerateNestedGenericCallCandidates(preparedLine, matchedCallIndices))
+                AddCallLikeReference(candidate.Name, candidate.NameIndex);
 
             // issue #293: bare no-arg attributes / annotations are invisible to CallRegex because
             // it requires `(`. Emit them from dedicated regexes so `[Serializable]` / `@Deprecated`
@@ -855,8 +876,30 @@ public static class ReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        var name = match.Groups["name"].Value;
-        var column = match.Groups["name"].Index + 1;
+        AddReference(
+            references,
+            seen,
+            fileId,
+            match.Groups["name"].Value,
+            match.Groups["name"].Index,
+            referenceKind,
+            context,
+            lineNumber,
+            container);
+    }
+
+    private static void AddReference(
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string name,
+        int nameIndex,
+        string referenceKind,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        var column = nameIndex + 1;
         var dedupeKey = $"{lineNumber}:{column}:{referenceKind}:{name}";
         if (!seen.Add(dedupeKey))
             return;
@@ -2763,6 +2806,92 @@ public static class ReferenceExtractor
             ? string.Equals(token, "new", StringComparison.OrdinalIgnoreCase)
             : string.Equals(token, "new", StringComparison.Ordinal);
     }
+
+    private readonly record struct NestedGenericCallCandidate(string Name, int NameIndex);
+
+    private static IEnumerable<NestedGenericCallCandidate> EnumerateNestedGenericCallCandidates(
+        string preparedLine,
+        HashSet<int> matchedCallIndices)
+    {
+        for (var i = 0; i < preparedLine.Length; i++)
+        {
+            if (!IsAsciiIdentifierStartChar(preparedLine[i]))
+                continue;
+            if (i > 0 && (IsIdentifierChar(preparedLine[i - 1]) || preparedLine[i - 1] == '$'))
+                continue;
+
+            var nameStart = i;
+            i++;
+            while (i < preparedLine.Length && IsIdentifierChar(preparedLine[i]))
+                i++;
+
+            if (matchedCallIndices.Contains(nameStart))
+            {
+                i--;
+                continue;
+            }
+
+            var scan = i;
+            if (scan + 1 < preparedLine.Length
+                && preparedLine[scan] == '?'
+                && preparedLine[scan + 1] == '.')
+            {
+                scan += 2;
+            }
+
+            if (scan >= preparedLine.Length || preparedLine[scan] != '<')
+            {
+                i--;
+                continue;
+            }
+
+            if (!TrySkipBalancedGenericArgs(preparedLine, ref scan, out var sawNestedGeneric) || !sawNestedGeneric)
+            {
+                i--;
+                continue;
+            }
+
+            while (scan < preparedLine.Length && char.IsWhiteSpace(preparedLine[scan]))
+                scan++;
+
+            if (scan < preparedLine.Length && preparedLine[scan] == '(')
+                yield return new NestedGenericCallCandidate(preparedLine[nameStart..i], nameStart);
+
+            i--;
+        }
+    }
+
+    private static bool TrySkipBalancedGenericArgs(string preparedLine, ref int scan, out bool sawNestedGeneric)
+    {
+        sawNestedGeneric = false;
+        if (scan >= preparedLine.Length || preparedLine[scan] != '<')
+            return false;
+
+        var depth = 0;
+        while (scan < preparedLine.Length)
+        {
+            var ch = preparedLine[scan++];
+            if (ch == '<')
+            {
+                depth++;
+                if (depth > 1)
+                    sawNestedGeneric = true;
+            }
+            else if (ch == '>')
+            {
+                depth--;
+                if (depth == 0)
+                    return true;
+                if (depth < 0)
+                    return false;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsAsciiIdentifierStartChar(char ch) =>
+        ch == '_' || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
 
     private static bool IsIdentifierChar(char ch) =>
         char.IsLetterOrDigit(ch) || ch == '_';
