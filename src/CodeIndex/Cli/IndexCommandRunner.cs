@@ -1111,7 +1111,7 @@ public static class IndexCommandRunner
 
     private static void RestampHotspotFamilyTrustForFullScan(
         DbWriter writer,
-        bool allFilesRewritten,
+        IReadOnlySet<string> reusedLanguages,
         IReadOnlyDictionary<string, string?> priorVersions,
         IReadOnlyDictionary<string, string?> priorFingerprints,
         IReadOnlyDictionary<string, string?> currentFingerprints)
@@ -1122,9 +1122,39 @@ public static class IndexCommandRunner
             currentFingerprints.TryGetValue(lang, out var currentFingerprint);
             priorVersions.TryGetValue(lang, out var priorVersion);
             priorFingerprints.TryGetValue(lang, out var priorFingerprint);
-            if (allFilesRewritten || (priorVersion == currentVersion && priorFingerprint == currentFingerprint))
+            if (!reusedLanguages.Contains(lang) || (priorVersion == currentVersion && priorFingerprint == currentFingerprint))
                 writer.MarkHotspotFamilyReady(lang, currentFingerprint);
         }
+    }
+
+    private static Dictionary<string, bool> GetHotspotFamilyTrustMatchesCurrent(
+        IReadOnlyDictionary<string, string?> priorVersions,
+        IReadOnlyDictionary<string, string?> priorFingerprints,
+        IReadOnlyDictionary<string, string?> currentFingerprints)
+    {
+        var currentVersion = DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var values = new Dictionary<string, bool>(StringComparer.Ordinal);
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+        {
+            currentFingerprints.TryGetValue(lang, out var currentFingerprint);
+            priorVersions.TryGetValue(lang, out var priorVersion);
+            priorFingerprints.TryGetValue(lang, out var priorFingerprint);
+            values[lang] = priorVersion == currentVersion && priorFingerprint == currentFingerprint;
+        }
+
+        return values;
+    }
+
+    private static bool AllowReuseWithCurrentHotspotFamilyTrust(
+        string? lang,
+        IReadOnlyDictionary<string, bool> hotspotFamilyTrustMatchesCurrent)
+    {
+        if (!FileIndexer.SupportsHotspotFamilyMarkerLanguage(lang))
+            return true;
+
+        return lang != null
+            && hotspotFamilyTrustMatchesCurrent.TryGetValue(lang, out var matchesCurrent)
+            && matchesCurrent;
     }
 
     private static bool IsOutsideProjectRoot(string relativePath) =>
@@ -1306,6 +1336,10 @@ public static class IndexCommandRunner
         var projectRootWritten = PathsEqual(normalizedPriorIndexedProjectRoot, normalizedProjectRoot);
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
+        var hotspotFamilyTrustMatchesCurrent = GetHotspotFamilyTrustMatchesCurrent(
+            priorHotspotFamilyVersions,
+            priorHotspotFamilyMarkerFingerprints,
+            currentHotspotFamilyMarkerFingerprints);
 
         void WriteProjectRootOnce()
         {
@@ -1407,6 +1441,7 @@ public static class IndexCommandRunner
 
         var interactiveIndexSpinner = !options.Json && !Console.IsOutputRedirected;
         var redirectedIndexingMessagePrinted = false;
+        var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
 
         void StartIndexSpinnerIfNeeded()
         {
@@ -1471,11 +1506,14 @@ public static class IndexCommandRunner
                     record.Path,
                     record.Modified,
                     record.Checksum,
-                    allowReuse: record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent);
+                    allowReuse: (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
+                        && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
                 if (existingId != null)
                 {
                     skipped++;
                     processed++;
+                    if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(record.Lang) && record.Lang != null)
+                        reusedHotspotFamilyLanguages.Add(record.Lang);
                     if (options.Verbose && !options.Json)
                     {
                         PauseIndexSpinnerForConsoleWrite();
@@ -1567,7 +1605,7 @@ public static class IndexCommandRunner
             csharpSymbolNameReadyAfter = true;
             RestampHotspotFamilyTrustForFullScan(
                 writer,
-                skipped == 0,
+                reusedHotspotFamilyLanguages,
                 priorHotspotFamilyVersions,
                 priorHotspotFamilyMarkerFingerprints,
                 currentHotspotFamilyMarkerFingerprints);

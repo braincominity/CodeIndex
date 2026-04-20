@@ -825,7 +825,7 @@ public partial class McpServer
 
     private static void RestampHotspotFamilyTrust(
         DbWriter writer,
-        bool allFilesRewritten,
+        IReadOnlySet<string> reusedLanguages,
         IReadOnlyDictionary<string, string?> priorVersions,
         IReadOnlyDictionary<string, string?> priorFingerprints,
         IReadOnlyDictionary<string, string?> currentFingerprints)
@@ -836,9 +836,39 @@ public partial class McpServer
             currentFingerprints.TryGetValue(lang, out var currentFingerprint);
             priorVersions.TryGetValue(lang, out var priorVersion);
             priorFingerprints.TryGetValue(lang, out var priorFingerprint);
-            if (allFilesRewritten || (priorVersion == currentVersion && priorFingerprint == currentFingerprint))
+            if (!reusedLanguages.Contains(lang) || (priorVersion == currentVersion && priorFingerprint == currentFingerprint))
                 writer.MarkHotspotFamilyReady(lang, currentFingerprint);
         }
+    }
+
+    private static Dictionary<string, bool> GetHotspotFamilyTrustMatchesCurrent(
+        IReadOnlyDictionary<string, string?> priorVersions,
+        IReadOnlyDictionary<string, string?> priorFingerprints,
+        IReadOnlyDictionary<string, string?> currentFingerprints)
+    {
+        var currentVersion = DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var values = new Dictionary<string, bool>(StringComparer.Ordinal);
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+        {
+            currentFingerprints.TryGetValue(lang, out var currentFingerprint);
+            priorVersions.TryGetValue(lang, out var priorVersion);
+            priorFingerprints.TryGetValue(lang, out var priorFingerprint);
+            values[lang] = priorVersion == currentVersion && priorFingerprint == currentFingerprint;
+        }
+
+        return values;
+    }
+
+    private static bool AllowReuseWithCurrentHotspotFamilyTrust(
+        string? lang,
+        IReadOnlyDictionary<string, bool> hotspotFamilyTrustMatchesCurrent)
+    {
+        if (!FileIndexer.SupportsHotspotFamilyMarkerLanguage(lang))
+            return true;
+
+        return lang != null
+            && hotspotFamilyTrustMatchesCurrent.TryGetValue(lang, out var matchesCurrent)
+            && matchesCurrent;
     }
 
     private static void AddHotspotFamilySignal(JsonObject payload, HotspotFamilySignal signal)
@@ -1459,6 +1489,10 @@ public partial class McpServer
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
+        var hotspotFamilyTrustMatchesCurrent = GetHotspotFamilyTrustMatchesCurrent(
+            priorHotspotFamilyVersions,
+            priorHotspotFamilyMarkerFingerprints,
+            currentHotspotFamilyMarkerFingerprints);
         var normalizedProjectPath = Path.GetFullPath(projectPath);
         var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(priorIndexedProjectRoot)
             ? null
@@ -1501,6 +1535,7 @@ public partial class McpServer
         // Scan and index / スキャン・インデックス
         var files = indexer.ScanFiles();
         int processed = 0, skipped = 0, errors = 0;
+        var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var filePath in files)
         {
@@ -1511,11 +1546,14 @@ public partial class McpServer
                     record.Path,
                     record.Modified,
                     record.Checksum,
-                    allowReuse: record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent);
+                    allowReuse: (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
+                        && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
                 if (existingId != null)
                 {
                     skipped++;
                     processed++;
+                    if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(record.Lang) && record.Lang != null)
+                        reusedHotspotFamilyLanguages.Add(record.Lang);
                     continue;
                 }
 
@@ -1559,7 +1597,7 @@ public partial class McpServer
             csharpSymbolNameReadyAfter = true;
             RestampHotspotFamilyTrust(
                 writer,
-                skipped == 0,
+                reusedHotspotFamilyLanguages,
                 priorHotspotFamilyVersions,
                 priorHotspotFamilyMarkerFingerprints,
                 currentHotspotFamilyMarkerFingerprints);

@@ -3694,7 +3694,7 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FullScan_DoesNotRestampHotspotFamilyReadyWhenMarkerFingerprintChanges()
+    public void Run_FullScan_RestampsHotspotFamilyReadyWhenMarkerFingerprintChanges()
     {
         var projectRoot = CreateTempProject();
         try
@@ -3742,8 +3742,10 @@ public class IndexCommandRunnerTests
             Assert.Equal("success", json2.GetProperty("status").GetString());
 
             using var verifyDb = new DbContext(dbPath);
-            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
-            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp")));
+            Assert.Equal(
+                DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+            Assert.False(string.IsNullOrWhiteSpace(verifyDb.GetMetaString(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"))));
         }
         finally
         {
@@ -3814,11 +3816,61 @@ public class IndexCommandRunnerTests
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             using var verifyDb = new DbContext(dbPath);
             Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
-            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("vb")));
 
             var (hotspotsExitCode, hotspotsJson) = RunHotspotsJson(dbPath, "csharp", "function");
             Assert.True(hotspotsExitCode is CommandExitCodes.Success or CommandExitCodes.NotFound);
             Assert.True(hotspotsJson.GetProperty("hotspot_family_ready").GetBoolean());
+            if (hotspotsJson.TryGetProperty("degraded", out var degraded))
+                Assert.False(degraded.GetBoolean());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_RestampsHotspotFamilyTrustWhenOnlyMetadataWasCleared()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "App.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part1.cs"), "public partial class Api { public void Run() { } }");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part2.cs"), "public partial class Api { public void Run(int value) { } }");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Caller.cs"), "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); } }");
+
+            var (initialExitCode, initialJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal("success", initialJson.GetProperty("status").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.GetHotspotFamilyVersionMetaKey("csharp"), null);
+                writer.SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"), null);
+            }
+
+            var (rerunExitCode, rerunJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, rerunExitCode);
+            Assert.Equal("success", rerunJson.GetProperty("status").GetString());
+            Assert.True(rerunJson.GetProperty("summary").GetProperty("files_skipped").GetInt32() > 0);
+
+            using (var verifyDb = new DbContext(dbPath))
+            {
+                Assert.Equal(
+                    DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+                Assert.False(string.IsNullOrWhiteSpace(verifyDb.GetMetaString(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"))));
+            }
+
+            var (hotspotsExitCode, hotspotsJson) = RunHotspotsJson(dbPath, "csharp", "function");
+            Assert.Equal(CommandExitCodes.Success, hotspotsExitCode);
+            Assert.True(hotspotsJson.GetProperty("hotspot_family_ready").GetBoolean());
+            Assert.Equal(1, hotspotsJson.GetProperty("count").GetInt32());
             if (hotspotsJson.TryGetProperty("degraded", out var degraded))
                 Assert.False(degraded.GetBoolean());
         }
