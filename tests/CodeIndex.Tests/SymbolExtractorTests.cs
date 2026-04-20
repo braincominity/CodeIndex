@@ -5366,12 +5366,15 @@ public class SymbolExtractorTests
         // with `abstract` / `virtual` / `override` / `sealed override` / `new`, plus interface
         // events with `static abstract` and accessor-bodied `static virtual`. The current main
         // branch already accepts these modifier sequences; this test locks the exact dogfood
-        // fixture in place so the open issue cannot regress silently.
+        // fixture in place so the open issue cannot regress silently. The same container
+        // walk now also treats `struct` as a real parent, so keep one struct-owned event in
+        // the fixture to ensure the broader container fix stays covered too.
         // Closes #334: issue 本文の再現ケース全体を固定する。`abstract` / `virtual` /
         // `override` / `sealed override` / `new` 付き class event と、`static abstract` /
         // accessor 本体付き `static virtual` interface event の両方が抽出され続ける必要がある。
         // 現行 main はこれらを受理できるため、このテストは open issue の dogfood fixture を
-        // そのまま回帰防止として固定する。
+        // そのまま回帰防止として固定する。同じ container 走査は `struct` も親として扱うよう
+        // になったため、より広い親子付け修正も 1 件の struct event で固定する。
         var content = """
             using System;
             namespace EventMods;
@@ -5391,6 +5394,11 @@ public class SymbolExtractorTests
                 public sealed override event EventHandler Ring;
             }
 
+            public struct Box
+            {
+                public event EventHandler Sent;
+            }
+
             public interface IBus
             {
                 event EventHandler Regular;
@@ -5401,7 +5409,7 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var events = symbols.Where(s => s.Kind == "event").ToList();
 
-        Assert.Equal(10, events.Count);
+        Assert.Equal(11, events.Count);
         var basePing = Assert.Single(events.Where(s => s.Name == "Ping" && s.ContainerKind == "class" && s.ContainerName == "Base"));
         Assert.Equal("public", basePing.Visibility);
         Assert.Equal("EventHandler", basePing.ReturnType);
@@ -5421,6 +5429,10 @@ public class SymbolExtractorTests
         Assert.Contains(events, s => s.Name == "Hide" && s.ContainerKind == "class" && s.ContainerName == "Base" && s.Visibility == "public" && s.ReturnType == "EventHandler");
         Assert.Contains(events, s => s.Name == "Peek" && s.ContainerKind == "class" && s.ContainerName == "Base" && s.Visibility == "protected" && s.ReturnType == "EventHandler");
         Assert.Contains(events, s => s.Name == "Plain" && s.ContainerKind == "class" && s.ContainerName == "Base" && s.Visibility == "public" && s.ReturnType == "EventHandler");
+        var sent = Assert.Single(events.Where(s => s.Name == "Sent" && s.ContainerKind == "struct" && s.ContainerName == "Box"));
+        Assert.Equal("public", sent.Visibility);
+        Assert.Equal("EventHandler", sent.ReturnType);
+
         var regular = Assert.Single(events.Where(s => s.Name == "Regular" && s.ContainerKind == "interface" && s.ContainerName == "IBus"));
         Assert.True(string.IsNullOrEmpty(regular.Visibility));
         Assert.Equal("EventHandler", regular.ReturnType);
