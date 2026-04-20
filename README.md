@@ -446,7 +446,7 @@ Languages:
   javascript      4
 ```
 
-`status --json` also reports trust flags / availability fields such as `fold_ready`, `graph_table_available`, `issues_table_available`, and `csharp_symbol_name_ready`. If `csharp_symbol_name_ready` is `false`, run `cdidx index .` once to rewrite unchanged C# rows to the current canonical operator / conversion-operator / indexer names.
+`status --json` also reports trust flags / availability fields such as `fold_ready`, `graph_table_available`, `issues_table_available`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, and `csharp_symbol_name_ready`. If `hotspot_family_ready` is `false`, `hotspots` may still run but duplicate-name families are conservatively degraded until you rerun `cdidx index .` to restamp authoritative hotspot-family metadata. If `csharp_symbol_name_ready` is `false`, run `cdidx index .` once to rewrite unchanged C# rows to the current canonical operator / conversion-operator / indexer names.
 
 ### Map the repo before searching
 
@@ -1371,7 +1371,7 @@ Languages:
   javascript      4
 ```
 
-`status --json` には `fold_ready`、`graph_table_available`、`issues_table_available`、`csharp_symbol_name_ready` などの trust flag / availability field も含まれます。`csharp_symbol_name_ready` が `false` の場合は、`cdidx index .` を 1 回実行して unchanged な C# 行を現在の canonical operator / conversion operator / indexer 名へ書き換えてください。
+`status --json` には `fold_ready`、`graph_table_available`、`issues_table_available`、`hotspot_family_ready`、`hotspot_family_degraded_reason`、`csharp_symbol_name_ready` などの trust flag / availability field も含まれます。`hotspot_family_ready` が `false` の間も `hotspots` 自体は使えますが、duplicate-name family は authoritative ではない保守的 fallback に縮退しうるため、`cdidx index .` を再実行して hotspot-family metadata を restamp してください。`csharp_symbol_name_ready` が `false` の場合は、`cdidx index .` を 1 回実行して unchanged な C# 行を現在の canonical operator / conversion operator / indexer 名へ書き換えてください。
 
 ### 検索前にリポジトリ全体を俯瞰する
 
