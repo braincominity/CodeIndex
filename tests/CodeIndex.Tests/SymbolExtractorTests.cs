@@ -8208,6 +8208,68 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsWrappedRawStringFieldBeyondLookaheadBudget()
+    {
+        // issue #447 follow-up: once the declaration is confirmed at `Script = """`,
+        // the extractor must continue linearly to the real `""";` terminator instead of
+        // dropping the symbol at the 16-line confirmation cap.
+        // issue #447 follow-up: `Script = """` で宣言確定後は、16 行の確認上限で
+        // 打ち切らず、実際の `""";` 終端まで線形に継続してシンボルを保持する。
+        var content = string.Join(
+            "\n",
+            [
+                "namespace Demo;",
+                "public class Fixtures",
+                "{",
+                "    private static readonly string",
+                "        Script = \"\"\"",
+                .. Enumerable.Range(1, 18).Select(i => $"line{i:00}"),
+                "\"\"\";",
+                "}"
+            ]);
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function"
+            && s.Name == "Script"
+            && s.Visibility == "private"
+            && s.ReturnType == "string");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsLongObjectInitializerBeyondLookaheadBudget()
+    {
+        // issue #447 follow-up: long object/collection initializers must keep consuming
+        // lines after the declaration is confirmed at `_map = new()`, rather than falling
+        // back to the raw header once the bounded confirmation phase expires.
+        // issue #447 follow-up: `_map = new()` で宣言確定後は、長い object/collection
+        // initializer でも bounded な確認フェーズ満了で raw header に戻らず、そのまま
+        // 継続して終端 `;` まで追跡しなければならない。
+        var initializerLines = Enumerable.Range(1, 18)
+            .Select(i => $"            [\"k{i:00}\"] = {i}")
+            .ToArray();
+        var content = string.Join(
+            "\n",
+            [
+                "using System.Collections.Generic;",
+                "namespace Demo;",
+                "public class Containers",
+                "{",
+                "    private Dictionary<string, int>",
+                "        _map = new()",
+                "        {",
+                .. initializerLines,
+                "        };",
+                "}"
+            ]);
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property"
+            && s.Name == "_map"
+            && s.Visibility == "private"
+            && s.ReturnType == "Dictionary<string,int>");
+    }
+
+    [Fact]
     public void Extract_CSharp_MultiLineFieldIgnoresBraceInsideStringLiteral()
     {
         // Brace detection must use the sanitized match line, not the raw source, so a

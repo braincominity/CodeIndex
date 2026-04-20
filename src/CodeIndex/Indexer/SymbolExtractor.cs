@@ -174,6 +174,13 @@ public static class SymbolExtractor
         int? SignatureLastLineExclusiveEndColumn = null,
         int? ExpressionBodyEndLineIndex = null);
 
+    private enum CSharpAccessorProbeStatus
+    {
+        Pending,
+        Found,
+        Rejected
+    }
+
     private readonly record struct RecordPrimaryComponent(
         string Name,
         string Type,
@@ -1073,22 +1080,24 @@ public static class SymbolExtractor
     // 複数行宣言も 1 つのマッチ行に結合できるようにする。複数行 const フィールド向けに
     // `const` も他の field 対応修飾子と一緒に列挙する。Closes #355.
     private static readonly Regex CSharpPropertyHeaderPrefixRegex = new($@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|volatile|unsafe|extern|const|ref(?:\s+readonly)?)\s+)*(?:{CSharpTypePattern})\s*(?:\w+)?\s*\{{?\s*$", RegexOptions.Compiled);
-    // Multi-line field/property declarations are real, but they remain short in practice:
-    // a handful of wrapped generic / attribute / accessor lines, not dozens of lines of
-    // unrelated method-body content. BuildCSharpPropertyMatchLine re-normalizes the joined
-    // candidate after each appended line, so letting a false-positive "header prefix" scan
-    // arbitrarily far can turn one bad candidate into super-linear work on large C# files.
-    // Cap both the physical-line lookahead and the joined candidate length so pathological
-    // call-site shapes (issue #447's raw-string test fixture) bail out early while legitimate
-    // wrapped declarations still fit comfortably inside the limit.
-    // 複数行 field/property 宣言は存在するが、実用上は数行の wrapped generic / attribute /
-    // accessor であり、無関係なメソッド本体を何十行も跨がない。BuildCSharpPropertyMatchLine は
-    // 行を足すたびに連結候補を再正規化するため、誤って header prefix と見なした行を無制限に
-    // 先読みすると、大きい C# ファイルで super-linear な仕事量になる。physical line 数と
-    // 連結候補長の両方に上限を入れ、issue #447 の raw-string 系 false positive は早期打ち切りしつつ、
-    // 正常な wrapped 宣言は余裕を持って通す。
+    // Limit only the lightweight confirmation phase. Once a candidate looks like a real
+    // declaration (`name =`, or a named member header before `{`), BuildCSharpPropertyMatchLine
+    // switches to a linear terminator/accessor scan so long raw strings / initializers are not
+    // truncated. The cap exists solely to stop false-positive statement fragments such as
+    // `return o switch` from repeatedly re-normalizing the rest of a large file. Closes #447.
+    // 上限は軽量な確認フェーズにだけ適用する。候補が実際の宣言らしく見えた時点
+    // （`name =`、または `{` 前まで到達した named member header）で
+    // BuildCSharpPropertyMatchLine は線形な終端 / accessor 走査へ切り替え、長い raw string /
+    // initializer を途中で切らない。上限の目的は `return o switch` のような false positive 文断片が
+    // 大きいファイルの残り全体を何度も再正規化するのを止めることだけ。Closes #447.
     private const int CSharpPropertyMatchLookaheadLineLimit = 16;
     private const int CSharpPropertyMatchLookaheadCharLimit = 4096;
+    private static readonly Regex CSharpConfirmedMemberPrefixRegex = new(
+        $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|volatile|unsafe|extern|const|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate\b(?!\*)|event|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await|try|do|operator|this|base)\b)(?:{CSharpTypePattern})\s+(?:{CSharpExplicitInterfaceQualifierPattern}\s*\.\s*)?(?:@?[A-Za-z_]\w*)\s*\{{?\s*$",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpStandaloneAccessorRegex = new(
+        @"^\s*(?:(?:protected\s+internal|private\s+protected|protected|internal|private|public)\s+)*(?:readonly\s+)*(?:get|set|init)\b",
+        RegexOptions.Compiled);
 
     // Detect physical lines that consist solely of C# modifier keywords (no identifier,
     // no parentheses, no punctuation). Used by TryFindCSharpWrappedHeaderModifier to
@@ -1349,6 +1358,13 @@ public static class SymbolExtractor
                         // 後ろにある実フィールド）を取りこぼさないよう、次の候補探索
                         // 位置へ進める。この進行が無いと最初の拒否で while ループが
                         // 行を抜けてしまい、後続候補が失われる。Closes #400.
+                        lineOffset = FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang);
+                        continue;
+                    }
+                    if (lang == "csharp"
+                        && pattern.Kind == "property"
+                        && IsStandaloneCSharpAccessorCandidate(patternMatchLine))
+                    {
                         lineOffset = FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang);
                         continue;
                     }
@@ -9405,11 +9421,106 @@ public static class SymbolExtractor
                 return new CSharpPropertyMatchCandidate(normalizedCombined, i, i);
             }
 
+            if (HasCSharpTopLevelFieldInitializer(normalizedCombined)
+                || openBraceLineIndex >= 0 && CSharpConfirmedMemberPrefixRegex.IsMatch(normalizedCombined))
+            {
+                return ContinueConfirmedCSharpPropertyMatch(
+                    lines,
+                    csharpMatchLines,
+                    builder,
+                    startLineIndex,
+                    i,
+                    normalizedCombined,
+                    openBraceLineIndex,
+                    openBraceExclusiveEndColumn);
+            }
+
             if (nextLine.StartsWith(";", StringComparison.Ordinal))
                 break;
         }
 
         return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
+    }
+
+    private static CSharpPropertyMatchCandidate ContinueConfirmedCSharpPropertyMatch(
+        string[] lines,
+        string[] csharpMatchLines,
+        StringBuilder builder,
+        int startLineIndex,
+        int currentLineIndex,
+        string normalizedCombined,
+        int openBraceLineIndex,
+        int? openBraceExclusiveEndColumn)
+    {
+        var semicolonTracker = new CSharpTopLevelSemicolonTracker();
+        semicolonTracker.Scan(normalizedCombined);
+
+        StringBuilder? accessorProbeBuilder = null;
+        var accessorProbeStatus = CSharpAccessorProbeStatus.Rejected;
+        if (openBraceLineIndex >= 0 && openBraceExclusiveEndColumn.HasValue)
+        {
+            accessorProbeBuilder = BuildCSharpAccessorProbeBuilder(
+                csharpMatchLines,
+                openBraceLineIndex,
+                openBraceExclusiveEndColumn.Value,
+                currentLineIndex);
+            accessorProbeStatus = ClassifyCSharpAccessorProbe(accessorProbeBuilder.ToString());
+            if (accessorProbeStatus == CSharpAccessorProbeStatus.Found)
+            {
+                return new CSharpPropertyMatchCandidate(
+                    normalizedCombined,
+                    currentLineIndex,
+                    openBraceLineIndex,
+                    openBraceExclusiveEndColumn);
+            }
+        }
+
+        for (int i = currentLineIndex + 1; i < csharpMatchLines.Length; i++)
+        {
+            var nextLine = csharpMatchLines[i].Trim();
+            if (nextLine.Length == 0)
+                continue;
+
+            builder.Append(' ').Append(nextLine);
+            semicolonTracker.Scan(nextLine);
+
+            if (openBraceLineIndex < 0 && csharpMatchLines[i].IndexOf('{') >= 0)
+            {
+                openBraceLineIndex = i;
+                openBraceExclusiveEndColumn = ResolveCSharpBraceColumn(lines[i], csharpMatchLines[i]) + 1;
+                accessorProbeBuilder = BuildCSharpAccessorProbeBuilder(
+                    csharpMatchLines,
+                    openBraceLineIndex,
+                    openBraceExclusiveEndColumn.Value,
+                    i);
+                accessorProbeStatus = ClassifyCSharpAccessorProbe(accessorProbeBuilder.ToString());
+            }
+            else if (accessorProbeBuilder != null
+                && accessorProbeStatus == CSharpAccessorProbeStatus.Pending)
+            {
+                AppendCSharpAccessorProbeLine(accessorProbeBuilder, csharpMatchLines[i], null);
+                accessorProbeStatus = ClassifyCSharpAccessorProbe(accessorProbeBuilder.ToString());
+            }
+
+            if (accessorProbeStatus == CSharpAccessorProbeStatus.Found)
+            {
+                return new CSharpPropertyMatchCandidate(
+                    CollapseCSharpGenericTypeWhitespace(builder.ToString()),
+                    i,
+                    openBraceLineIndex,
+                    openBraceExclusiveEndColumn);
+            }
+
+            if (semicolonTracker.HasTopLevelSemicolon)
+            {
+                return new CSharpPropertyMatchCandidate(
+                    CollapseCSharpGenericTypeWhitespace(builder.ToString()),
+                    i,
+                    i);
+            }
+        }
+
+        return new CSharpPropertyMatchCandidate(normalizedCombined, currentLineIndex, currentLineIndex);
     }
 
     // Prefer the raw line's `{` column (to preserve original positioning for body slicing),
@@ -9439,8 +9550,52 @@ public static class SymbolExtractor
         cursor = SkipWhitespace(text, cursor);
         if (TrySkipCSharpAccessorAccessibility(text, ref cursor))
             cursor = SkipWhitespace(text, cursor);
+        while (TrySkipCSharpAccessorModifier(text, ref cursor))
+            cursor = SkipWhitespace(text, cursor);
 
         return StartsWithCSharpAccessorKeyword(text, cursor);
+    }
+
+    private static bool HasCSharpTopLevelFieldInitializer(string text)
+    {
+        int paren = 0, bracket = 0, brace = 0;
+        for (int i = 0; i < text.Length; i++)
+        {
+            var ch = text[i];
+            switch (ch)
+            {
+                case '(':
+                    paren++;
+                    continue;
+                case ')' when paren > 0:
+                    paren--;
+                    continue;
+                case '[':
+                    bracket++;
+                    continue;
+                case ']' when bracket > 0:
+                    bracket--;
+                    continue;
+                case '{':
+                    brace++;
+                    continue;
+                case '}' when brace > 0:
+                    brace--;
+                    continue;
+                case '=' when paren == 0 && bracket == 0 && brace == 0:
+                    var previous = i > 0 ? text[i - 1] : '\0';
+                    var next = i + 1 < text.Length ? text[i + 1] : '\0';
+                    if (previous is not ('=' or '!' or '<' or '>')
+                        && next is not ('=' or '>'))
+                    {
+                        return true;
+                    }
+
+                    continue;
+            }
+        }
+
+        return false;
     }
 
     private static int SkipWhitespace(string text, int cursor)
@@ -9494,6 +9649,15 @@ public static class SymbolExtractor
         return false;
     }
 
+    private static bool TrySkipCSharpAccessorModifier(string text, ref int cursor)
+    {
+        if (!StartsWithWord(text, cursor, "readonly"))
+            return false;
+
+        cursor += "readonly".Length;
+        return true;
+    }
+
     private static bool StartsWithCSharpAccessorKeyword(string text, int cursor) =>
         StartsWithWord(text, cursor, "get")
         || StartsWithWord(text, cursor, "set")
@@ -9509,6 +9673,119 @@ public static class SymbolExtractor
 
         var end = cursor + word.Length;
         return end >= text.Length || !char.IsLetterOrDigit(text[end]) && text[end] != '_';
+    }
+
+    private static StringBuilder BuildCSharpAccessorProbeBuilder(
+        string[] csharpMatchLines,
+        int openBraceLineIndex,
+        int openBraceExclusiveEndColumn,
+        int endLineIndex)
+    {
+        var builder = new StringBuilder();
+        var openBraceColumn = Math.Max(0, openBraceExclusiveEndColumn - 1);
+        for (int i = openBraceLineIndex; i <= endLineIndex && i < csharpMatchLines.Length; i++)
+        {
+            AppendCSharpAccessorProbeLine(
+                builder,
+                csharpMatchLines[i],
+                i == openBraceLineIndex ? openBraceColumn : null);
+        }
+
+        return builder;
+    }
+
+    private static void AppendCSharpAccessorProbeLine(StringBuilder builder, string sanitizedLine, int? startColumn)
+    {
+        var start = Math.Clamp(startColumn ?? 0, 0, sanitizedLine.Length);
+        var trimmed = sanitizedLine[start..].Trim();
+        if (trimmed.Length == 0)
+            return;
+
+        if (builder.Length > 0)
+            builder.Append(' ');
+        builder.Append(trimmed);
+    }
+
+    private static CSharpAccessorProbeStatus ClassifyCSharpAccessorProbe(string text)
+    {
+        var braceIndex = text.IndexOf('{');
+        if (braceIndex < 0)
+            return CSharpAccessorProbeStatus.Rejected;
+
+        var cursor = SkipWhitespace(text, braceIndex + 1);
+        while (true)
+        {
+            while (TrySkipCSharpAttributeList(text, ref cursor))
+                cursor = SkipWhitespace(text, cursor);
+
+            if (cursor >= text.Length)
+                return CSharpAccessorProbeStatus.Pending;
+
+            if (TrySkipCSharpAccessorAccessibility(text, ref cursor))
+            {
+                cursor = SkipWhitespace(text, cursor);
+                if (cursor >= text.Length)
+                    return CSharpAccessorProbeStatus.Pending;
+            }
+            while (TrySkipCSharpAccessorModifier(text, ref cursor))
+            {
+                cursor = SkipWhitespace(text, cursor);
+                if (cursor >= text.Length)
+                    return CSharpAccessorProbeStatus.Pending;
+            }
+
+            break;
+        }
+
+        return StartsWithCSharpAccessorKeyword(text, cursor)
+            ? CSharpAccessorProbeStatus.Found
+            : CSharpAccessorProbeStatus.Rejected;
+    }
+
+    private static bool IsStandaloneCSharpAccessorCandidate(string text) =>
+        CSharpStandaloneAccessorRegex.IsMatch(text);
+
+    private struct CSharpTopLevelSemicolonTracker
+    {
+        private int _parenDepth;
+        private int _bracketDepth;
+        private int _braceDepth;
+
+        public bool HasTopLevelSemicolon { get; private set; }
+
+        public void Scan(string text)
+        {
+            if (HasTopLevelSemicolon)
+                return;
+
+            for (int i = 0; i < text.Length; i++)
+            {
+                switch (text[i])
+                {
+                    case '(':
+                        _parenDepth++;
+                        break;
+                    case ')' when _parenDepth > 0:
+                        _parenDepth--;
+                        break;
+                    case '[':
+                        _bracketDepth++;
+                        break;
+                    case ']' when _bracketDepth > 0:
+                        _bracketDepth--;
+                        break;
+                    case '{':
+                        _braceDepth++;
+                        break;
+                    case '}' when _braceDepth > 0:
+                        _braceDepth--;
+                        break;
+                    case ';' when _parenDepth == 0 && _bracketDepth == 0 && _braceDepth == 0:
+                        HasTopLevelSemicolon = true;
+                        return;
+                }
+            }
+        }
     }
 
     private static bool TryFindCSharpExpressionArrow(string[] lines, int startLineIndex, int endLineIndex, out int arrowLineIndex, out int arrowColumn)
