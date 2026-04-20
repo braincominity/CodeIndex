@@ -5186,6 +5186,56 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_InterfaceEventsUseInterfaceContainer()
+    {
+        var content = """
+            using System;
+            namespace EventMods;
+
+            public interface IBus
+            {
+                event EventHandler Regular;
+                static abstract event EventHandler StaticAbs;
+                static virtual event EventHandler StaticVirt { add { } remove { } }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        foreach (var name in new[] { "Regular", "StaticAbs", "StaticVirt" })
+        {
+            var evt = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == name));
+            Assert.Equal("interface", evt.ContainerKind);
+            Assert.Equal("IBus", evt.ContainerName);
+            Assert.Equal("EventMods.IBus", evt.ContainerQualifiedName);
+        }
+    }
+
+    [Fact]
+    public void Extract_CSharp_StructMembersUseStructContainer()
+    {
+        var content = """
+            namespace Demo;
+
+            public struct S
+            {
+                public int P { get; set; }
+                public event System.EventHandler E;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("struct", property.ContainerKind);
+        Assert.Equal("S", property.ContainerName);
+        Assert.Equal("Demo.S", property.ContainerQualifiedName);
+
+        var evt = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E"));
+        Assert.Equal("struct", evt.ContainerKind);
+        Assert.Equal("S", evt.ContainerName);
+        Assert.Equal("Demo.S", evt.ContainerQualifiedName);
+    }
+
+    [Fact]
     public void Extract_CSharp_TypeDeclarations_FreeModifierOrder()
     {
         // Closes #355: type declarations (class / struct / interface / record) also accept
