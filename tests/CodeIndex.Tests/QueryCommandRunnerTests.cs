@@ -11891,6 +11891,69 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpSwitchExpressionDeclarationPatternWhenGuardDoesNotLeakReferenceContext()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_switch_expression_declaration_pattern_when_guard_collision");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Status
+                {
+                    Ready
+                }
+
+                public sealed class Holder
+                {
+                    public int Ready { get; set; }
+                }
+
+                public sealed class Uses
+                {
+                    public Demo.Status Read(object value)
+                    {
+                        return value switch
+                        {
+                            Holder Status when Status.Ready > 0 => Demo.Status.Ready,
+                            _ => Demo.Status.Ready
+                        };
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var first = ParseJsonOutput(stdout);
+            var firstJson = first.RootElement;
+            var rows = ParseJsonLines(stdout)
+                .Select(document => (
+                    Line: document.RootElement.GetProperty("line").GetInt32(),
+                    Column: document.RootElement.GetProperty("column").GetInt32(),
+                    ContainerName: document.RootElement.GetProperty("container_name").GetString()))
+                .OrderBy(row => row.Line)
+                .ThenBy(row => row.Column)
+                .ToArray();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("call", firstJson.GetProperty("reference_kind").GetString());
+            Assert.Equal([19, 20], rows.Select(row => row.Line).ToArray());
+            Assert.Equal([64, 30], rows.Select(row => row.Column).ToArray());
+            Assert.All(rows, row => Assert.Equal("Read", row.ContainerName));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpSwitchExpressionRecursivePatternVariableDoesNotLeakReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_switch_expression_recursive_pattern_collision");
