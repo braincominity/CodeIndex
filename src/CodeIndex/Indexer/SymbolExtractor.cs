@@ -13957,11 +13957,21 @@ public static class SymbolExtractor
         if (occurrenceIndex < 0 || string.IsNullOrEmpty(rawLine) || string.IsNullOrEmpty(signature))
             return -1;
 
+        // Same-line C# occurrence tracking must ignore declaration lookalikes inside string
+        // literals and comments, or the nth "real" declaration is mapped onto an earlier
+        // quoted/commented copy of the same signature. LexCSharpLine preserves original
+        // columns while blanking those regions, so the resulting indices still line up with
+        // the raw line. Closes #558.
+        // same-line C# の occurrence tracking は、文字列リテラルやコメント中の見かけ上の
+        // 宣言を数えてはいけない。そうしないと n 個目の「本物の」宣言が、より前にある
+        // quoted/commented な同一 signature へ誤対応付けされる。LexCSharpLine は元の列を
+        // 保ったまま当該領域だけ空白化するので、得られる index は raw line と整合したまま使える。
+        var searchLine = LexCSharpLine(rawLine, new CSharpLexState()).SanitizedLine;
         var currentOccurrence = 0;
         var searchStart = 0;
-        while (searchStart < rawLine.Length)
+        while (searchStart < searchLine.Length)
         {
-            var matchIndex = rawLine.IndexOf(signature, searchStart, StringComparison.Ordinal);
+            var matchIndex = searchLine.IndexOf(signature, searchStart, StringComparison.Ordinal);
             if (matchIndex < 0)
                 return -1;
 

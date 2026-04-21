@@ -9616,6 +9616,38 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_WrappedNestedTypeIgnoresStringLiteralLookalikesWhenTrackingSameLineOccurrences()
+    {
+        // Same-line occurrence tracking must ignore string-literal lookalikes of the same
+        // declaration signature. Otherwise the later real declaration is mapped onto the
+        // quoted copy and the outer sibling misattaches under the inner `Child`. Closes #558.
+        // same-line occurrence tracking は、同じ宣言 signature を含む文字列リテラルを
+        // 数えてはいけない。数えてしまうと後続の本物の宣言が quoted copy に対応付けられ、
+        // outer sibling が inner `Child` 配下へ誤帰属する。Closes #558.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        public const string Marker = \"public partial class Child { }\"; public partial class Child { } } public partial class Child { }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var children = symbols
+            .Where(s => s.Kind == "class" && s.Name == "Child")
+            .OrderBy(s => s.ContainerName)
+            .ToList();
+        Assert.Equal(2, children.Count);
+
+        Assert.Contains(children, child => child.ContainerKind == "class" && child.ContainerName == "Wrapped");
+        Assert.Contains(children, child => child.ContainerKind == "class" && child.ContainerName == "Host");
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineMultipleFieldsAreAllCaptured()
     {
         // `public class Multi { public int A; public int B; public int C; }` must
