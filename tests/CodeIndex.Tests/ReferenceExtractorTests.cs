@@ -2023,6 +2023,87 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithDeclarationPatternVariable_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(object value)
+                {
+                    if (value is Holder Status)
+                    {
+                        _ = Status.Ready;
+                    }
+
+                    return Demo.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal(22, readyRef.Line);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithDottedValueReceiverChain_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace RealNs;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            namespace Test;
+
+            public sealed class ReadyHolder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class NamespaceLike
+            {
+                public ReadyHolder Status { get; } = new();
+            }
+
+            public sealed class Uses
+            {
+                public global::RealNs.Status Read(NamespaceLike RealNs)
+                {
+                    _ = RealNs.Status.Ready;
+                    return global::RealNs.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal(25, readyRef.Line);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpQualifiedEnumMemberAccess_WithGlobalQualifierAndConflictingType_PreservesReference()
     {
         const string content = """

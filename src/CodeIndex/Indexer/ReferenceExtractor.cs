@@ -254,6 +254,9 @@ public static class ReferenceExtractor
     private static readonly Regex CSharpQueryRangeValueNameRegex = new(
         @"\b(?:from|join)\s+(?<name>@?[A-Za-z_]\w*)\s+in\b|\blet\s+(?<name>@?[A-Za-z_]\w*)\s*=|\binto\s+(?<name>@?[A-Za-z_]\w*)\b",
         RegexOptions.Compiled);
+    private static readonly Regex CSharpDeclarationPatternValueNameRegex = new(
+        @"\bis\s+(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*)\s+(?<name>@?[A-Za-z_]\w*)\b",
+        RegexOptions.Compiled);
     private static readonly Regex CSharpOutValueNameRegex = new(
         @"\bout\s+(?:var|(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*))\s+(?<name>@?[A-Za-z_]\w*)(?=\s*[\),])",
         RegexOptions.Compiled);
@@ -1349,6 +1352,19 @@ public static class ReferenceExtractor
                             scopeEnd.Line,
                             scopeEnd.Column);
                     }
+                    foreach (Match match in CSharpDeclarationPatternValueNameRegex.Matches(structuralLines[i]))
+                    {
+                        if (!TryFindCSharpDeclarationPatternScopeEndPosition(structuralLines, end, i, match.Index, out var scopeEnd))
+                            continue;
+
+                        AddCSharpFunctionValueReceiverName(
+                            names,
+                            NormalizeCSharpIdentifier(match.Groups["name"].Value),
+                            i + 1,
+                            match.Index,
+                            scopeEnd.Line,
+                            scopeEnd.Column);
+                    }
                     foreach (Match match in CSharpOutValueNameRegex.Matches(structuralLines[i]))
                         AddCSharpFunctionValueReceiverName(names, NormalizeCSharpIdentifier(match.Groups["name"].Value), i + 1, match.Index, symbol.BodyEndLine.Value, int.MaxValue);
                     foreach (Match match in CSharpCatchValueNameRegex.Matches(structuralLines[i]))
@@ -1671,17 +1687,20 @@ public static class ReferenceExtractor
         IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> valueReceiverNamesByFunctionStartLine)
     {
         if (string.IsNullOrWhiteSpace(qualifier)
-            || qualifier.Contains('.')
             || (valueReceiverNamesByContainingType.Count == 0 && valueReceiverNamesByFunctionStartLine.Count == 0))
             return false;
         if (!string.Equals(qualifier, resolvedQualifier, StringComparison.Ordinal))
+            return false;
+
+        var receiverName = GetFirstQualifiedSegment(qualifier);
+        if (string.IsNullOrWhiteSpace(receiverName))
             return false;
 
         if (callContainer != null
             && (callContainer.Kind == "function" || callContainer.Kind == "property")
             && valueReceiverNamesByFunctionStartLine.TryGetValue(callContainer.StartLine, out var functionNames)
             && functionNames.Any(record => IsWithinCSharpScope(record, lineNumber, column)
-                && string.Equals(record.Name, qualifier, StringComparison.Ordinal)))
+                && string.Equals(record.Name, receiverName, StringComparison.Ordinal)))
         {
             return true;
         }
@@ -1690,8 +1709,8 @@ public static class ReferenceExtractor
         return containingType != null
             && valueReceiverNamesByContainingType.TryGetValue(containingType, out var names)
             && (IsStaticCSharpSymbol(callContainer)
-                ? names.StaticNames.Contains(qualifier)
-                : names.StaticNames.Contains(qualifier) || names.InstanceNames.Contains(qualifier));
+                ? names.StaticNames.Contains(receiverName)
+                : names.StaticNames.Contains(receiverName) || names.InstanceNames.Contains(receiverName));
     }
 
     private static string? GetContainingTypeQualifiedName(SymbolRecord? symbol)
@@ -1996,6 +2015,50 @@ public static class ReferenceExtractor
         }
 
         return new CSharpLineColumn(bodyEndIndex + 1, 0);
+    }
+
+    private static bool TryFindCSharpDeclarationPatternScopeEndPosition(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int lineIndex,
+        int declarationColumn,
+        out CSharpLineColumn scopeEnd)
+    {
+        scopeEnd = new CSharpLineColumn(0, 0);
+        if (lineIndex < 0 || lineIndex >= structuralLines.Count)
+            return false;
+
+        if (!TryFindCSharpConditionalHeaderStartColumn(structuralLines[lineIndex], declarationColumn, out var headerStartColumn))
+            return false;
+
+        scopeEnd = FindFollowingCSharpEmbeddedStatementEndPosition(structuralLines, bodyEndIndex, lineIndex, headerStartColumn);
+        return true;
+    }
+
+    private static bool TryFindCSharpConditionalHeaderStartColumn(string line, int declarationColumn, out int headerStartColumn)
+    {
+        headerStartColumn = -1;
+        if (string.IsNullOrEmpty(line))
+            return false;
+
+        var limit = Math.Min(declarationColumn, line.Length - 1);
+        for (var column = limit; column >= 0; column--)
+        {
+            if (!TryConsumeCSharpKeyword(line, column, "if", out var afterKeyword)
+                && !TryConsumeCSharpKeyword(line, column, "while", out afterKeyword))
+            {
+                continue;
+            }
+
+            var openParenColumn = line.IndexOf('(', afterKeyword);
+            if (openParenColumn >= 0 && openParenColumn < declarationColumn)
+            {
+                headerStartColumn = column;
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static CSharpLineColumn FindCSharpStatementEndPosition(
