@@ -11315,6 +11315,117 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpQueryRangeVariableGenericTypePatternDesignationDoesNotLeakEnumReference()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_query_generic_type_pattern_designation");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                using System.Collections.Generic;
+                using System.Linq;
+
+                namespace Demo;
+
+                public enum Status
+                {
+                    Ready
+                }
+
+                public sealed class Holder
+                {
+                    public int Ready { get; set; }
+                }
+
+                public sealed class Uses
+                {
+                    public int Read(IEnumerable<Holder> items)
+                    {
+                        return (from Status in items
+                                select Status is Dictionary<int, int> dict ? Status.Ready : 0).First();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.Equal(0, json.GetProperty("references").GetArrayLength());
+            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_ExactJson_CSharpQueryRangeVariableGenericTypePatternDesignationDoesNotLeakEnumReferenceBundle()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_query_generic_type_pattern_designation");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                using System.Collections.Generic;
+                using System.Linq;
+
+                namespace Demo;
+
+                public enum Status
+                {
+                    Ready
+                }
+
+                public sealed class Holder
+                {
+                    public int Ready { get; set; }
+                }
+
+                public sealed class Uses
+                {
+                    public int Read(IEnumerable<Holder> items)
+                    {
+                        return (from Status in items
+                                select Status is Dictionary<int, int> dict ? Status.Ready : 0).First();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, json.GetProperty("definitions").GetArrayLength());
+            Assert.Empty(json.GetProperty("references").EnumerateArray());
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
+            Assert.False(json.TryGetProperty("graph_degraded", out _));
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpRecursivePatternCaseVariableDoesNotLeakReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_recursive_pattern_case_collision");
