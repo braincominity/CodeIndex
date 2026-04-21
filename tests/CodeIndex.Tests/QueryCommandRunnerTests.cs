@@ -3734,6 +3734,88 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_CSharpIssue363Fixture_DoesNotReturnPhantomSymbols()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_issue363");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "R.cs"),
+                """""
+                namespace CsRawStringPhantom;
+
+                public class Svc
+                {
+                    public int RealMethod() => 0;
+
+                    public string DocsExample() => """
+                        public void FakeMethod() { }
+                        public int FakeProp { get; set; }
+                        public class FakeClass { }
+                        public interface IFakeIface { }
+                        public delegate int FakeDel();
+                        public event System.EventHandler FakeEvent;
+                        public Foo() { }
+                        """;
+
+                    public string VerbatimExample() => @"
+                        public void VerbatimFake() { }
+                    ";
+
+                    public string InterpExample() => $"""
+                        public void InterpFake() { }
+                        """;
+
+                    public int AnotherReal() => 1;
+                }
+                """"");
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            var rows = ParseJsonLines(stdout);
+            var symbols = rows
+                .Select(row => row.RootElement.GetProperty("name").GetString())
+                .OfType<string>()
+                .ToHashSet(StringComparer.Ordinal);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(7, rows.Count);
+
+            Assert.Contains("CsRawStringPhantom", symbols);
+            Assert.Contains("Svc", symbols);
+            Assert.Contains("RealMethod", symbols);
+            Assert.Contains("DocsExample", symbols);
+            Assert.Contains("VerbatimExample", symbols);
+            Assert.Contains("InterpExample", symbols);
+            Assert.Contains("AnotherReal", symbols);
+
+            Assert.DoesNotContain("FakeMethod", symbols);
+            Assert.DoesNotContain("FakeProp", symbols);
+            Assert.DoesNotContain("FakeClass", symbols);
+            Assert.DoesNotContain("IFakeIface", symbols);
+            Assert.DoesNotContain("FakeDel", symbols);
+            Assert.DoesNotContain("FakeEvent", symbols);
+            Assert.DoesNotContain("Foo", symbols);
+            Assert.DoesNotContain("VerbatimFake", symbols);
+            Assert.DoesNotContain("InterpFake", symbols);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_CssExactNameSeparatesLiteralSelectors()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_css_exact_name");
