@@ -1354,7 +1354,7 @@ public static class ReferenceExtractor
                     }
                     foreach (Match match in CSharpDeclarationPatternValueNameRegex.Matches(structuralLines[i]))
                     {
-                        if (!TryFindCSharpDeclarationPatternScopeEndPosition(structuralLines, end, i, match.Index, out var scopeEnd))
+                        if (!TryFindCSharpDeclarationPatternScopeEndPosition(structuralLines, start, end, i, match.Index, out var scopeEnd))
                             continue;
 
                         AddCSharpFunctionValueReceiverName(
@@ -2019,29 +2019,59 @@ public static class ReferenceExtractor
 
     private static bool TryFindCSharpDeclarationPatternScopeEndPosition(
         IReadOnlyList<string> structuralLines,
+        int bodyStartIndex,
         int bodyEndIndex,
         int lineIndex,
         int declarationColumn,
         out CSharpLineColumn scopeEnd)
     {
         scopeEnd = new CSharpLineColumn(0, 0);
-        if (lineIndex < 0 || lineIndex >= structuralLines.Count)
+        if (lineIndex < 0 || lineIndex >= structuralLines.Count || bodyStartIndex < 0)
             return false;
 
-        if (!TryFindCSharpConditionalHeaderStartColumn(structuralLines[lineIndex], declarationColumn, out var headerStartColumn))
+        if (!TryFindCSharpConditionalHeaderStartPosition(structuralLines, bodyStartIndex, lineIndex, declarationColumn, out var headerLineIndex, out var headerStartColumn))
             return false;
 
-        scopeEnd = FindFollowingCSharpEmbeddedStatementEndPosition(structuralLines, bodyEndIndex, lineIndex, headerStartColumn);
+        scopeEnd = FindFollowingCSharpEmbeddedStatementEndPosition(structuralLines, bodyEndIndex, headerLineIndex, headerStartColumn);
         return true;
     }
 
-    private static bool TryFindCSharpConditionalHeaderStartColumn(string line, int declarationColumn, out int headerStartColumn)
+    private static bool TryFindCSharpConditionalHeaderStartPosition(
+        IReadOnlyList<string> structuralLines,
+        int bodyStartIndex,
+        int lineIndex,
+        int declarationColumn,
+        out int headerLineIndex,
+        out int headerStartColumn)
+    {
+        headerLineIndex = -1;
+        headerStartColumn = -1;
+        if (lineIndex < bodyStartIndex || lineIndex >= structuralLines.Count)
+            return false;
+
+        for (var scanLine = lineIndex; scanLine >= bodyStartIndex; scanLine--)
+        {
+            var searchColumn = scanLine == lineIndex
+                ? declarationColumn
+                : structuralLines[scanLine].Length - 1;
+            if (!TryFindCSharpConditionalHeaderStartColumn(structuralLines[scanLine], searchColumn, out var column))
+                continue;
+
+            headerLineIndex = scanLine;
+            headerStartColumn = column;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryFindCSharpConditionalHeaderStartColumn(string line, int searchLimitColumn, out int headerStartColumn)
     {
         headerStartColumn = -1;
         if (string.IsNullOrEmpty(line))
             return false;
 
-        var limit = Math.Min(declarationColumn, line.Length - 1);
+        var limit = Math.Min(searchLimitColumn, line.Length - 1);
         for (var column = limit; column >= 0; column--)
         {
             if (!TryConsumeCSharpKeyword(line, column, "if", out var afterKeyword)
@@ -2051,7 +2081,7 @@ public static class ReferenceExtractor
             }
 
             var openParenColumn = line.IndexOf('(', afterKeyword);
-            if (openParenColumn >= 0 && openParenColumn < declarationColumn)
+            if (openParenColumn >= 0 && openParenColumn <= limit)
             {
                 headerStartColumn = column;
                 return true;

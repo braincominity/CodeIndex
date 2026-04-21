@@ -2062,6 +2062,87 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithMultiLineIfDeclarationPatternVariable_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(object value)
+                {
+                    if (
+                        value is Holder Status)
+                    {
+                        _ = Status.Ready;
+                    }
+
+                    return Demo.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal(23, readyRef.Line);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithMultiLineWhileDeclarationPatternVariable_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(object value)
+                {
+                    while (
+                        value is Holder Status)
+                    {
+                        _ = Status.Ready;
+                        break;
+                    }
+
+                    return Demo.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal(24, readyRef.Line);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpQualifiedEnumMemberAccess_WithDottedValueReceiverChain_DoesNotLeakAsEnumMemberReference()
     {
         const string content = """
