@@ -1248,6 +1248,15 @@ public static class SymbolExtractor
             var patternStartOffset = lang is "javascript" or "typescript"
                 ? FindNextJavaScriptTypeScriptStatementStart(matchLine, 0)
                 : 0;
+            if (lang == "csharp" && patternStartOffset == 0)
+            {
+                var firstNonWhitespace = 0;
+                while (firstNonWhitespace < matchLine.Length && char.IsWhiteSpace(matchLine[firstNonWhitespace]))
+                    firstNonWhitespace++;
+
+                if (firstNonWhitespace < matchLine.Length && matchLine[firstNonWhitespace] == '}')
+                    patternStartOffset = FindNextSameLineBraceStatementStart(matchLine, firstNonWhitespace + 1, lang);
+            }
             while (patternStartOffset >= 0 && patternStartOffset < matchLine.Length)
             {
                 var stopAfterFirstPatternMatch = false;
@@ -7396,7 +7405,15 @@ public static class SymbolExtractor
                 {
                     depth--;
                     if (depth == 0)
-                        return (i + 1, bodyStartLine, i + 1);
+                    {
+                        var trailingSiblingOffset = FindNextSameLineBraceStatementStart(scanLine, j + 1, "csharp");
+                        var bodyEndLine = trailingSiblingOffset >= 0
+                            && bodyStartLine.HasValue
+                            && bodyStartLine.Value < i + 1
+                            ? i
+                            : i + 1;
+                        return (i + 1, bodyStartLine, bodyEndLine);
+                    }
                     continue;
                 }
 

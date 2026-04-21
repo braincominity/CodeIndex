@@ -9507,6 +9507,45 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_WrappedNestedTypeClosingBraceLineStillFindsOuterSibling()
+    {
+        // Wrapped multi-line nested types can end on a line that also starts a later outer
+        // sibling (`} public int Q { get; }`). The line-level C# scan must restart from the
+        // post-brace statement boundary instead of treating the leading `}` as a dead line,
+        // or the outer sibling silently disappears from symbols/definition/outline. Closes #545.
+        // 折り返された multi-line nested type は、閉じ brace 行に outer sibling が続く
+        // (`} public int Q { get; }`) 形を取りうる。C# の行単位 scan は先頭 `}` の後ろにある
+        // statement 境界から再開しなければならず、そうしないと outer sibling が
+        // symbols/definition/outline から無言で脱落する。Closes #545.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        public int P { get; }",
+            "    } public int Q { get; }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrapped = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Wrapped"));
+        Assert.Equal("class", wrapped.ContainerKind);
+        Assert.Equal("Host", wrapped.ContainerName);
+
+        var innerProperty = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("class", innerProperty.ContainerKind);
+        Assert.Equal("Wrapped", innerProperty.ContainerName);
+
+        var outerProperty = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Q"));
+        Assert.Equal("public int Q { get; }", outerProperty.Signature);
+        Assert.Equal("class", outerProperty.ContainerKind);
+        Assert.Equal("Host", outerProperty.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineMultipleFieldsAreAllCaptured()
     {
         // `public class Multi { public int A; public int B; public int C; }` must
