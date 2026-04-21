@@ -242,6 +242,9 @@ public static class ReferenceExtractor
     private static readonly Regex CSharpJavaInitializerTrailingRegex = new(
         @"\bnew\s+(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*))*(?<name>[A-Za-z_]\w*)(?:\s*<[^>\n]+>)?(?:\s*\[[^\[\]\n]*\])*\s*$",
         RegexOptions.Compiled);
+    private static readonly Regex CSharpUsingAliasRegex = new(
+        @"^\s*(?:global\s+)?using\s+(?!static\b)(?<alias>@?[A-Za-z_]\w*)\s*=\s*(?<target>[^;]+)",
+        RegexOptions.Compiled);
     // Java access/method modifier set used by the same-line ctor scanner.
     // same-line ctor 本体のスキャナで使うアクセス / メソッド修飾子一覧。
     private static readonly HashSet<string> JavaCtorModifiers = new(StringComparer.Ordinal)
@@ -501,6 +504,7 @@ public static class ReferenceExtractor
         // 宣言ヘッダー全体を合成コンテナで上書きする。`{` / `;` 以降の本体行は通常の container に戻す。
         var recordPrimaryCtorRanges = BuildCSharpPrimaryCtorContainers(language, symbols, structuralLines);
         var csharpQualifiedEnumMemberLookup = BuildCSharpQualifiedEnumMemberLookup(language, symbols);
+        var csharpUsingAliasMap = BuildCSharpUsingAliasMap(language, structuralLines);
 
         var references = new List<ReferenceRecord>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -861,17 +865,21 @@ public static class ReferenceExtractor
 
             // Qualified C# enum-member access such as `Nested.A` or `Outer.First.None` is not
             // a method call, but downstream symbol workflows (`references`, `callers`,
-            // `callees`, `inspect`, `impact`) still need a graph edge anchored to the
-            // narrowest real owner symbol. Keep the edge kind as `call` so existing graph
-            // readers continue to see it without a schema or SQL contract change.
+            // `callees`, `inspect`, `impact`) still need an edge anchored to the narrowest
+            // real owner symbol. Ordinary code paths stay `call` so existing graph readers
+            // keep working, while C# attribute metadata sites are downgraded to `attribute`
+            // to stay out of runtime call-graph traversals (issue #293 / #492).
             // `Nested.A` や `Outer.First.None` のような C# enum member の修飾アクセスは
             // メソッド呼び出しではないが、下流の symbol workflow では実 owner に紐づく edge が必要。
-            // 既存 reader / SQL 契約を壊さないよう kind は `call` のまま発行する。
+            // 通常コードでは既存 reader / SQL 契約を守るため kind は `call` を維持し、C# 属性メタデータ内だけ
+            // `attribute` に落として runtime call-graph への混入を防ぐ (issue #293 / #492)。
             if (language == "csharp" && csharpQualifiedEnumMemberLookup.Count > 0)
             {
                 EmitCSharpQualifiedEnumMemberReferences(
                     preparedLine,
                     csharpQualifiedEnumMemberLookup,
+                    csharpAttrRangesOnLine,
+                    csharpUsingAliasMap,
                     references,
                     seen,
                     fileId,
@@ -1173,6 +1181,29 @@ public static class ReferenceExtractor
     private static bool IsCSharpIdentifierStart(char c) =>
         c == '_' || c == '@' || char.IsLetter(c);
 
+    private static Dictionary<string, string> BuildCSharpUsingAliasMap(string language, IReadOnlyList<string> structuralLines)
+    {
+        var aliases = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (language != "csharp")
+            return aliases;
+
+        foreach (var line in structuralLines)
+        {
+            var match = CSharpUsingAliasRegex.Match(line);
+            if (!match.Success)
+                continue;
+
+            var alias = NormalizeCSharpIdentifier(match.Groups["alias"].Value);
+            var target = TryNormalizeCSharpQualifiedName(match.Groups["target"].Value);
+            if (string.IsNullOrWhiteSpace(alias) || string.IsNullOrWhiteSpace(target))
+                continue;
+
+            aliases[alias] = target;
+        }
+
+        return aliases;
+    }
+
     private static Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> BuildCSharpQualifiedEnumMemberLookup(
         string language,
         IReadOnlyList<SymbolRecord> symbols)
@@ -1225,6 +1256,8 @@ public static class ReferenceExtractor
     private static void EmitCSharpQualifiedEnumMemberReferences(
         string preparedLine,
         IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> enumMemberLookup,
+        IReadOnlyList<(int start, int end)>? csharpAttrRangesOnLine,
+        IReadOnlyDictionary<string, string> usingAliases,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -1251,12 +1284,17 @@ public static class ReferenceExtractor
                 continue;
 
             var qualifier = NormalizeCSharpQualifiedSegments(preparedLine, parsed.Segments, parsed.Segments.Count - 1);
-            if (!MatchesQualifiedEnumType(qualifier, targets))
+            var resolvedQualifier = ResolveCSharpQualifiedAliasTarget(qualifier, usingAliases);
+            if (!MatchesQualifiedEnumType(resolvedQualifier, targets))
                 continue;
 
             var nextTokenIndex = SkipWhitespace(preparedLine, member.End);
             if (nextTokenIndex < preparedLine.Length && preparedLine[nextTokenIndex] == '(')
                 continue;
+
+            var insideCSharpAttributeRange = csharpAttrRangesOnLine != null
+                && IsInsideCSharpAttributeRange(csharpAttrRangesOnLine, member.Start);
+            var referenceKind = TryClassifyMetadataReference("csharp", preparedLine, member.Start, insideCSharpAttributeRange) ?? "call";
 
             AddReference(
                 references,
@@ -1264,7 +1302,7 @@ public static class ReferenceExtractor
                 fileId,
                 memberName,
                 member.Start,
-                "call",
+                referenceKind,
                 context,
                 lineNumber,
                 resolveContainerForCall(member.Start));
@@ -1343,6 +1381,11 @@ public static class ReferenceExtractor
         return index;
     }
 
+    private static string NormalizeCSharpIdentifier(string identifier) =>
+        !string.IsNullOrEmpty(identifier) && identifier[0] == '@'
+            ? identifier[1..]
+            : identifier;
+
     private static string NormalizeCSharpQualifiedSegments(
         string preparedLine,
         IReadOnlyList<(int Start, int End)> segments,
@@ -1358,6 +1401,43 @@ public static class ReferenceExtractor
             builder.Append(segment[0] == '@' ? segment[1..] : segment);
         }
         return builder.ToString();
+    }
+
+    private static string? TryNormalizeCSharpQualifiedName(string candidate)
+    {
+        var trimmed = candidate.Trim();
+        if (trimmed.StartsWith("global::", StringComparison.Ordinal))
+            trimmed = trimmed["global::".Length..];
+        if (string.IsNullOrWhiteSpace(trimmed))
+            return null;
+        if (!TryReadCSharpQualifiedAccess(trimmed, 0, out var parsed))
+            return null;
+        if (SkipWhitespace(trimmed, parsed.NextIndex) != trimmed.Length)
+            return null;
+        return NormalizeCSharpQualifiedSegments(trimmed, parsed.Segments, parsed.Segments.Count);
+    }
+
+    private static string ResolveCSharpQualifiedAliasTarget(string qualifier, IReadOnlyDictionary<string, string> usingAliases)
+    {
+        if (string.IsNullOrWhiteSpace(qualifier) || usingAliases.Count == 0)
+            return qualifier;
+
+        var firstSegment = GetFirstQualifiedSegment(qualifier);
+        if (!usingAliases.TryGetValue(firstSegment, out var aliasTarget))
+            return qualifier;
+
+        return qualifier.Length == firstSegment.Length
+            ? aliasTarget
+            : aliasTarget + qualifier[firstSegment.Length..];
+    }
+
+    private static string GetFirstQualifiedSegment(string qualifiedName)
+    {
+        if (string.IsNullOrWhiteSpace(qualifiedName))
+            return string.Empty;
+
+        var firstDot = qualifiedName.IndexOf('.');
+        return firstDot < 0 ? qualifiedName : qualifiedName[..firstDot];
     }
 
     private static bool MatchesQualifiedEnumType(
@@ -3693,7 +3773,7 @@ public static class ReferenceExtractor
         return false;
     }
 
-    private static bool IsInsideCSharpAttributeRange(List<(int start, int end)> ranges, int index)
+    private static bool IsInsideCSharpAttributeRange(IReadOnlyList<(int start, int end)> ranges, int index)
     {
         foreach (var (start, end) in ranges)
         {

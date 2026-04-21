@@ -902,6 +902,71 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithUsingAliasToNonEnumType_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace A;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Values
+            {
+                public static int Ready = 1;
+            }
+
+            namespace B;
+
+            using Status = A.Values;
+
+            public class UsesAlias
+            {
+                public int Read()
+                {
+                    return Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithUsingAliasToEnumType_PreservesEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            using Alias = Demo.Status;
+
+            public class UsesAlias
+            {
+                public Status Read()
+                {
+                    return Alias.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var ready = Assert.Single(references.Where(reference => reference.SymbolName == "Ready"));
+        Assert.Equal("call", ready.ReferenceKind);
+        Assert.Equal("Read", ready.ContainerName);
+    }
+
+    [Fact]
     public void Extract_ConstructorCalls_AreInstantiateOnly()
     {
         const string content = """
@@ -6423,16 +6488,29 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpMultiLineAttributeArgumentEnum_NotClassifiedAsAttribute()
+    public void Extract_CsharpMultiLineAttributeArgumentEnum_UsesAttributeKindInsteadOfCall()
     {
-        // Regression (issue #293 follow-up): identifiers appearing inside the argument list of
-        // a multi-line attribute such as `ConverterStrategy.AllowNumbers` must NOT be recorded
-        // as `attribute` references. Only the attribute-list top level (`[`/`,` boundary, paren
-        // depth 0) is a valid no-arg attribute name position.
-        // リグレッション (issue #293 補足): 複数行属性の引数リスト内にある識別子
-        // (例: `ConverterStrategy.AllowNumbers`) は `attribute` として記録してはならない。
-        // 属性リストの top-level (paren 深さ 0 の `[` / `,` 境界) のみが no-arg 属性名の位置。
+        // Regression (issue #492): enum-member accesses inside C# attribute arguments must reuse
+        // metadata classification so they do not leak into the runtime call-graph as `call`.
+        // The no-arg attribute detector still only applies to the attribute-list top level.
+        // リグレッション (issue #492): C# 属性引数内の enum メンバーアクセスは metadata kind に
+        // 落とし、runtime call-graph に `call` として混入させない。no-arg 属性検出は引き続き
+        // 属性リストの top-level にのみ適用される。
         const string content = """
+            using System;
+
+            public enum ConverterStrategy
+            {
+                AllowNumbers,
+                Strict
+            }
+
+            [AttributeUsage(AttributeTargets.Class)]
+            public sealed class JsonConverterAttribute : Attribute
+            {
+                public JsonConverterAttribute(ConverterStrategy strategy) { }
+            }
+
             [
                 JsonConverter(
                     ConverterStrategy.AllowNumbers
@@ -6450,11 +6528,12 @@ public class ReferenceExtractorTests
         var jsonConverter = Assert.Single(references.Where(r => r.SymbolName == "JsonConverter"));
         Assert.Equal("attribute", jsonConverter.ReferenceKind);
 
-        // AllowNumbers is an enum member access inside the attribute arguments — it must not be
-        // picked up as a no-arg attribute even though it happens to end at end-of-line inside
-        // the `[...]` section.
-        // AllowNumbers は属性引数内の enum メンバーアクセスなので、no-arg 属性として取り込まれないこと。
-        Assert.DoesNotContain(references, r => r.SymbolName == "AllowNumbers" && r.ReferenceKind == "attribute");
+        // AllowNumbers sits inside the attribute argument list, so it should inherit the metadata
+        // context (`attribute`) without being emitted as a runtime `call`.
+        // AllowNumbers は属性引数内なので、runtime `call` ではなく metadata 文脈 (`attribute`) を継承する。
+        var allowNumbers = Assert.Single(references.Where(r => r.SymbolName == "AllowNumbers"));
+        Assert.Equal("attribute", allowNumbers.ReferenceKind);
+        Assert.DoesNotContain(references, r => r.SymbolName == "AllowNumbers" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "ConverterStrategy" && r.ReferenceKind == "attribute");
     }
 
