@@ -9446,6 +9446,37 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DoesNotMatchQualifiedNewExpressionsAsExplicitInterfaceDefinitions()
+    {
+        // Issue #362: qualified constructor expressions (`new Namespace.Type()`) must not be
+        // misread as `returnType + interface.member` by the explicit-interface regex.
+        // Issue #362: 修飾付きコンストラクタ式 (`new Namespace.Type()`) を、明示的インターフェース
+        // 実装 regex の `returnType + interface.member` と誤認しないこと。
+        var content = """
+            public class Service : IDisposable
+            {
+                public void Build()
+                {
+                    new System.Text.StringBuilder().Append("a").Append("b").ToString();
+                    _ = new System.Text.RegularExpressions.Regex("pattern");
+                    new System.Net.Http.HttpClient().Dispose();
+                }
+
+                void IDisposable.Dispose()
+                {
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Build" && s.ReturnType == "void");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Dispose" && s.ReturnType == "void");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "StringBuilder");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Regex");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "HttpClient");
+    }
+
+    [Fact]
     public void Extract_CSharp_DoesNotMatchNamedArgumentFrameworkCallsAsDefinitions()
     {
         // Named-argument labels preceding qualified framework calls must not look like explicit interface impls.
