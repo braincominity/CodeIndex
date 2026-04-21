@@ -7041,6 +7041,38 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_Issue339_SameLineAttributedEnumMembersStayIndexed()
+    {
+        // Same-line C# attributes on enum members must not hide the member name.
+        // C# enum member の同行 attribute は member 名を隠してはならない。
+        var content = """
+            namespace EnumAttr;
+
+            public enum Status
+            {
+                [System.Obsolete] Legacy = 0,
+                [System.ComponentModel.DefaultValue(1)] B = 1,
+                [System.Obsolete][System.ComponentModel.Browsable(false)] D = 3,
+
+                [System.Obsolete]
+                E = 4,
+
+                F = 5,
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Status");
+        foreach (var name in new[] { "Legacy", "B", "D", "E", "F" })
+        {
+            var symbol = Assert.Single(symbols.Where(s => s.Name == name));
+            Assert.Equal("enum", symbol.Kind);
+            Assert.Equal("Status", symbol.ContainerName);
+            Assert.Equal("enum", symbol.ContainerKind);
+        }
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsRegionDirectives()
     {
         var content = "#region Private Methods\nvoid Helper() { }\n#endregion\n\n#region Properties\npublic int X { get; set; }\n#endregion";
