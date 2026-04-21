@@ -21,6 +21,9 @@ public class SymbolRecord
     /// <summary>Definition start line (1-based) / 定義開始行（1始まり）</summary>
     public int StartLine { get; set; }
 
+    /// <summary>Definition start column (0-based) when known / 定義開始列（0始まり、分かる場合）</summary>
+    public int? StartColumn { get; set; }
+
     /// <summary>Definition end line (1-based) / 定義終了行（1始まり）</summary>
     public int EndLine { get; set; }
 
