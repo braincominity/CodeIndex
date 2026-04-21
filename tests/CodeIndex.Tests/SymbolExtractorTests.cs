@@ -9729,6 +9729,73 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_WrappedNestedTypeBraceBodiedLastInnerMemberKeepsOuterPropertySibling()
+    {
+        // A compact brace-bodied inner type can sit on the wrapped type's closing-brace line
+        // before an outer property sibling (`Child { } } public int Q { get; }`). The
+        // type-header false-positive recovery must skip the intermediate `}` and still
+        // reach `Q`, while keeping `Child` attached to `Wrapped`. Closes #554.
+        // compact な brace-bodied inner type は、wrapped type の closing-brace 行で outer
+        // property sibling (`Child { } } public int Q { get; }`) の直前に現れうる。type
+        // header 偽陽性からの same-line 再開は中間の `}` を飛ばして `Q` まで届きつつ、
+        // `Child` を `Wrapped` 配下に残さなければならない。Closes #554.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        public partial class Child { } } public int Q { get; }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
+        Assert.Equal("class", child.ContainerKind);
+        Assert.Equal("Wrapped", child.ContainerName);
+
+        var outerProperty = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Q"));
+        Assert.Equal("public int Q { get; }", outerProperty.Signature);
+        Assert.Equal("class", outerProperty.ContainerKind);
+        Assert.Equal("Host", outerProperty.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedNestedTypeBraceBodiedLastInnerMemberKeepsOuterTypeSibling()
+    {
+        // The same compact `Child { } }` shape must also keep a later outer class sibling
+        // visible. Otherwise the type-header recovery restarts on the closing `}` and drops
+        // `Sibling` from symbol-oriented queries. Closes #554.
+        // 同じ compact な `Child { } }` 形では、後続の outer class sibling も見え続けなければ
+        // ならない。そうでないと type-header 回復が closing `}` から再開して `Sibling` を
+        // symbol 系クエリから落としてしまう。Closes #554.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        public partial class Child { } } public partial class Sibling",
+            "        {",
+            "        }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
+        Assert.Equal("class", child.ContainerKind);
+        Assert.Equal("Wrapped", child.ContainerName);
+
+        var sibling = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Sibling"));
+        Assert.Equal("class", sibling.ContainerKind);
+        Assert.Equal("Host", sibling.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CSharp_WrappedNestedTypeKeepsSameLineDuplicateSignatureSiblings()
     {
         // Duplicate suppression must not collapse distinct same-line siblings just because
