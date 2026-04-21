@@ -8916,6 +8916,63 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_SameLineDeclaratorListsStillExpandAfterEarlierSiblings()
+    {
+        // Same-line field declarator lists must still expand trailing declarators even
+        // when the field statement is only reached after an earlier sibling on the same
+        // physical line restarts matching. The current branch already handles the #582
+        // repro shapes; this test locks that behavior so a future column-domain mismatch
+        // does not silently drop `B`. Closes #582.
+        // 同一物理行で先行 sibling の後ろから field 文に再入した場合でも、same-line の
+        // declarator list は末尾 declarator を展開し続けなければならない。現行ブランチは
+        // #582 の再現形を既に正しく処理できるため、このテストで将来の列座標ずれ回帰から
+        // `B` が無言で欠落するのを防ぐ。Closes #582.
+        var cases = new[]
+        {
+            new
+            {
+                Content = "public class C { public void M() { } public int A = 1, B; }",
+                SiblingKind = "function",
+                SiblingName = "M",
+                Signature = "public int A = 1, B;"
+            },
+            new
+            {
+                Content = "public class C { public int P { get; set; } public int A, B; }",
+                SiblingKind = "property",
+                SiblingName = "P",
+                Signature = "public int A, B;"
+            },
+            new
+            {
+                Content = "public class C { public class N { } public int A = 1, B; }",
+                SiblingKind = "class",
+                SiblingName = "N",
+                Signature = "public int A = 1, B;"
+            }
+        };
+
+        foreach (var @case in cases)
+        {
+            var symbols = SymbolExtractor.Extract(1, "csharp", @case.Content);
+
+            Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "C");
+            Assert.Contains(symbols, s => s.Kind == @case.SiblingKind && s.Name == @case.SiblingName
+                && s.ContainerKind == "class" && s.ContainerName == "C");
+
+            var a = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "A"));
+            Assert.Equal("class", a.ContainerKind);
+            Assert.Equal("C", a.ContainerName);
+            Assert.Equal(@case.Signature, a.Signature);
+
+            var b = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "B"));
+            Assert.Equal("class", b.ContainerKind);
+            Assert.Equal("C", b.ContainerName);
+            Assert.Equal(@case.Signature, b.Signature);
+        }
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineClassBodyFieldIsCapturedAndLocalIsRejected()
     {
         // Column-aware scope tracking: `public class C { public int X; }` must capture
