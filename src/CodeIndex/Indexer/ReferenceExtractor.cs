@@ -2029,11 +2029,72 @@ public static class ReferenceExtractor
         if (lineIndex < 0 || lineIndex >= structuralLines.Count || bodyStartIndex < 0)
             return false;
 
+        if (TryFindEnclosingCSharpLambdaScopeEndPosition(
+                structuralLines,
+                bodyStartIndex,
+                bodyEndIndex,
+                lineIndex,
+                declarationColumn,
+                out scopeEnd))
+        {
+            return true;
+        }
+
         if (!TryFindCSharpConditionalHeaderStartPosition(structuralLines, bodyStartIndex, lineIndex, declarationColumn, out var headerLineIndex, out var headerStartColumn))
             return false;
 
         scopeEnd = FindFollowingCSharpEmbeddedStatementEndPosition(structuralLines, bodyEndIndex, headerLineIndex, headerStartColumn);
         return true;
+    }
+
+    private static bool TryFindEnclosingCSharpLambdaScopeEndPosition(
+        IReadOnlyList<string> structuralLines,
+        int bodyStartIndex,
+        int bodyEndIndex,
+        int lineIndex,
+        int declarationColumn,
+        out CSharpLineColumn scopeEnd)
+    {
+        scopeEnd = new CSharpLineColumn(0, 0);
+        if (bodyEndIndex < bodyStartIndex
+            || lineIndex < bodyStartIndex
+            || lineIndex > bodyEndIndex)
+        {
+            return false;
+        }
+
+        var bodyText = string.Join("\n", structuralLines.Skip(bodyStartIndex).Take(bodyEndIndex - bodyStartIndex + 1));
+        if (string.IsNullOrEmpty(bodyText))
+            return false;
+
+        var targetOffset = GetBodyTextOffset(structuralLines, bodyStartIndex, bodyEndIndex, lineIndex, declarationColumn);
+        var startLineNumber = bodyStartIndex + 1;
+        var foundEnclosingLambda = false;
+        for (var searchIndex = 0; searchIndex < bodyText.Length;)
+        {
+            var arrowIndex = bodyText.IndexOf("=>", searchIndex, StringComparison.Ordinal);
+            if (arrowIndex < 0 || arrowIndex >= targetOffset)
+                break;
+
+            searchIndex = arrowIndex + 2;
+            if (!IsPotentialCSharpLambdaArrow(bodyText, arrowIndex))
+                continue;
+
+            var lambdaScopeEnd = FindCSharpLambdaScopeEndPosition(bodyText, arrowIndex, startLineNumber, bodyEndIndex + 1);
+            var lambdaScopeEndOffset = GetBodyTextOffset(
+                structuralLines,
+                bodyStartIndex,
+                bodyEndIndex,
+                lambdaScopeEnd.Line - 1,
+                lambdaScopeEnd.Column);
+            if (targetOffset > lambdaScopeEndOffset)
+                continue;
+
+            scopeEnd = lambdaScopeEnd;
+            foundEnclosingLambda = true;
+        }
+
+        return foundEnclosingLambda;
     }
 
     private static bool TryFindCSharpConditionalHeaderStartPosition(
@@ -2089,6 +2150,25 @@ public static class ReferenceExtractor
         }
 
         return false;
+    }
+
+    private static int GetBodyTextOffset(
+        IReadOnlyList<string> structuralLines,
+        int bodyStartIndex,
+        int bodyEndIndex,
+        int lineIndex,
+        int column)
+    {
+        if (bodyEndIndex < bodyStartIndex)
+            return 0;
+
+        var clampedLineIndex = Math.Max(bodyStartIndex, Math.Min(lineIndex, bodyEndIndex));
+        var offset = 0;
+        for (var scanLine = bodyStartIndex; scanLine < clampedLineIndex; scanLine++)
+            offset += structuralLines[scanLine].Length + 1;
+
+        var line = structuralLines[clampedLineIndex];
+        return offset + Math.Max(0, Math.Min(column, line.Length));
     }
 
     private static CSharpLineColumn FindCSharpStatementEndPosition(
@@ -2330,6 +2410,33 @@ public static class ReferenceExtractor
         }
 
         return new CSharpLineColumn(fallbackScopeEndLine, int.MaxValue);
+    }
+
+    private static bool IsPotentialCSharpLambdaArrow(string bodyText, int arrowIndex)
+    {
+        var leftIndex = SkipWhitespaceBackward(bodyText, arrowIndex - 1);
+        if (leftIndex < 0)
+            return false;
+
+        if (bodyText[leftIndex] == ')')
+            return TryFindMatchingOpenParen(bodyText, leftIndex, out _);
+
+        var identifierEnd = leftIndex + 1;
+        var identifierStart = leftIndex;
+        while (identifierStart >= 0 && IsCSharpIdentifierPart(bodyText[identifierStart]))
+            identifierStart--;
+        identifierStart++;
+        if (identifierStart >= identifierEnd || !IsCSharpIdentifierStart(bodyText[identifierStart]))
+            return false;
+
+        var prefixIndex = SkipWhitespaceBackward(bodyText, identifierStart - 1);
+        if (prefixIndex < 0)
+            return false;
+
+        var prefixChar = bodyText[prefixIndex];
+        return prefixChar is '=' or '(' or ',' or ':'
+            || (TryReadPreviousIdentifierToken(bodyText, prefixIndex, out var previousToken)
+                && string.Equals(previousToken, "return", StringComparison.Ordinal));
     }
 
     private static int GetLineStartOffset(string text, int offset)
