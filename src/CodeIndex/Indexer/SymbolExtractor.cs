@@ -13602,12 +13602,10 @@ public static class SymbolExtractor
             while (stack.Count > 0 && !IsFileScopedNamespace(stack.Peek()) && symbol.StartLine > stack.Peek().EndLine)
                 stack.Pop();
 
-            while (stack.Count > 0 && !ContainsSymbol(stack.Peek(), symbol))
-                stack.Pop();
+            var containerPath = GetEffectiveContainerPath(stack, symbol);
 
-            if (stack.Count > 0)
+            if (containerPath.Count > 0)
             {
-                var containerPath = GetEffectiveContainerPath(stack, symbol);
                 if (symbol.ContainerKind != null && symbol.ContainerName != null)
                 {
                     var explicitContainerAlreadyPresent = containerPath.Count > 0
@@ -13631,7 +13629,7 @@ public static class SymbolExtractor
                 }
             }
 
-            symbol.FamilyKey ??= BuildSelfFamilyKey(symbol, stack);
+            symbol.FamilyKey ??= BuildSelfFamilyKey(symbol, containerPath);
 
             if (CanContainSymbols(symbol))
                 stack.Push(symbol);
@@ -13641,14 +13639,21 @@ public static class SymbolExtractor
     private static IReadOnlyList<SymbolRecord> GetEffectiveContainerPath(IEnumerable<SymbolRecord> containers, SymbolRecord symbol)
     {
         var orderedContainers = containers.Reverse().ToList();
+        var containingContainers = orderedContainers
+            .Where(container => ContainsSymbol(container, symbol))
+            .ToList();
+
+        if (containingContainers.Count == 0)
+            return [];
+
         if (symbol.Kind == "enum" && symbol.BodyStartLine == null)
         {
-            var enumIndex = orderedContainers.FindLastIndex(container => container.Kind == "enum");
+            var enumIndex = containingContainers.FindLastIndex(container => container.Kind == "enum");
             if (enumIndex >= 0)
-                return orderedContainers.Take(enumIndex + 1).ToList();
+                return containingContainers.Take(enumIndex + 1).ToList();
         }
 
-        return orderedContainers;
+        return containingContainers;
     }
 
     private static string? BuildQualifiedContainerName(IEnumerable<SymbolRecord> containers)

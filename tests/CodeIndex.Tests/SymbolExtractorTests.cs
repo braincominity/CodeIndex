@@ -9427,6 +9427,46 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_WrappedNestedClassMembersStayAttachedToNestedContainer()
+    {
+        // The #525 wrapped-header signature fix must not evict a same-line nested type
+        // from later container assignment. In the regression from #535, `Wrapped` kept
+        // its corrected multi-line header signature, but the later property `P` attached
+        // to the outer `Host` class after same-line siblings popped `Wrapped` out of the
+        // active container stack too early. Pin the exact issue fixture so both the
+        // signature fix and the nested-container attachment stay true together. Closes #535.
+        // #525 の wrapped-header signature fix は、同一行にいる nested type を後続 member の
+        // container 判定から追い出してはならない。#535 の回帰では `Wrapped` の multi-line
+        // header 自体は正しくなった一方で、同一行 sibling を処理した時点で active container
+        // stack から `Wrapped` が早く落ち、後続 property `P` が outer `Host` に付いていた。
+        // issue の fixture そのものを固定し、signature 修正と nested-container 付与が同時に
+        // 崩れないようにする。Closes #535.
+        var content = string.Join(
+            "\n",
+            "namespace ReviewFixtures;",
+            "",
+            "public class Host",
+            "{",
+            "    public void M<T1, T2>() { } public event System.Action<int, string>? E; public class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        public int P { get; }",
+            "    }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrapped = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Wrapped"));
+        Assert.Equal("public class Wrapped<T> where T : class", wrapped.Signature);
+        Assert.Equal("class", wrapped.ContainerKind);
+        Assert.Equal("Host", wrapped.ContainerName);
+
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("public int P { get; }", property.Signature);
+        Assert.Equal("class", property.ContainerKind);
+        Assert.Equal("Wrapped", property.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineMultipleFieldsAreAllCaptured()
     {
         // `public class Multi { public int A; public int B; public int C; }` must
