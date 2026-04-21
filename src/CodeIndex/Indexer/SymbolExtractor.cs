@@ -1840,7 +1840,8 @@ public static class SymbolExtractor
                                     Signature = signature,
                                     Visibility = TryGetGroup(match, pattern.VisibilityGroup),
                                     ReturnType = NormalizeMetadata(entry.ReturnType),
-                                });
+                                },
+                                line);
                         }
                     }
                     else
@@ -1862,7 +1863,8 @@ public static class SymbolExtractor
                                 Signature = signature,
                                 Visibility = TryGetGroup(match, pattern.VisibilityGroup),
                                 ReturnType = NormalizeMetadata(TryGetGroup(match, pattern.ReturnTypeGroup)),
-                            });
+                            },
+                            line);
                     }
 
                     if (lang == "csharp"
@@ -2083,7 +2085,7 @@ public static class SymbolExtractor
                     // 進め、同一行 sibling（`class A {} class B {}` など）だけを扱う。Closes #400.
                     if (lang == "csharp" && kind is "class" or "struct" or "interface" or "enum" or "namespace")
                     {
-                        var nextTypeBodyOffset = FindNextSameLineBraceStatementStart(
+                        var nextTypeBodyOffset = FindNextSameLineNonClosingBraceStatementStart(
                             matchLine,
                             absoluteStartColumn + Math.Max(1, match.Length),
                             lang);
@@ -6676,7 +6678,8 @@ public static class SymbolExtractor
         List<SymbolRecord> symbols,
         HashSet<string>? cssSeenSymbols,
         int lineNumber,
-        SymbolRecord symbol)
+        SymbolRecord symbol,
+        string? rawLine = null)
     {
         if (cssSeenSymbols != null)
         {
@@ -6684,6 +6687,8 @@ public static class SymbolExtractor
             if (!cssSeenSymbols.Add(key))
                 return;
         }
+
+        symbol.SameLineSignatureOccurrenceIndex = GetSameLineSignatureOccurrenceIndex(symbols, symbol);
 
         // Same-line restart paths can legitimately revisit the same declaration from a
         // different regex row or restart offset. Suppress only exact duplicate symbol
@@ -6694,7 +6699,7 @@ public static class SymbolExtractor
         // 再訪しうる。ここでは exact duplicate の `SymbolRecord` だけを抑止し、
         // mixed-kind 回復で同じ宣言が二重出力されるのを防ぎつつ、範囲や signature が
         // 異なる正当な overload / sibling はそのまま残す。Closes #472 / #473 follow-up.
-        if (symbols.Any(existing =>
+        var duplicateCount = symbols.Count(existing =>
                 existing.Kind == symbol.Kind
                 && existing.Name == symbol.Name
                 && existing.Line == symbol.Line
@@ -6704,12 +6709,69 @@ public static class SymbolExtractor
                 && existing.BodyEndLine == symbol.BodyEndLine
                 && existing.Signature == symbol.Signature
                 && existing.Visibility == symbol.Visibility
-                && existing.ReturnType == symbol.ReturnType))
+                && existing.ReturnType == symbol.ReturnType);
+        if (duplicateCount > 0
+            && !HasRemainingSameLineSignatureOccurrence(symbol, rawLine, duplicateCount))
         {
             return;
         }
 
         symbols.Add(symbol);
+    }
+
+    private static int? GetSameLineSignatureOccurrenceIndex(List<SymbolRecord> symbols, SymbolRecord symbol)
+    {
+        if (symbol.Signature == null
+            || symbol.StartLine != symbol.EndLine
+            || symbol.Line != symbol.StartLine)
+        {
+            return null;
+        }
+
+        return symbols.Count(existing =>
+            existing.Line == symbol.Line
+            && existing.StartLine == symbol.StartLine
+            && existing.Signature == symbol.Signature);
+    }
+
+    // Some compact same-line C# fixtures can legitimately contain two distinct siblings with
+    // the same short signature on the same physical line
+    // (`Child { } } public partial class Child { }`). Allow as many identical rows as the raw
+    // line actually contains, and suppress only the true restart duplicates beyond that. Closes #552.
+    // compact な同一行 C# fixture では、同じ短い signature を持つ別 sibling が同じ物理行に
+    // 実在しうる (`Child { } } public partial class Child { }`)。raw 行に実在する出現回数までは
+    // 許容し、それを超える restart 由来の真の duplicate だけを抑止する。Closes #552.
+    private static bool HasRemainingSameLineSignatureOccurrence(SymbolRecord symbol, string? rawLine, int duplicateCount)
+    {
+        if (rawLine == null
+            || symbol.Signature == null
+            || symbol.StartLine != symbol.EndLine
+            || symbol.Line != symbol.StartLine)
+        {
+            return false;
+        }
+
+        return CountNonOverlappingOccurrences(rawLine, symbol.Signature) > duplicateCount;
+    }
+
+    private static int CountNonOverlappingOccurrences(string text, string value)
+    {
+        if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(value))
+            return 0;
+
+        var count = 0;
+        var startIndex = 0;
+        while (startIndex < text.Length)
+        {
+            var index = text.IndexOf(value, startIndex, StringComparison.Ordinal);
+            if (index < 0)
+                break;
+
+            count++;
+            startIndex = index + value.Length;
+        }
+
+        return count;
     }
 
     private static void ExtractCssInlineGroupingSelectors(
@@ -13748,6 +13810,9 @@ public static class SymbolExtractor
 
         if (candidate.StartLine == container.StartLine)
         {
+            if (TryContainsCSharpSameLineSymbolByRawLine(container, candidate, rawLines, out var containsSameLineSymbol))
+                return containsSameLineSymbol;
+
             return CanContainSameLineSymbol(container, candidate)
                 && container.Signature != null
                 && candidate.Signature != null
@@ -13762,6 +13827,51 @@ public static class SymbolExtractor
         }
 
         return IsInsideCSharpClosingBraceLineContainer(container, candidate, rawLines);
+    }
+
+    private static bool TryContainsCSharpSameLineSymbolByRawLine(
+        SymbolRecord container,
+        SymbolRecord candidate,
+        string[]? rawLines,
+        out bool contains)
+    {
+        contains = false;
+        if (rawLines == null
+            || container.Signature == null
+            || candidate.Signature == null
+            || container.StartLine != candidate.StartLine
+            || container.StartLine <= 0
+            || container.StartLine > rawLines.Length
+            || !CanContainSameLineSymbol(container, candidate))
+        {
+            return false;
+        }
+
+        var rawLine = rawLines[container.StartLine - 1];
+        var containerStartColumn = FindSignatureOccurrenceStartColumn(
+            rawLine,
+            container.Signature,
+            container.SameLineSignatureOccurrenceIndex ?? 0);
+        var candidateStartColumn = FindSignatureOccurrenceStartColumn(
+            rawLine,
+            candidate.Signature,
+            candidate.SameLineSignatureOccurrenceIndex ?? 0);
+        if (containerStartColumn < 0 || candidateStartColumn < 0)
+            return false;
+
+        if (container.BodyStartLine == container.StartLine
+            && container.EndLine == container.StartLine)
+        {
+            var closingBraceColumn = FindCSharpSameLineContainerClosingBraceColumn(rawLine, containerStartColumn);
+            if (closingBraceColumn < 0)
+                return false;
+
+            contains = candidateStartColumn > containerStartColumn
+                && candidateStartColumn < closingBraceColumn;
+            return true;
+        }
+
+        return false;
     }
 
     // A wrapped C# type can deliberately end its body one line earlier when the closing
@@ -13797,7 +13907,10 @@ public static class SymbolExtractor
         if (closingBraceColumn < 0)
             return false;
 
-        var candidateColumn = rawLines[lineIndex].IndexOf(candidate.Signature, StringComparison.Ordinal);
+        var candidateColumn = FindSignatureOccurrenceStartColumn(
+            rawLines[lineIndex],
+            candidate.Signature,
+            candidate.SameLineSignatureOccurrenceIndex ?? 0);
         return candidateColumn >= 0 && candidateColumn < closingBraceColumn;
     }
 
@@ -13822,6 +13935,58 @@ public static class SymbolExtractor
         var sanitizedLine = LexCSharpLine(rawLines[endLineIndex], lexState).SanitizedLine;
         var depth = 1;
         for (var i = 0; i < sanitizedLine.Length; i++)
+        {
+            var ch = sanitizedLine[i];
+            if (ch == '{')
+            {
+                depth++;
+            }
+            else if (ch == '}')
+            {
+                depth--;
+                if (depth == 0)
+                    return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int FindSignatureOccurrenceStartColumn(string rawLine, string signature, int occurrenceIndex)
+    {
+        if (occurrenceIndex < 0 || string.IsNullOrEmpty(rawLine) || string.IsNullOrEmpty(signature))
+            return -1;
+
+        var currentOccurrence = 0;
+        var searchStart = 0;
+        while (searchStart < rawLine.Length)
+        {
+            var matchIndex = rawLine.IndexOf(signature, searchStart, StringComparison.Ordinal);
+            if (matchIndex < 0)
+                return -1;
+
+            if (currentOccurrence == occurrenceIndex)
+                return matchIndex;
+
+            currentOccurrence++;
+            searchStart = matchIndex + signature.Length;
+        }
+
+        return -1;
+    }
+
+    private static int FindCSharpSameLineContainerClosingBraceColumn(string rawLine, int containerStartColumn)
+    {
+        if (containerStartColumn < 0 || containerStartColumn >= rawLine.Length)
+            return -1;
+
+        var sanitizedLine = LexCSharpLine(rawLine, new CSharpLexState()).SanitizedLine;
+        var openBraceColumn = sanitizedLine.IndexOf('{', containerStartColumn);
+        if (openBraceColumn < 0)
+            return -1;
+
+        var depth = 0;
+        for (var i = openBraceColumn; i < sanitizedLine.Length; i++)
         {
             var ch = sanitizedLine[i];
             if (ch == '{')

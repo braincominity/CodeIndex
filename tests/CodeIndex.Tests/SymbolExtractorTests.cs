@@ -9582,6 +9582,40 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_WrappedNestedTypeKeepsSameLineDuplicateSignatureSiblings()
+    {
+        // Duplicate suppression must not collapse distinct same-line siblings just because
+        // they share the same short signature before container assignment runs. In the
+        // compact wrapped case below, both `Child` declarations are real: one inside
+        // `Wrapped`, one later under `Host`. Closes #552.
+        // duplicate suppression は、container 判定前に短い signature が一致するだけで
+        // 別物の same-line sibling を潰してはならない。下の compact な wrapped case では
+        // `Child` 宣言が 2 つとも実在し、片方は `Wrapped` 配下、もう片方は後続の `Host`
+        // 配下である。Closes #552.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        public partial class Child { } } public partial class Child { }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var children = symbols
+            .Where(s => s.Kind == "class" && s.Name == "Child")
+            .OrderBy(s => s.ContainerName)
+            .ToList();
+        Assert.Equal(2, children.Count);
+
+        Assert.Contains(children, child => child.ContainerKind == "class" && child.ContainerName == "Wrapped");
+        Assert.Contains(children, child => child.ContainerKind == "class" && child.ContainerName == "Host");
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineMultipleFieldsAreAllCaptured()
     {
         // `public class Multi { public int A; public int B; public int C; }` must

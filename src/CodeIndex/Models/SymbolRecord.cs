@@ -50,4 +50,7 @@ public class SymbolRecord
 
     /// <summary>Return type when known / 戻り値型</summary>
     public string? ReturnType { get; set; }
+
+    /// <summary>0-based occurrence index of the same signature on the same raw line / 同一 raw 行・同一 signature 内での 0-based 出現順</summary>
+    public int? SameLineSignatureOccurrenceIndex { get; set; }
 }
