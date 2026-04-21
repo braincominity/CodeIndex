@@ -9453,6 +9453,63 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpForeachValueNamedLikeEnumDoesNotLeakInsideElseBranch()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_foreach_else_scope_end");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                using System.Collections.Generic;
+
+                namespace Demo;
+
+                public enum Status
+                {
+                    Ready
+                }
+
+                public sealed class Holder
+                {
+                    public int Ready { get; set; }
+                }
+
+                public sealed class Uses
+                {
+                    public Demo.Status Read(IEnumerable<Holder> items, bool flag)
+                    {
+                        foreach (var Status in items)
+                            if (flag)
+                                _ = 0;
+                            else
+                                _ = Status.Ready;
+
+                        return Demo.Status.Ready;
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("Read", json.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpLaterLocalShadowingDoesNotSuppressEarlierReference()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_local_order");

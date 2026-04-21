@@ -1887,6 +1887,47 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithForeachValueNamedLikeEnum_DoesNotLeakInsideElseBranch()
+    {
+        const string content = """
+            using System.Collections.Generic;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<Holder> items, bool flag)
+                {
+                    foreach (var Status in items)
+                        if (flag)
+                            _ = 0;
+                        else
+                            _ = Status.Ready;
+
+                    return Demo.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpQualifiedEnumMemberAccess_WithLaterLocalShadowing_DoesNotSuppressEarlierReference()
     {
         const string content = """

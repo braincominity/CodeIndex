@@ -1995,6 +1995,25 @@ public static class ReferenceExtractor
         int startLineIndex,
         int startColumn)
     {
+        if (TrySkipCSharpWhitespace(structuralLines, bodyEndIndex, startLineIndex, startColumn, out var statementLineIndex, out var statementColumn)
+            && TryConsumeCSharpKeyword(structuralLines[statementLineIndex], statementColumn, "if", out var afterIfColumn))
+        {
+            if (TrySkipCSharpWhitespace(structuralLines, bodyEndIndex, statementLineIndex, afterIfColumn, out var openParenLineIndex, out var openParenColumn)
+                && openParenColumn < structuralLines[openParenLineIndex].Length
+                && structuralLines[openParenLineIndex][openParenColumn] == '('
+                && TryFindMatchingCSharpDelimiter(structuralLines, bodyEndIndex, openParenLineIndex, openParenColumn, '(', ')', out var closeParen))
+            {
+                var thenEnd = FindCSharpStatementEndPosition(structuralLines, bodyEndIndex, closeParen.Line, closeParen.Column + 1);
+                if (TrySkipCSharpWhitespace(structuralLines, bodyEndIndex, thenEnd.Line - 1, thenEnd.Column + 1, out var elseLineIndex, out var elseColumn)
+                    && TryConsumeCSharpKeyword(structuralLines[elseLineIndex], elseColumn, "else", out var afterElseColumn))
+                {
+                    return FindCSharpStatementEndPosition(structuralLines, bodyEndIndex, elseLineIndex, afterElseColumn);
+                }
+
+                return thenEnd;
+            }
+        }
+
         var foundContent = false;
         var parenDepth = 0;
         var bracketDepth = 0;
@@ -2042,7 +2061,7 @@ public static class ReferenceExtractor
                         {
                             braceDepth--;
                             if (braceDepth == 0 && parenDepth == 0 && bracketDepth == 0)
-                                return new CSharpLineColumn(lineIndex + 1, column + 1);
+                                return new CSharpLineColumn(lineIndex + 1, column);
                         }
                         break;
                     case ';':
@@ -2058,6 +2077,87 @@ public static class ReferenceExtractor
         }
 
         return new CSharpLineColumn(bodyEndIndex + 1, 0);
+    }
+
+    private static bool TrySkipCSharpWhitespace(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int startLineIndex,
+        int startColumn,
+        out int nextLineIndex,
+        out int nextColumn)
+    {
+        for (var lineIndex = startLineIndex; lineIndex <= bodyEndIndex; lineIndex++)
+        {
+            var line = structuralLines[lineIndex];
+            var columnStart = lineIndex == startLineIndex ? Math.Min(startColumn, line.Length) : 0;
+            for (var column = columnStart; column < line.Length; column++)
+            {
+                if (!char.IsWhiteSpace(line[column]))
+                {
+                    nextLineIndex = lineIndex;
+                    nextColumn = column;
+                    return true;
+                }
+            }
+        }
+
+        nextLineIndex = bodyEndIndex;
+        nextColumn = structuralLines[Math.Min(bodyEndIndex, structuralLines.Count - 1)].Length;
+        return false;
+    }
+
+    private static bool TryConsumeCSharpKeyword(string line, int startColumn, string keyword, out int nextColumn)
+    {
+        nextColumn = startColumn;
+        if (startColumn < 0 || startColumn + keyword.Length > line.Length)
+            return false;
+        if (!line.AsSpan(startColumn, keyword.Length).Equals(keyword, StringComparison.Ordinal))
+            return false;
+        if (startColumn > 0 && IsCSharpIdentifierPart(line[startColumn - 1]))
+            return false;
+        if (startColumn + keyword.Length < line.Length && IsCSharpIdentifierPart(line[startColumn + keyword.Length]))
+            return false;
+
+        nextColumn = startColumn + keyword.Length;
+        return true;
+    }
+
+    private static bool TryFindMatchingCSharpDelimiter(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int startLineIndex,
+        int startColumn,
+        char open,
+        char close,
+        out CSharpLineColumn match)
+    {
+        var depth = 0;
+        for (var lineIndex = startLineIndex; lineIndex <= bodyEndIndex; lineIndex++)
+        {
+            var line = structuralLines[lineIndex];
+            var columnStart = lineIndex == startLineIndex ? Math.Min(startColumn, line.Length) : 0;
+            for (var column = columnStart; column < line.Length; column++)
+            {
+                var current = line[column];
+                if (current == open)
+                {
+                    depth++;
+                }
+                else if (current == close && depth > 0)
+                {
+                    depth--;
+                    if (depth == 0)
+                    {
+                        match = new CSharpLineColumn(lineIndex + 1, column);
+                        return true;
+                    }
+                }
+            }
+        }
+
+        match = new CSharpLineColumn(bodyEndIndex + 1, 0);
+        return false;
     }
 
     private static CSharpLineColumn FindCSharpExpressionEndPosition(
