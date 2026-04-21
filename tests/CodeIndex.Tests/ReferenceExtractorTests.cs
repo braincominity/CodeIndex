@@ -759,7 +759,7 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_DoesNotCreateBareEnumMemberReferencesYet()
+    public void Extract_CsharpQualifiedEnumMemberAccess_UsesNarrowestOwnerContainer()
     {
         const string content = """
             namespace Demo;
@@ -773,10 +773,16 @@ public class ReferenceExtractorTests
 
             public class UsesEnum
             {
+                public Nested Value => Nested.A;
+
+                public Nested GetValue()
+                {
+                    return Nested.A;
+                }
+
                 public void Use()
                 {
-                    _ = Nested.A;
-                    _ = Outer.First.None;
+                    return Outer.First.None;
                 }
             }
             """;
@@ -784,8 +790,16 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "A");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "None");
+        var aRefs = references.Where(reference => reference.SymbolName == "A").OrderBy(reference => reference.Line).ToList();
+        Assert.Equal(2, aRefs.Count);
+        Assert.All(aRefs, reference => Assert.Equal("call", reference.ReferenceKind));
+        Assert.Contains(aRefs, reference => reference.ContainerKind == "property" && reference.ContainerName == "Value");
+        Assert.Contains(aRefs, reference => reference.ContainerKind == "function" && reference.ContainerName == "GetValue");
+
+        var noneRef = Assert.Single(references.Where(reference => reference.SymbolName == "None"));
+        Assert.Equal("call", noneRef.ReferenceKind);
+        Assert.Equal("function", noneRef.ContainerKind);
+        Assert.Equal("Use", noneRef.ContainerName);
     }
 
     [Fact]
@@ -851,7 +865,7 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "A");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "A" && reference.ReferenceKind == "call");
     }
 
     [Fact]

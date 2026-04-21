@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Models;
 
@@ -383,19 +384,12 @@ public static class ReferenceExtractor
         if (lang == null)
             return null;
 
-        if (!SupportsLanguage(lang))
-            return false;
-
-        return IsUnsupportedCSharpEnumMemberSymbol(lang, kind, containerKind)
-            ? false
-            : true;
+        return SupportsLanguage(lang);
     }
 
     public static string? GetUnsupportedSymbolKind(string? lang, string? kind, string? containerKind)
     {
-        return IsUnsupportedCSharpEnumMemberSymbol(lang, kind, containerKind)
-            ? "enum_member"
-            : null;
+        return null;
     }
 
     /// <summary>
@@ -407,9 +401,6 @@ public static class ReferenceExtractor
     {
         if (lang == null || graphSupported == null)
             return null;
-
-        if (IsUnsupportedCSharpEnumMemberSymbol(lang, kind, containerKind))
-            return "Call-graph extraction is indexed for 'csharp', but enum-member access edges are not indexed yet.";
 
         if (graphSupported.Value)
             return $"Call-graph extraction is indexed for '{lang}'.";
@@ -440,9 +431,7 @@ public static class ReferenceExtractor
 
     private static bool IsUnsupportedCSharpEnumMemberSymbol(string? lang, string? kind, string? containerKind)
     {
-        return string.Equals(lang, "csharp", StringComparison.Ordinal)
-            && string.Equals(kind, "enum", StringComparison.Ordinal)
-            && string.Equals(containerKind, "enum", StringComparison.Ordinal);
+        return false;
     }
 
     /// <summary>
@@ -511,6 +500,7 @@ public static class ReferenceExtractor
         // C# のプライマリコンストラクタ宣言（record / class / struct）で base primary-ctor を呼んでいる場合、
         // 宣言ヘッダー全体を合成コンテナで上書きする。`{` / `;` 以降の本体行は通常の container に戻す。
         var recordPrimaryCtorRanges = BuildCSharpPrimaryCtorContainers(language, symbols, structuralLines);
+        var csharpQualifiedEnumMemberLookup = BuildCSharpQualifiedEnumMemberLookup(language, symbols);
 
         var references = new List<ReferenceRecord>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -556,7 +546,7 @@ public static class ReferenceExtractor
             // lives past the header-terminating `{` and must stay with its real innermost container.
             // 同一行 record で `{` より後ろの本体呼び出しまで合成 ctor に奪われないよう、コール単位で
             // ヘッダ範囲（end line の end column より前）に入っているかを判定して差し替える。
-            SymbolRecord ResolveContainerForCall(int column)
+            SymbolRecord? ResolveContainerForCall(int column)
             {
                 foreach (var (rangeStart, rangeStartColumn, rangeEnd, rangeEndColumn, syntheticRecordCtor) in recordPrimaryCtorRanges)
                 {
@@ -588,7 +578,7 @@ public static class ReferenceExtractor
                     }
                 }
 
-                return container!;
+                return container;
             }
 
             // Event subscription/unsubscription (C#) / イベント購読・解除 (C#)
@@ -868,6 +858,27 @@ public static class ReferenceExtractor
             // `call` / `instantiate` を発行する。issue #263 参照。
             foreach (var candidate in EnumerateNestedGenericCallCandidates(preparedLine, matchedCallIndices))
                 AddCallLikeReference(candidate.Name, candidate.NameIndex);
+
+            // Qualified C# enum-member access such as `Nested.A` or `Outer.First.None` is not
+            // a method call, but downstream symbol workflows (`references`, `callers`,
+            // `callees`, `inspect`, `impact`) still need a graph edge anchored to the
+            // narrowest real owner symbol. Keep the edge kind as `call` so existing graph
+            // readers continue to see it without a schema or SQL contract change.
+            // `Nested.A` や `Outer.First.None` のような C# enum member の修飾アクセスは
+            // メソッド呼び出しではないが、下流の symbol workflow では実 owner に紐づく edge が必要。
+            // 既存 reader / SQL 契約を壊さないよう kind は `call` のまま発行する。
+            if (language == "csharp" && csharpQualifiedEnumMemberLookup.Count > 0)
+            {
+                EmitCSharpQualifiedEnumMemberReferences(
+                    preparedLine,
+                    csharpQualifiedEnumMemberLookup,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
+            }
 
             // issue #293: bare no-arg attributes / annotations are invisible to CallRegex because
             // it requires `(`. Emit them from dedicated regexes so `[Serializable]` / `@Deprecated`
@@ -1161,6 +1172,227 @@ public static class ReferenceExtractor
 
     private static bool IsCSharpIdentifierStart(char c) =>
         c == '_' || c == '@' || char.IsLetter(c);
+
+    private static Dictionary<string, List<(string EnumName, string? QualifiedEnumName)>> BuildCSharpQualifiedEnumMemberLookup(
+        string language,
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        var lookup = new Dictionary<string, List<(string EnumName, string? QualifiedEnumName)>>(StringComparer.Ordinal);
+        if (language != "csharp")
+            return lookup;
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "enum" || symbol.ContainerKind != "enum")
+                continue;
+            if (string.IsNullOrWhiteSpace(symbol.Name) || string.IsNullOrWhiteSpace(symbol.ContainerName))
+                continue;
+
+            if (!lookup.TryGetValue(symbol.Name, out var targets))
+            {
+                targets = [];
+                lookup[symbol.Name] = targets;
+            }
+
+            bool exists = false;
+            foreach (var target in targets)
+            {
+                if (string.Equals(target.EnumName, symbol.ContainerName, StringComparison.Ordinal)
+                    && string.Equals(target.QualifiedEnumName, symbol.ContainerQualifiedName, StringComparison.Ordinal))
+                {
+                    exists = true;
+                    break;
+                }
+            }
+
+            if (!exists)
+                targets.Add((symbol.ContainerName!, symbol.ContainerQualifiedName));
+        }
+
+        return lookup;
+    }
+
+    private static void EmitCSharpQualifiedEnumMemberReferences(
+        string preparedLine,
+        IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName)>> enumMemberLookup,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForCall)
+    {
+        var scan = 0;
+        while (scan < preparedLine.Length)
+        {
+            if (!TryReadCSharpQualifiedAccess(preparedLine, scan, out var parsed))
+            {
+                scan++;
+                continue;
+            }
+
+            scan = Math.Max(scan + 1, parsed.NextIndex);
+            if (!parsed.LastSeparatorWasDot || parsed.Segments.Count < 2)
+                continue;
+
+            var member = parsed.Segments[^1];
+            var memberName = preparedLine.Substring(member.Start, member.End - member.Start);
+            if (!enumMemberLookup.TryGetValue(memberName, out var targets))
+                continue;
+
+            var qualifier = NormalizeCSharpQualifiedSegments(preparedLine, parsed.Segments, parsed.Segments.Count - 1);
+            if (!MatchesQualifiedEnumType(qualifier, targets))
+                continue;
+
+            var nextTokenIndex = SkipWhitespace(preparedLine, member.End);
+            if (nextTokenIndex < preparedLine.Length && preparedLine[nextTokenIndex] == '(')
+                continue;
+
+            AddReference(
+                references,
+                seen,
+                fileId,
+                memberName,
+                member.Start,
+                "call",
+                context,
+                lineNumber,
+                resolveContainerForCall(member.Start));
+        }
+    }
+
+    private static bool TryReadCSharpQualifiedAccess(
+        string preparedLine,
+        int start,
+        out (List<(int Start, int End)> Segments, int NextIndex, bool LastSeparatorWasDot) parsed)
+    {
+        parsed = (new List<(int Start, int End)>(), start, false);
+
+        if (start > 0 && IsCSharpIdentifierPart(preparedLine[start - 1]))
+            return false;
+        if (start >= preparedLine.Length || !IsCSharpIdentifierStart(preparedLine[start]))
+            return false;
+
+        var segments = new List<(int Start, int End)>();
+        var cursor = start;
+        var lastSeparatorWasDot = false;
+        while (true)
+        {
+            if (!TryConsumeCSharpIdentifier(preparedLine, ref cursor, out var segmentStart, out var segmentEnd))
+                return false;
+
+            segments.Add((segmentStart, segmentEnd));
+
+            var separatorStart = SkipWhitespace(preparedLine, cursor);
+            if (separatorStart + 1 < preparedLine.Length
+                && preparedLine[separatorStart] == ':'
+                && preparedLine[separatorStart + 1] == ':')
+            {
+                cursor = SkipWhitespace(preparedLine, separatorStart + 2);
+                lastSeparatorWasDot = false;
+                continue;
+            }
+
+            if (separatorStart < preparedLine.Length && preparedLine[separatorStart] == '.')
+            {
+                cursor = SkipWhitespace(preparedLine, separatorStart + 1);
+                lastSeparatorWasDot = true;
+                continue;
+            }
+
+            parsed = (segments, cursor, lastSeparatorWasDot);
+            return true;
+        }
+    }
+
+    private static bool TryConsumeCSharpIdentifier(
+        string preparedLine,
+        ref int cursor,
+        out int start,
+        out int end)
+    {
+        start = cursor;
+        if (cursor >= preparedLine.Length || !IsCSharpIdentifierStart(preparedLine[cursor]))
+        {
+            end = cursor;
+            return false;
+        }
+
+        cursor++;
+        while (cursor < preparedLine.Length && IsCSharpIdentifierPart(preparedLine[cursor]))
+            cursor++;
+
+        end = cursor;
+        return true;
+    }
+
+    private static int SkipWhitespace(string text, int index)
+    {
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+            index++;
+        return index;
+    }
+
+    private static string NormalizeCSharpQualifiedSegments(
+        string preparedLine,
+        IReadOnlyList<(int Start, int End)> segments,
+        int count)
+    {
+        var builder = new StringBuilder();
+        for (var i = 0; i < count; i++)
+        {
+            if (i > 0)
+                builder.Append('.');
+            var (start, end) = segments[i];
+            var segment = preparedLine.Substring(start, end - start);
+            builder.Append(segment[0] == '@' ? segment[1..] : segment);
+        }
+        return builder.ToString();
+    }
+
+    private static bool MatchesQualifiedEnumType(
+        string qualifier,
+        IReadOnlyList<(string EnumName, string? QualifiedEnumName)> targets)
+    {
+        foreach (var (enumName, qualifiedEnumName) in targets)
+        {
+            if (!string.IsNullOrWhiteSpace(qualifiedEnumName)
+                && QualifiedNameHasSuffix(qualifiedEnumName!, qualifier))
+            {
+                return true;
+            }
+
+            if (string.Equals(GetLastQualifiedSegment(qualifier), enumName, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool QualifiedNameHasSuffix(string fullName, string suffix)
+    {
+        if (string.IsNullOrWhiteSpace(fullName) || string.IsNullOrWhiteSpace(suffix))
+            return false;
+        if (string.Equals(fullName, suffix, StringComparison.Ordinal))
+            return true;
+        if (suffix.Length >= fullName.Length)
+            return false;
+
+        var start = fullName.Length - suffix.Length;
+        return string.Compare(fullName, start, suffix, 0, suffix.Length, StringComparison.Ordinal) == 0
+            && fullName[start - 1] == '.';
+    }
+
+    private static string GetLastQualifiedSegment(string qualifiedName)
+    {
+        if (string.IsNullOrWhiteSpace(qualifiedName))
+            return string.Empty;
+
+        var lastDot = qualifiedName.LastIndexOf('.');
+        var lastColon = qualifiedName.LastIndexOf("::", StringComparison.Ordinal);
+        var split = Math.Max(lastDot, lastColon);
+        return split < 0 ? qualifiedName : qualifiedName[(split + (split == lastColon ? 2 : 1))..];
+    }
 
     private static void AddTypeReferenceSegment(
         List<ReferenceRecord> references,

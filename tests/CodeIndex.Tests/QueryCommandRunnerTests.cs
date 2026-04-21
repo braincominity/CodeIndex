@@ -6908,7 +6908,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunReferences_ExactJson_CSharpEnumMembersReturnUnsupportedGraphMetadata()
+    public void RunReferences_ExactJson_CSharpEnumMembersReturnIndexedReferences()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_references");
         try
@@ -6947,16 +6947,16 @@ public class QueryCommandRunnerTests
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.Equal(0, json.GetProperty("references").GetArrayLength());
-            Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
-            Assert.False(json.GetProperty("graph_supported").GetBoolean());
-            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
-            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
-            Assert.Contains("enum-member access edges are not indexed yet", json.GetProperty("graph_support_reason").GetString());
-            Assert.DoesNotContain("not indexed for 'csharp'", json.GetProperty("graph_support_reason").GetString(), StringComparison.Ordinal);
+            Assert.Equal("src/cases.cs", json.GetProperty("path").GetString());
+            Assert.Equal("A", json.GetProperty("symbol_name").GetString());
+            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("function", json.GetProperty("container_kind").GetString());
+            Assert.Equal("Use", json.GetProperty("container_name").GetString());
+            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+            Assert.False(json.TryGetProperty("graph_degraded", out _));
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
         }
         finally
         {
@@ -6965,7 +6965,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunInspect_JsonLeavesEnumMemberReferencesEmptyWithoutResolvedEdges()
+    public void RunInspect_JsonIncludesResolvedEnumMemberReferences()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_enum_member_bundle");
         try
@@ -7005,12 +7005,12 @@ public class QueryCommandRunnerTests
             Assert.Equal("enum", definition.GetProperty("container_kind").GetString());
             Assert.Equal("Nested", definition.GetProperty("container_name").GetString());
             Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
-            Assert.False(json.GetProperty("graph_supported").GetBoolean());
-            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
-            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
-            Assert.Contains("enum-member access edges are not indexed yet", json.GetProperty("graph_support_reason").GetString());
-            Assert.DoesNotContain("not indexed for 'csharp'", json.GetProperty("graph_support_reason").GetString(), StringComparison.Ordinal);
-            Assert.Empty(json.GetProperty("references").EnumerateArray());
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
+            var reference = Assert.Single(json.GetProperty("references").EnumerateArray());
+            Assert.Equal("A", reference.GetProperty("symbol_name").GetString());
+            Assert.Equal("Use", reference.GetProperty("container_name").GetString());
+            Assert.False(json.TryGetProperty("graph_degraded", out _));
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
         }
         finally
         {
@@ -7019,7 +7019,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunInspect_NonExactJson_MarksEnumMemberGraphLimitWhenDefinitionsResolveToEnumMember()
+    public void RunInspect_NonExactJson_TreatsEnumMembersAsGraphSupported()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_enum_member_bundle_non_exact");
         try
@@ -7056,11 +7056,11 @@ public class QueryCommandRunnerTests
             Assert.Equal("enum", definition.GetProperty("container_kind").GetString());
             Assert.Equal("Color", definition.GetProperty("container_name").GetString());
             Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
-            Assert.False(json.GetProperty("graph_supported").GetBoolean());
-            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
-            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
-            Assert.Contains("enum-member access edges are not indexed yet", json.GetProperty("graph_support_reason").GetString());
-            Assert.DoesNotContain("not indexed for 'csharp'", json.GetProperty("graph_support_reason").GetString(), StringComparison.Ordinal);
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
+            var reference = Assert.Single(json.GetProperty("references").EnumerateArray());
+            Assert.Equal("Shade", reference.GetProperty("container_name").GetString());
+            Assert.False(json.TryGetProperty("graph_degraded", out _));
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
         }
         finally
         {
@@ -7069,7 +7069,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunInspect_NonExactJson_MixedCallableAndEnumMemberKeepsGraphSupportedButMarksGap()
+    public void RunInspect_NonExactJson_MixedCallableAndEnumMemberKeepsGraphSupported()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_mixed_callable_enum");
         try
@@ -7106,11 +7106,9 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.True(json.GetProperty("graph_supported").GetBoolean());
-            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
-            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
-            Assert.Contains("Call-graph extraction is indexed for 'csharp'.", json.GetProperty("graph_support_reason").GetString());
-            Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", json.GetProperty("graph_support_reason").GetString());
             Assert.NotEmpty(json.GetProperty("references").EnumerateArray());
+            Assert.False(json.TryGetProperty("graph_degraded", out _));
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
         }
         finally
         {
@@ -7119,7 +7117,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunInspect_ExactJson_LargeMixedCandidateSetStillMarksEnumMemberGap()
+    public void RunInspect_ExactJson_LargeMixedCandidateSetKeepsGraphClean()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_large_mixed_exact");
         try
@@ -7159,8 +7157,8 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.True(json.GetProperty("graph_supported").GetBoolean());
-            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
-            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.False(json.TryGetProperty("graph_degraded", out _));
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
         }
         finally
         {
@@ -7209,8 +7207,8 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
-            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
         }
         finally
         {
@@ -7219,7 +7217,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunCallers_ExactJson_CSharpEnumMember_ReturnsUnsupportedGraphMetadata()
+    public void RunCallers_ExactJson_CSharpEnumMember_ReturnsIndexedCaller()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callers_enum_member_gap");
         try
@@ -7249,15 +7247,15 @@ public class QueryCommandRunnerTests
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.Equal(0, json.GetProperty("callers").GetArrayLength());
-            Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
-            Assert.False(json.GetProperty("graph_supported").GetBoolean());
-            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
-            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
-            Assert.Contains("enum-member access edges are not indexed yet", json.GetProperty("graph_support_reason").GetString());
+            Assert.Equal("src/cases.cs", json.GetProperty("path").GetString());
+            Assert.Equal("property", json.GetProperty("caller_kind").GetString());
+            Assert.Equal("Value", json.GetProperty("caller_name").GetString());
+            Assert.Equal("A", json.GetProperty("callee_name").GetString());
+            Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
+            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
         }
         finally
         {
@@ -7304,7 +7302,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunReferences_ExactJson_WithResults_StillIncludesUnsupportedGraphMetadata()
+    public void RunReferences_ExactJson_WithResults_StaysCleanWhenEnumMembersAlsoExist()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_references_enum_member_success_metadata");
         try
@@ -7340,11 +7338,11 @@ public class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.True(json.GetProperty("graph_supported").GetBoolean());
-            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
-            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
-            Assert.Contains("Call-graph extraction is indexed for 'csharp'.", json.GetProperty("graph_support_reason").GetString());
-            Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", json.GetProperty("graph_support_reason").GetString());
+            Assert.Equal("src/cases.cs", json.GetProperty("path").GetString());
+            Assert.Equal("A", json.GetProperty("symbol_name").GetString());
+            Assert.Equal("Use", json.GetProperty("container_name").GetString());
+            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
         }
         finally
         {
@@ -7353,7 +7351,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunReferences_ExactJson_WithoutLang_MixedCallableAndEnumMember_UsesSupportedGraphMetadata()
+    public void RunReferences_ExactJson_WithoutLang_MixedCallableAndEnumMember_ReturnsPrimaryHit()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_references_exact_mixed_without_lang");
         try
@@ -7385,12 +7383,11 @@ public class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("javascript", json.GetProperty("graph_language").GetString());
-            Assert.True(json.GetProperty("graph_supported").GetBoolean());
-            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
-            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
-            Assert.Contains("Call-graph extraction is indexed for 'javascript'.", json.GetProperty("graph_support_reason").GetString());
-            Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", json.GetProperty("graph_support_reason").GetString());
+            Assert.Equal("web/app.js", json.GetProperty("path").GetString());
+            Assert.Equal("javascript", json.GetProperty("lang").GetString());
+            Assert.Equal("Ready", json.GetProperty("symbol_name").GetString());
+            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
         }
         finally
         {
@@ -7399,7 +7396,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunCallers_ExactJson_WithResults_StillIncludesUnsupportedGraphMetadata()
+    public void RunCallers_ExactJson_WithResults_StayCleanWhenEnumMembersAlsoExist()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callers_enum_member_success_metadata");
         try
@@ -7435,11 +7432,12 @@ public class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.True(json.GetProperty("graph_supported").GetBoolean());
-            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
-            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
-            Assert.Contains("Call-graph extraction is indexed for 'csharp'.", json.GetProperty("graph_support_reason").GetString());
-            Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", json.GetProperty("graph_support_reason").GetString());
+            Assert.Equal("src/cases.cs", json.GetProperty("path").GetString());
+            Assert.Equal("Use", json.GetProperty("caller_name").GetString());
+            Assert.Equal("A", json.GetProperty("callee_name").GetString());
+            Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
+            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
         }
         finally
         {
@@ -7486,7 +7484,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunCallees_ExactJson_CSharpEnumMember_ReturnsUnsupportedGraphMetadata()
+    public void RunCallees_ExactJson_CSharpEnumMember_UsesZeroSchema()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callees_enum_member_gap");
         try
@@ -7520,11 +7518,8 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal(0, json.GetProperty("callees").GetArrayLength());
-            Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
-            Assert.False(json.GetProperty("graph_supported").GetBoolean());
-            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
-            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
-            Assert.Contains("enum-member access edges are not indexed yet", json.GetProperty("graph_support_reason").GetString());
+            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
         }
         finally
         {
@@ -7571,7 +7566,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunCallees_ExactJson_WithResults_StillIncludesUnsupportedGraphMetadata()
+    public void RunCallees_ExactJson_WithResults_StayCleanWhenEnumMembersAlsoExist()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callees_enum_member_success_metadata");
         try
@@ -7607,11 +7602,12 @@ public class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.True(json.GetProperty("graph_supported").GetBoolean());
-            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
-            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
-            Assert.Contains("Call-graph extraction is indexed for 'csharp'.", json.GetProperty("graph_support_reason").GetString());
-            Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", json.GetProperty("graph_support_reason").GetString());
+            Assert.Equal("src/cases.cs", json.GetProperty("path").GetString());
+            Assert.Equal("A", json.GetProperty("caller_name").GetString());
+            Assert.Equal("B", json.GetProperty("callee_name").GetString());
+            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
         }
         finally
         {
@@ -7652,12 +7648,11 @@ public class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("javascript", json.GetProperty("graph_language").GetString());
-            Assert.True(json.GetProperty("graph_supported").GetBoolean());
-            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
-            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
-            Assert.Contains("Call-graph extraction is indexed for 'javascript'.", json.GetProperty("graph_support_reason").GetString());
-            Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", json.GetProperty("graph_support_reason").GetString());
+            Assert.Equal("web/app.js", json.GetProperty("path").GetString());
+            Assert.Equal("javascript", json.GetProperty("lang").GetString());
+            Assert.Equal("Ready", json.GetProperty("symbol_name").GetString());
+            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
         }
         finally
         {
@@ -7666,7 +7661,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunInspect_ExactJson_MixedCSharpEnumMemberHitsKeepGraphSupportedWhileMarkingGap()
+    public void RunInspect_ExactJson_MixedCSharpEnumMemberHitsKeepGraphSupported()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_mixed_enum_member_bundle");
         try
@@ -7699,10 +7694,8 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(2, json.GetProperty("definitions").GetArrayLength());
             Assert.True(json.GetProperty("graph_supported").GetBoolean());
-            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
-            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
-            Assert.Contains("Call-graph extraction is indexed for 'csharp'.", json.GetProperty("graph_support_reason").GetString());
-            Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", json.GetProperty("graph_support_reason").GetString());
+            Assert.False(json.TryGetProperty("graph_degraded", out _));
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
         }
         finally
         {
@@ -7745,10 +7738,9 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("javascript", json.GetProperty("graph_language").GetString());
             Assert.True(json.GetProperty("graph_supported").GetBoolean());
-            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
-            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
-            Assert.Contains("Call-graph extraction is indexed for 'javascript'.", json.GetProperty("graph_support_reason").GetString());
-            Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", json.GetProperty("graph_support_reason").GetString());
+            Assert.False(json.TryGetProperty("graph_degraded", out _));
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
+            Assert.Equal("Call-graph extraction is indexed for 'javascript'.", json.GetProperty("graph_support_reason").GetString());
         }
         finally
         {
@@ -7800,8 +7792,8 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("javascript", json.GetProperty("graph_language").GetString());
             Assert.True(json.GetProperty("graph_supported").GetBoolean());
-            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
-            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.False(json.TryGetProperty("graph_degraded", out _));
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
             Assert.Equal("web/app.js", json.GetProperty("file").GetProperty("path").GetString());
             Assert.Contains("web/app.js", nearbyPaths);
             Assert.DoesNotContain("src/status.cs", nearbyPaths);
@@ -7858,7 +7850,7 @@ public class QueryCommandRunnerTests
             Assert.True(document.RootElement.GetProperty("graph_supported").GetBoolean());
             Assert.True(document.RootElement.GetProperty("graph_degraded").GetBoolean());
             Assert.Equal("enum_member", document.RootElement.GetProperty("unsupported_symbol_kind").GetString());
-            Assert.Contains("excluded from unused", document.RootElement.GetProperty("graph_support_reason").GetString());
+            Assert.Contains("currently excluded from unused analysis", document.RootElement.GetProperty("graph_support_reason").GetString());
             Assert.DoesNotContain("A", names);
             Assert.DoesNotContain("B", names);
         }
@@ -7914,7 +7906,7 @@ public class QueryCommandRunnerTests
             Assert.True(document.RootElement.GetProperty("graph_supported").GetBoolean());
             Assert.True(document.RootElement.GetProperty("graph_degraded").GetBoolean());
             Assert.Equal("enum_member", document.RootElement.GetProperty("unsupported_symbol_kind").GetString());
-            Assert.Contains("enum members are excluded from unused", document.RootElement.GetProperty("graph_support_reason").GetString());
+            Assert.Contains("currently excluded from unused analysis", document.RootElement.GetProperty("graph_support_reason").GetString());
             Assert.Contains("Color", names);
             Assert.Contains("TrulyUnused", names);
             Assert.DoesNotContain("Red", names);
@@ -8051,7 +8043,7 @@ public class QueryCommandRunnerTests
             Assert.True(json.GetProperty("graph_supported").GetBoolean());
             Assert.True(json.GetProperty("graph_degraded").GetBoolean());
             Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
-            Assert.Contains("excluded from unused", json.GetProperty("graph_support_reason").GetString());
+            Assert.Contains("currently excluded from unused analysis", json.GetProperty("graph_support_reason").GetString());
         }
         finally
         {
@@ -8101,10 +8093,8 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal(0, json.GetProperty("references").GetArrayLength());
-            Assert.False(json.GetProperty("graph_supported").GetBoolean());
-            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
-            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
-            Assert.Contains("enum-member access edges are not indexed yet", json.GetProperty("graph_support_reason").GetString());
+            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
         }
         finally
         {
@@ -8196,8 +8186,8 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("javascript", json.GetProperty("graph_language").GetString());
             Assert.True(json.GetProperty("graph_supported").GetBoolean());
-            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
-            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
+            Assert.False(json.TryGetProperty("graph_degraded", out _));
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
             Assert.Equal("web/app.js", json.GetProperty("file").GetProperty("path").GetString());
             Assert.Contains("web/app.js", nearbyPaths);
             Assert.DoesNotContain("src/status.cs", nearbyPaths);
