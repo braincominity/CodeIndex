@@ -246,7 +246,7 @@ public static class ReferenceExtractor
         @"^\s*(?:global\s+)?using\s+(?!static\b)(?<alias>@?[A-Za-z_]\w*)\s*=\s*(?<target>[^;]+)",
         RegexOptions.Compiled);
     private static readonly Regex CSharpLocalValueNameRegex = new(
-        @"(?:^|[;{}]\s*)(?:(?:(?:await\s+)?using\s+var)|var|(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*))\s+(?<name>@?[A-Za-z_]\w*)\s*(?==|;|,)",
+        @"(?:^\s*|[;{}]\s*)(?:(?:(?:await\s+)?using\s+var)|var|(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*))\s+(?<name>@?[A-Za-z_]\w*)\s*(?==|;|,)",
         RegexOptions.Compiled);
     private static readonly Regex CSharpForeachValueNameRegex = new(
         @"\bforeach\s*\(\s*(?:var|(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*))\s+(?<name>@?[A-Za-z_]\w*)\s+in\b",
@@ -254,6 +254,7 @@ public static class ReferenceExtractor
     private static readonly Regex CSharpQueryRangeValueNameRegex = new(
         @"\b(?:from|join)\s+(?<name>@?[A-Za-z_]\w*)\s+in\b|\blet\s+(?<name>@?[A-Za-z_]\w*)\s*=|\binto\s+(?<name>@?[A-Za-z_]\w*)\b",
         RegexOptions.Compiled);
+    private static readonly Regex CSharpStaticModifierRegex = new(@"\bstatic\b", RegexOptions.Compiled);
     // Java access/method modifier set used by the same-line ctor scanner.
     // same-line ctor 本体のスキャナで使うアクセス / メソッド修飾子一覧。
     private static readonly HashSet<string> JavaCtorModifiers = new(StringComparer.Ordinal)
@@ -1195,6 +1196,8 @@ public static class ReferenceExtractor
         c == '_' || c == '@' || char.IsLetter(c);
 
     private sealed record CSharpUsingAliasRecord(string AliasName, string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
+    private sealed record CSharpContainingTypeValueReceiverNames(HashSet<string> InstanceNames, HashSet<string> StaticNames);
+    private sealed record CSharpFunctionValueReceiverNameRecord(string Name, int Line);
 
     private static List<CSharpUsingAliasRecord> BuildCSharpUsingAliases(string language, IReadOnlyList<SymbolRecord> symbols)
     {
@@ -1248,9 +1251,9 @@ public static class ReferenceExtractor
         return aliases;
     }
 
-    private static Dictionary<string, HashSet<string>> BuildCSharpValueReceiverNamesByContainingType(string language, IReadOnlyList<SymbolRecord> symbols)
+    private static Dictionary<string, CSharpContainingTypeValueReceiverNames> BuildCSharpValueReceiverNamesByContainingType(string language, IReadOnlyList<SymbolRecord> symbols)
     {
-        var lookup = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        var lookup = new Dictionary<string, CSharpContainingTypeValueReceiverNames>(StringComparer.Ordinal);
         if (language != "csharp")
             return lookup;
 
@@ -1265,22 +1268,27 @@ public static class ReferenceExtractor
 
             if (!lookup.TryGetValue(containingType!, out var names))
             {
-                names = new HashSet<string>(StringComparer.Ordinal);
+                names = new CSharpContainingTypeValueReceiverNames(
+                    new HashSet<string>(StringComparer.Ordinal),
+                    new HashSet<string>(StringComparer.Ordinal));
                 lookup[containingType!] = names;
             }
 
-            names.Add(symbol.Name);
+            if (IsStaticCSharpSymbol(symbol))
+                names.StaticNames.Add(symbol.Name);
+            else
+                names.InstanceNames.Add(symbol.Name);
         }
 
         return lookup;
     }
 
-    private static Dictionary<int, HashSet<string>> BuildCSharpValueReceiverNamesByFunctionStartLine(
+    private static Dictionary<int, List<CSharpFunctionValueReceiverNameRecord>> BuildCSharpValueReceiverNamesByFunctionStartLine(
         string language,
         IReadOnlyList<SymbolRecord> symbols,
         IReadOnlyList<string> structuralLines)
     {
-        var lookup = new Dictionary<int, HashSet<string>>();
+        var lookup = new Dictionary<int, List<CSharpFunctionValueReceiverNameRecord>>();
         if (language != "csharp")
             return lookup;
 
@@ -1289,8 +1297,8 @@ public static class ReferenceExtractor
             if (symbol.Kind != "function" || symbol.StartLine <= 0)
                 continue;
 
-            var names = new HashSet<string>(StringComparer.Ordinal);
-            AddCSharpParameterNames(names, symbol.Signature);
+            var names = new List<CSharpFunctionValueReceiverNameRecord>();
+            AddCSharpParameterNames(names, symbol.Signature, symbol.StartLine);
 
             if (symbol.BodyStartLine != null && symbol.BodyEndLine != null)
             {
@@ -1299,12 +1307,17 @@ public static class ReferenceExtractor
                 for (var i = start; i <= end; i++)
                 {
                     foreach (Match match in CSharpLocalValueNameRegex.Matches(structuralLines[i]))
-                        names.Add(NormalizeCSharpIdentifier(match.Groups["name"].Value));
+                        AddCSharpFunctionValueReceiverName(names, NormalizeCSharpIdentifier(match.Groups["name"].Value), i + 1);
                     foreach (Match match in CSharpForeachValueNameRegex.Matches(structuralLines[i]))
-                        names.Add(NormalizeCSharpIdentifier(match.Groups["name"].Value));
+                        AddCSharpFunctionValueReceiverName(names, NormalizeCSharpIdentifier(match.Groups["name"].Value), i + 1);
                     foreach (Match match in CSharpQueryRangeValueNameRegex.Matches(structuralLines[i]))
-                        names.Add(NormalizeCSharpIdentifier(match.Groups["name"].Value));
+                        AddCSharpFunctionValueReceiverName(names, NormalizeCSharpIdentifier(match.Groups["name"].Value), i + 1);
                 }
+
+                AddCSharpLambdaParameterNames(
+                    names,
+                    string.Join("\n", structuralLines.Skip(start).Take(end - start + 1)),
+                    start + 1);
             }
 
             if (names.Count > 0)
@@ -1368,8 +1381,8 @@ public static class ReferenceExtractor
         IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> enumMemberLookup,
         IReadOnlyList<(int start, int end)>? csharpAttrRangesOnLine,
         IReadOnlyList<CSharpUsingAliasRecord> usingAliases,
-        IReadOnlyDictionary<string, HashSet<string>> valueReceiverNamesByContainingType,
-        IReadOnlyDictionary<int, HashSet<string>> valueReceiverNamesByFunctionStartLine,
+        IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> valueReceiverNamesByContainingType,
+        IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> valueReceiverNamesByFunctionStartLine,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -1398,9 +1411,7 @@ public static class ReferenceExtractor
             var callContainer = resolveContainerForCall(member.Start);
             var qualifier = TrimLeadingCSharpGlobalQualifier(NormalizeCSharpQualifiedSegments(preparedLine, parsed.Segments, parsed.Segments.Count - 1));
             var resolvedQualifier = ResolveCSharpQualifiedAliasTarget(qualifier, lineNumber, usingAliases);
-            if (HasCSharpLambdaValueReceiverConflict(preparedLine, qualifier, member.Start))
-                continue;
-            if (HasCSharpValueReceiverConflict(qualifier, resolvedQualifier, callContainer, valueReceiverNamesByContainingType, valueReceiverNamesByFunctionStartLine))
+            if (HasCSharpValueReceiverConflict(qualifier, resolvedQualifier, lineNumber, callContainer, valueReceiverNamesByContainingType, valueReceiverNamesByFunctionStartLine))
                 continue;
             if (!MatchesQualifiedEnumType(resolvedQualifier, targets))
                 continue;
@@ -1571,9 +1582,10 @@ public static class ReferenceExtractor
     private static bool HasCSharpValueReceiverConflict(
         string qualifier,
         string resolvedQualifier,
+        int lineNumber,
         SymbolRecord? callContainer,
-        IReadOnlyDictionary<string, HashSet<string>> valueReceiverNamesByContainingType,
-        IReadOnlyDictionary<int, HashSet<string>> valueReceiverNamesByFunctionStartLine)
+        IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> valueReceiverNamesByContainingType,
+        IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> valueReceiverNamesByFunctionStartLine)
     {
         if (string.IsNullOrWhiteSpace(qualifier)
             || qualifier.Contains('.')
@@ -1585,7 +1597,7 @@ public static class ReferenceExtractor
         if (callContainer != null
             && callContainer.Kind == "function"
             && valueReceiverNamesByFunctionStartLine.TryGetValue(callContainer.StartLine, out var functionNames)
-            && functionNames.Contains(qualifier))
+            && functionNames.Any(record => record.Line <= lineNumber && string.Equals(record.Name, qualifier, StringComparison.Ordinal)))
         {
             return true;
         }
@@ -1593,74 +1605,9 @@ public static class ReferenceExtractor
         var containingType = GetContainingTypeQualifiedName(callContainer);
         return containingType != null
             && valueReceiverNamesByContainingType.TryGetValue(containingType, out var names)
-            && names.Contains(qualifier);
-    }
-
-    private static bool HasCSharpLambdaValueReceiverConflict(string preparedLine, string qualifier, int memberStart)
-    {
-        if (string.IsNullOrWhiteSpace(qualifier) || qualifier.Contains('.'))
-            return false;
-
-        var searchIndex = 0;
-        while (searchIndex < memberStart)
-        {
-            var arrowIndex = preparedLine.IndexOf("=>", searchIndex, StringComparison.Ordinal);
-            if (arrowIndex < 0 || arrowIndex >= memberStart)
-                break;
-            if (LambdaParameterListContains(preparedLine, arrowIndex, qualifier))
-                return true;
-            searchIndex = arrowIndex + 2;
-        }
-
-        return false;
-    }
-
-    private static bool LambdaParameterListContains(string preparedLine, int arrowIndex, string qualifier)
-    {
-        var leftIndex = SkipWhitespaceBackward(preparedLine, arrowIndex - 1);
-        if (leftIndex < 0)
-            return false;
-
-        if (preparedLine[leftIndex] == ')')
-        {
-            if (!TryFindMatchingOpenParen(preparedLine, leftIndex, out var openParenIndex))
-                return false;
-
-            var parameters = preparedLine[(openParenIndex + 1)..leftIndex];
-            foreach (var segment in SplitTopLevelCSharpParameterSegments(parameters))
-            {
-                if (TryExtractTrailingCSharpParameterName(segment, out var parameterName)
-                    && string.Equals(parameterName, qualifier, StringComparison.Ordinal))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        var identifierEnd = leftIndex + 1;
-        var identifierStart = leftIndex;
-        while (identifierStart >= 0 && IsCSharpIdentifierPart(preparedLine[identifierStart]))
-            identifierStart--;
-        identifierStart++;
-        if (identifierStart >= identifierEnd || !IsCSharpIdentifierStart(preparedLine[identifierStart]))
-            return false;
-
-        var parameter = NormalizeCSharpIdentifier(preparedLine[identifierStart..identifierEnd]);
-        if (!string.Equals(parameter, qualifier, StringComparison.Ordinal))
-            return false;
-
-        var prefixIndex = SkipWhitespaceBackward(preparedLine, identifierStart - 1);
-        if (prefixIndex < 0)
-            return false;
-
-        var prefixChar = preparedLine[prefixIndex];
-        if (prefixChar is '=' or '(' or ',' or ':')
-            return true;
-
-        return TryReadPreviousIdentifierToken(preparedLine, prefixIndex, out var previousToken)
-            && string.Equals(previousToken, "return", StringComparison.Ordinal);
+            && (IsStaticCSharpSymbol(callContainer)
+                ? names.StaticNames.Contains(qualifier)
+                : names.StaticNames.Contains(qualifier) || names.InstanceNames.Contains(qualifier));
     }
 
     private static string? GetContainingTypeQualifiedName(SymbolRecord? symbol)
@@ -1684,7 +1631,7 @@ public static class ReferenceExtractor
         return $"{parentQualifiedName}.{name}";
     }
 
-    private static void AddCSharpParameterNames(HashSet<string> names, string? signature)
+    private static void AddCSharpParameterNames(List<CSharpFunctionValueReceiverNameRecord> names, string? signature, int lineNumber)
     {
         if (string.IsNullOrWhiteSpace(signature))
             return;
@@ -1698,7 +1645,7 @@ public static class ReferenceExtractor
         foreach (var segment in SplitTopLevelCSharpParameterSegments(parameters))
         {
             if (TryExtractTrailingCSharpParameterName(segment, out var name))
-                names.Add(name);
+                AddCSharpFunctionValueReceiverName(names, name, lineNumber);
         }
     }
 
@@ -1782,6 +1729,94 @@ public static class ReferenceExtractor
         return !string.IsNullOrWhiteSpace(name);
     }
 
+    private static void AddCSharpLambdaParameterNames(List<CSharpFunctionValueReceiverNameRecord> names, string bodyText, int startLineNumber)
+    {
+        if (string.IsNullOrWhiteSpace(bodyText))
+            return;
+
+        var searchIndex = 0;
+        while (searchIndex < bodyText.Length)
+        {
+            var arrowIndex = bodyText.IndexOf("=>", searchIndex, StringComparison.Ordinal);
+            if (arrowIndex < 0)
+                break;
+
+            AddCSharpLambdaParametersBeforeArrow(names, bodyText, arrowIndex, startLineNumber);
+            searchIndex = arrowIndex + 2;
+        }
+    }
+
+    private static void AddCSharpLambdaParametersBeforeArrow(
+        List<CSharpFunctionValueReceiverNameRecord> names,
+        string bodyText,
+        int arrowIndex,
+        int startLineNumber)
+    {
+        var leftIndex = SkipWhitespaceBackward(bodyText, arrowIndex - 1);
+        if (leftIndex < 0)
+            return;
+
+        var declarationLine = GetLineNumberFromOffset(bodyText, arrowIndex, startLineNumber);
+        if (bodyText[leftIndex] == ')')
+        {
+            if (!TryFindMatchingOpenParen(bodyText, leftIndex, out var openParenIndex))
+                return;
+
+            var parameters = bodyText[(openParenIndex + 1)..leftIndex];
+            foreach (var segment in SplitTopLevelCSharpParameterSegments(parameters))
+            {
+                if (TryExtractTrailingCSharpParameterName(segment, out var parameterName))
+                    AddCSharpFunctionValueReceiverName(names, parameterName, declarationLine);
+            }
+
+            return;
+        }
+
+        var identifierEnd = leftIndex + 1;
+        var identifierStart = leftIndex;
+        while (identifierStart >= 0 && IsCSharpIdentifierPart(bodyText[identifierStart]))
+            identifierStart--;
+        identifierStart++;
+        if (identifierStart >= identifierEnd || !IsCSharpIdentifierStart(bodyText[identifierStart]))
+            return;
+
+        var parameter = NormalizeCSharpIdentifier(bodyText[identifierStart..identifierEnd]);
+        var prefixIndex = SkipWhitespaceBackward(bodyText, identifierStart - 1);
+        if (prefixIndex < 0)
+            return;
+
+        var prefixChar = bodyText[prefixIndex];
+        if (prefixChar is '=' or '(' or ',' or ':'
+            || (TryReadPreviousIdentifierToken(bodyText, prefixIndex, out var previousToken)
+                && string.Equals(previousToken, "return", StringComparison.Ordinal)))
+        {
+            AddCSharpFunctionValueReceiverName(names, parameter, declarationLine);
+        }
+    }
+
+    private static void AddCSharpFunctionValueReceiverName(List<CSharpFunctionValueReceiverNameRecord> names, string name, int lineNumber)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return;
+        if (names.Any(record => record.Line == lineNumber && string.Equals(record.Name, name, StringComparison.Ordinal)))
+            return;
+
+        names.Add(new CSharpFunctionValueReceiverNameRecord(name, lineNumber));
+    }
+
+    private static int GetLineNumberFromOffset(string text, int offset, int startLineNumber)
+    {
+        var lineNumber = startLineNumber;
+        var limit = Math.Min(offset, text.Length);
+        for (var i = 0; i < limit; i++)
+        {
+            if (text[i] == '\n')
+                lineNumber++;
+        }
+
+        return lineNumber;
+    }
+
     private static int SkipWhitespaceBackward(string text, int index)
     {
         while (index >= 0 && char.IsWhiteSpace(text[index]))
@@ -1832,6 +1867,9 @@ public static class ReferenceExtractor
         token = text[start..(end + 1)];
         return token.Length > 0;
     }
+
+    private static bool IsStaticCSharpSymbol(SymbolRecord? symbol) =>
+        symbol?.Signature != null && CSharpStaticModifierRegex.IsMatch(symbol.Signature);
 
     private static string GetFirstQualifiedSegment(string qualifiedName)
     {
