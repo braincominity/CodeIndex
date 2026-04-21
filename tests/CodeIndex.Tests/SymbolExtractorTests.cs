@@ -9208,6 +9208,49 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_GenericSameLineMembersKeepLaterBraceSiblingStartColumns()
+    {
+        // After earlier generic same-line members collapse whitespace in the per-line
+        // C# match buffer, later brace-bodied siblings must still slice their signature
+        // from the raw start column. Otherwise `int P { get; }` and `interface J { ... }`
+        // keep the preceding `;` / `{` from the raw line even though the symbols
+        // themselves are found. Pin both the direct property case and the nested
+        // interface case reported in #525. Closes #525.
+        // 先行する generic な same-line member によって C# の per-line match buffer 側で
+        // 空白が潰れても、後続 brace-bodied sibling の signature は raw start 列から
+        // 切り出されなければならない。そうでないと `int P { get; }` や
+        // `interface J { ... }` の先頭に、raw 行上の直前 delimiter (`;` / `{`) が残る。
+        // symbol 自体は見つかっていても signature が壊れるので、#525 の direct
+        // property ケースと nested interface ケースの両方を固定する。Closes #525.
+        var content = string.Join(
+            "\n",
+            "public interface I { void M<T1, T2>(); event System.Action<int, string> E; int P { get; } }",
+            "public interface I2 { void M<T1, T2>(); event System.Action<int, string> E; interface J { int P { get; } } }");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var directProperty = Assert.Single(symbols.Where(s =>
+            s.Kind == "property"
+            && s.Name == "P"
+            && s.ContainerKind == "interface"
+            && s.ContainerName == "I"));
+        Assert.Equal("int P { get; }", directProperty.Signature);
+
+        var nestedInterface = Assert.Single(symbols.Where(s =>
+            s.Kind == "interface"
+            && s.Name == "J"
+            && s.ContainerKind == "interface"
+            && s.ContainerName == "I2"));
+        Assert.Equal("interface J { int P { get; } }", nestedInterface.Signature);
+
+        var nestedProperty = Assert.Single(symbols.Where(s =>
+            s.Kind == "property"
+            && s.Name == "P"
+            && s.Line == 2
+            && s.Signature == "int P { get; }"));
+        Assert.Equal("int P { get; }", nestedProperty.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineMultipleFieldsAreAllCaptured()
     {
         // `public class Multi { public int A; public int B; public int C; }` must

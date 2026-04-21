@@ -1514,13 +1514,21 @@ public static class SymbolExtractor
                         break;
                     }
 
+                    var csharpSingleLineCollapsedMatch = lang == "csharp"
+                        && csharpMatchLines != null
+                        && ReferenceEquals(patternMatchLine, csharpMatchLines[i]);
+                    var csharpSignatureRawStartColumn = csharpGateRawStartColumn;
+                    var csharpSameLineBraceStartColumn = csharpSingleLineCollapsedMatch
+                        ? csharpSignatureRawStartColumn
+                        : absoluteStartColumn;
                     var sameLineEndColumn = pattern.BodyStyle == BodyStyle.Brace
                         && bodyEndLine == startLine
-                        ? FindSameLineBraceEndColumn(line, absoluteStartColumn, lang, kind)
+                        ? FindSameLineBraceEndColumn(line, csharpSameLineBraceStartColumn, lang, kind)
                         : -1;
+                    var sameLineEndUsesRawColumns = pattern.BodyStyle == BodyStyle.Brace
+                        && bodyEndLine == startLine;
                     if (lang == "csharp"
-                        && csharpMatchLines != null
-                        && ReferenceEquals(patternMatchLine, csharpMatchLines[i])
+                        && csharpSingleLineCollapsedMatch
                         && CanUseCSharpSameLineSemicolonEndColumn(kind))
                     {
                         var semicolonEndColumn = FindCSharpSameLineSemicolonEndColumn(patternMatchLine, absoluteStartColumn);
@@ -1528,6 +1536,7 @@ public static class SymbolExtractor
                             && (sameLineEndColumn < absoluteStartColumn || semicolonEndColumn < sameLineEndColumn))
                         {
                             sameLineEndColumn = semicolonEndColumn;
+                            sameLineEndUsesRawColumns = false;
                         }
                     }
                     if (sameLineEndColumn < absoluteStartColumn
@@ -1548,9 +1557,12 @@ public static class SymbolExtractor
                         // sibling が property など先頭側 pattern へ再到達できるようにする。
                         // これが無いと event signature が後続宣言を飲み込み、後続 sibling が
                         // earlier pattern に届かない。Closes #520.
-                        var braceEndColumn = FindSameLineBraceEndColumn(line, absoluteStartColumn, lang, kind);
+                        var braceEndColumn = FindSameLineBraceEndColumn(line, csharpSameLineBraceStartColumn, lang, kind);
                         if (braceEndColumn >= absoluteStartColumn)
+                        {
                             sameLineEndColumn = braceEndColumn;
+                            sameLineEndUsesRawColumns = true;
+                        }
                     }
                     if (sameLineEndColumn < absoluteStartColumn
                         && lang == "csharp"
@@ -1558,6 +1570,7 @@ public static class SymbolExtractor
                         && pattern.BodyStyle == BodyStyle.None)
                     {
                         sameLineEndColumn = FindCSharpSameLineEnumMemberEndColumn(patternMatchLine, absoluteStartColumn);
+                        sameLineEndUsesRawColumns = false;
                     }
                     string signature;
                     if (csharpWrappedModifierPrefix != null)
@@ -1572,16 +1585,18 @@ public static class SymbolExtractor
                         // (`static Foo() { ... }`) を保存する。同一行に brace 本体が閉じる
                         // ケースではその末尾で切り詰め、シグネチャが本体全体を飲み込まない
                         // ようにする。Closes #348.
+                        var nameLineStartColumn = csharpSingleLineCollapsedMatch && sameLineEndUsesRawColumns
+                            ? csharpSignatureRawStartColumn
+                            : absoluteStartColumn;
                         var nameLineContent = sameLineEndColumn >= absoluteStartColumn
-                            ? line[absoluteStartColumn..(sameLineEndColumn + 1)]
-                            : line[absoluteStartColumn..];
+                            ? line[nameLineStartColumn..Math.Min(sameLineEndColumn + 1, line.Length)]
+                            : line[nameLineStartColumn..];
                         signature = (csharpWrappedModifierPrefix + " " + nameLineContent.TrimStart()).Trim();
                     }
                     else if (sameLineEndColumn >= absoluteStartColumn)
                     {
                         if (lang == "csharp"
-                            && csharpMatchLines != null
-                            && ReferenceEquals(patternMatchLine, csharpMatchLines[i])
+                            && csharpSingleLineCollapsedMatch
                             && CanUseCSharpSameLineSemicolonEndColumn(kind))
                         {
                             var rawStart = TranslateCSharpCollapsedColumnToRaw(
@@ -1603,7 +1618,13 @@ public static class SymbolExtractor
                         }
                         else
                         {
-                            signature = line[absoluteStartColumn..(sameLineEndColumn + 1)].Trim();
+                            var signatureStartColumn = csharpSingleLineCollapsedMatch && sameLineEndUsesRawColumns
+                                ? csharpSignatureRawStartColumn
+                                : absoluteStartColumn;
+                            var signatureEndExclusive = Math.Min(sameLineEndColumn + 1, line.Length);
+                            if (signatureEndExclusive <= signatureStartColumn)
+                                signatureEndExclusive = Math.Min(signatureStartColumn + Math.Max(1, match.Length), line.Length);
+                            signature = line[signatureStartColumn..signatureEndExclusive].Trim();
                         }
                     }
                     else if (lang == "csharp"
@@ -1628,7 +1649,7 @@ public static class SymbolExtractor
                         signature = BuildCSharpMultilineSignature(
                             lines,
                             i,
-                            absoluteStartColumn,
+                            csharpSignatureRawStartColumn,
                             csharpPropertyCandidate.SignatureLastLineIndex,
                             csharpPropertyCandidate.SignatureLastLineExclusiveEndColumn);
                     }
@@ -1637,7 +1658,7 @@ public static class SymbolExtractor
                         && TryFindCSharpTypeHeaderExtent(
                             lines,
                             i,
-                            absoluteStartColumn,
+                            csharpSignatureRawStartColumn,
                             out var csharpTypeHeaderLastLineIndex,
                             out var csharpTypeHeaderLastLineExclusiveEndColumn)
                         && csharpTypeHeaderLastLineIndex > i)
@@ -1658,7 +1679,7 @@ public static class SymbolExtractor
                         signature = BuildCSharpTypeHeaderSignature(
                             lines,
                             i,
-                            absoluteStartColumn,
+                            csharpSignatureRawStartColumn,
                             csharpTypeHeaderLastLineIndex,
                             csharpTypeHeaderLastLineExclusiveEndColumn);
                     }
