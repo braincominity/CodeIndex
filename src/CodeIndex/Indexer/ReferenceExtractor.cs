@@ -3130,12 +3130,26 @@ public static class ReferenceExtractor
                 if (char.IsWhiteSpace(current))
                     continue;
 
-                return current is '(' or ')' or ']' or '[' or '.' or ',' or ';' or '{' or ':' or '?'
-                    || IsCSharpIdentifierStart(current);
+                if (current is '(' or ')' or ']' or '[' or '.' or ',' or ';' or '{' or ':' or '?'
+                    || IsCSharpIdentifierStart(current))
+                {
+                    return true;
+                }
+
+                return IsCSharpQueryGenericComparisonOperator(line, column);
             }
         }
 
         return true;
+    }
+
+    private static bool IsCSharpQueryGenericComparisonOperator(string line, int column)
+    {
+        if (column < 0 || column + 1 >= line.Length)
+            return false;
+
+        var current = line[column];
+        return (current is '!' or '=') && line[column + 1] == '=';
     }
 
     private static CSharpLineColumn FindCSharpArrowExpressionScopeEndPosition(string bodyText, int arrowIndex, int startLineNumber, int fallbackScopeEndLine)
