@@ -9064,6 +9064,60 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_SameLineAutoPropertyBeforeMethodIsCaptured()
+    {
+        // Mixed-kind same-line siblings must not lose the earlier brace-body property when a
+        // later method on the same physical line needs a different regex family. This locks the
+        // property side of `property -> method` so the outer-type false-positive skip and the
+        // same-line continuation machinery do not silently leave only the method behind.
+        // Closes #472 / #473 follow-up.
+        // 同一行の mixed-kind sibling では、後続 method が別 regex 群を必要とするからと
+        // いって、手前の brace-body property を落としてはならない。outer type 偽陽性の
+        // skip と same-line 継続処理が組み合わさって method だけ残る退行を防ぐため、
+        // `property -> method` の property 側を固定する。Closes #472 / #473 follow-up.
+        var content = "public class C { public int P { get; set; } public void M() { } }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "C"));
+
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("class", property.ContainerKind);
+        Assert.Equal("C", property.ContainerName);
+        Assert.Equal("public int P { get; set; }", property.Signature);
+
+        var method = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "M"));
+        Assert.Equal("class", method.ContainerKind);
+        Assert.Equal("C", method.ContainerName);
+        Assert.Equal("public void M() { }", method.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineAutoPropertyBeforeEventIsCaptured()
+    {
+        // The same continuation path must also preserve brace-body properties when the next
+        // same-line sibling is an event declaration instead of a method. This guards the
+        // `property -> event` shape covered by the mixed-kind same-line follow-up issue.
+        // Closes #472 / #473 follow-up.
+        // 同じ継続経路は、次の same-line sibling が method ではなく event の場合でも
+        // brace-body property を保持しなければならない。mixed-kind same-line の追件で
+        // 問題になった `property -> event` 形をここで固定する。Closes #472 / #473 follow-up.
+        var content = "public class C { public int P { get; set; } public event System.EventHandler E; }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "C"));
+
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("class", property.ContainerKind);
+        Assert.Equal("C", property.ContainerName);
+        Assert.Equal("public int P { get; set; }", property.Signature);
+
+        var eventSymbol = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E"));
+        Assert.Equal("class", eventSymbol.ContainerKind);
+        Assert.Equal("C", eventSymbol.ContainerName);
+        Assert.Equal("public event System.EventHandler E;", eventSymbol.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineAutoPropertyAfterConstructorsIsCaptured()
     {
         // Same-line C# constructors must not stop later sibling declarations from
