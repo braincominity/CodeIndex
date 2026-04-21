@@ -5713,6 +5713,10 @@ public class SymbolExtractorTests
                 public Dictionary<string, int>
                     Cache { get; } = new();
 
+                public T Create<T>(string name)
+                    where T : class, new()
+                    => default!;
+
                 public int
                     this[string key] { get => 0; set { } }
 
@@ -5733,13 +5737,36 @@ public class SymbolExtractorTests
         Assert.Equal(12, cache.StartLine);
         Assert.Equal(13, cache.EndLine);
 
+        var create = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Create"));
+        Assert.Equal("public", create.Visibility);
+        Assert.Equal("T", create.ReturnType);
+        Assert.Equal(15, create.StartLine);
+        Assert.Equal(17, create.EndLine);
+
         var indexer = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Item"));
         Assert.Equal("public", indexer.Visibility);
         Assert.Equal("int", indexer.ReturnType);
-        Assert.Equal(15, indexer.StartLine);
-        Assert.Equal(16, indexer.EndLine);
+        Assert.Equal(19, indexer.StartLine);
+        Assert.Equal(20, indexer.EndLine);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Simple" && s.ReturnType == "int");
+        Assert.Equal(
+            new[]
+            {
+                ("class", "Svc"),
+                ("function", "Create"),
+                ("function", "GetMapping"),
+                ("function", "Item"),
+                ("function", "Simple"),
+                ("namespace", "CsMultilineSig"),
+                ("property", "Cache"),
+            },
+            symbols
+                .Where(s => s.Kind != "import")
+                .Select(s => (s.Kind, s.Name))
+                .OrderBy(x => x.Kind, StringComparer.Ordinal)
+                .ThenBy(x => x.Name, StringComparer.Ordinal)
+                .ToArray());
     }
 
     [Fact]
