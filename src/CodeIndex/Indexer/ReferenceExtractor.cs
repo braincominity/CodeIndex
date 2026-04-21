@@ -2130,17 +2130,14 @@ public static class ReferenceExtractor
         if (startColumn < 0 || startColumn >= line.Length)
             return false;
 
-        if (startColumn > 0 && IsCSharpIdentifierPart(line[startColumn - 1]))
+        if (startColumn > 0 && !char.IsWhiteSpace(line[startColumn - 1]))
             return false;
 
         var tokenStart = startColumn;
         if (line[tokenStart] == '@')
-        {
-            tokenStart++;
-            if (tokenStart >= line.Length || !IsCSharpIdentifierPart(line[tokenStart]))
-                return false;
-        }
-        else if (!IsCSharpIdentifierPart(line[tokenStart]))
+            return false;
+
+        if (!IsCSharpIdentifierPart(line[tokenStart]))
         {
             return false;
         }
