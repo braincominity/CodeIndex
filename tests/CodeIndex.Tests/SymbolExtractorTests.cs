@@ -9032,6 +9032,38 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_SameLineAutoPropertyAfterExpressionBodiedPropertyIsCaptured()
+    {
+        // Same-line C# type bodies must not skip the first real member just because an
+        // outer-type false-positive property candidate overran into a later sibling while
+        // scanning for `{` / `=>`. In
+        // `public class C { public int A => 1; public int P { get; set; } }`,
+        // both `A` and `P` must survive and there must be no phantom `property C`.
+        // Closes #472.
+        // 同一行 C# 型本体では、outer-type 由来の偽 property 候補が後続 sibling まで
+        // 食い込んだとしても、最初の本物 member を飛ばしてはならない。
+        // `public class C { public int A => 1; public int P { get; set; } }`
+        // では `A` と `P` の両方が抽出され、phantom `property C` が出てはいけない。
+        // Closes #472.
+        var content = "public class C { public int A => 1; public int P { get; set; } }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "C"));
+
+        var expressionProperty = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "A"));
+        Assert.Equal("class", expressionProperty.ContainerKind);
+        Assert.Equal("C", expressionProperty.ContainerName);
+        Assert.Equal("public int A => 1;", expressionProperty.Signature);
+
+        var autoProperty = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("class", autoProperty.ContainerKind);
+        Assert.Equal("C", autoProperty.ContainerName);
+        Assert.Equal("public int P { get; set; }", autoProperty.Signature);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "C");
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineAutoPropertyAfterConstructorsIsCaptured()
     {
         // Same-line C# constructors must not stop later sibling declarations from

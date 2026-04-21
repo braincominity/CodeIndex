@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Fixed
+- **Same-line C# type bodies no longer skip an expression-bodied property before a later auto-property (#472)** — `SymbolExtractor` now rejects outer-type brace-property false positives by restarting from the first member inside the same-line type body instead of the regex tail, and same-line C# property bodies can continue scanning later sibling declarations on the same physical line. This fixes compact fixtures such as `public class C { public int A => 1; public int P { get; set; } }`, which now emit both `property A` and `property P` without inventing a phantom `property C`. Added regression coverage in `SymbolExtractorTests`. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`. Closes #472.
+
 ### [1.13.0] - 2026-04-21
 
 #### Changed
@@ -767,6 +770,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 修正
+- **同一行 C# 型本体で、式本体 property の直後に続く auto-property を取り落とさないよう修正 (#472)** — `SymbolExtractor` は outer type 由来の brace-property 偽陽性を regex 末尾ではなく同一行型本体の最初の member 位置から再開して弾くようになり、同じ物理行の C# property 本体からも後続 sibling 宣言の走査を継続できるようになった。これにより `public class C { public int A => 1; public int P { get; set; } }` のようなコンパクトな fixture でも phantom `property C` を作らず、`property A` と `property P` の両方を抽出できる。`SymbolExtractorTests` に回帰テストを追加。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`. Closes #472.
 
 ### [1.13.0] - 2026-04-21
 

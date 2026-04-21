@@ -1330,13 +1330,15 @@ public static class SymbolExtractor
                     }
 
                     var absoluteStartColumn = lineOffset + match.Index;
+                    var nextSameLineOffsetAfterRejectedCSharpProperty = -1;
                     if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, patternMatchLine, csharpSwitchExpressionLines, i)
-                        || ShouldSkipCSharpBracePropertyCandidate(
+                        || TrySkipCSharpBracePropertyCandidate(
                             lang,
                             pattern,
                             patternMatchLine,
                             absoluteStartColumn,
-                            match.Value.Contains("=>", StringComparison.Ordinal)))
+                            match.Value.Contains("=>", StringComparison.Ordinal),
+                            out nextSameLineOffsetAfterRejectedCSharpProperty))
                     {
                         // False-positive C# property matches can happen at the start of a
                         // same-line type header (`public class C { ... }`) because the
@@ -1350,10 +1352,12 @@ public static class SymbolExtractor
                         // `returnType + name + {` と誤認することがある。この偽候補を弾いた
                         // ときに同一行スキャン全体を break せず、次の brace 区切り宣言へ進めて
                         // 後続の本物 property にもマッチ機会を残す。Closes #470.
-                        lineOffset = FindNextSameLineBraceStatementStart(
-                            matchLine,
-                            absoluteStartColumn + Math.Max(1, match.Length),
-                            lang);
+                        lineOffset = nextSameLineOffsetAfterRejectedCSharpProperty >= 0
+                            ? nextSameLineOffsetAfterRejectedCSharpProperty
+                            : FindNextSameLineBraceStatementStart(
+                                matchLine,
+                                absoluteStartColumn + Math.Max(1, match.Length),
+                                lang);
                         continue;
                     }
 
@@ -9239,7 +9243,7 @@ public static class SymbolExtractor
 
     private static bool CanContinueScanningSameLineCSharpBraceBody(string kind)
     {
-        return kind is "namespace" or "class" or "struct" or "interface" or "enum";
+        return kind is "namespace" or "class" or "struct" or "interface" or "enum" or "property";
     }
 
     private static int FindCSharpSameLineBraceEndColumn(string line, int startColumn)
@@ -10845,13 +10849,15 @@ public static class SymbolExtractor
     // 式本体プロパティ（`Name => expr;`）も FindCSharpBraceRange で '=>' 本体範囲を
     // 取るため BodyStyle.Brace を使うが、match 行に `{ get|set|init` は来ないので
     // ここで弾くと式本体プロパティが全滅してしまう。Closes #233.
-    private static bool ShouldSkipCSharpBracePropertyCandidate(
+    private static bool TrySkipCSharpBracePropertyCandidate(
         string? lang,
         SymbolPattern pattern,
         string matchLine,
         int matchStartColumn,
-        bool matchedExpressionArrow)
+        bool matchedExpressionArrow,
+        out int nextSameLineOffset)
     {
+        nextSameLineOffset = -1;
         if (lang != "csharp"
             || pattern.Kind != "property"
             || pattern.BodyStyle != BodyStyle.Brace)
@@ -10864,21 +10870,34 @@ public static class SymbolExtractor
         if (matchStartColumn > matchLine.Length)
             matchStartColumn = matchLine.Length;
 
-        // Same-line type bodies reuse the full physical line as the candidate text, so the
-        // first `{` on the line can belong to the enclosing class / struct / interface
-        // rather than the matched property declaration. Anchor the guard to the actual match
-        // start so `{ get; set; }` inside `class C { int P { get; set; } }` is judged from
-        // the property's `{`, not the outer type's `{`. Only the regex match itself may
-        // bless an expression-bodied property; a later same-line `=>` from a method such as
-        // `public int M() => 1; public int P { get; set; }` must not keep an outer-type
-        // false positive alive. Closes #470.
-        // 同一行の型本体では物理行全体を候補文字列として再利用するため、行内最初の `{` が
-        // マッチ対象の property ではなく外側 class / struct / interface のものになりうる。
-        // ガードは実際のマッチ開始列から判定し、`class C { int P { get; set; } }` では
-        // 外側型の `{` ではなく property 自身の `{ get; set; }` を見て判断する。式本体
-        // property の許可判定も regex の実マッチ範囲だけで行い、同一行後半の method の
-        // `=>` で outer-type 偽陽性が生き残らないようにする。Closes #470.
+        // Same-line type headers can still false-positive as brace properties because the
+        // C# property regex accepts omitted visibility/modifier runs. Detect a real
+        // class/struct/interface/record header up front and restart from the first member
+        // inside that type body, rather than from the regex match tail. The regex tail can
+        // overrun into a later sibling expression-bodied property (`A => 1`) or brace-body
+        // property (`P { get; set; }`), which would otherwise skip the real member that
+        // should be matched next. Closes #472.
+        // 同一行の型ヘッダは、visibility / modifier 省略を許す C# property regex により
+        // brace-property 偽陽性になりうる。ここでは実際の
+        // class/struct/interface/record ヘッダを先に検出し、regex マッチ末尾ではなく
+        // 型本体の最初の member 位置から再開する。regex 末尾基準だと後続の
+        // 式本体 property (`A => 1`) や brace-body property (`P { get; set; }`) まで
+        // 飛び越してしまい、次に取るべき本物の member をスキップしてしまう。Closes #472.
         var matchedDeclaration = matchLine[matchStartColumn..];
+        if (CSharpTypeBodyDeclarationMarker.IsMatch(matchedDeclaration))
+        {
+            var typeBodyOpenBrace = matchedDeclaration.IndexOf('{');
+            if (typeBodyOpenBrace >= 0)
+            {
+                nextSameLineOffset = FindNextSameLineBraceStatementStart(
+                    matchLine,
+                    matchStartColumn + typeBodyOpenBrace + 1,
+                    lang);
+            }
+
+            return true;
+        }
+
         return !matchedExpressionArrow
             && !HasCSharpPropertyAccessorStart(matchedDeclaration);
     }
