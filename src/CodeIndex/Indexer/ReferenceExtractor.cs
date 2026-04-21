@@ -251,6 +251,9 @@ public static class ReferenceExtractor
     private static readonly Regex CSharpForeachValueNameRegex = new(
         @"\bforeach\s*\(\s*(?:var|(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*))\s+(?<name>@?[A-Za-z_]\w*)\s+in\b",
         RegexOptions.Compiled);
+    private static readonly Regex CSharpQueryRangeValueNameRegex = new(
+        @"\b(?:from|join)\s+(?<name>@?[A-Za-z_]\w*)\s+in\b|\blet\s+(?<name>@?[A-Za-z_]\w*)\s*=|\binto\s+(?<name>@?[A-Za-z_]\w*)\b",
+        RegexOptions.Compiled);
     // Java access/method modifier set used by the same-line ctor scanner.
     // same-line ctor 本体のスキャナで使うアクセス / メソッド修飾子一覧。
     private static readonly HashSet<string> JavaCtorModifiers = new(StringComparer.Ordinal)
@@ -1191,13 +1194,21 @@ public static class ReferenceExtractor
     private static bool IsCSharpIdentifierStart(char c) =>
         c == '_' || c == '@' || char.IsLetter(c);
 
-    private sealed record CSharpUsingAliasRecord(string AliasName, string TargetQualifiedName, int Line);
+    private sealed record CSharpUsingAliasRecord(string AliasName, string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
 
     private static List<CSharpUsingAliasRecord> BuildCSharpUsingAliases(string language, IReadOnlyList<SymbolRecord> symbols)
     {
         var aliases = new List<CSharpUsingAliasRecord>();
         if (language != "csharp")
             return aliases;
+
+        var namespaceScopes = symbols
+            .Where(symbol => symbol.Kind == "namespace")
+            .Select(symbol => (
+                StartLine: symbol.BodyStartLine ?? symbol.StartLine,
+                EndLine: symbol.BodyEndLine ?? symbol.EndLine))
+            .Where(scope => scope.StartLine > 0 && scope.EndLine >= scope.StartLine)
+            .ToList();
 
         foreach (var symbol in symbols)
         {
@@ -1213,7 +1224,24 @@ public static class ReferenceExtractor
             if (string.IsNullOrWhiteSpace(alias) || string.IsNullOrWhiteSpace(target))
                 continue;
 
-            aliases.Add(new CSharpUsingAliasRecord(alias, target, symbol.Line));
+            var scopeStartLine = 1;
+            var scopeEndLine = int.MaxValue;
+            var scopeWidth = int.MaxValue;
+            foreach (var (startLine, endLine) in namespaceScopes)
+            {
+                if (symbol.Line < startLine || symbol.Line > endLine)
+                    continue;
+
+                var width = endLine - startLine;
+                if (width > scopeWidth)
+                    continue;
+
+                scopeStartLine = startLine;
+                scopeEndLine = endLine;
+                scopeWidth = width;
+            }
+
+            aliases.Add(new CSharpUsingAliasRecord(alias, target, symbol.Line, scopeStartLine, scopeEndLine));
         }
 
         aliases.Sort(static (left, right) => left.Line.CompareTo(right.Line));
@@ -1273,6 +1301,8 @@ public static class ReferenceExtractor
                     foreach (Match match in CSharpLocalValueNameRegex.Matches(structuralLines[i]))
                         names.Add(NormalizeCSharpIdentifier(match.Groups["name"].Value));
                     foreach (Match match in CSharpForeachValueNameRegex.Matches(structuralLines[i]))
+                        names.Add(NormalizeCSharpIdentifier(match.Groups["name"].Value));
+                    foreach (Match match in CSharpQueryRangeValueNameRegex.Matches(structuralLines[i]))
                         names.Add(NormalizeCSharpIdentifier(match.Groups["name"].Value));
                 }
             }
@@ -1368,6 +1398,8 @@ public static class ReferenceExtractor
             var callContainer = resolveContainerForCall(member.Start);
             var qualifier = TrimLeadingCSharpGlobalQualifier(NormalizeCSharpQualifiedSegments(preparedLine, parsed.Segments, parsed.Segments.Count - 1));
             var resolvedQualifier = ResolveCSharpQualifiedAliasTarget(qualifier, lineNumber, usingAliases);
+            if (HasCSharpLambdaValueReceiverConflict(preparedLine, qualifier, member.Start))
+                continue;
             if (HasCSharpValueReceiverConflict(qualifier, resolvedQualifier, callContainer, valueReceiverNamesByContainingType, valueReceiverNamesByFunctionStartLine))
                 continue;
             if (!MatchesQualifiedEnumType(resolvedQualifier, targets))
@@ -1519,6 +1551,8 @@ public static class ReferenceExtractor
             var alias = usingAliases[i];
             if (alias.Line > lineNumber)
                 continue;
+            if (lineNumber < alias.ScopeStartLine || lineNumber > alias.ScopeEndLine)
+                continue;
             if (!string.Equals(alias.AliasName, firstSegment, StringComparison.Ordinal))
                 continue;
 
@@ -1562,6 +1596,73 @@ public static class ReferenceExtractor
             && names.Contains(qualifier);
     }
 
+    private static bool HasCSharpLambdaValueReceiverConflict(string preparedLine, string qualifier, int memberStart)
+    {
+        if (string.IsNullOrWhiteSpace(qualifier) || qualifier.Contains('.'))
+            return false;
+
+        var searchIndex = 0;
+        while (searchIndex < memberStart)
+        {
+            var arrowIndex = preparedLine.IndexOf("=>", searchIndex, StringComparison.Ordinal);
+            if (arrowIndex < 0 || arrowIndex >= memberStart)
+                break;
+            if (LambdaParameterListContains(preparedLine, arrowIndex, qualifier))
+                return true;
+            searchIndex = arrowIndex + 2;
+        }
+
+        return false;
+    }
+
+    private static bool LambdaParameterListContains(string preparedLine, int arrowIndex, string qualifier)
+    {
+        var leftIndex = SkipWhitespaceBackward(preparedLine, arrowIndex - 1);
+        if (leftIndex < 0)
+            return false;
+
+        if (preparedLine[leftIndex] == ')')
+        {
+            if (!TryFindMatchingOpenParen(preparedLine, leftIndex, out var openParenIndex))
+                return false;
+
+            var parameters = preparedLine[(openParenIndex + 1)..leftIndex];
+            foreach (var segment in SplitTopLevelCSharpParameterSegments(parameters))
+            {
+                if (TryExtractTrailingCSharpParameterName(segment, out var parameterName)
+                    && string.Equals(parameterName, qualifier, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        var identifierEnd = leftIndex + 1;
+        var identifierStart = leftIndex;
+        while (identifierStart >= 0 && IsCSharpIdentifierPart(preparedLine[identifierStart]))
+            identifierStart--;
+        identifierStart++;
+        if (identifierStart >= identifierEnd || !IsCSharpIdentifierStart(preparedLine[identifierStart]))
+            return false;
+
+        var parameter = NormalizeCSharpIdentifier(preparedLine[identifierStart..identifierEnd]);
+        if (!string.Equals(parameter, qualifier, StringComparison.Ordinal))
+            return false;
+
+        var prefixIndex = SkipWhitespaceBackward(preparedLine, identifierStart - 1);
+        if (prefixIndex < 0)
+            return false;
+
+        var prefixChar = preparedLine[prefixIndex];
+        if (prefixChar is '=' or '(' or ',' or ':')
+            return true;
+
+        return TryReadPreviousIdentifierToken(preparedLine, prefixIndex, out var previousToken)
+            && string.Equals(previousToken, "return", StringComparison.Ordinal);
+    }
+
     private static string? GetContainingTypeQualifiedName(SymbolRecord? symbol)
     {
         if (symbol == null)
@@ -1596,21 +1697,8 @@ public static class ReferenceExtractor
         var parameters = signature[(openParen + 1)..closeParen];
         foreach (var segment in SplitTopLevelCSharpParameterSegments(parameters))
         {
-            var trimmed = segment.Trim();
-            if (trimmed.Length == 0 || trimmed == "this")
-                continue;
-
-            var end = trimmed.Length - 1;
-            while (end >= 0 && char.IsWhiteSpace(trimmed[end]))
-                end--;
-            while (end >= 0 && (trimmed[end] == '?' || trimmed[end] == '!'))
-                end--;
-            var start = end;
-            while (start >= 0 && IsCSharpIdentifierPart(trimmed[start]))
-                start--;
-
-            if (end >= 0 && start < end)
-                names.Add(NormalizeCSharpIdentifier(trimmed[(start + 1)..(end + 1)]));
+            if (TryExtractTrailingCSharpParameterName(segment, out var name))
+                names.Add(name);
         }
     }
 
@@ -1670,6 +1758,79 @@ public static class ReferenceExtractor
             segments.Add(parameters[segmentStart..]);
 
         return segments;
+    }
+
+    private static bool TryExtractTrailingCSharpParameterName(string segment, out string name)
+    {
+        name = string.Empty;
+        var trimmed = segment.Trim();
+        if (trimmed.Length == 0 || trimmed == "this")
+            return false;
+
+        var end = trimmed.Length - 1;
+        while (end >= 0 && char.IsWhiteSpace(trimmed[end]))
+            end--;
+        while (end >= 0 && (trimmed[end] == '?' || trimmed[end] == '!'))
+            end--;
+        var start = end;
+        while (start >= 0 && IsCSharpIdentifierPart(trimmed[start]))
+            start--;
+        if (end < 0 || start >= end)
+            return false;
+
+        name = NormalizeCSharpIdentifier(trimmed[(start + 1)..(end + 1)]);
+        return !string.IsNullOrWhiteSpace(name);
+    }
+
+    private static int SkipWhitespaceBackward(string text, int index)
+    {
+        while (index >= 0 && char.IsWhiteSpace(text[index]))
+            index--;
+        return index;
+    }
+
+    private static bool TryFindMatchingOpenParen(string text, int closeParenIndex, out int openParenIndex)
+    {
+        openParenIndex = -1;
+        var depth = 0;
+        for (var i = closeParenIndex; i >= 0; i--)
+        {
+            if (text[i] == ')')
+            {
+                depth++;
+            }
+            else if (text[i] == '(')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    openParenIndex = i;
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryReadPreviousIdentifierToken(string text, int index, out string token)
+    {
+        token = string.Empty;
+        var end = index;
+        while (end >= 0 && !IsCSharpIdentifierPart(text[end]))
+            end--;
+        if (end < 0)
+            return false;
+
+        var start = end;
+        while (start >= 0 && IsCSharpIdentifierPart(text[start]))
+            start--;
+        start++;
+        if (start > end)
+            return false;
+
+        token = text[start..(end + 1)];
+        return token.Length > 0;
     }
 
     private static string GetFirstQualifiedSegment(string qualifiedName)

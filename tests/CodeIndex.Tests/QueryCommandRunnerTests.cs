@@ -8273,39 +8273,42 @@ public class QueryCommandRunnerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
                 """
-                namespace Demo;
-
-                public enum Status
+                namespace Demo
                 {
-                    Ready
-                }
-
-                public static class Values
-                {
-                    public static int Ready = 1;
-                }
-
-                namespace B;
-
-                using Alias = Demo.Values;
-
-                public class UsesValues
-                {
-                    public int Read()
+                    public enum Status
                     {
-                        return Alias.Ready;
+                        Ready
+                    }
+
+                    public static class Values
+                    {
+                        public static int Ready = 1;
                     }
                 }
 
-                namespace C;
-
-                using Alias = Demo.Status;
-
-                public class UsesEnum
+                namespace B
                 {
-                    public Status Read()
+                    using Alias = Demo.Values;
+
+                    public class UsesValues
                     {
-                        return Alias.Ready;
+                        public int Read()
+                        {
+                            return Alias.Ready;
+                        }
+                    }
+                }
+
+                namespace C
+                {
+                    using Alias = Demo.Status;
+
+                    public class UsesEnum
+                    {
+                        public Demo.Status Read()
+                        {
+                            return Alias.Ready;
+                        }
                     }
                 }
                 """);
@@ -8321,7 +8324,76 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("call", json.GetProperty("reference_kind").GetString());
-            Assert.Equal(33, json.GetProperty("line").GetInt32());
+            Assert.Equal(35, json.GetProperty("line").GetInt32());
+            Assert.Equal("Read", json.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_CSharpLaterSiblingAliasRebindingDoesNotStealEarlierEnumScope()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_alias_rebinding");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo
+                {
+                    public enum Status
+                    {
+                        Ready
+                    }
+
+                    public static class Values
+                    {
+                        public static int Ready = 1;
+                    }
+                }
+
+                namespace B
+                {
+                    using Alias = Demo.Status;
+
+                    public class UsesEnum
+                    {
+                        public Demo.Status Read()
+                        {
+                            return Alias.Ready;
+                        }
+                    }
+                }
+
+                namespace C
+                {
+                    using Alias = Demo.Values;
+
+                    public class UsesValues
+                    {
+                        public int Read()
+                        {
+                            return Alias.Ready;
+                        }
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal(22, json.GetProperty("line").GetInt32());
             Assert.Equal("Read", json.GetProperty("container_name").GetString());
         }
         finally
@@ -8358,6 +8430,114 @@ public class QueryCommandRunnerTests
                     public int Read()
                     {
                         return Status.Ready;
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Empty(json.GetProperty("references").EnumerateArray());
+            Assert.Empty(json.GetProperty("callers").EnumerateArray());
+            Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_ExactJson_CSharpLambdaParameterNamedLikeEnumDoesNotLeakReferenceContext()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_lambda_parameter_collision");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                using System;
+
+                namespace Demo;
+
+                public enum Status
+                {
+                    Ready
+                }
+
+                public sealed class Holder
+                {
+                    public int Ready { get; set; }
+                }
+
+                public sealed class Uses
+                {
+                    public Func<Holder, int> Build()
+                    {
+                        return Status => Status.Ready;
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Empty(json.GetProperty("references").EnumerateArray());
+            Assert.Empty(json.GetProperty("callers").EnumerateArray());
+            Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_ExactJson_CSharpQueryRangeVariableNamedLikeEnumDoesNotLeakReferenceContext()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_query_range_collision");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                using System.Collections.Generic;
+                using System.Linq;
+
+                namespace Demo;
+
+                public enum Status
+                {
+                    Ready
+                }
+
+                public sealed class Holder
+                {
+                    public int Ready { get; set; }
+                }
+
+                public sealed class Uses
+                {
+                    public IEnumerable<int> Read(IEnumerable<Holder> items)
+                    {
+                        return from Status in items
+                               select Status.Ready;
                     }
                 }
                 """);

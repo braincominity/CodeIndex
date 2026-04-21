@@ -970,39 +970,42 @@ public class ReferenceExtractorTests
     public void Extract_CsharpQualifiedEnumMemberAccess_WithRepeatedAliasNames_UsesNearestAliasScope()
     {
         const string content = """
-            namespace Demo;
-
-            public enum Status
+            namespace Demo
             {
-                Ready
-            }
-
-            public static class Values
-            {
-                public static int Ready = 1;
-            }
-
-            namespace B;
-
-            using Alias = Demo.Values;
-
-            public class UsesValues
-            {
-                public int Read()
+                public enum Status
                 {
-                    return Alias.Ready;
+                    Ready
+                }
+
+                public static class Values
+                {
+                    public static int Ready = 1;
                 }
             }
 
-            namespace C;
-
-            using Alias = Demo.Status;
-
-            public class UsesEnum
+            namespace B
             {
-                public Status Read()
+                using Alias = Demo.Values;
+
+                public class UsesValues
                 {
-                    return Alias.Ready;
+                    public int Read()
+                    {
+                        return Alias.Ready;
+                    }
+                }
+            }
+
+            namespace C
+            {
+                using Alias = Demo.Status;
+
+                public class UsesEnum
+                {
+                    public Demo.Status Read()
+                    {
+                        return Alias.Ready;
+                    }
                 }
             }
             """;
@@ -1012,7 +1015,60 @@ public class ReferenceExtractorTests
 
         var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
         var readyRef = Assert.Single(readyRefs);
-        Assert.Equal(33, readyRef.Line);
+        Assert.Equal(35, readyRef.Line);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithLaterSiblingAliasRebinding_DoesNotStealEarlierEnumScope()
+    {
+        const string content = """
+            namespace Demo
+            {
+                public enum Status
+                {
+                    Ready
+                }
+
+                public static class Values
+                {
+                    public static int Ready = 1;
+                }
+            }
+
+            namespace B
+            {
+                using Alias = Demo.Status;
+
+                public class UsesEnum
+                {
+                    public Demo.Status Read()
+                    {
+                        return Alias.Ready;
+                    }
+                }
+            }
+
+            namespace C
+            {
+                using Alias = Demo.Values;
+
+                public class UsesValues
+                {
+                    public int Read()
+                    {
+                        return Alias.Ready;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal(22, readyRef.Line);
         Assert.Equal("Read", readyRef.ContainerName);
     }
 
@@ -1039,6 +1095,74 @@ public class ReferenceExtractorTests
                 public int Read()
                 {
                     return Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithLambdaParameterNamedLikeEnum_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            using System;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Func<Holder, int> Build()
+                {
+                    return Status => Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryRangeVariableNamedLikeEnum_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    return from Status in items
+                           select Status.Ready;
                 }
             }
             """;
