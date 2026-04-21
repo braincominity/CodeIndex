@@ -9130,6 +9130,42 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_GenericSameLineSemicolonMembersKeepTerminator()
+    {
+        // The same-line semicolon-boundary fix for #473 must translate collapsed generic
+        // columns back to raw columns before slicing signatures, or spaces inside generic
+        // arguments make the extracted signature stop one character early and silently drop
+        // the terminating `;`. Lock event / interface-method / delegate shapes that all
+        // route through the semicolon-body path. Closes #473 review follow-up.
+        // #473 の same-line semicolon 境界 fix は、signature を切り出す前に collapsed
+        // generic 列を raw 列へ戻す必要がある。そうしないと generic 引数内の空白のぶんだけ
+        // signature が 1 文字短くなり、終端 `;` が無言で脱落する。semicolor-body 経路を
+        // 通る event / interface method / delegate の 3 形を固定する。Closes #473 review
+        // follow-up.
+        var content = string.Join(
+            "\n",
+            "public class C { public event System.Action<int, string> E; public int P { get; set; } }",
+            "public interface I { void M<T1, T2>(); int R { get; } }",
+            "public class Holder { public delegate void Inner<T1, T2>(); public int Q { get; set; } }");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var e = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E"));
+        Assert.Equal("public event System.Action<int, string> E;", e.Signature);
+        Assert.Equal("class", e.ContainerKind);
+        Assert.Equal("C", e.ContainerName);
+
+        var m = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "M"));
+        Assert.Equal("void M<T1, T2>();", m.Signature);
+        Assert.Equal("interface", m.ContainerKind);
+        Assert.Equal("I", m.ContainerName);
+
+        var inner = Assert.Single(symbols.Where(s => s.Kind == "delegate" && s.Name == "Inner"));
+        Assert.Equal("public delegate void Inner<T1, T2>();", inner.Signature);
+        Assert.Equal("class", inner.ContainerKind);
+        Assert.Equal("Holder", inner.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineMultipleFieldsAreAllCaptured()
     {
         // `public class Multi { public int A; public int B; public int C; }` must

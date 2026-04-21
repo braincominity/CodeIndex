@@ -1557,7 +1557,32 @@ public static class SymbolExtractor
                     }
                     else if (sameLineEndColumn >= absoluteStartColumn)
                     {
-                        signature = line[absoluteStartColumn..(sameLineEndColumn + 1)].Trim();
+                        if (lang == "csharp"
+                            && csharpMatchLines != null
+                            && ReferenceEquals(patternMatchLine, csharpMatchLines[i])
+                            && CanUseCSharpSameLineSemicolonEndColumn(kind))
+                        {
+                            var rawStart = TranslateCSharpCollapsedColumnToRaw(
+                                csharpMatchColumnToRaw,
+                                i,
+                                absoluteStartColumn,
+                                line.Length);
+                            var rawEndInclusive = TranslateCSharpCollapsedColumnToRaw(
+                                csharpMatchColumnToRaw,
+                                i,
+                                sameLineEndColumn,
+                                line.Length);
+                            var rawEndExclusive = Math.Min(rawEndInclusive + 1, line.Length);
+                            if (rawStart > line.Length)
+                                rawStart = line.Length;
+                            if (rawEndExclusive <= rawStart)
+                                rawEndExclusive = Math.Min(rawStart + Math.Max(1, match.Length), line.Length);
+                            signature = line[rawStart..rawEndExclusive].Trim();
+                        }
+                        else
+                        {
+                            signature = line[absoluteStartColumn..(sameLineEndColumn + 1)].Trim();
+                        }
                     }
                     else if (lang == "csharp"
                         && pattern.BodyStyle == BodyStyle.None
