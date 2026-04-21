@@ -11499,7 +11499,7 @@ public static class SymbolExtractor
             var typeBodyOpenBrace = matchedDeclaration.IndexOf('{');
             if (typeBodyOpenBrace >= 0)
             {
-                nextSameLineOffset = FindNextSameLineBraceStatementStart(
+                nextSameLineOffset = FindNextSameLineNonClosingBraceStatementStart(
                     matchLine,
                     matchStartColumn + typeBodyOpenBrace + 1,
                     lang);
