@@ -5618,6 +5618,79 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_WrappedExpressionBodiedProperty_Issue345Repro_ShapesAndControls_AreCaptured()
+    {
+        // issue #345: explicit regression coverage for expression-bodied properties whose
+        // `=>` moves to the next physical line, including attributed/static variants and
+        // a multi-line expression body. Indexers and methods with wrapped `=>` remain the
+        // expected control cases and must not be reclassified as properties.
+        // issue #345: `=>` が次の物理行へ送られた式本体プロパティの明示的な回帰テスト。
+        // attribute/static 付きや multi-line 式本体も含めて property として抽出しつつ、
+        // wrapped `=>` の indexer / method は従来どおり control case として残す。
+        var content = """
+            namespace WrappedArrowProp;
+
+            public class Svc
+            {
+                public int Same => 1;
+
+                public int Wrapped
+                    => 2;
+
+                [System.Obsolete]
+                public int WrappedAttr
+                    => 3;
+
+                public static int WrappedStatic
+                    => 4;
+
+                public int WrappedMulti
+                    => 1
+                     + 2;
+
+                public int this[int i]
+                    => i;
+
+                public int WrappedMethod()
+                    => 5;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Same");
+
+        var wrapped = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Wrapped"));
+        Assert.Equal(7, wrapped.StartLine);
+        Assert.Equal(8, wrapped.EndLine);
+        Assert.Equal(7, wrapped.BodyStartLine);
+        Assert.Equal(8, wrapped.BodyEndLine);
+
+        var wrappedAttr = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "WrappedAttr"));
+        Assert.Equal(11, wrappedAttr.StartLine);
+        Assert.Equal(12, wrappedAttr.EndLine);
+        Assert.Equal(11, wrappedAttr.BodyStartLine);
+        Assert.Equal(12, wrappedAttr.BodyEndLine);
+
+        var wrappedStatic = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "WrappedStatic"));
+        Assert.Equal(14, wrappedStatic.StartLine);
+        Assert.Equal(15, wrappedStatic.EndLine);
+        Assert.Equal(14, wrappedStatic.BodyStartLine);
+        Assert.Equal(15, wrappedStatic.BodyEndLine);
+        Assert.Equal("public", wrappedStatic.Visibility);
+
+        var wrappedMulti = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "WrappedMulti"));
+        Assert.Equal(17, wrappedMulti.StartLine);
+        Assert.Equal(19, wrappedMulti.EndLine);
+        Assert.Equal(17, wrappedMulti.BodyStartLine);
+        Assert.Equal(19, wrappedMulti.BodyEndLine);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Item");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "WrappedMethod");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Item");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "WrappedMethod");
+    }
+
+    [Fact]
     public void Extract_CSharp_AllmanBlockBodiedProperty_WithIntermediateBlockComment_IsExtracted()
     {
         // issue #233 fourth review follow-up: when an Allman-style block-bodied property
@@ -6632,6 +6705,70 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Name == "Name");
         Assert.DoesNotContain(symbols, s => s.Name == "Age");
         Assert.DoesNotContain(symbols, s => s.Name == "Email");
+    }
+
+    [Fact]
+    public void Extract_CSharp_Issue374_ObjectInitializerNumericAssignmentsDoNotCreatePhantomSymbols()
+    {
+        // Closes #374: the full issue repro uses both multiline and inline object initializers
+        // with numeric assignments like `Age = 30,` and `Priority = 2`. Those lines must not
+        // reappear as phantom enum-member symbols just because they share the old `Name = 1,`
+        // surface shape.
+        // Closes #374: issue 本文の再現ケースでは `Age = 30,` や `Priority = 2` のような
+        // 数値代入を含む multiline / inline object initializer が混在する。旧来の
+        // `Name = 1,` 形に見えても phantom enum-member symbol を再発させてはいけない。
+        var content = """
+            using System.Collections.Generic;
+
+            namespace CsObjInitPhantom;
+
+            public class Person
+            {
+                public string Name { get; set; } = "";
+                public int Age { get; set; }
+                public int Priority { get; set; }
+            }
+
+            public class Creator
+            {
+                public Person CreatePerson() => new Person
+                {
+                    Name = "Alice",
+                    Age = 30,
+                    Priority = 1
+                };
+
+                public List<Person> CreateMany() => new()
+                {
+                    new Person { Name = "Bob", Age = 25, Priority = 2 },
+                    new Person
+                    {
+                        Name = "Carol",
+                        Age = 45,
+                        Priority = 3
+                    }
+                };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var ageSymbols = symbols.Where(s => s.Name == "Age").ToList();
+        Assert.Single(ageSymbols);
+        Assert.Equal("property", ageSymbols[0].Kind);
+        Assert.Equal("Person", ageSymbols[0].ContainerName);
+
+        var prioritySymbols = symbols.Where(s => s.Name == "Priority").ToList();
+        Assert.Single(prioritySymbols);
+        Assert.Equal("property", prioritySymbols[0].Kind);
+        Assert.Equal("Person", prioritySymbols[0].ContainerName);
+
+        var nameSymbols = symbols.Where(s => s.Name == "Name").ToList();
+        Assert.Single(nameSymbols);
+        Assert.Equal("property", nameSymbols[0].Kind);
+        Assert.Equal("Person", nameSymbols[0].ContainerName);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "CreatePerson" && s.ContainerName == "Creator");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "CreateMany" && s.ContainerName == "Creator");
     }
 
     [Fact]
