@@ -2271,11 +2271,7 @@ public static class ReferenceExtractor
                         break;
                     case '}':
                         if (braceDepth > 0)
-                        {
                             braceDepth--;
-                            if (braceDepth == 0 && parenDepth == 0 && bracketDepth == 0)
-                                return new CSharpLineColumn(lineIndex + 1, column);
-                        }
                         break;
                     case ';':
                         if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
