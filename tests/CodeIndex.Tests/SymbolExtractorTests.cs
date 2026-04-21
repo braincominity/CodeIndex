@@ -2987,6 +2987,68 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_Issue363RawInterpolatedAndVerbatimStrings_DoNotLeakPhantomSymbols()
+    {
+        // Regression for issue #363 exact repro: code-shaped members inside C# raw,
+        // interpolated raw, and multi-line verbatim strings must not be indexed as
+        // real symbols. The current main branch already handles this correctly; this
+        // test locks the user-reported fixture in place so future refactors cannot
+        // silently reopen it.
+        // issue #363 の exact repro 回帰: C# の raw string / 補間付き raw string /
+        // 複数行 verbatim string 内のコード風メンバーを本物の symbol として
+        // index してはならない。現行 main では直っているため、このテストで
+        // ユーザー報告フィクスチャを固定し、将来の refactor での再発を防ぐ。
+        var content = """""
+            namespace CsRawStringPhantom;
+
+            public class Svc
+            {
+                public int RealMethod() => 0;
+
+                public string DocsExample() => """
+                    public void FakeMethod() { }
+                    public int FakeProp { get; set; }
+                    public class FakeClass { }
+                    public interface IFakeIface { }
+                    public delegate int FakeDel();
+                    public event System.EventHandler FakeEvent;
+                    public Foo() { }
+                    """;
+
+                public string VerbatimExample() => @"
+                    public void VerbatimFake() { }
+                ";
+
+                public string InterpExample() => $"""
+                    public void InterpFake() { }
+                    """;
+
+                public int AnotherReal() => 1;
+            }
+            """"";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "namespace" && symbol.Name == "CsRawStringPhantom");
+        Assert.Contains(symbols, symbol => symbol.Kind == "class" && symbol.Name == "Svc");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "RealMethod");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "DocsExample");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "VerbatimExample");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "InterpExample");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "AnotherReal");
+        Assert.Equal(7, symbols.Count);
+
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "FakeMethod");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "FakeProp");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "FakeClass");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "IFakeIface");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "FakeDel");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "FakeEvent");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "Foo");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "VerbatimFake");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "InterpFake");
+    }
+
+    [Fact]
     public void Extract_CSharp_CommentedTripleQuotesDoNotHideFollowingMembers()
     {
         var content = "public class FixtureHost\n{\n    // \"\"\" this is only a comment marker\n    public void Run() { }\n}";
