@@ -3133,7 +3133,7 @@ public static class ReferenceExtractor
                 if (char.IsWhiteSpace(current))
                     continue;
 
-                return current is '(' or ')' or ']' or '[' or '.' or ',' or ';' or '{' or ':'
+                return current is '(' or ')' or ']' or '[' or '.' or ',' or ';' or '{' or ':' or '?'
                     || IsCSharpIdentifierStart(current);
             }
         }

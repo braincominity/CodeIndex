@@ -2437,6 +2437,41 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithTerminalSelectGenericTypePatternWithoutDesignation_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public int Read(IEnumerable<Holder> items)
+                {
+                    return (from Status in items
+                            select Status is Dictionary<int, int> ? Status.Ready : 0).First();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryKeywordNamedLocalFunctionInSelectExpression_PreservesLaterEnumReference()
     {
         const string content = """
