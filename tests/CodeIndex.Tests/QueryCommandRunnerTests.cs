@@ -6874,7 +6874,55 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("Hook", json.GetProperty("caller_name").GetString());
             Assert.Equal("Changed", json.GetProperty("callee_name").GetString());
+            Assert.False(json.TryGetProperty("reference_kind", out _));
             Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallers_HumanOutput_ShowsReferenceKindPerRow()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callers_human_reference_kind");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/BaseWidget.cs", "csharp",
+                """
+                public class BaseWidget
+                {
+                    public BaseWidget() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/DerivedWidget.cs", "csharp",
+                """
+                public class DerivedWidget : BaseWidget
+                {
+                    public DerivedWidget() : base() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Factory.cs", "csharp",
+                """
+                public class Factory
+                {
+                    public BaseWidget Make() => new BaseWidget();
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["BaseWidget", "--db", dbPath, "--lang", "csharp", "--exact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("call         function   DerivedWidget", stdout);
+            Assert.Contains("src/DerivedWidget.cs:3  -> BaseWidget (1 refs)", stdout);
+            Assert.Contains("instantiate  function   Make", stdout);
+            Assert.Contains("src/Factory.cs:3  -> BaseWidget (1 refs)", stdout);
+            Assert.Contains("(2 callers in 2 files)", stderr);
         }
         finally
         {
