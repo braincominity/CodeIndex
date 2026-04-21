@@ -9314,6 +9314,105 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_CarriedBlockCommentLookalike_DoesNotEmitFakeNestedClass()
+    {
+        // When a C# line starts inside a carried `/* ... */` block comment, declaration-shaped
+        // comment text on that line must stay masked all the way through same-line brace-body
+        // extraction. Otherwise the later real `Child` can inherit the comment body's `Fake`
+        // signature or produce an extra phantom sibling.
+        // C# の行頭が前行から継続した `/* ... */` ブロックコメント内にある場合、その行にある
+        // 宣言風コメント文字列は same-line brace-body 抽出の最後までマスクされ続けなければならない。
+        // そうでないと、後続の本物 `Child` がコメント内 `Fake` の signature を引き継いだり、
+        // 余計な phantom sibling を出してしまう。Closes #567 / #572.
+        var content = """
+            namespace Demo;
+
+            public partial class Host
+            {
+                public partial class Wrapped<T>
+                    where T : class
+                {
+                    /*
+                    public partial class Fake { } */ public partial class Child { } }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
+        Assert.Equal("Wrapped", child.ContainerName);
+        Assert.Equal("class", child.ContainerKind);
+        Assert.Equal("public partial class Child { }", child.Signature);
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Fake");
+    }
+
+    [Fact]
+    public void Extract_CSharp_CarriedBlockCommentSameNameLookalike_EmitsOneRealNestedClass()
+    {
+        // The same carried-comment path must not emit a phantom nested `Child` when the comment
+        // body uses the same short name as the real declaration on that line. Pin the single-real-
+        // declaration case so `AssignContainers` never sees a bogus self-nested `Child`.
+        // 同じ継続コメント経路では、コメント本文が実宣言と同じ短名 `Child` を使っていても
+        // phantom な nested `Child` を出してはならない。実宣言が 1 つだけのケースを固定し、
+        // `AssignContainers` が自分自身を親にする偽 `Child` を見ることがないようにする。
+        // Closes #567 / #572.
+        var content = """
+            namespace Demo;
+
+            public partial class Host
+            {
+                public partial class Wrapped<T>
+                    where T : class
+                {
+                    /*
+                    public partial class Child { } */ public partial class Child { } }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
+        Assert.Equal("Wrapped", child.ContainerName);
+        Assert.Equal("class", child.ContainerKind);
+        Assert.Equal("public partial class Child { }", child.Signature);
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Child" && s.ContainerName == "Child");
+    }
+
+    [Fact]
+    public void Extract_CSharp_CarriedBlockCommentSameNameLookalike_KeepsOnlyRealSiblings()
+    {
+        // If the real nested `Child` is followed by an outer same-line sibling, the carried block
+        // comment must not consume an occurrence slot or expose a third phantom `Child`. Only the
+        // nested real symbol and the outer real sibling should remain.
+        // 実際の nested `Child` の後ろに outer same-line sibling が続く場合でも、継続 block
+        // comment が occurrence slot を食ったり 3 個目の phantom `Child` を出してはならない。
+        // 残るのは nested 側の実シンボルと outer 側の実 sibling だけであるべき。Closes #567 / #572.
+        var content = """
+            namespace Demo;
+
+            public partial class Host
+            {
+                public partial class Wrapped<T>
+                    where T : class
+                {
+                    /*
+                    public partial class Child { } */ public partial class Child { } } public partial class Child { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var children = symbols.Where(s => s.Kind == "class" && s.Name == "Child").ToList();
+        Assert.Equal(2, children.Count);
+        Assert.Contains(children, child =>
+            child.ContainerKind == "class"
+            && child.ContainerName == "Wrapped"
+            && child.Signature == "public partial class Child { }");
+        Assert.Contains(children, child =>
+            child.ContainerKind == "class"
+            && child.ContainerName == "Host"
+            && child.Signature == "public partial class Child { }");
+        Assert.DoesNotContain(children, child => child.ContainerName == "Child");
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineGenericBraceBodiedMembersStillExposeLaterCompactSiblings()
     {
         // After the #525 raw-column brace clamp, same-line generic brace-bodied
