@@ -9118,6 +9118,34 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_SameLineEventBeforeMethodIsCaptured()
+    {
+        // Mixed-kind same-line siblings must also preserve an earlier event when a later
+        // method shares the same physical line. Without a C#-specific defer/restart path,
+        // the method regex can claim the later sibling before the event row ever runs and
+        // silently drop `event E`.
+        // Closes #473 follow-up.
+        // 同一行の mixed-kind sibling では、後続 method が同じ物理行にある場合でも
+        // 手前の event を落としてはならない。C# 専用の defer/restart 経路が無いと、
+        // method regex が先に後続 sibling を取って `event E` が無言で欠落する。
+        // Closes #473 follow-up.
+        var content = "public class C { public event System.EventHandler E; public void M() { } }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "C"));
+
+        var eventSymbol = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E"));
+        Assert.Equal("class", eventSymbol.ContainerKind);
+        Assert.Equal("C", eventSymbol.ContainerName);
+        Assert.Equal("public event System.EventHandler E;", eventSymbol.Signature);
+
+        var method = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "M"));
+        Assert.Equal("class", method.ContainerKind);
+        Assert.Equal("C", method.ContainerName);
+        Assert.Equal("public void M() { }", method.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineAutoPropertyAfterConstructorsIsCaptured()
     {
         // Same-line C# constructors must not stop later sibling declarations from

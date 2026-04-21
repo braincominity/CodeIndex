@@ -244,6 +244,9 @@ public static class SymbolExtractor
     private static readonly Regex CSharpSameLinePropertyStatementStartRegex = new(
         $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?:ref(?:\s+readonly)?)\s+)?(?:{CSharpTypePattern})\s+(?:{CSharpExplicitInterfaceQualifierPattern}\.)?\w+\s*(?:\{{|=>\s*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpSameLineEventOrDelegateStatementStartRegex = new(
+        $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern|virtual|override|abstract|sealed|new|partial|file)\s+)*(?:event\s+(?:{CSharpTypePattern})\s+\w+\s*(?:[;=]|\{{)|delegate\s+(?:{CSharpTypePattern})\s+\w+\s*[\(<])",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly HashSet<string> JavaScriptTypeScriptControlFlowHeaderKeywords =
     [
@@ -1758,6 +1761,15 @@ public static class SymbolExtractor
                         && csharpPropertyCandidate.ExpressionBodyEndLineIndex.HasValue)
                     {
                         csharpSuppressedContinuationUntil = Math.Max(csharpSuppressedContinuationUntil, csharpPropertyCandidate.ExpressionBodyEndLineIndex.Value);
+                    }
+
+                    if (lang == "csharp"
+                        && pattern.Kind is "event" or "delegate"
+                        && pattern.BodyStyle == BodyStyle.None
+                        && TryGetCSharpSameLineSemicolonSiblingOffset(patternMatchLine, absoluteStartColumn, out var nextSemicolonSiblingOffset))
+                    {
+                        restartPatternScanOffset = nextSemicolonSiblingOffset;
+                        break;
                     }
 
                     CollectRecordPrimaryComponentSymbols(
@@ -9858,7 +9870,8 @@ public static class SymbolExtractor
 
         var remaining = matchLine[startColumn..];
         return !CSharpTypeBodyDeclarationMarker.IsMatch(remaining)
-            && CSharpSameLinePropertyStatementStartRegex.IsMatch(remaining);
+            && (CSharpSameLinePropertyStatementStartRegex.IsMatch(remaining)
+                || CSharpSameLineEventOrDelegateStatementStartRegex.IsMatch(remaining));
     }
 
     private static bool ShouldDeferCSharpBracePropertySameLineAdvance(string matchLine, int startColumn)
@@ -9870,6 +9883,28 @@ public static class SymbolExtractor
         return !CSharpTypeBodyDeclarationMarker.IsMatch(remaining)
             && !HasCSharpPropertyAccessorStart(remaining)
             && CSharpSameLinePropertyStatementStartRegex.IsMatch(remaining);
+    }
+
+    private static bool TryGetCSharpSameLineSemicolonSiblingOffset(string matchLine, int startColumn, out int nextSameLineOffset)
+    {
+        nextSameLineOffset = -1;
+        if (startColumn < 0 || startColumn >= matchLine.Length)
+            return false;
+
+        var statementEnd = FindCSharpPlainFieldStatementEnd(matchLine, startColumn);
+        if (statementEnd <= startColumn)
+            return false;
+
+        var nextOffset = FindNextSameLineBraceStatementStart(matchLine, statementEnd, "csharp");
+        if (nextOffset <= statementEnd
+            || nextOffset >= matchLine.Length
+            || matchLine[nextOffset] == '}')
+        {
+            return false;
+        }
+
+        nextSameLineOffset = nextOffset;
+        return true;
     }
 
     private static bool HasCSharpTopLevelFieldInitializer(string text)
