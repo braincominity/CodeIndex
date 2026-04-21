@@ -245,6 +245,12 @@ public static class ReferenceExtractor
     private static readonly Regex CSharpUsingAliasRegex = new(
         @"^\s*(?:global\s+)?using\s+(?!static\b)(?<alias>@?[A-Za-z_]\w*)\s*=\s*(?<target>[^;]+)",
         RegexOptions.Compiled);
+    private static readonly Regex CSharpLocalValueNameRegex = new(
+        @"(?:^|[;{}]\s*)(?:(?:(?:await\s+)?using\s+var)|var|(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*))\s+(?<name>@?[A-Za-z_]\w*)\s*(?==|;|,)",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpForeachValueNameRegex = new(
+        @"\bforeach\s*\(\s*(?:var|(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*))\s+(?<name>@?[A-Za-z_]\w*)\s+in\b",
+        RegexOptions.Compiled);
     // Java access/method modifier set used by the same-line ctor scanner.
     // same-line ctor 本体のスキャナで使うアクセス / メソッド修飾子一覧。
     private static readonly HashSet<string> JavaCtorModifiers = new(StringComparer.Ordinal)
@@ -506,6 +512,7 @@ public static class ReferenceExtractor
         var csharpQualifiedEnumMemberLookup = BuildCSharpQualifiedEnumMemberLookup(language, symbols);
         var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols);
         var csharpValueReceiverNames = BuildCSharpValueReceiverNamesByContainingType(language, symbols);
+        var csharpFunctionValueReceiverNames = BuildCSharpValueReceiverNamesByFunctionStartLine(language, symbols, structuralLines);
 
         var references = new List<ReferenceRecord>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -882,6 +889,7 @@ public static class ReferenceExtractor
                     csharpAttrRangesOnLine,
                     csharpUsingAliases,
                     csharpValueReceiverNames,
+                    csharpFunctionValueReceiverNames,
                     references,
                     seen,
                     fileId,
@@ -1239,6 +1247,43 @@ public static class ReferenceExtractor
         return lookup;
     }
 
+    private static Dictionary<int, HashSet<string>> BuildCSharpValueReceiverNamesByFunctionStartLine(
+        string language,
+        IReadOnlyList<SymbolRecord> symbols,
+        IReadOnlyList<string> structuralLines)
+    {
+        var lookup = new Dictionary<int, HashSet<string>>();
+        if (language != "csharp")
+            return lookup;
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "function" || symbol.StartLine <= 0)
+                continue;
+
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            AddCSharpParameterNames(names, symbol.Signature);
+
+            if (symbol.BodyStartLine != null && symbol.BodyEndLine != null)
+            {
+                var start = Math.Max(symbol.BodyStartLine.Value - 1, 0);
+                var end = Math.Min(symbol.BodyEndLine.Value - 1, structuralLines.Count - 1);
+                for (var i = start; i <= end; i++)
+                {
+                    foreach (Match match in CSharpLocalValueNameRegex.Matches(structuralLines[i]))
+                        names.Add(NormalizeCSharpIdentifier(match.Groups["name"].Value));
+                    foreach (Match match in CSharpForeachValueNameRegex.Matches(structuralLines[i]))
+                        names.Add(NormalizeCSharpIdentifier(match.Groups["name"].Value));
+                }
+            }
+
+            if (names.Count > 0)
+                lookup[symbol.StartLine] = names;
+        }
+
+        return lookup;
+    }
+
     private static Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> BuildCSharpQualifiedEnumMemberLookup(
         string language,
         IReadOnlyList<SymbolRecord> symbols)
@@ -1294,6 +1339,7 @@ public static class ReferenceExtractor
         IReadOnlyList<(int start, int end)>? csharpAttrRangesOnLine,
         IReadOnlyList<CSharpUsingAliasRecord> usingAliases,
         IReadOnlyDictionary<string, HashSet<string>> valueReceiverNamesByContainingType,
+        IReadOnlyDictionary<int, HashSet<string>> valueReceiverNamesByFunctionStartLine,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -1322,7 +1368,7 @@ public static class ReferenceExtractor
             var callContainer = resolveContainerForCall(member.Start);
             var qualifier = NormalizeCSharpQualifiedSegments(preparedLine, parsed.Segments, parsed.Segments.Count - 1);
             var resolvedQualifier = ResolveCSharpQualifiedAliasTarget(qualifier, lineNumber, usingAliases);
-            if (HasCSharpValueReceiverConflict(qualifier, resolvedQualifier, callContainer, valueReceiverNamesByContainingType))
+            if (HasCSharpValueReceiverConflict(qualifier, resolvedQualifier, callContainer, valueReceiverNamesByContainingType, valueReceiverNamesByFunctionStartLine))
                 continue;
             if (!MatchesQualifiedEnumType(resolvedQualifier, targets))
                 continue;
@@ -1487,12 +1533,23 @@ public static class ReferenceExtractor
         string qualifier,
         string resolvedQualifier,
         SymbolRecord? callContainer,
-        IReadOnlyDictionary<string, HashSet<string>> valueReceiverNamesByContainingType)
+        IReadOnlyDictionary<string, HashSet<string>> valueReceiverNamesByContainingType,
+        IReadOnlyDictionary<int, HashSet<string>> valueReceiverNamesByFunctionStartLine)
     {
-        if (string.IsNullOrWhiteSpace(qualifier) || qualifier.Contains('.') || valueReceiverNamesByContainingType.Count == 0)
+        if (string.IsNullOrWhiteSpace(qualifier)
+            || qualifier.Contains('.')
+            || (valueReceiverNamesByContainingType.Count == 0 && valueReceiverNamesByFunctionStartLine.Count == 0))
             return false;
         if (!string.Equals(qualifier, resolvedQualifier, StringComparison.Ordinal))
             return false;
+
+        if (callContainer != null
+            && callContainer.Kind == "function"
+            && valueReceiverNamesByFunctionStartLine.TryGetValue(callContainer.StartLine, out var functionNames)
+            && functionNames.Contains(qualifier))
+        {
+            return true;
+        }
 
         var containingType = GetContainingTypeQualifiedName(callContainer);
         return containingType != null
@@ -1519,6 +1576,95 @@ public static class ReferenceExtractor
         if (string.IsNullOrWhiteSpace(parentQualifiedName))
             return name;
         return $"{parentQualifiedName}.{name}";
+    }
+
+    private static void AddCSharpParameterNames(HashSet<string> names, string? signature)
+    {
+        if (string.IsNullOrWhiteSpace(signature))
+            return;
+
+        var openParen = signature.IndexOf('(');
+        var closeParen = signature.LastIndexOf(')');
+        if (openParen < 0 || closeParen <= openParen)
+            return;
+
+        var parameters = signature[(openParen + 1)..closeParen];
+        foreach (var segment in SplitTopLevelCSharpParameterSegments(parameters))
+        {
+            var trimmed = segment.Trim();
+            if (trimmed.Length == 0 || trimmed == "this")
+                continue;
+
+            var end = trimmed.Length - 1;
+            while (end >= 0 && char.IsWhiteSpace(trimmed[end]))
+                end--;
+            while (end >= 0 && (trimmed[end] == '?' || trimmed[end] == '!'))
+                end--;
+            var start = end;
+            while (start >= 0 && IsCSharpIdentifierPart(trimmed[start]))
+                start--;
+
+            if (end >= 0 && start < end)
+                names.Add(NormalizeCSharpIdentifier(trimmed[(start + 1)..(end + 1)]));
+        }
+    }
+
+    private static List<string> SplitTopLevelCSharpParameterSegments(string parameters)
+    {
+        var segments = new List<string>();
+        var depthAngle = 0;
+        var depthParen = 0;
+        var depthBracket = 0;
+        var depthBrace = 0;
+        var segmentStart = 0;
+
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            var ch = parameters[i];
+            switch (ch)
+            {
+                case '<':
+                    depthAngle++;
+                    break;
+                case '>':
+                    if (depthAngle > 0)
+                        depthAngle--;
+                    break;
+                case '(':
+                    depthParen++;
+                    break;
+                case ')':
+                    if (depthParen > 0)
+                        depthParen--;
+                    break;
+                case '[':
+                    depthBracket++;
+                    break;
+                case ']':
+                    if (depthBracket > 0)
+                        depthBracket--;
+                    break;
+                case '{':
+                    depthBrace++;
+                    break;
+                case '}':
+                    if (depthBrace > 0)
+                        depthBrace--;
+                    break;
+                case ',':
+                    if (depthAngle == 0 && depthParen == 0 && depthBracket == 0 && depthBrace == 0)
+                    {
+                        segments.Add(parameters[segmentStart..i]);
+                        segmentStart = i + 1;
+                    }
+                    break;
+            }
+        }
+
+        if (segmentStart <= parameters.Length)
+            segments.Add(parameters[segmentStart..]);
+
+        return segments;
     }
 
     private static string GetFirstQualifiedSegment(string qualifiedName)
