@@ -9740,6 +9740,77 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_InlineBlockCommentBeforeSameLineClassDoesNotPolluteSignature()
+    {
+        // Inline block comments that end immediately before a real same-line declaration must
+        // not leak into the emitted signature text. The real symbol should keep only the
+        // canonical declaration slice. Closes #578.
+        // same-line の実宣言直前で閉じる inline block comment は、出力 signature に
+        // 混入してはならない。実在 symbol には正規の宣言部分だけを残す。Closes #578.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        /* public partial class Child { } */ public partial class Child { }",
+            "    }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
+        Assert.Equal("Wrapped", child.ContainerName);
+        Assert.Equal("public partial class Child { }", child.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_InlineBlockCommentBeforeSameLinePropertyDoesNotPolluteSignature()
+    {
+        // Property signatures must also clamp from the declaration token after an inline
+        // block comment, not from the comment prefix. Closes #578.
+        // property の signature も inline block comment の先頭ではなく、その後ろの
+        // 実宣言トークンから切り出さなければならない。Closes #578.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public class C",
+            "{",
+            "    /* public int P { get; } */ public int P { get; }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("C", property.ContainerName);
+        Assert.Equal("public int P { get; }", property.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_InlineBlockCommentBeforeSameLineMethodDoesNotPolluteSignature()
+    {
+        // Method signatures must ignore inline block-comment lookalikes that appear on the
+        // same physical line before the real declaration. Closes #578.
+        // method の signature も、同一物理行で実宣言より前にある inline block comment
+        // 由来の見かけ上の宣言を無視しなければならない。Closes #578.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public class C",
+            "{",
+            "    /* public void M() { } */ public void M() { }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var method = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "M"));
+        Assert.Equal("C", method.ContainerName);
+        Assert.Equal("public void M() { }", method.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_MultilineCommentCloseLineDoesNotEmitPhantomSameLineClass()
     {
         // A multiline block comment that closes immediately before a real same-line class
