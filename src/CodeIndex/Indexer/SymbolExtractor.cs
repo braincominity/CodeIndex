@@ -13970,14 +13970,30 @@ public static class SymbolExtractor
         }
 
         var lexState = new CSharpLexState();
+        var depth = 0;
         var endLineIndex = container.EndLine - 1;
         for (var lineIndex = container.BodyStartLine.Value - 1; lineIndex < endLineIndex; lineIndex++)
         {
-            lexState = LexCSharpLine(rawLines[lineIndex], lexState).EndState;
+            var lineResult = LexCSharpLine(rawLines[lineIndex], lexState);
+            lexState = lineResult.EndState;
+
+            foreach (var ch in lineResult.SanitizedLine)
+            {
+                if (ch == '{')
+                {
+                    depth++;
+                }
+                else if (ch == '}')
+                {
+                    depth--;
+                }
+            }
         }
 
         var sanitizedLine = LexCSharpLine(rawLines[endLineIndex], lexState).SanitizedLine;
-        var depth = 1;
+        if (depth <= 0)
+            return -1;
+
         for (var i = 0; i < sanitizedLine.Length; i++)
         {
             var ch = sanitizedLine[i];

@@ -9725,6 +9725,41 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_ClosingBraceLineKeepsInnerMemberAfterInnerMethodClosesSameLine()
+    {
+        // Wrapped closing-brace-line recovery must carry forward the unmatched brace depth
+        // that is already open at the start of the end line. Otherwise the first `}` on the
+        // line is mistaken for the wrapped type's close and later inner members fall out to
+        // the outer type. Closes #575.
+        // wrapped closing-brace-line の復元では、end line 開始時点ですでに開いている
+        // unmatched brace depth を引き継がなければならない。そうしないと行頭側の
+        // 最初の `}` を wrapped type 自身の閉じ括弧と誤認し、後続 inner member が
+        // outer type 側へこぼれる。Closes #575.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        public void M()",
+            "        {",
+            "        } public int P { get; } } public int Q { get; }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrappedProperty = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("class", wrappedProperty.ContainerKind);
+        Assert.Equal("Wrapped", wrappedProperty.ContainerName);
+
+        var hostProperty = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Q"));
+        Assert.Equal("class", hostProperty.ContainerKind);
+        Assert.Equal("Host", hostProperty.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineMultipleFieldsAreAllCaptured()
     {
         // `public class Multi { public int A; public int B; public int C; }` must
