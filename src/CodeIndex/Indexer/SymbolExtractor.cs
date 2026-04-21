@@ -13679,7 +13679,6 @@ public static class SymbolExtractor
             return null;
 
         var names = containers
-            .Reverse()
             .Select(container => container.Name)
             .Where(name => !string.IsNullOrWhiteSpace(name))
             .Append(symbol.Name)
