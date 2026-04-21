@@ -3054,12 +3054,9 @@ public static class ReferenceExtractor
                         angleDepth++;
                         break;
                     case '>':
-                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
-                        {
-                            angleDepth--;
-                            if (angleDepth == 0)
-                                return HasCSharpQueryGenericSuffix(structuralLines, bodyEndIndex, lineIndex, column + 1);
-                        }
+                        angleDepth--;
+                        if (angleDepth == 0)
+                            return HasCSharpQueryGenericSuffix(structuralLines, bodyEndIndex, lineIndex, column + 1);
                         break;
                     case '(':
                         parenDepth++;
