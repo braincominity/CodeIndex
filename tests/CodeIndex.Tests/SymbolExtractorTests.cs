@@ -9485,6 +9485,339 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_WrappedNestedClassMembersStayAttachedToNestedContainer()
+    {
+        // The #525 wrapped-header signature fix must not evict a same-line nested type
+        // from later container assignment. In the regression from #535, `Wrapped` kept
+        // its corrected multi-line header signature, but the later property `P` attached
+        // to the outer `Host` class after same-line siblings popped `Wrapped` out of the
+        // active container stack too early. Pin the exact issue fixture so both the
+        // signature fix and the nested-container attachment stay true together. Closes #535.
+        // #525 の wrapped-header signature fix は、同一行にいる nested type を後続 member の
+        // container 判定から追い出してはならない。#535 の回帰では `Wrapped` の multi-line
+        // header 自体は正しくなった一方で、同一行 sibling を処理した時点で active container
+        // stack から `Wrapped` が早く落ち、後続 property `P` が outer `Host` に付いていた。
+        // issue の fixture そのものを固定し、signature 修正と nested-container 付与が同時に
+        // 崩れないようにする。Closes #535.
+        var content = string.Join(
+            "\n",
+            "namespace ReviewFixtures;",
+            "",
+            "public class Host",
+            "{",
+            "    public void M<T1, T2>() { } public event System.Action<int, string>? E; public class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        public int P { get; }",
+            "    }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrapped = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Wrapped"));
+        Assert.Equal("public class Wrapped<T> where T : class", wrapped.Signature);
+        Assert.Equal("class", wrapped.ContainerKind);
+        Assert.Equal("Host", wrapped.ContainerName);
+
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("public int P { get; }", property.Signature);
+        Assert.Equal("class", property.ContainerKind);
+        Assert.Equal("Wrapped", property.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedNestedPartialTypesKeepRootToLeafFamilyKeys()
+    {
+        // The #535 container-path fix changes `BuildSelfFamilyKey` to receive a root-to-leaf
+        // effective container path. If the old `Reverse()` is left in place, nested partial
+        // types flip their family key order (`Host.ReviewFixtures.Wrapped`) and no longer
+        // match the container-qualified-name contract used by hotspot-family grouping.
+        // Pin a wrapped nested partial-type fixture so both the container path and family key
+        // stay in canonical root-to-leaf order. Closes #541.
+        // #535 の container-path fix 以降、`BuildSelfFamilyKey` は root-to-leaf 順の
+        // effective container path を受け取る。ここで旧 `Reverse()` が残ると、nested partial
+        // type の family key が `Host.ReviewFixtures.Wrapped` のように逆順化し、
+        // hotspot-family grouping が依存する container-qualified-name 契約と食い違う。
+        // wrapped な nested partial-type の fixture を固定し、container path と family key の
+        // 両方が canonical な root-to-leaf 順を保つことを検証する。Closes #541.
+        var content = string.Join(
+            "\n",
+            "namespace ReviewFixtures;",
+            "",
+            "public class Host",
+            "{",
+            "    public void M<T1, T2>() { } public event System.Action<int, string>? E; public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        public partial class Child",
+            "        {",
+            "        }",
+            "    }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrapped = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Wrapped"));
+        Assert.Equal("ReviewFixtures.Host", wrapped.ContainerQualifiedName);
+        Assert.Equal("ReviewFixtures.Host.Wrapped", wrapped.FamilyKey);
+
+        var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
+        Assert.Equal("ReviewFixtures.Host.Wrapped", child.ContainerQualifiedName);
+        Assert.Equal("ReviewFixtures.Host.Wrapped", child.FamilyKey);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedNestedTypeClosingBraceLineStillFindsOuterSibling()
+    {
+        // Wrapped multi-line nested types can end on a line that also starts a later outer
+        // sibling (`} public int Q { get; }`). The line-level C# scan must restart from the
+        // post-brace statement boundary instead of treating the leading `}` as a dead line,
+        // or the outer sibling silently disappears from symbols/definition/outline. Closes #545.
+        // 折り返された multi-line nested type は、閉じ brace 行に outer sibling が続く
+        // (`} public int Q { get; }`) 形を取りうる。C# の行単位 scan は先頭 `}` の後ろにある
+        // statement 境界から再開しなければならず、そうしないと outer sibling が
+        // symbols/definition/outline から無言で脱落する。Closes #545.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        public int P { get; }",
+            "    } public int Q { get; }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrapped = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Wrapped"));
+        Assert.Equal("class", wrapped.ContainerKind);
+        Assert.Equal("Host", wrapped.ContainerName);
+
+        var innerProperty = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("class", innerProperty.ContainerKind);
+        Assert.Equal("Wrapped", innerProperty.ContainerName);
+
+        var outerProperty = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Q"));
+        Assert.Equal("public int Q { get; }", outerProperty.Signature);
+        Assert.Equal("class", outerProperty.ContainerKind);
+        Assert.Equal("Host", outerProperty.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedNestedTypeClosingBraceLineKeepsLastInnerMemberAndOuterSibling()
+    {
+        // A wrapped nested type can end on the same line as both its last inner member and
+        // a later outer sibling (`public int P { get; } } public int Q { get; }`). The
+        // closing-line body clamp from #545 must still keep `P` inside `Wrapped`, while the
+        // same-line restart skips the intervening `}` and still reaches outer sibling `Q`.
+        // Closes #549.
+        // wrapped な nested type は、最後の inner member と後続 outer sibling が同じ閉じ
+        // brace 行 (`public int P { get; } } public int Q { get; }`) に載ることがある。
+        // #545 の closing-line body clamp は `P` を `Wrapped` の内側に残しつつ、same-line
+        // restart は間の `}` を飛ばして outer sibling `Q` に到達しなければならない。
+        // Closes #549.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        public int P { get; } } public int Q { get; }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var innerProperty = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("class", innerProperty.ContainerKind);
+        Assert.Equal("Wrapped", innerProperty.ContainerName);
+
+        var outerProperty = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Q"));
+        Assert.Equal("public int Q { get; }", outerProperty.Signature);
+        Assert.Equal("class", outerProperty.ContainerKind);
+        Assert.Equal("Host", outerProperty.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedNestedTypeKeepsSameLineDuplicateSignatureSiblings()
+    {
+        // Duplicate suppression must not collapse distinct same-line siblings just because
+        // they share the same short signature before container assignment runs. In the
+        // compact wrapped case below, both `Child` declarations are real: one inside
+        // `Wrapped`, one later under `Host`. Closes #552.
+        // duplicate suppression は、container 判定前に短い signature が一致するだけで
+        // 別物の same-line sibling を潰してはならない。下の compact な wrapped case では
+        // `Child` 宣言が 2 つとも実在し、片方は `Wrapped` 配下、もう片方は後続の `Host`
+        // 配下である。Closes #552.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        public partial class Child { } } public partial class Child { }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var children = symbols
+            .Where(s => s.Kind == "class" && s.Name == "Child")
+            .OrderBy(s => s.ContainerName)
+            .ToList();
+        Assert.Equal(2, children.Count);
+
+        Assert.Contains(children, child => child.ContainerKind == "class" && child.ContainerName == "Wrapped");
+        Assert.Contains(children, child => child.ContainerKind == "class" && child.ContainerName == "Host");
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedNestedTypeIgnoresStringLiteralLookalikesWhenTrackingSameLineOccurrences()
+    {
+        // Same-line occurrence tracking must ignore string-literal lookalikes of the same
+        // declaration signature. Otherwise the later real declaration is mapped onto the
+        // quoted copy and the outer sibling misattaches under the inner `Child`. Closes #558.
+        // same-line occurrence tracking は、同じ宣言 signature を含む文字列リテラルを
+        // 数えてはいけない。数えてしまうと後続の本物の宣言が quoted copy に対応付けられ、
+        // outer sibling が inner `Child` 配下へ誤帰属する。Closes #558.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        public const string Marker = \"public partial class Child { }\"; public partial class Child { } } public partial class Child { }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var children = symbols
+            .Where(s => s.Kind == "class" && s.Name == "Child")
+            .OrderBy(s => s.ContainerName)
+            .ToList();
+        Assert.Equal(2, children.Count);
+
+        Assert.Contains(children, child => child.ContainerKind == "class" && child.ContainerName == "Wrapped");
+        Assert.Contains(children, child => child.ContainerKind == "class" && child.ContainerName == "Host");
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedNestedTypeIgnoresMultilineCommentLookalikesWhenTrackingSameLineOccurrences()
+    {
+        // Same-line occurrence recovery must also respect block-comment state carried from
+        // earlier lines. Otherwise a declaration-shaped lookalike inside a multiline comment
+        // consumes the first occurrence slot and the later outer sibling is misattached under
+        // the inner wrapped type. Closes #567.
+        // same-line occurrence 復元は、前行から継続する block comment state も尊重しなければ
+        // ならない。そうしないと複数行コメント中の宣言風 lookalike が最初の occurrence slot を
+        // 奪い、後続 outer sibling が inner wrapped type 配下へ誤帰属する。Closes #567.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        /*",
+            "        public partial class Child { } */ public partial class Child { } } public partial class Child { }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var children = symbols
+            .Where(s => s.Kind == "class" && s.Name == "Child")
+            .OrderBy(s => s.ContainerName)
+            .ToList();
+        Assert.Equal(2, children.Count);
+
+        Assert.Contains(children, child => child.ContainerKind == "class" && child.ContainerName == "Wrapped");
+        Assert.Contains(children, child => child.ContainerKind == "class" && child.ContainerName == "Host");
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultilineCommentCloseLineDoesNotEmitPhantomSameLineClass()
+    {
+        // A multiline block comment that closes immediately before a real same-line class
+        // declaration must not leak comment-body lookalikes or `*/`-prefixed phantom rows
+        // into symbol extraction. The current branch regression around wrapped same-line
+        // occurrence recovery started emitting an extra `Child` row here. Closes #571.
+        // 複数行 block comment の閉じ `*/` 直後に実在する same-line class 宣言が続く場合でも、
+        // コメント本文の lookalike や `*/` 付き phantom 行を symbol 抽出へ漏らしてはならない。
+        // wrapped same-line occurrence 修正の枝では、この fixture で余計な `Child` 行が
+        // 追加で出る回帰が入っていた。Closes #571.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        /*",
+            "        public partial class Fake { } */ public partial class Child { } }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var children = symbols
+            .Where(s => s.Kind == "class" && s.Name == "Child")
+            .ToList();
+        var child = Assert.Single(children);
+        Assert.Equal("public partial class Child { }", child.Signature);
+        Assert.Equal("class", child.ContainerKind);
+        Assert.Equal("Wrapped", child.ContainerName);
+
+        Assert.DoesNotContain(symbols, s =>
+            s.Kind == "class"
+            && s.Signature != null
+            && s.Signature.Contains("Fake", StringComparison.Ordinal));
+        Assert.DoesNotContain(symbols, s =>
+            s.Kind == "class"
+            && s.Signature != null
+            && s.Signature.StartsWith("*/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Extract_CSharp_ClosingBraceLineKeepsInnerMemberAfterInnerMethodClosesSameLine()
+    {
+        // Wrapped closing-brace-line recovery must carry forward the unmatched brace depth
+        // that is already open at the start of the end line. Otherwise the first `}` on the
+        // line is mistaken for the wrapped type's close and later inner members fall out to
+        // the outer type. Closes #575.
+        // wrapped closing-brace-line の復元では、end line 開始時点ですでに開いている
+        // unmatched brace depth を引き継がなければならない。そうしないと行頭側の
+        // 最初の `}` を wrapped type 自身の閉じ括弧と誤認し、後続 inner member が
+        // outer type 側へこぼれる。Closes #575.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        public void M()",
+            "        {",
+            "        } public int P { get; } } public int Q { get; }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrappedProperty = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("class", wrappedProperty.ContainerKind);
+        Assert.Equal("Wrapped", wrappedProperty.ContainerName);
+
+        var hostProperty = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Q"));
+        Assert.Equal("class", hostProperty.ContainerKind);
+        Assert.Equal("Host", hostProperty.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineMultipleFieldsAreAllCaptured()
     {
         // `public class Multi { public int A; public int B; public int C; }` must
