@@ -1298,6 +1298,49 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithGetterLocalShadowing_DoesNotLeakIntoSetter()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Status Value
+                {
+                    get
+                    {
+                        Holder Status = new();
+                        _ = Status.Ready;
+                        return Demo.Status.Ready;
+                    }
+                    set
+                    {
+                        _ = Status.Ready;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .OrderBy(reference => reference.Line)
+            .ToList();
+        Assert.Equal([21, 25], readyRefs.Select(reference => reference.Line).ToArray());
+    }
+
+    [Fact]
     public void Extract_CsharpQualifiedEnumMemberAccess_WithOutDeclarationShadowing_DoesNotLeakAsEnumMemberReference()
     {
         const string content = """
@@ -1329,6 +1372,97 @@ public class ReferenceExtractorTests
                     }
 
                     return Demo.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithCatchShadowing_DoesNotLeakAfterCatchBlock()
+    {
+        const string content = """
+            using System;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Status Read()
+                {
+                    try
+                    {
+                        throw new Exception();
+                    }
+                    catch (Exception Status)
+                    {
+                        _ = Status.Message;
+                    }
+
+                    return Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithUsingStatementShadowing_DoesNotLeakAfterUsingBlock()
+    {
+        const string content = """
+            using System;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder : IDisposable
+            {
+                public int Ready { get; set; }
+
+                public void Dispose()
+                {
+                }
+            }
+
+            public sealed class Uses
+            {
+                public Status Read(bool flag)
+                {
+                    if (flag)
+                    {
+                        using (Holder Status = new())
+                        {
+                            _ = Status.Ready;
+                        }
+                    }
+
+                    return Status.Ready;
                 }
             }
             """;
