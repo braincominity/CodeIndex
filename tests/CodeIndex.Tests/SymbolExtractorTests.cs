@@ -5691,6 +5691,58 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_SplitReturnTypeLine_StillCapturesMethodPropertyAndIndexer()
+    {
+        // issue #361: when a long C# return type wraps onto the previous line, the
+        // method/property/indexer must still be emitted instead of being silently
+        // dropped by a per-line-only regex pass.
+        // issue #361: C# の長い戻り値型が前行へ折り返されても、method/property/indexer は
+        // per-line 前提の regex で silent drop されず、引き続き抽出される必要がある。
+        var content = """
+            using System.Collections.Generic;
+
+            namespace CsMultilineSig;
+
+            public class Svc
+            {
+                public Dictionary<string, List<int>>
+                    GetMapping(
+                        string key,
+                        int defaultValue) => new();
+
+                public Dictionary<string, int>
+                    Cache { get; } = new();
+
+                public int
+                    this[string key] { get => 0; set { } }
+
+                public int Simple() => 0;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var getMapping = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "GetMapping"));
+        Assert.Equal("public", getMapping.Visibility);
+        Assert.Equal("Dictionary<string,List<int>>", getMapping.ReturnType);
+        Assert.Equal(7, getMapping.StartLine);
+        Assert.Equal(10, getMapping.EndLine);
+
+        var cache = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Cache"));
+        Assert.Equal("public", cache.Visibility);
+        Assert.Equal("Dictionary<string,int>", cache.ReturnType);
+        Assert.Equal(12, cache.StartLine);
+        Assert.Equal(13, cache.EndLine);
+
+        var indexer = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Item"));
+        Assert.Equal("public", indexer.Visibility);
+        Assert.Equal("int", indexer.ReturnType);
+        Assert.Equal(15, indexer.StartLine);
+        Assert.Equal(16, indexer.EndLine);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Simple" && s.ReturnType == "int");
+    }
+
+    [Fact]
     public void Extract_CSharp_AllmanBlockBodiedProperty_WithIntermediateBlockComment_IsExtracted()
     {
         // issue #233 fourth review follow-up: when an Allman-style block-bodied property
