@@ -1209,32 +1209,36 @@ public static class SymbolExtractor
             if (lang == "batch" && IsBatchCommentLine(line))
                 continue;
 
-            var stopAfterFirstPatternMatch = false;
-            foreach (var pattern in patterns)
+            var patternStartOffset = lang is "javascript" or "typescript"
+                ? FindNextJavaScriptTypeScriptStatementStart(matchLine, 0)
+                : 0;
+            while (patternStartOffset >= 0 && patternStartOffset < matchLine.Length)
             {
-                if (lang == "csharp" && ReferenceEquals(pattern.Regex, CSharpEnumMemberRegex))
-                    continue;
-                // Merge multi-line field headers for C# regardless of kind. Kind "property" (plain
-                // fields) and kind "function" (const / static readonly fields) both need the
-                // merge. Non-field function patterns (methods, constructors, operators, indexers)
-                // are unaffected because CSharpPropertyHeaderPrefixRegex requires the line to end
-                // before `(` or `{`, so lines like `public int Foo()` never satisfy the header
-                // prefix and the merger returns the original line. Closes #355.
-                // C# の複数行フィールドヘッダ結合は kind に依らず適用する。kind "property"（通常
-                // フィールド）と kind "function"（`const` / `static readonly` フィールド）の両方で
-                // 結合が必要。method / constructor / operator / indexer のような非フィールド
-                // function パターンは `CSharpPropertyHeaderPrefixRegex` が `(` や `{` を含む行を
-                // 受け付けないため影響を受けず、merger は元の行をそのまま返す。Closes #355.
-                var csharpPropertyCandidate = lang == "csharp" && pattern.Kind is "property" or "function"
-                    ? BuildCSharpPropertyMatchLine(lines, csharpMatchLines!, i)
-                    : new CSharpPropertyMatchCandidate(matchLine, i, i);
-                var patternMatchLine = csharpPropertyCandidate.MatchLine;
-                var lineOffset = lang is "javascript" or "typescript"
-                    ? FindNextJavaScriptTypeScriptStatementStart(patternMatchLine, 0)
-                    : 0;
-                string? csharpWrappedModifierPrefix = null;
-                while (lineOffset >= 0 && lineOffset < patternMatchLine.Length)
+                var stopAfterFirstPatternMatch = false;
+                var restartPatternScanOffset = -1;
+                foreach (var pattern in patterns)
                 {
+                    if (lang == "csharp" && ReferenceEquals(pattern.Regex, CSharpEnumMemberRegex))
+                        continue;
+                    // Merge multi-line field headers for C# regardless of kind. Kind "property" (plain
+                    // fields) and kind "function" (const / static readonly fields) both need the
+                    // merge. Non-field function patterns (methods, constructors, operators, indexers)
+                    // are unaffected because CSharpPropertyHeaderPrefixRegex requires the line to end
+                    // before `(` or `{`, so lines like `public int Foo()` never satisfy the header
+                    // prefix and the merger returns the original line. Closes #355.
+                    // C# の複数行フィールドヘッダ結合は kind に依らず適用する。kind "property"（通常
+                    // フィールド）と kind "function"（`const` / `static readonly` フィールド）の両方で
+                    // 結合が必要。method / constructor / operator / indexer のような非フィールド
+                    // function パターンは `CSharpPropertyHeaderPrefixRegex` が `(` や `{` を含む行を
+                    // 受け付けないため影響を受けず、merger は元の行をそのまま返す。Closes #355.
+                    var csharpPropertyCandidate = lang == "csharp" && pattern.Kind is "property" or "function"
+                        ? BuildCSharpPropertyMatchLine(lines, csharpMatchLines!, i)
+                        : new CSharpPropertyMatchCandidate(matchLine, i, i);
+                    var patternMatchLine = csharpPropertyCandidate.MatchLine;
+                    var lineOffset = patternStartOffset;
+                    string? csharpWrappedModifierPrefix = null;
+                    while (lineOffset >= 0 && lineOffset < patternMatchLine.Length)
+                    {
                     var match = pattern.Regex.Match(patternMatchLine[lineOffset..]);
                     if (!match.Success
                         && lang == "csharp"
@@ -1295,11 +1299,33 @@ public static class SymbolExtractor
                         break;
                     }
 
-                    if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, patternMatchLine, csharpSwitchExpressionLines, i))
-                        break;
-
-                    if (ShouldSkipCSharpBracePropertyCandidate(lang, pattern, patternMatchLine))
-                        break;
+                    var absoluteStartColumn = lineOffset + match.Index;
+                    if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, patternMatchLine, csharpSwitchExpressionLines, i)
+                        || ShouldSkipCSharpBracePropertyCandidate(
+                            lang,
+                            pattern,
+                            patternMatchLine,
+                            absoluteStartColumn,
+                            match.Value.Contains("=>", StringComparison.Ordinal)))
+                    {
+                        // False-positive C# property matches can happen at the start of a
+                        // same-line type header (`public class C { ... }`) because the
+                        // property regex allows omitted visibility/modifier runs and can
+                        // initially treat the header as `returnType + name + {`. Do not break
+                        // the whole same-line scan on that rejection — advance to the next
+                        // brace-delimited statement so a real nested property later on the
+                        // same physical line still gets a chance to match. Closes #470.
+                        // C# の property 正規表現は visibility / modifier 省略を許すため、
+                        // 同一行の型ヘッダ先頭 (`public class C { ... }`) を一旦
+                        // `returnType + name + {` と誤認することがある。この偽候補を弾いた
+                        // ときに同一行スキャン全体を break せず、次の brace 区切り宣言へ進めて
+                        // 後続の本物 property にもマッチ機会を残す。Closes #470.
+                        lineOffset = FindNextSameLineBraceStatementStart(
+                            matchLine,
+                            absoluteStartColumn + Math.Max(1, match.Length),
+                            lang);
+                        continue;
+                    }
 
                     // Gate the C# plain-field pattern (kind `property`, BodyStyle.None) to
                     // lines that sit directly inside a type body. Without this gate, local
@@ -1316,7 +1342,6 @@ public static class SymbolExtractor
                     if (ShouldSkipCssNestedSelectorCandidate(lang, pattern, patternMatchLine, cssQualifiedRuleAncestors, i))
                         break;
 
-                    var absoluteStartColumn = lineOffset + match.Index;
                     // For C#, collapsed-space column (from CollapseCSharpGenericTypeWhitespace)
                     // has to be translated back to raw-space before it can be compared against
                     // CSharpTypeBodyScope's per-line transitions, which were built from
@@ -1769,6 +1794,41 @@ public static class SymbolExtractor
 
                     if (!CanContinueScanningSameLineBraceBody(lang, kind, pattern.BodyStyle, bodyEndLine, startLine, sameLineEndColumn, absoluteStartColumn))
                     {
+                        if (lang == "csharp"
+                            && kind == "function"
+                            && pattern.BodyStyle == BodyStyle.Brace
+                            && bodyEndLine == startLine
+                            && sameLineEndColumn >= absoluteStartColumn)
+                        {
+                            // Same-line C# function-like members (methods, ctors, static ctors,
+                            // finalizers, indexers) can be followed by later sibling
+                            // declarations (`M() => 1; public int P { get; set; }`,
+                            // `C() { } public int P { get; set; }`) that should still reach
+                            // their own patterns. Restart the whole pattern list from the next
+                            // same-line statement so earlier patterns (notably the property
+                            // regex, which appears before ctor patterns) also get a chance to
+                            // see the sibling declaration. When there is no later statement, we
+                            // keep the old stop-after-first-match behavior so ordinary
+                            // single-declaration lines do not reopen duplicate-matching paths.
+                            // Closes #470 review follow-up.
+                            // 同一行の C# の function 系 member（method / ctor / static ctor /
+                            // finalizer / indexer）の後ろに別の sibling 宣言
+                            // (`M() => 1; public int P { get; set; }`,
+                            // `C() { } public int P { get; set; }`) が続く場合、その後続も
+                            // 各自の pattern に到達できる必要がある。ctor 系より前にある
+                            // property regex のような earlier pattern にも機会を戻すため、
+                            // 次の same-line statement 位置から pattern 列全体を再走査する。
+                            // 後続宣言が無い行では従来どおり stop-after-first-match を維持し、
+                            // 通常の単独宣言行で duplicate match 経路を再び開かない。Closes #470
+                            // review follow-up.
+                            var nextSameLineOffset = FindNextSameLineBraceStatementStart(matchLine, sameLineEndColumn + 1, lang);
+                            if (nextSameLineOffset > sameLineEndColumn)
+                            {
+                                restartPatternScanOffset = nextSameLineOffset;
+                                break;
+                            }
+                        }
+
                         // Batch `set` assignments can legitimately repeat on a single line via
                         // `&` command-chaining (`set A=1 & set B=2`), parenthesized grouping
                         // (`if ... ( set P=1 ) else set Q=2`), or `for`-loop bodies
@@ -1817,8 +1877,17 @@ public static class SymbolExtractor
                         : FindNextSameLineBraceStatementStart(matchLine, sameLineEndColumn + 1, lang);
                 }
 
-                if (stopAfterFirstPatternMatch)
+                if (restartPatternScanOffset >= 0 || stopAfterFirstPatternMatch)
                     break;
+                }
+
+                if (restartPatternScanOffset >= 0)
+                {
+                    patternStartOffset = restartPatternScanOffset;
+                    continue;
+                }
+
+                break;
             }
 
             if (lang == "css" && cssScannerLine != null)
@@ -9148,20 +9217,91 @@ public static class SymbolExtractor
         var sanitizedLine = LexCSharpLine(line, new CSharpLexState()).SanitizedLine;
         var depth = 0;
         var opened = false;
+        var expressionBody = false;
+        var parenDepth = 0;
+        var bracketDepth = 0;
 
         for (var index = Math.Max(0, startColumn); index < sanitizedLine.Length; index++)
         {
             var ch = sanitizedLine[index];
-            if (ch == '{')
+
+            if (expressionBody)
+            {
+                if (ch == '(')
+                    parenDepth++;
+                else if (ch == ')' && parenDepth > 0)
+                    parenDepth--;
+                else if (ch == '[')
+                    bracketDepth++;
+                else if (ch == ']' && bracketDepth > 0)
+                    bracketDepth--;
+                else if (ch == '{')
+                    depth++;
+                else if (ch == '}' && depth > 0)
+                    depth--;
+                else if (ch == ';' && parenDepth == 0 && bracketDepth == 0 && depth == 0)
+                    return index;
+
+                continue;
+            }
+
+            if (ch == '(')
+            {
+                parenDepth++;
+                continue;
+            }
+
+            if (ch == ')' && parenDepth > 0)
+            {
+                parenDepth--;
+                continue;
+            }
+
+            if (ch == '[')
+            {
+                bracketDepth++;
+                continue;
+            }
+
+            if (ch == ']' && bracketDepth > 0)
+            {
+                bracketDepth--;
+                continue;
+            }
+
+            if (ch == '{' && parenDepth == 0 && bracketDepth == 0)
             {
                 depth++;
                 opened = true;
+                continue;
             }
-            else if (ch == '}' && opened)
+
+            if (ch == '}' && opened && parenDepth == 0 && bracketDepth == 0)
             {
                 depth--;
                 if (depth == 0)
                     return index;
+
+                continue;
+            }
+
+            // Expression-bodied members (`=> expr;`) have no surrounding `{}` to anchor the
+            // same-line end column. Detect the top-level `=>` so later sibling declarations
+            // on the same physical line are not swallowed into the current signature / body
+            // extent. Closes #470 review follow-up.
+            // 式本体 member (`=> expr;`) には `{}` が無いため、same-line 終端列を
+            // top-level の `=>` から `;` までで判定する。これにより、同じ物理行の後続
+            // sibling 宣言を現在の signature / body 範囲へ飲み込まないようにする。
+            // Closes #470 review follow-up.
+            if (ch == '='
+                && index + 1 < sanitizedLine.Length
+                && sanitizedLine[index + 1] == '>'
+                && !opened
+                && parenDepth == 0
+                && bracketDepth == 0)
+            {
+                expressionBody = true;
+                index++;
             }
         }
 
@@ -10678,12 +10818,40 @@ public static class SymbolExtractor
     private static bool ShouldSkipCSharpBracePropertyCandidate(
         string? lang,
         SymbolPattern pattern,
-        string matchLine) =>
-        lang == "csharp"
-        && pattern.Kind == "property"
-        && pattern.BodyStyle == BodyStyle.Brace
-        && !matchLine.Contains("=>", StringComparison.Ordinal)
-        && !HasCSharpPropertyAccessorStart(matchLine);
+        string matchLine,
+        int matchStartColumn,
+        bool matchedExpressionArrow)
+    {
+        if (lang != "csharp"
+            || pattern.Kind != "property"
+            || pattern.BodyStyle != BodyStyle.Brace)
+        {
+            return false;
+        }
+
+        if (matchStartColumn < 0)
+            matchStartColumn = 0;
+        if (matchStartColumn > matchLine.Length)
+            matchStartColumn = matchLine.Length;
+
+        // Same-line type bodies reuse the full physical line as the candidate text, so the
+        // first `{` on the line can belong to the enclosing class / struct / interface
+        // rather than the matched property declaration. Anchor the guard to the actual match
+        // start so `{ get; set; }` inside `class C { int P { get; set; } }` is judged from
+        // the property's `{`, not the outer type's `{`. Only the regex match itself may
+        // bless an expression-bodied property; a later same-line `=>` from a method such as
+        // `public int M() => 1; public int P { get; set; }` must not keep an outer-type
+        // false positive alive. Closes #470.
+        // 同一行の型本体では物理行全体を候補文字列として再利用するため、行内最初の `{` が
+        // マッチ対象の property ではなく外側 class / struct / interface のものになりうる。
+        // ガードは実際のマッチ開始列から判定し、`class C { int P { get; set; } }` では
+        // 外側型の `{` ではなく property 自身の `{ get; set; }` を見て判断する。式本体
+        // property の許可判定も regex の実マッチ範囲だけで行い、同一行後半の method の
+        // `=>` で outer-type 偽陽性が生き残らないようにする。Closes #470.
+        var matchedDeclaration = matchLine[matchStartColumn..];
+        return !matchedExpressionArrow
+            && !HasCSharpPropertyAccessorStart(matchedDeclaration);
+    }
 
     // Mark every line that sits directly inside a C# type body (class / struct /
     // interface / record / enum). Used to gate the plain-field pattern so that
