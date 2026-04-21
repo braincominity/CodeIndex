@@ -1329,9 +1329,13 @@ public static class ReferenceExtractor
                             names,
                             NormalizeCSharpIdentifier(match.Groups["name"].Value),
                             i + 1,
-                            FindFollowingCSharpBlockEndLine(structuralLines, end, i, match.Index));
+                            FindFollowingCSharpEmbeddedStatementEndLine(structuralLines, end, i, match.Index));
                     foreach (Match match in CSharpQueryRangeValueNameRegex.Matches(structuralLines[i]))
-                        AddCSharpFunctionValueReceiverName(names, NormalizeCSharpIdentifier(match.Groups["name"].Value), i + 1, symbol.BodyEndLine.Value);
+                        AddCSharpFunctionValueReceiverName(
+                            names,
+                            NormalizeCSharpIdentifier(match.Groups["name"].Value),
+                            i + 1,
+                            FindCSharpStatementEndLine(structuralLines, end, i, match.Index));
                     foreach (Match match in CSharpOutValueNameRegex.Matches(structuralLines[i]))
                         AddCSharpFunctionValueReceiverName(names, NormalizeCSharpIdentifier(match.Groups["name"].Value), i + 1, symbol.BodyEndLine.Value);
                     foreach (Match match in CSharpCatchValueNameRegex.Matches(structuralLines[i]))
@@ -1339,19 +1343,19 @@ public static class ReferenceExtractor
                             names,
                             NormalizeCSharpIdentifier(match.Groups["name"].Value),
                             i + 1,
-                            FindFollowingCSharpBlockEndLine(structuralLines, end, i, match.Index));
+                            FindFollowingCSharpEmbeddedStatementEndLine(structuralLines, end, i, match.Index));
                     foreach (Match match in CSharpUsingStatementValueNameRegex.Matches(structuralLines[i]))
                         AddCSharpFunctionValueReceiverName(
                             names,
                             NormalizeCSharpIdentifier(match.Groups["name"].Value),
                             i + 1,
-                            FindFollowingCSharpBlockEndLine(structuralLines, end, i, match.Index));
+                            FindFollowingCSharpEmbeddedStatementEndLine(structuralLines, end, i, match.Index));
                     foreach (Match match in CSharpFixedValueNameRegex.Matches(structuralLines[i]))
                         AddCSharpFunctionValueReceiverName(
                             names,
                             NormalizeCSharpIdentifier(match.Groups["name"].Value),
                             i + 1,
-                            FindFollowingCSharpBlockEndLine(structuralLines, end, i, match.Index));
+                            FindFollowingCSharpEmbeddedStatementEndLine(structuralLines, end, i, match.Index));
                 }
 
                 AddCSharpLambdaParameterNames(
@@ -1785,7 +1789,8 @@ public static class ReferenceExtractor
             if (arrowIndex < 0)
                 break;
 
-            AddCSharpLambdaParametersBeforeArrow(names, bodyText, arrowIndex, startLineNumber, scopeEndLine);
+            var lambdaScopeEndLine = FindCSharpLambdaScopeEndLine(bodyText, arrowIndex, startLineNumber, scopeEndLine);
+            AddCSharpLambdaParametersBeforeArrow(names, bodyText, arrowIndex, startLineNumber, lambdaScopeEndLine);
             searchIndex = arrowIndex + 2;
         }
     }
@@ -1912,35 +1917,159 @@ public static class ReferenceExtractor
         return bodyEndIndex + 1;
     }
 
-    private static int FindFollowingCSharpBlockEndLine(
+    private static int FindFollowingCSharpEmbeddedStatementEndLine(
         IReadOnlyList<string> structuralLines,
         int bodyEndIndex,
         int headerLineIndex,
         int searchStartColumn)
     {
-        var foundOpeningBrace = false;
-        var depth = 0;
+        var parenDepth = 0;
+        var foundHeaderOpenParen = false;
         for (var lineIndex = headerLineIndex; lineIndex <= bodyEndIndex; lineIndex++)
         {
             var line = structuralLines[lineIndex];
             var startColumn = lineIndex == headerLineIndex ? Math.Min(searchStartColumn, line.Length) : 0;
             for (var column = startColumn; column < line.Length; column++)
             {
-                if (line[column] == '{')
+                if (line[column] == '(')
                 {
-                    depth++;
-                    foundOpeningBrace = true;
+                    parenDepth++;
+                    foundHeaderOpenParen = true;
                 }
-                else if (line[column] == '}' && foundOpeningBrace && depth > 0)
+                else if (line[column] == ')' && foundHeaderOpenParen && parenDepth > 0)
                 {
-                    depth--;
-                    if (depth == 0)
-                        return lineIndex + 1;
+                    parenDepth--;
+                    if (parenDepth == 0)
+                        return FindCSharpStatementEndLine(structuralLines, bodyEndIndex, lineIndex, column + 1);
                 }
             }
         }
 
         return bodyEndIndex + 1;
+    }
+
+    private static int FindCSharpStatementEndLine(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int startLineIndex,
+        int startColumn)
+    {
+        var foundContent = false;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        for (var lineIndex = startLineIndex; lineIndex <= bodyEndIndex; lineIndex++)
+        {
+            var line = structuralLines[lineIndex];
+            var columnStart = lineIndex == startLineIndex ? Math.Min(startColumn, line.Length) : 0;
+            for (var column = columnStart; column < line.Length; column++)
+            {
+                var current = line[column];
+                if (!foundContent)
+                {
+                    if (char.IsWhiteSpace(current))
+                        continue;
+
+                    foundContent = true;
+                }
+
+                switch (current)
+                {
+                    case '(':
+                        parenDepth++;
+                        break;
+                    case ')':
+                        if (parenDepth > 0)
+                            parenDepth--;
+                        break;
+                    case '[':
+                        bracketDepth++;
+                        break;
+                    case ']':
+                        if (bracketDepth > 0)
+                            bracketDepth--;
+                        break;
+                    case '{':
+                        braceDepth++;
+                        break;
+                    case '}':
+                        if (braceDepth > 0)
+                        {
+                            braceDepth--;
+                            if (braceDepth == 0 && parenDepth == 0 && bracketDepth == 0)
+                                return lineIndex + 1;
+                        }
+                        break;
+                    case ';':
+                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                            return lineIndex + 1;
+                        break;
+                }
+            }
+        }
+
+        return bodyEndIndex + 1;
+    }
+
+    private static int FindCSharpLambdaScopeEndLine(string bodyText, int arrowIndex, int startLineNumber, int fallbackScopeEndLine)
+    {
+        var foundContent = false;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        for (var i = Math.Min(arrowIndex + 2, bodyText.Length); i < bodyText.Length; i++)
+        {
+            var current = bodyText[i];
+            if (!foundContent)
+            {
+                if (char.IsWhiteSpace(current))
+                    continue;
+
+                foundContent = true;
+            }
+
+            switch (current)
+            {
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                        return GetLineNumberFromOffset(bodyText, i + 1, startLineNumber);
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']':
+                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                        return GetLineNumberFromOffset(bodyText, i + 1, startLineNumber);
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth == 0 && parenDepth == 0 && bracketDepth == 0)
+                        return GetLineNumberFromOffset(bodyText, i + 1, startLineNumber);
+                    if (braceDepth > 0)
+                    {
+                        braceDepth--;
+                        if (braceDepth == 0 && parenDepth == 0 && bracketDepth == 0)
+                            return GetLineNumberFromOffset(bodyText, i + 1, startLineNumber);
+                    }
+                    break;
+                case ',':
+                case ';':
+                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                        return GetLineNumberFromOffset(bodyText, i + 1, startLineNumber);
+                    break;
+            }
+        }
+
+        return fallbackScopeEndLine;
     }
 
     private static int SkipWhitespaceBackward(string text, int index)
