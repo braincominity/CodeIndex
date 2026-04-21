@@ -1629,11 +1629,7 @@ public static class SymbolExtractor
                         var nameLineStartColumn = csharpSingleLineCollapsedMatch
                             ? (sameLineEndUsesRawColumns
                                 ? csharpSignatureRawStartColumn
-                                : TranslateCSharpCollapsedColumnToRaw(
-                                    csharpMatchColumnToRaw,
-                                    i,
-                                    absoluteStartColumn,
-                                    line.Length))
+                                : csharpSignatureRawStartColumn)
                             : absoluteStartColumn;
                         var nameLineEndExclusive = sameLineEndColumn >= absoluteStartColumn
                             ? (sameLineEndUsesRawColumns
@@ -1657,11 +1653,7 @@ public static class SymbolExtractor
                             && csharpSingleLineCollapsedMatch
                             && (sameLineEndUsesRawColumns || CanUseCSharpSameLineSemicolonEndColumn(kind)))
                         {
-                            var rawStart = TranslateCSharpCollapsedColumnToRaw(
-                                csharpMatchColumnToRaw,
-                                i,
-                                absoluteStartColumn,
-                                line.Length);
+                            var rawStart = csharpSignatureRawStartColumn;
                             var rawEndInclusive = sameLineEndUsesRawColumns
                                 ? sameLineEndColumn
                                 : TranslateCSharpCollapsedColumnToRaw(
