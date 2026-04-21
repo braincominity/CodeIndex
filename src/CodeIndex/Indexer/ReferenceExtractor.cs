@@ -2271,7 +2271,14 @@ public static class ReferenceExtractor
                     if (IsCSharpQueryClauseKeyword(keyword)
                         && IsCSharpQueryClauseKeywordSuffix(line, nextColumn, keyword))
                     {
-                        terminalClauseSeen = IsCSharpTerminalQueryClauseKeyword(keyword);
+                        if (string.Equals(keyword, "by", StringComparison.Ordinal) && terminalClauseSeen)
+                        {
+                            terminalClauseSeen = true;
+                        }
+                        else
+                        {
+                            terminalClauseSeen = IsCSharpTerminalQueryClauseKeyword(keyword);
+                        }
                     }
 
                     column = nextColumn - 1;
