@@ -8916,6 +8916,36 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_SameLineDeclaratorListWithInitializer_KeepsTrailingField()
+    {
+        // Same-line type bodies can hand the field matcher a tail like ` = 1, B;` even
+        // when the regex itself stops at the first declarator name. That tail still
+        // belongs to the current field declaration, so the post-match declarator scan
+        // must skip the initializer and recover `B` instead of treating the statement as
+        // complete at `A`. Closes #572/#567 follow-up.
+        // 同一行の型本体では、regex 自体は先頭 declarator 名で止まっていても、
+        // field matcher が ` = 1, B;` の tail を受け取ることがある。この tail は
+        // 現在の field 宣言の一部なので、post-match の declarator 走査は初期化式を
+        // 読み飛ばして `B` を復元し、`A` で宣言完結扱いにしてはならない。
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "public class C { public void M() { } public int A = 1, B; }");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property"
+            && s.Name == "A"
+            && s.ReturnType == "int"
+            && s.ContainerName == "C"
+            && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "property"
+            && s.Name == "B"
+            && s.ReturnType == "int"
+            && s.ContainerName == "C"
+            && s.Visibility == "public");
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineClassBodyFieldIsCapturedAndLocalIsRejected()
     {
         // Column-aware scope tracking: `public class C { public int X; }` must capture

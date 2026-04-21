@@ -1905,7 +1905,7 @@ public static class SymbolExtractor
                     var declaratorEntries = lang == "csharp"
                         && pattern.Kind == "property"
                         && pattern.BodyStyle == BodyStyle.None
-                        ? TryExpandCSharpFieldDeclaratorList(patternMatchLine, match, pattern.ReturnTypeGroup, name)
+                        ? TryExpandCSharpFieldDeclaratorList(patternMatchLine[lineOffset..], match, pattern.ReturnTypeGroup, name)
                         : null;
 
                     if (declaratorEntries != null)
@@ -11686,9 +11686,10 @@ public static class SymbolExtractor
         var tailText = matchEnd < patternMatchLine.Length
             ? patternMatchLine[matchEnd..]
             : string.Empty;
+        var matchContinuesIntoInitializer = matchEndedAtEquals || TailStartsWithCSharpAssignment(tailText);
 
         var hasCommaInReturnType = ContainsCSharpTopLevelComma(returnTypeRaw);
-        var tailDeclaratorNames = ScanCSharpTailDeclaratorNames(tailText, matchEndedAtEquals);
+        var tailDeclaratorNames = ScanCSharpTailDeclaratorNames(tailText, matchContinuesIntoInitializer);
 
         if (!hasCommaInReturnType && tailDeclaratorNames.Count == 0)
             return null;
@@ -11741,6 +11742,15 @@ public static class SymbolExtractor
         }
 
         return results.Count > 1 ? results : null;
+    }
+
+    private static bool TailStartsWithCSharpAssignment(string tail)
+    {
+        var index = 0;
+        while (index < tail.Length && char.IsWhiteSpace(tail[index]))
+            index++;
+
+        return index < tail.Length && tail[index] == '=';
     }
 
     private static List<string> ScanCSharpTailDeclaratorNames(string tail, bool matchEndedAtEquals)
