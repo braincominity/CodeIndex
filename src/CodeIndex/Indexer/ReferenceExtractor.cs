@@ -2981,10 +2981,7 @@ public static class ReferenceExtractor
                         if (angleDepth > 0)
                         {
                             angleDepth--;
-                            break;
                         }
-                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
-                            return new CSharpLineColumn(lineIndex + 1, column);
                         break;
                     case '(':
                         parenDepth++;
@@ -3034,6 +3031,8 @@ public static class ReferenceExtractor
     {
         var line = structuralLines[startLineIndex];
         if (startColumn < 0 || startColumn >= line.Length || line[startColumn] != '<')
+            return false;
+        if (HasCSharpQueryGenericOperatorOnRight(line, startColumn + 1))
             return false;
         if (!HasCSharpQueryGenericReceiverOnLeft(line, startColumn - 1))
             return false;
@@ -3095,6 +3094,16 @@ public static class ReferenceExtractor
         }
 
         return false;
+    }
+
+    private static bool HasCSharpQueryGenericOperatorOnRight(string line, int index)
+    {
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+        if (index >= line.Length)
+            return false;
+
+        return line[index] is '<' or '=';
     }
 
     private static bool HasCSharpQueryGenericReceiverOnLeft(string line, int index)

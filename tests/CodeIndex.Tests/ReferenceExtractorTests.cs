@@ -2354,6 +2354,54 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithTerminalSelectShiftExpression_PreservesOnlyTrailingEnumReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public static class Sink
+            {
+                public static IEnumerable<int> Pick(IEnumerable<int> left, Status right) => left;
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    return Sink.Pick(
+                        from Status in items
+                        select (Status.Ready << 1) >> (1 + Status.Ready),
+                        Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .OrderBy(reference => reference.Line)
+            .ToList();
+
+        Assert.Equal([28], readyRefs.Select(reference => reference.Line).ToArray());
+        Assert.All(readyRefs, reference => Assert.Equal("Read", reference.ContainerName));
+    }
+
+    [Fact]
     public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryKeywordNamedLocalFunctionInSelectExpression_PreservesLaterEnumReference()
     {
         const string content = """

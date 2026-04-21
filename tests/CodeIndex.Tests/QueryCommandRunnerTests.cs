@@ -11189,6 +11189,132 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpQueryRangeVariableShiftSelectorPreservesOnlyTrailingEnumReference()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_query_shift_selector");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                using System.Collections.Generic;
+                using System.Linq;
+
+                namespace Demo;
+
+                public enum Status
+                {
+                    Ready
+                }
+
+                public sealed class Holder
+                {
+                    public int Ready { get; set; }
+                }
+
+                public static class Sink
+                {
+                    public static IEnumerable<int> Pick(IEnumerable<int> left, Status right) => left;
+                }
+
+                public sealed class Uses
+                {
+                    public IEnumerable<int> Read(IEnumerable<Holder> items)
+                    {
+                        return Sink.Pick(
+                            from Status in items
+                            select (Status.Ready << 1) >> (1 + Status.Ready),
+                            Status.Ready);
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal(28, json.GetProperty("line").GetInt32());
+            Assert.Equal("Read", json.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunInspect_ExactJson_CSharpQueryRangeVariableShiftSelectorPreservesOnlyTrailingEnumReferenceBundle()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_query_shift_selector");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                using System.Collections.Generic;
+                using System.Linq;
+
+                namespace Demo;
+
+                public enum Status
+                {
+                    Ready
+                }
+
+                public sealed class Holder
+                {
+                    public int Ready { get; set; }
+                }
+
+                public static class Sink
+                {
+                    public static IEnumerable<int> Pick(IEnumerable<int> left, Status right) => left;
+                }
+
+                public sealed class Uses
+                {
+                    public IEnumerable<int> Read(IEnumerable<Holder> items)
+                    {
+                        return Sink.Pick(
+                            from Status in items
+                            select (Status.Ready << 1) >> (1 + Status.Ready),
+                            Status.Ready);
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var reference = Assert.Single(json.GetProperty("references").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, json.GetProperty("definitions").GetArrayLength());
+            Assert.Equal(28, reference.GetProperty("line").GetInt32());
+            Assert.Equal("Read", reference.GetProperty("container_name").GetString());
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
+            Assert.False(json.TryGetProperty("graph_degraded", out _));
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpRecursivePatternCaseVariableDoesNotLeakReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_recursive_pattern_case_collision");
