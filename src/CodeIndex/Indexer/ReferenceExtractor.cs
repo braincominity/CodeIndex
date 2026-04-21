@@ -254,6 +254,18 @@ public static class ReferenceExtractor
     private static readonly Regex CSharpQueryRangeValueNameRegex = new(
         @"\b(?:from|join)\s+(?<name>@?[A-Za-z_]\w*)\s+in\b|\blet\s+(?<name>@?[A-Za-z_]\w*)\s*=|\binto\s+(?<name>@?[A-Za-z_]\w*)\b",
         RegexOptions.Compiled);
+    private static readonly Regex CSharpOutValueNameRegex = new(
+        @"\bout\s+(?:var|(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*))\s+(?<name>@?[A-Za-z_]\w*)(?=\s*[\),])",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpCatchValueNameRegex = new(
+        @"\bcatch\s*\(\s*(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*)\s+(?<name>@?[A-Za-z_]\w*)",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpUsingStatementValueNameRegex = new(
+        @"\busing\s*\(\s*(?:var|(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*))\s+(?<name>@?[A-Za-z_]\w*)\s*=",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpFixedValueNameRegex = new(
+        @"\bfixed\s*\(\s*(?:var|(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*))\s+(?<name>@?[A-Za-z_]\w*)\s*=",
+        RegexOptions.Compiled);
     private static readonly Regex CSharpStaticModifierRegex = new(@"\bstatic\b", RegexOptions.Compiled);
     // Java access/method modifier set used by the same-line ctor scanner.
     // same-line ctor 本体のスキャナで使うアクセス / メソッド修飾子一覧。
@@ -1294,11 +1306,12 @@ public static class ReferenceExtractor
 
         foreach (var symbol in symbols)
         {
-            if (symbol.Kind != "function" || symbol.StartLine <= 0)
+            if (symbol.Kind is not ("function" or "property") || symbol.StartLine <= 0)
                 continue;
 
             var names = new List<CSharpFunctionValueReceiverNameRecord>();
-            AddCSharpParameterNames(names, symbol.Signature, symbol.StartLine);
+            if (symbol.Kind == "function")
+                AddCSharpParameterNames(names, symbol.Signature, symbol.StartLine);
 
             if (symbol.BodyStartLine != null && symbol.BodyEndLine != null)
             {
@@ -1311,6 +1324,14 @@ public static class ReferenceExtractor
                     foreach (Match match in CSharpForeachValueNameRegex.Matches(structuralLines[i]))
                         AddCSharpFunctionValueReceiverName(names, NormalizeCSharpIdentifier(match.Groups["name"].Value), i + 1);
                     foreach (Match match in CSharpQueryRangeValueNameRegex.Matches(structuralLines[i]))
+                        AddCSharpFunctionValueReceiverName(names, NormalizeCSharpIdentifier(match.Groups["name"].Value), i + 1);
+                    foreach (Match match in CSharpOutValueNameRegex.Matches(structuralLines[i]))
+                        AddCSharpFunctionValueReceiverName(names, NormalizeCSharpIdentifier(match.Groups["name"].Value), i + 1);
+                    foreach (Match match in CSharpCatchValueNameRegex.Matches(structuralLines[i]))
+                        AddCSharpFunctionValueReceiverName(names, NormalizeCSharpIdentifier(match.Groups["name"].Value), i + 1);
+                    foreach (Match match in CSharpUsingStatementValueNameRegex.Matches(structuralLines[i]))
+                        AddCSharpFunctionValueReceiverName(names, NormalizeCSharpIdentifier(match.Groups["name"].Value), i + 1);
+                    foreach (Match match in CSharpFixedValueNameRegex.Matches(structuralLines[i]))
                         AddCSharpFunctionValueReceiverName(names, NormalizeCSharpIdentifier(match.Groups["name"].Value), i + 1);
                 }
 
@@ -1595,7 +1616,7 @@ public static class ReferenceExtractor
             return false;
 
         if (callContainer != null
-            && callContainer.Kind == "function"
+            && (callContainer.Kind == "function" || callContainer.Kind == "property")
             && valueReceiverNamesByFunctionStartLine.TryGetValue(callContainer.StartLine, out var functionNames)
             && functionNames.Any(record => record.Line <= lineNumber && string.Equals(record.Name, qualifier, StringComparison.Ordinal)))
         {
