@@ -2067,8 +2067,13 @@ public static class ReferenceExtractor
             return false;
 
         var armText = bodyText[armStartOffset..arrowIndex];
-        if (!TryParseCSharpRecursivePatternDesignation(armText, 0, false, out name, out var relativeOffset)
-            && !TryParseCSharpSwitchExpressionArmDeclarationPatternDesignation(armText, out name, out relativeOffset))
+        var preparedArmLines = StructuralLineMasker.MaskLines("csharp", armText.Split('\n'));
+        for (var i = 0; i < preparedArmLines.Length; i++)
+            preparedArmLines[i] = PrepareLine("csharp", preparedArmLines[i]);
+
+        var preparedArmText = string.Join("\n", preparedArmLines);
+        if (!TryParseCSharpRecursivePatternDesignation(preparedArmText, 0, false, out name, out var relativeOffset)
+            && !TryParseCSharpSwitchExpressionArmDeclarationPatternDesignation(preparedArmText, out name, out relativeOffset))
         {
             return false;
         }
