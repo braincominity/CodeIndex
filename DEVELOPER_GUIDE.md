@@ -470,6 +470,8 @@ For the CLAUDE.md template (ready-to-copy code search rules for AI agents), see 
 
 Query commands (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `excerpt`, `map`, `inspect`) default to **human-readable output**. Use `--json` for JSON lines output (one JSON object per line), designed for easy parsing by AI agents.
 
+`references` already prefixes each human-readable row with `reference_kind`, and `callers` now does the same for its grouped caller rows while keeping JSON output unchanged. This lets terminal users distinguish `call` / `instantiate` / `subscribe` without re-running the command with `--json`.
+
 MCP tool calls return structured JSON in `structuredContent` plus a short summary in `content`, so clients can consume typed data directly.
 
 `search`, `definition`, `references`, `callers`, `callees`, `symbols`, and `files` also share path-aware narrowing via `--path`, repeatable `--exclude-path`, and `--exclude-tests`. The read layer ranks source files ahead of tests and docs, and `search` further boosts exact symbol-name and path matches so AI clients are more likely to land on implementation files first.
@@ -1543,6 +1545,8 @@ CLAUDE.mdテンプレート（AI向けコード検索ルールのコピペ用）
 ### 出力形式
 
 クエリコマンド（`search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files`、`excerpt`、`map`、`inspect`）はデフォルトで**人間向け出力**です。`--json`でJSONライン出力（1行1 JSONオブジェクト）に切り替えでき、AIエージェントが容易にパースできるよう設計されています。
+
+`references` は以前から人間向け出力の各行先頭に `reference_kind` を表示しており、`callers` も grouped caller 行に対して同じタグを出すようになった。これにより端末上でも `call` / `instantiate` / `subscribe` を `--json` なしで見分けられる一方、JSON 出力契約は変わらない。
 
 MCPツール呼び出しは `structuredContent` に構造化JSON、`content` に短い要約を返すため、クライアントは型付きデータを直接利用できます。
 

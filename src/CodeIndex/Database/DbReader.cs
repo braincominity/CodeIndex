@@ -134,6 +134,11 @@ public partial class DbReader
     private static string GetPreferredReferenceKindSql(string referenceKindSql)
         => $"CASE WHEN SUM(CASE WHEN {referenceKindSql} = 'instantiate' THEN 1 ELSE 0 END) > 0 THEN 'instantiate' ELSE MIN({referenceKindSql}) END";
 
+    private static string GetGroupedCallerReferenceKindSql(string referenceKindSql)
+        => $"CASE WHEN SUM(CASE WHEN {referenceKindSql} = 'instantiate' THEN 1 ELSE 0 END) > 0 THEN 'instantiate' " +
+           $"WHEN SUM(CASE WHEN {referenceKindSql} = 'subscribe' THEN 1 ELSE 0 END) > 0 THEN 'subscribe' " +
+           $"ELSE MIN({referenceKindSql}) END";
+
     private static string GetPathBucketOrderSql(string pathSql)
         => PathBucketOrder.Replace("f.path", pathSql, StringComparison.Ordinal);
 
@@ -959,7 +964,9 @@ public partial class DbReader
         var sql = referenceKind == null
             ? $@"
             WITH logical_references AS (
-                SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.line
+                SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
+                       {GetGroupedCallerReferenceKindSql("r.reference_kind")} AS reference_kind,
+                       r.line
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
                 WHERE r.container_name IS NOT NULL
@@ -967,7 +974,7 @@ public partial class DbReader
                   AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}"
             : @"
             SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
-                   MIN(r.line) AS first_line, COUNT(*) AS reference_count
+                   r.reference_kind, MIN(r.line) AS first_line, COUNT(*) AS reference_count
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
             WHERE r.container_name IS NOT NULL";
@@ -993,6 +1000,7 @@ public partial class DbReader
                 GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number
             )
             SELECT path, lang, container_kind, container_name, symbol_name,
+                   " + GetGroupedCallerReferenceKindSql("r.reference_kind") + @" AS reference_kind,
                    MIN(line) AS first_line, COUNT(*) AS reference_count
             FROM logical_references r
             GROUP BY path, lang, container_kind, container_name, symbol_name";
@@ -1033,8 +1041,9 @@ public partial class DbReader
                 CallerKind = GetNullableString(reader, 2),
                 CallerName = GetNullableString(reader, 3),
                 CalleeName = reader.GetString(4),
-                FirstLine = reader.GetInt32(5),
-                ReferenceCount = reader.GetInt32(6),
+                ReferenceKind = reader.GetString(5),
+                FirstLine = reader.GetInt32(6),
+                ReferenceCount = reader.GetInt32(7),
             });
         }
         return results;
