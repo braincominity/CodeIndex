@@ -224,6 +224,73 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpCompactSameLineTypeBody_AttributesEnumMemberReferenceToInnermostMethod()
+    {
+        // issue #546: when a compact same-line C# type body contains multiple nested
+        // members, enum-member references inside the inline method must attach to the
+        // innermost function rather than collapsing to the outer class.
+        // issue #546: compact な same-line C# 型本体で複数メンバーが同一行に並んでも、
+        // inline method 内の enum member 参照は外側 class ではなく最内側 function に帰属すること。
+        const string content = """
+            namespace N;
+            enum Color { Red }
+            class C { int N => 0; void M() { var x = global::N.Color.Red; } }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var redRef = Assert.Single(references.Where(r => r.SymbolName == "Red"));
+        Assert.Equal("function", redRef.ContainerKind);
+        Assert.Equal("M", redRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpCompactSameLineTypeBody_AttributesPropertyCallToInnermostProperty()
+    {
+        // Compact same-line type bodies must also keep earlier inline property references on
+        // the property itself instead of letting a later same-line method steal them.
+        // compact な same-line 型本体でも、先行する inline property 内の参照は、
+        // 後続 method ではなく property 自身に帰属し続ける必要がある。
+        const string content = """
+            namespace N;
+            enum Color { Red }
+            class C { Color Wrap => global::N.Color.Red; void M() { var x = global::N.Color.Red; } }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var wrapRef = Assert.Single(references.Where(r => r.SymbolName == "Red" && r.ContainerName == "Wrap"));
+        Assert.Equal("property", wrapRef.ContainerKind);
+        Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ContainerName == "Wrap" && r.ContainerKind == "class");
+    }
+
+    [Fact]
+    public void Extract_CsharpMultiLineTypeBody_KeepsEnumMemberReferenceOnMethod()
+    {
+        // The fix for compact same-line type bodies must not regress the existing multi-line
+        // control case, which already resolves enum-member references to the method.
+        // compact same-line 向け修正で、既存の multi-line 制御ケースが class 側へ戻らないこと。
+        const string content = """
+            namespace N;
+            enum Color { Red }
+            class C
+            {
+                int N => 0;
+                void M() { var x = global::N.Color.Red; }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var redRef = Assert.Single(references.Where(r => r.SymbolName == "Red"));
+        Assert.Equal("function", redRef.ContainerKind);
+        Assert.Equal("M", redRef.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpDefinitionLine_DoesNotBecomeReference()
     {
         const string content = """

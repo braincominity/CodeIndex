@@ -2890,6 +2890,40 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunCallers_ExactJson_CSharpCompactSameLineTypeBody_PrefersInnermostMethodContainer()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callers_csharp_compact_same_line_type_body");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace N;
+                enum Color { Red }
+                class C { int N => 0; void M() { var x = global::N.Color.Red; } }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("function", json.GetProperty("caller_kind").GetString());
+            Assert.Equal("M", json.GetProperty("caller_name").GetString());
+            Assert.Equal("Red", json.GetProperty("callee_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunCallers_ExactJson_MultiLineSwitchArm_AttributesToEnclosingFunction()
     {
         // issue #233 third review follow-up: inside a switch expression whose `=>` is
@@ -7199,6 +7233,43 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_ExactJson_CSharpCompactSameLineTypeBody_PrefersInnermostMethodContainer()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_compact_same_line_type_body");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace N;
+                enum Color { Red }
+                class C { int N => 0; void M() { var x = global::N.Color.Red; } }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var reference = Assert.Single(json.GetProperty("references").EnumerateArray());
+            var caller = Assert.Single(json.GetProperty("callers").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("function", reference.GetProperty("container_kind").GetString());
+            Assert.Equal("M", reference.GetProperty("container_name").GetString());
+            Assert.Equal("function", caller.GetProperty("caller_kind").GetString());
+            Assert.Equal("M", caller.GetProperty("caller_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_NonExactJson_MixedCallableAndEnumMemberKeepsGraphSupported()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_mixed_callable_enum");
@@ -11311,6 +11382,40 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("call", json.GetProperty("reference_kind").GetString());
             Assert.Equal(12, json.GetProperty("line").GetInt32());
+            Assert.Equal("M", json.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_CSharpCompactSameLineTypeBody_PrefersInnermostMethodContainer()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_references_compact_same_line_type_body");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace N;
+                enum Color { Red }
+                class C { int N => 0; void M() { var x = global::N.Color.Red; } }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("function", json.GetProperty("container_kind").GetString());
             Assert.Equal("M", json.GetProperty("container_name").GetString());
         }
         finally
