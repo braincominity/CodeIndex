@@ -1626,11 +1626,28 @@ public static class SymbolExtractor
                         // (`static Foo() { ... }`) を保存する。同一行に brace 本体が閉じる
                         // ケースではその末尾で切り詰め、シグネチャが本体全体を飲み込まない
                         // ようにする。Closes #348.
-                        var nameLineStartColumn = csharpSingleLineCollapsedMatch && sameLineEndUsesRawColumns
-                            ? csharpSignatureRawStartColumn
+                        var nameLineStartColumn = csharpSingleLineCollapsedMatch
+                            ? (sameLineEndUsesRawColumns
+                                ? csharpSignatureRawStartColumn
+                                : TranslateCSharpCollapsedColumnToRaw(
+                                    csharpMatchColumnToRaw,
+                                    i,
+                                    absoluteStartColumn,
+                                    line.Length))
                             : absoluteStartColumn;
+                        var nameLineEndExclusive = sameLineEndColumn >= absoluteStartColumn
+                            ? (sameLineEndUsesRawColumns
+                                ? Math.Min(sameLineEndColumn + 1, line.Length)
+                                : Math.Min(
+                                    TranslateCSharpCollapsedColumnToRaw(
+                                        csharpMatchColumnToRaw,
+                                        i,
+                                        sameLineEndColumn,
+                                        line.Length) + 1,
+                                    line.Length))
+                            : line.Length;
                         var nameLineContent = sameLineEndColumn >= absoluteStartColumn
-                            ? line[nameLineStartColumn..Math.Min(sameLineEndColumn + 1, line.Length)]
+                            ? line[nameLineStartColumn..nameLineEndExclusive]
                             : line[nameLineStartColumn..];
                         signature = (csharpWrappedModifierPrefix + " " + nameLineContent.TrimStart()).Trim();
                     }
@@ -1638,19 +1655,20 @@ public static class SymbolExtractor
                     {
                         if (lang == "csharp"
                             && csharpSingleLineCollapsedMatch
-                            && !sameLineEndUsesRawColumns
-                            && CanUseCSharpSameLineSemicolonEndColumn(kind))
+                            && (sameLineEndUsesRawColumns || CanUseCSharpSameLineSemicolonEndColumn(kind)))
                         {
                             var rawStart = TranslateCSharpCollapsedColumnToRaw(
                                 csharpMatchColumnToRaw,
                                 i,
                                 absoluteStartColumn,
                                 line.Length);
-                            var rawEndInclusive = TranslateCSharpCollapsedColumnToRaw(
-                                csharpMatchColumnToRaw,
-                                i,
-                                sameLineEndColumn,
-                                line.Length);
+                            var rawEndInclusive = sameLineEndUsesRawColumns
+                                ? sameLineEndColumn
+                                : TranslateCSharpCollapsedColumnToRaw(
+                                    csharpMatchColumnToRaw,
+                                    i,
+                                    sameLineEndColumn,
+                                    line.Length);
                             var rawEndExclusive = Math.Min(rawEndInclusive + 1, line.Length);
                             if (rawStart > line.Length)
                                 rawStart = line.Length;
@@ -1840,6 +1858,9 @@ public static class SymbolExtractor
                                     Name = entry.Name,
                                     Line = startLine,
                                     StartLine = startLine,
+                                    StartColumn = csharpSingleLineCollapsedMatch
+                                        ? csharpSignatureRawStartColumn
+                                        : absoluteStartColumn,
                                     EndLine = Math.Max(startLine, endLine),
                                     BodyStartLine = bodyStartLine,
                                     BodyEndLine = bodyEndLine,
@@ -1863,6 +1884,9 @@ public static class SymbolExtractor
                                 Name = name,
                                 Line = startLine,
                                 StartLine = startLine,
+                                StartColumn = csharpSingleLineCollapsedMatch
+                                    ? csharpSignatureRawStartColumn
+                                    : absoluteStartColumn,
                                 EndLine = Math.Max(startLine, endLine),
                                 BodyStartLine = bodyStartLine,
                                 BodyEndLine = bodyEndLine,
@@ -6710,6 +6734,7 @@ public static class SymbolExtractor
                 && existing.Name == symbol.Name
                 && existing.Line == symbol.Line
                 && existing.StartLine == symbol.StartLine
+                && existing.StartColumn == symbol.StartColumn
                 && existing.EndLine == symbol.EndLine
                 && existing.BodyStartLine == symbol.BodyStartLine
                 && existing.BodyEndLine == symbol.BodyEndLine
@@ -13708,9 +13733,14 @@ public static class SymbolExtractor
         CSharpLexState[]? csharpLineStartStates = null)
     {
         var ordered = symbols
-            .OrderBy(s => s.StartLine)
-            .ThenByDescending(s => s.EndLine)
-            .ThenByDescending(s => s.Signature?.Length ?? 0)
+            .Select((symbol, originalIndex) => new { Symbol = symbol, OriginalIndex = originalIndex })
+            .OrderBy(entry => entry.Symbol.StartLine)
+            .ThenBy(entry => entry.Symbol.StartColumn.HasValue ? 0 : 1)
+            .ThenBy(entry => entry.Symbol.StartColumn ?? int.MaxValue)
+            .ThenByDescending(entry => entry.Symbol.EndLine)
+            .ThenByDescending(entry => entry.Symbol.Signature?.Length ?? 0)
+            .ThenBy(entry => entry.OriginalIndex)
+            .Select(entry => entry.Symbol)
             .ToList();
 
         var stack = new Stack<SymbolRecord>();
