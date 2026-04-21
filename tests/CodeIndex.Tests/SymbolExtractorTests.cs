@@ -8898,16 +8898,19 @@ public class SymbolExtractorTests
         // after method-like patterns with a return type, so
         // `public class C { public C() { } public int P { get; set; } }`
         // still dropped `P` while the same shape after a normal method worked.
-        // Lock both instance and static constructor forms because they share the
-        // same function-kind same-line stop path, even though the static ctor itself
-        // is not guaranteed to surface as a separate symbol in every shape here.
-        // Closes #470 review follow-up.
+        // Issue #478 showed an additional starvation path: the dedicated static-ctor
+        // regex sat after property rows, so
+        // `public class D { static D() { } public int Q { get; set; } }`
+        // indexed `Q` but silently lost the static ctor itself. Lock both ctor kinds
+        // and the later properties in one same-line fixture. Closes #470 / #478.
         // 同一行の C# constructor は、その後ろに続く sibling 宣言の pattern 到達を
         // 止めてはならない。#470 の追修正当初は戻り値型を持つ method 系だけを再開
         // していたため、`public class C { public C() { } public int P { get; set; } }`
-        // では通常 method 後と違って `P` がまだ落ちていた。instance / static ctor は
-        // 同じ function-kind の same-line stop 経路を共有するため、後続 property を
-        // 両方固定する。Closes #470 review follow-up.
+        // では通常 method 後と違って `P` がまだ落ちていた。さらに #478 では、
+        // static ctor 専用 regex が property 行より後ろにあったため
+        // `public class D { static D() { } public int Q { get; set; } }`
+        // で `Q` は出ても static ctor 自体が欠落していた。instance / static ctor と
+        // 後続 property の両方をこの same-line fixture で固定する。Closes #470 / #478.
         var content = string.Join(
             "\n",
             "public class C { public C() { } public int P { get; set; } }",
@@ -8922,6 +8925,11 @@ public class SymbolExtractorTests
         Assert.Equal("class", p.ContainerKind);
         Assert.Equal("C", p.ContainerName);
         Assert.Equal("public int P { get; set; }", p.Signature);
+
+        var staticCtor = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "D"));
+        Assert.Equal("class", staticCtor.ContainerKind);
+        Assert.Equal("D", staticCtor.ContainerName);
+        Assert.Equal("static D() { }", staticCtor.Signature);
 
         var q = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Q"));
         Assert.Equal("class", q.ContainerKind);
