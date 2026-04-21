@@ -8265,6 +8265,72 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpEnumMemberRepeatedAliasNamesUseNearestAliasScope()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_repeated_alias_scope");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Status
+                {
+                    Ready
+                }
+
+                public static class Values
+                {
+                    public static int Ready = 1;
+                }
+
+                namespace B;
+
+                using Alias = Demo.Values;
+
+                public class UsesValues
+                {
+                    public int Read()
+                    {
+                        return Alias.Ready;
+                    }
+                }
+
+                namespace C;
+
+                using Alias = Demo.Status;
+
+                public class UsesEnum
+                {
+                    public Status Read()
+                    {
+                        return Alias.Ready;
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal(33, json.GetProperty("line").GetInt32());
+            Assert.Equal("Read", json.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactCountJson_PathScopeDoesNotInheritOutOfScopeEnumMemberMetadata()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_references_scoped_js");

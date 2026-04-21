@@ -967,6 +967,56 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithRepeatedAliasNames_UsesNearestAliasScope()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Values
+            {
+                public static int Ready = 1;
+            }
+
+            namespace B;
+
+            using Alias = Demo.Values;
+
+            public class UsesValues
+            {
+                public int Read()
+                {
+                    return Alias.Ready;
+                }
+            }
+
+            namespace C;
+
+            using Alias = Demo.Status;
+
+            public class UsesEnum
+            {
+                public Status Read()
+                {
+                    return Alias.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal(33, readyRef.Line);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
     public void Extract_ConstructorCalls_AreInstantiateOnly()
     {
         const string content = """

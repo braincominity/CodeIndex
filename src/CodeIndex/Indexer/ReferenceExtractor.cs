@@ -504,7 +504,7 @@ public static class ReferenceExtractor
         // 宣言ヘッダー全体を合成コンテナで上書きする。`{` / `;` 以降の本体行は通常の container に戻す。
         var recordPrimaryCtorRanges = BuildCSharpPrimaryCtorContainers(language, symbols, structuralLines);
         var csharpQualifiedEnumMemberLookup = BuildCSharpQualifiedEnumMemberLookup(language, symbols);
-        var csharpUsingAliasMap = BuildCSharpUsingAliasMap(language, structuralLines);
+        var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols);
 
         var references = new List<ReferenceRecord>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -879,7 +879,7 @@ public static class ReferenceExtractor
                     preparedLine,
                     csharpQualifiedEnumMemberLookup,
                     csharpAttrRangesOnLine,
-                    csharpUsingAliasMap,
+                    csharpUsingAliases,
                     references,
                     seen,
                     fileId,
@@ -1181,15 +1181,20 @@ public static class ReferenceExtractor
     private static bool IsCSharpIdentifierStart(char c) =>
         c == '_' || c == '@' || char.IsLetter(c);
 
-    private static Dictionary<string, string> BuildCSharpUsingAliasMap(string language, IReadOnlyList<string> structuralLines)
+    private sealed record CSharpUsingAliasRecord(string AliasName, string TargetQualifiedName, int Line);
+
+    private static List<CSharpUsingAliasRecord> BuildCSharpUsingAliases(string language, IReadOnlyList<SymbolRecord> symbols)
     {
-        var aliases = new Dictionary<string, string>(StringComparer.Ordinal);
+        var aliases = new List<CSharpUsingAliasRecord>();
         if (language != "csharp")
             return aliases;
 
-        foreach (var line in structuralLines)
+        foreach (var symbol in symbols)
         {
-            var match = CSharpUsingAliasRegex.Match(line);
+            if (symbol.Kind != "import" || string.IsNullOrWhiteSpace(symbol.Signature))
+                continue;
+
+            var match = CSharpUsingAliasRegex.Match(symbol.Signature!);
             if (!match.Success)
                 continue;
 
@@ -1198,9 +1203,10 @@ public static class ReferenceExtractor
             if (string.IsNullOrWhiteSpace(alias) || string.IsNullOrWhiteSpace(target))
                 continue;
 
-            aliases[alias] = target;
+            aliases.Add(new CSharpUsingAliasRecord(alias, target, symbol.Line));
         }
 
+        aliases.Sort(static (left, right) => left.Line.CompareTo(right.Line));
         return aliases;
     }
 
@@ -1257,7 +1263,7 @@ public static class ReferenceExtractor
         string preparedLine,
         IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> enumMemberLookup,
         IReadOnlyList<(int start, int end)>? csharpAttrRangesOnLine,
-        IReadOnlyDictionary<string, string> usingAliases,
+        IReadOnlyList<CSharpUsingAliasRecord> usingAliases,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -1284,7 +1290,7 @@ public static class ReferenceExtractor
                 continue;
 
             var qualifier = NormalizeCSharpQualifiedSegments(preparedLine, parsed.Segments, parsed.Segments.Count - 1);
-            var resolvedQualifier = ResolveCSharpQualifiedAliasTarget(qualifier, usingAliases);
+            var resolvedQualifier = ResolveCSharpQualifiedAliasTarget(qualifier, lineNumber, usingAliases);
             if (!MatchesQualifiedEnumType(resolvedQualifier, targets))
                 continue;
 
@@ -1417,13 +1423,26 @@ public static class ReferenceExtractor
         return NormalizeCSharpQualifiedSegments(trimmed, parsed.Segments, parsed.Segments.Count);
     }
 
-    private static string ResolveCSharpQualifiedAliasTarget(string qualifier, IReadOnlyDictionary<string, string> usingAliases)
+    private static string ResolveCSharpQualifiedAliasTarget(string qualifier, int lineNumber, IReadOnlyList<CSharpUsingAliasRecord> usingAliases)
     {
         if (string.IsNullOrWhiteSpace(qualifier) || usingAliases.Count == 0)
             return qualifier;
 
         var firstSegment = GetFirstQualifiedSegment(qualifier);
-        if (!usingAliases.TryGetValue(firstSegment, out var aliasTarget))
+        string? aliasTarget = null;
+        for (var i = usingAliases.Count - 1; i >= 0; i--)
+        {
+            var alias = usingAliases[i];
+            if (alias.Line > lineNumber)
+                continue;
+            if (!string.Equals(alias.AliasName, firstSegment, StringComparison.Ordinal))
+                continue;
+
+            aliasTarget = alias.TargetQualifiedName;
+            break;
+        }
+
+        if (aliasTarget == null)
             return qualifier;
 
         return qualifier.Length == firstSegment.Length
