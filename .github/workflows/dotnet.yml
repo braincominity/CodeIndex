@@ -30,11 +30,41 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # The Windows lane is still dominated by temp-heavy test I/O even after
+      # the Defender exclusions from #394. Pinning TMP/TEMP to RUNNER_TEMP
+      # moves Path.GetTempPath()-driven fixtures onto the same faster, already
+      # CI-owned volume as the checkout workspace instead of the default user
+      # profile temp under C:\Users\runneradmin\AppData\Local\Temp.
+      # GITHUB_ENV is written before the Defender-exclusion step so the later
+      # verification sees the actual effective TMP/TEMP/GetTempPath values.
+      # Windows lane は #394 の Defender 除外後も temp-heavy なテスト I/O が
+      # 支配的なため、TMP/TEMP を RUNNER_TEMP 配下へ固定する。これにより
+      # Path.GetTempPath() を使う fixture 群が、既定の
+      # C:\Users\runneradmin\AppData\Local\Temp ではなく checkout と同じ
+      # CI 管理下の高速ボリュームを使う。Defender 除外 step より前に
+      # GITHUB_ENV へ書き込むことで、後続の検証が実際の TMP/TEMP /
+      # GetTempPath 値をそのまま確認できるようにする。
+      - name: Pin Windows TMP/TEMP to runner temp
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tempRoot = Join-Path $env:RUNNER_TEMP "cdidx-temp"
+          New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+
+          "TMP=$tempRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TEMP=$tempRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          $env:TMP = $tempRoot
+          $env:TEMP = $tempRoot
+          Write-Host "Pinned Windows TMP/TEMP to: $tempRoot"
+          Write-Host ".NET Path.GetTempPath() now resolves to: $([System.IO.Path]::GetTempPath())"
+
       # Windows Defender real-time scanning of every temp file created by the
       # test suite (temp projects, SQLite DBs, .cdidx directories, synthetic
       # source files) dominates the Windows lane of this matrix; see issue #394.
-      # Excluding the workspace and every candidate temp root before build/test
-      # brings the Windows runtime back in line with macOS/Ubuntu.
+      # Excluding the workspace plus the effective temp roots before build/test
+      # prevents silent regression if the runner image or TMP/TEMP wiring
+      # changes again in the future.
       # We rely on -ExclusionPath only: -ExclusionProcess expects full image
       # paths, so bare filenames like 'dotnet.exe' would silently fail to take
       # effect. We include $env:TMP and the live [IO.Path]::GetTempPath() value
@@ -50,7 +80,8 @@ jobs:
       # テストスイートが大量に作る一時ファイル（temp project / SQLite DB /
       # .cdidx / 合成ソース）を Windows Defender が都度スキャンする影響で
       # Windows lane だけ極端に遅くなる（issue #394）。build/test 前に
-      # workspace と全候補 temp root を除外して macOS/Ubuntu と同等に戻す。
+      # workspace と実効 temp root 群を build/test 前に除外し、runner image や
+      # TMP/TEMP の配線が今後変わっても silent regression しないようにする。
       # -ExclusionProcess はフルパスを要求する仕様のため、bare filename では
       # 黙って no-op になる。ここでは -ExclusionPath だけに寄せる。.NET の
       # Path.GetTempPath() は TMP → TEMP → USERPROFILE の順で参照し、pwsh の
