@@ -9546,6 +9546,42 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_WrappedNestedTypeClosingBraceLineKeepsLastInnerMemberAndOuterSibling()
+    {
+        // A wrapped nested type can end on the same line as both its last inner member and
+        // a later outer sibling (`public int P { get; } } public int Q { get; }`). The
+        // closing-line body clamp from #545 must still keep `P` inside `Wrapped`, while the
+        // same-line restart skips the intervening `}` and still reaches outer sibling `Q`.
+        // Closes #549.
+        // wrapped な nested type は、最後の inner member と後続 outer sibling が同じ閉じ
+        // brace 行 (`public int P { get; } } public int Q { get; }`) に載ることがある。
+        // #545 の closing-line body clamp は `P` を `Wrapped` の内側に残しつつ、same-line
+        // restart は間の `}` を飛ばして outer sibling `Q` に到達しなければならない。
+        // Closes #549.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        public int P { get; } } public int Q { get; }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var innerProperty = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("class", innerProperty.ContainerKind);
+        Assert.Equal("Wrapped", innerProperty.ContainerName);
+
+        var outerProperty = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Q"));
+        Assert.Equal("public int Q { get; }", outerProperty.Signature);
+        Assert.Equal("class", outerProperty.ContainerKind);
+        Assert.Equal("Host", outerProperty.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineMultipleFieldsAreAllCaptured()
     {
         // `public class Multi { public int A; public int B; public int C; }` must

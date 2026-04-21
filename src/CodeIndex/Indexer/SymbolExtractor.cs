@@ -1255,7 +1255,7 @@ public static class SymbolExtractor
                     firstNonWhitespace++;
 
                 if (firstNonWhitespace < matchLine.Length && matchLine[firstNonWhitespace] == '}')
-                    patternStartOffset = FindNextSameLineBraceStatementStart(matchLine, firstNonWhitespace + 1, lang);
+                    patternStartOffset = FindNextSameLineNonClosingBraceStatementStart(matchLine, firstNonWhitespace + 1, lang);
             }
             while (patternStartOffset >= 0 && patternStartOffset < matchLine.Length)
             {
@@ -2014,7 +2014,7 @@ public static class SymbolExtractor
                             // 通常の単独宣言行で duplicate 経路を再び開かない。Closes #470 / #473.
                             if (csharpSingleLineCollapsedMatch && sameLineEndUsesRawColumns)
                             {
-                                var rawNextSiblingOffset = FindNextSameLineBraceStatementStart(line, sameLineEndColumn + 1, lang);
+                                var rawNextSiblingOffset = FindNextSameLineNonClosingBraceStatementStart(line, sameLineEndColumn + 1, lang);
                                 if (rawNextSiblingOffset > sameLineEndColumn)
                                 {
                                     restartPatternScanOffset = TranslateCSharpRawColumnToCollapsed(
@@ -2028,10 +2028,9 @@ public static class SymbolExtractor
                             }
                             else
                             {
-                                var nextSiblingOffset = FindNextSameLineBraceStatementStart(matchLine, sameLineEndColumn + 1, lang);
+                                var nextSiblingOffset = FindNextSameLineNonClosingBraceStatementStart(matchLine, sameLineEndColumn + 1, lang);
                                 if (nextSiblingOffset > sameLineEndColumn
-                                    && nextSiblingOffset < matchLine.Length
-                                    && matchLine[nextSiblingOffset] != '}')
+                                    && nextSiblingOffset < matchLine.Length)
                                 {
                                     restartPatternScanOffset = nextSiblingOffset;
                                     break;
@@ -2098,7 +2097,7 @@ public static class SymbolExtractor
                     var nextSameLineOffset = -1;
                     if (csharpSingleLineCollapsedMatch && sameLineEndUsesRawColumns)
                     {
-                        var rawNextSameLineOffset = FindNextSameLineBraceStatementStart(line, sameLineEndColumn + 1, lang);
+                        var rawNextSameLineOffset = FindNextSameLineNonClosingBraceStatementStart(line, sameLineEndColumn + 1, lang);
                         if (rawNextSameLineOffset > sameLineEndColumn)
                         {
                             nextSameLineOffset = TranslateCSharpRawColumnToCollapsed(
@@ -2111,7 +2110,7 @@ public static class SymbolExtractor
                     }
                     else
                     {
-                        nextSameLineOffset = FindNextSameLineBraceStatementStart(matchLine, sameLineEndColumn + 1, lang);
+                        nextSameLineOffset = FindNextSameLineNonClosingBraceStatementStart(matchLine, sameLineEndColumn + 1, lang);
                     }
                     var sameLineAdvanceComparisonColumn = csharpSingleLineCollapsedMatch && sameLineEndUsesRawColumns
                         ? TranslateCSharpRawColumnToCollapsed(
@@ -2125,8 +2124,7 @@ public static class SymbolExtractor
                         && kind == "property"
                         && pattern.BodyStyle == BodyStyle.Brace
                         && nextSameLineOffset > sameLineAdvanceComparisonColumn
-                        && nextSameLineOffset < matchLine.Length
-                        && matchLine[nextSameLineOffset] != '}')
+                        && nextSameLineOffset < matchLine.Length)
                     {
                         // A same-line brace-body property that is followed by another sibling
                         // declaration (`P { get; set; } public void M() { }`) must hand control
@@ -2202,7 +2200,7 @@ public static class SymbolExtractor
         else if (lang == "java")
             ExtractJavaEnumMembers(fileId, lines, symbols);
 
-        AssignContainers(symbols);
+        AssignContainers(symbols, lines);
         MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
         PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
@@ -3092,7 +3090,7 @@ public static class SymbolExtractor
             pos = cursor < maskedText.Length ? cursor + 1 : cursor;
         }
 
-        AssignContainers(symbols);
+        AssignContainers(symbols, lines);
         PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
     }
@@ -7406,7 +7404,7 @@ public static class SymbolExtractor
                     depth--;
                     if (depth == 0)
                     {
-                        var trailingSiblingOffset = FindNextSameLineBraceStatementStart(scanLine, j + 1, "csharp");
+                        var trailingSiblingOffset = FindNextSameLineNonClosingBraceStatementStart(scanLine, j + 1, "csharp");
                         var bodyEndLine = trailingSiblingOffset >= 0
                             && bodyStartLine.HasValue
                             && bodyStartLine.Value < i + 1
@@ -9378,6 +9376,26 @@ public static class SymbolExtractor
             : FindNextBraceStatementStart(matchLine, startIndex);
     }
 
+    // C# same-line restarts can legitimately hit a container-closing `}` before the next
+    // real sibling declaration (`... P { get; } } public int Q { get; }`). Keep advancing
+    // until we reach a non-`}` statement start so the later outer sibling is still visible.
+    // C# の同一行再開は、次の実 sibling 宣言の前に container を閉じる `}` に当たりうる
+    // (`... P { get; } } public int Q { get; }`)。後続の outer sibling を落とさないよう、
+    // 非 `}` の statement start に当たるまで再開位置を進める。
+    private static int FindNextSameLineNonClosingBraceStatementStart(string matchLine, int startIndex, string? lang)
+    {
+        var nextOffset = FindNextSameLineBraceStatementStart(matchLine, startIndex, lang);
+        while (lang == "csharp"
+               && nextOffset >= 0
+               && nextOffset < matchLine.Length
+               && matchLine[nextOffset] == '}')
+        {
+            nextOffset = FindNextSameLineBraceStatementStart(matchLine, nextOffset + 1, lang);
+        }
+
+        return nextOffset;
+    }
+
     private static int FindNextBraceStatementStart(string line, int startIndex)
     {
         var index = Math.Max(0, startIndex);
@@ -10153,10 +10171,9 @@ public static class SymbolExtractor
         if (statementEnd <= startColumn)
             return false;
 
-        var nextOffset = FindNextSameLineBraceStatementStart(matchLine, statementEnd, "csharp");
+        var nextOffset = FindNextSameLineNonClosingBraceStatementStart(matchLine, statementEnd, "csharp");
         if (nextOffset <= statementEnd
-            || nextOffset >= matchLine.Length
-            || matchLine[nextOffset] == '}')
+            || nextOffset >= matchLine.Length)
         {
             return false;
         }
@@ -10179,10 +10196,9 @@ public static class SymbolExtractor
         if (bodyEnd < startColumn)
             return false;
 
-        var nextOffset = FindNextSameLineBraceStatementStart(matchLine, bodyEnd + 1, "csharp");
+        var nextOffset = FindNextSameLineNonClosingBraceStatementStart(matchLine, bodyEnd + 1, "csharp");
         if (nextOffset <= bodyEnd
-            || nextOffset >= matchLine.Length
-            || matchLine[nextOffset] == '}')
+            || nextOffset >= matchLine.Length)
         {
             return false;
         }
@@ -13605,7 +13621,7 @@ public static class SymbolExtractor
         }
     }
 
-    private static void AssignContainers(List<SymbolRecord> symbols)
+    private static void AssignContainers(List<SymbolRecord> symbols, string[]? rawLines = null)
     {
         var ordered = symbols
             .OrderBy(s => s.StartLine)
@@ -13619,7 +13635,7 @@ public static class SymbolExtractor
             while (stack.Count > 0 && !IsFileScopedNamespace(stack.Peek()) && symbol.StartLine > stack.Peek().EndLine)
                 stack.Pop();
 
-            var containerPath = GetEffectiveContainerPath(stack, symbol);
+            var containerPath = GetEffectiveContainerPath(stack, symbol, rawLines);
 
             if (containerPath.Count > 0)
             {
@@ -13653,11 +13669,11 @@ public static class SymbolExtractor
         }
     }
 
-    private static IReadOnlyList<SymbolRecord> GetEffectiveContainerPath(IEnumerable<SymbolRecord> containers, SymbolRecord symbol)
+    private static IReadOnlyList<SymbolRecord> GetEffectiveContainerPath(IEnumerable<SymbolRecord> containers, SymbolRecord symbol, string[]? rawLines = null)
     {
         var orderedContainers = containers.Reverse().ToList();
         var containingContainers = orderedContainers
-            .Where(container => ContainsSymbol(container, symbol))
+            .Where(container => ContainsSymbol(container, symbol, rawLines))
             .ToList();
 
         if (containingContainers.Count == 0)
@@ -13722,7 +13738,7 @@ public static class SymbolExtractor
         return symbol.BodyStartLine != null && symbol.BodyEndLine != null;
     }
 
-    private static bool ContainsSymbol(SymbolRecord container, SymbolRecord candidate)
+    private static bool ContainsSymbol(SymbolRecord container, SymbolRecord candidate, string[]? rawLines = null)
     {
         if (IsFileScopedNamespace(container))
             return candidate.StartLine > container.StartLine;
@@ -13738,9 +13754,89 @@ public static class SymbolExtractor
                 && container.Signature.Contains(candidate.Signature, StringComparison.Ordinal);
         }
 
-        return candidate.StartLine >= container.BodyStartLine
+        if (candidate.StartLine >= container.BodyStartLine
             && candidate.StartLine <= container.BodyEndLine
-            && candidate.StartLine > container.StartLine;
+            && candidate.StartLine > container.StartLine)
+        {
+            return true;
+        }
+
+        return IsInsideCSharpClosingBraceLineContainer(container, candidate, rawLines);
+    }
+
+    // A wrapped C# type can deliberately end its body one line earlier when the closing
+    // brace line also starts an outer sibling (`} public int Q { get; }`). That keeps the
+    // later outer sibling out of the inner container, but the last inner member may still
+    // live earlier on that same closing-brace line (`public int P { get; } } public int Q`).
+    // Reconstruct the matching closing-brace column on the raw end line and treat only the
+    // declarations that start before that brace as inner members. Closes #549.
+    // wrapped な C# type は、閉じ brace 行に outer sibling (`} public int Q { get; }`)
+    // が続くとき、本体終端を 1 行手前へ倒して後続 sibling を inner container から外す。
+    // ただし最後の inner member 自体が同じ閉じ brace 行の前半に載ることがあり
+    // (`public int P { get; } } public int Q`)、そのままだと inner member まで外へ漏れる。
+    // そこで raw end line 上で対応する closing brace 列を再構築し、その brace より前に
+    // 始まる宣言だけを inner member として扱う。Closes #549.
+    private static bool IsInsideCSharpClosingBraceLineContainer(SymbolRecord container, SymbolRecord candidate, string[]? rawLines)
+    {
+        if (rawLines == null
+            || container.BodyStartLine == null
+            || container.BodyEndLine == null
+            || container.BodyEndLine.Value >= container.EndLine
+            || candidate.Signature == null
+            || candidate.StartLine != container.EndLine
+            || candidate.StartLine <= container.StartLine)
+        {
+            return false;
+        }
+
+        var lineIndex = container.EndLine - 1;
+        if (lineIndex < 0 || lineIndex >= rawLines.Length)
+            return false;
+
+        var closingBraceColumn = FindCSharpClosingBraceColumnOnContainerEndLine(container, rawLines);
+        if (closingBraceColumn < 0)
+            return false;
+
+        var candidateColumn = rawLines[lineIndex].IndexOf(candidate.Signature, StringComparison.Ordinal);
+        return candidateColumn >= 0 && candidateColumn < closingBraceColumn;
+    }
+
+    private static int FindCSharpClosingBraceColumnOnContainerEndLine(SymbolRecord container, string[] rawLines)
+    {
+        if (container.BodyStartLine == null
+            || container.EndLine <= 0
+            || container.EndLine > rawLines.Length
+            || container.BodyStartLine.Value <= 0
+            || container.BodyStartLine.Value > container.EndLine)
+        {
+            return -1;
+        }
+
+        var lexState = new CSharpLexState();
+        var endLineIndex = container.EndLine - 1;
+        for (var lineIndex = container.BodyStartLine.Value - 1; lineIndex < endLineIndex; lineIndex++)
+        {
+            lexState = LexCSharpLine(rawLines[lineIndex], lexState).EndState;
+        }
+
+        var sanitizedLine = LexCSharpLine(rawLines[endLineIndex], lexState).SanitizedLine;
+        var depth = 1;
+        for (var i = 0; i < sanitizedLine.Length; i++)
+        {
+            var ch = sanitizedLine[i];
+            if (ch == '{')
+            {
+                depth++;
+            }
+            else if (ch == '}')
+            {
+                depth--;
+                if (depth == 0)
+                    return i;
+            }
+        }
+
+        return -1;
     }
 
     private static bool CanContainSameLineSymbol(SymbolRecord container, SymbolRecord candidate)
