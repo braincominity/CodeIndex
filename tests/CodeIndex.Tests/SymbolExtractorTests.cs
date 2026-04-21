@@ -9146,6 +9146,34 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_SameLineAccessorEventBeforeMethodIsCaptured()
+    {
+        // Accessor-bodied events use `{ add/remove }` instead of `;`, so same-line mixed-kind
+        // recovery must treat the accessor body as the event's boundary and still restart at
+        // the following sibling method. Otherwise the event signature absorbs `public void M`
+        // and the method disappears.
+        // Closes #473 follow-up.
+        // アクセサ本体付き event は `;` ではなく `{ add/remove }` を持つため、same-line の
+        // mixed-kind 回復でも event 本体終端を境界として扱い、後続 method 位置から再開
+        // しなければならない。そうしないと event の signature が `public void M` を
+        // 飲み込み、method 自体が消える。Closes #473 follow-up.
+        var content = "public class C { public event System.Action E { add { } remove { } } public void M() { } }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "C"));
+
+        var eventSymbol = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E"));
+        Assert.Equal("class", eventSymbol.ContainerKind);
+        Assert.Equal("C", eventSymbol.ContainerName);
+        Assert.Equal("public event System.Action E { add { } remove { } }", eventSymbol.Signature);
+
+        var method = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "M"));
+        Assert.Equal("class", method.ContainerKind);
+        Assert.Equal("C", method.ContainerName);
+        Assert.Equal("public void M() { }", method.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineAutoPropertyAfterConstructorsIsCaptured()
     {
         // Same-line C# constructors must not stop later sibling declarations from

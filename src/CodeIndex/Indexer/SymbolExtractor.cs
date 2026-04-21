@@ -1531,7 +1531,11 @@ public static class SymbolExtractor
                     var sameLineEndColumn = pattern.BodyStyle == BodyStyle.Brace
                         && bodyEndLine == startLine
                         ? FindSameLineBraceEndColumn(line, absoluteStartColumn, lang, kind)
-                        : -1;
+                        : lang == "csharp"
+                            && kind == "event"
+                            && HasCSharpEventAccessorStart(patternMatchLine[absoluteStartColumn..])
+                            ? FindCSharpSameLineBraceEndColumn(line, absoluteStartColumn)
+                            : -1;
                     string signature;
                     if (csharpWrappedModifierPrefix != null)
                     {
@@ -1766,7 +1770,8 @@ public static class SymbolExtractor
                     if (lang == "csharp"
                         && pattern.Kind is "event" or "delegate"
                         && pattern.BodyStyle == BodyStyle.None
-                        && TryGetCSharpSameLineSemicolonSiblingOffset(patternMatchLine, absoluteStartColumn, out var nextSemicolonSiblingOffset))
+                        && (TryGetCSharpSameLineEventSiblingOffset(patternMatchLine, absoluteStartColumn, out var nextSemicolonSiblingOffset)
+                            || TryGetCSharpSameLineSemicolonSiblingOffset(patternMatchLine, absoluteStartColumn, out nextSemicolonSiblingOffset)))
                     {
                         restartPatternScanOffset = nextSemicolonSiblingOffset;
                         break;
@@ -9863,6 +9868,19 @@ public static class SymbolExtractor
         return StartsWithCSharpAccessorKeyword(text, cursor);
     }
 
+    private static bool HasCSharpEventAccessorStart(string text)
+    {
+        var braceIndex = text.IndexOf('{');
+        if (braceIndex < 0)
+            return false;
+
+        var cursor = SkipWhitespace(text, braceIndex + 1);
+        while (TrySkipCSharpAttributeList(text, ref cursor))
+            cursor = SkipWhitespace(text, cursor);
+
+        return StartsWithCSharpEventAccessorKeyword(text, cursor);
+    }
+
     private static bool ShouldDeferCSharpFunctionSameLineAdvance(string matchLine, int startColumn)
     {
         if (startColumn < 0 || startColumn >= matchLine.Length)
@@ -9905,6 +9923,51 @@ public static class SymbolExtractor
 
         nextSameLineOffset = nextOffset;
         return true;
+    }
+
+    private static bool TryGetCSharpSameLineEventSiblingOffset(string matchLine, int startColumn, out int nextSameLineOffset)
+    {
+        nextSameLineOffset = -1;
+        if (startColumn < 0 || startColumn >= matchLine.Length)
+            return false;
+
+        var remaining = matchLine[startColumn..];
+        if (!HasCSharpEventAccessorStart(remaining))
+            return false;
+
+        var bodyEnd = FindCSharpSameLineBraceEndColumn(matchLine, startColumn);
+        if (bodyEnd < startColumn)
+            return false;
+
+        var nextOffset = FindNextSameLineBraceStatementStart(matchLine, bodyEnd + 1, "csharp");
+        if (nextOffset <= bodyEnd
+            || nextOffset >= matchLine.Length
+            || matchLine[nextOffset] == '}')
+        {
+            return false;
+        }
+
+        nextSameLineOffset = nextOffset;
+        return true;
+    }
+
+    private static bool StartsWithCSharpEventAccessorKeyword(string text, int start)
+    {
+        return StartsWithCSharpEventAccessorKeyword(text, start, "add")
+            || StartsWithCSharpEventAccessorKeyword(text, start, "remove");
+    }
+
+    private static bool StartsWithCSharpEventAccessorKeyword(string text, int start, string keyword)
+    {
+        if (start < 0)
+            return false;
+        if (start + keyword.Length > text.Length)
+            return false;
+        if (!text.AsSpan(start, keyword.Length).SequenceEqual(keyword))
+            return false;
+
+        var end = start + keyword.Length;
+        return end >= text.Length || !char.IsLetterOrDigit(text[end]) && text[end] != '_';
     }
 
     private static bool HasCSharpTopLevelFieldInitializer(string text)
