@@ -5825,12 +5825,13 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_CSharp_DetectsGenericOverTupleReturnTypes()
     {
-        // Issue #241 / #344: the shared C# return-type matcher must allow tuple groups
+        // Issue #241 / #344 / #484: the shared C# return-type matcher must allow tuple groups
         // inside generic arguments so ordinary methods, interface declarations, and
-        // explicit-interface implementations do not silently disappear.
-        // Issue #241 / #344: 共有の C# 戻り値型 matcher は generic 引数内の tuple を
+        // explicit-interface implementations do not silently disappear, even when tuple
+        // elements themselves contain nested tuples.
+        // Issue #241 / #344 / #484: 共有の C# 戻り値型 matcher は generic 引数内の tuple を
         // 許容し、通常メソッド・interface 宣言・明示的インターフェース実装が
-        // 無言で消えないようにしなければならない。
+        // 無言で消えないようにしなければならず、tuple 要素側の入れ子 tuple も扱えなければならない。
         var content = """
             namespace Demo;
 
@@ -5838,6 +5839,7 @@ public class SymbolExtractorTests
             {
                 System.Collections.Generic.List<(int, int)> GetList();
                 System.Threading.Tasks.Task<((int A, int B), string Name)> Nested();
+                System.Threading.Tasks.Task<(((int A, int B), int C), string Name)> TooDeep();
             }
 
             public class Service : IFoo
@@ -5847,7 +5849,9 @@ public class SymbolExtractorTests
                 public System.Collections.Generic.IEnumerable<(string Key, int Value)> Items() => [];
                 System.Collections.Generic.List<(int, int)> IFoo.GetList() => [];
                 public System.Threading.Tasks.Task<((int A, int B), string Name)> NestedAsync() => System.Threading.Tasks.Task.FromResult(((1, 2), "n"));
+                public System.Threading.Tasks.Task<(((int A, int B), int C), string Name)> TooDeepAsync() => System.Threading.Tasks.Task.FromResult((((1, 2), 3), "deep"));
                 System.Threading.Tasks.Task<((int A, int B), string Name)> IFoo.Nested() => System.Threading.Tasks.Task.FromResult(((1, 2), "n"));
+                System.Threading.Tasks.Task<(((int A, int B), int C), string Name)> IFoo.TooDeep() => System.Threading.Tasks.Task.FromResult((((1, 2), 3), "deep"));
             }
             """;
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
@@ -5874,6 +5878,15 @@ public class SymbolExtractorTests
         Assert.Equal(2, nestedDeclarations.Count);
         Assert.Contains(nestedDeclarations, s => s.ContainerKind == "interface" && s.ContainerName == "IFoo" && s.ReturnType == "System.Threading.Tasks.Task<((intA,intB),stringName)>");
         Assert.Contains(nestedDeclarations, s => s.ContainerKind == "class" && s.ContainerName == "Service" && s.ReturnType == "System.Threading.Tasks.Task<((intA,intB),stringName)>");
+
+        var tooDeepAsync = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "TooDeepAsync"));
+        Assert.Equal("System.Threading.Tasks.Task<(((intA,intB),intC),stringName)>", tooDeepAsync.ReturnType);
+        Assert.Contains("System.Threading.Tasks.Task<(((int A, int B), int C), string Name)> TooDeepAsync()", tooDeepAsync.Signature);
+
+        var tooDeepDeclarations = symbols.Where(s => s.Kind == "function" && s.Name == "TooDeep").ToList();
+        Assert.Equal(2, tooDeepDeclarations.Count);
+        Assert.Contains(tooDeepDeclarations, s => s.ContainerKind == "interface" && s.ContainerName == "IFoo" && s.ReturnType == "System.Threading.Tasks.Task<(((intA,intB),intC),stringName)>");
+        Assert.Contains(tooDeepDeclarations, s => s.ContainerKind == "class" && s.ContainerName == "Service" && s.ReturnType == "System.Threading.Tasks.Task<(((intA,intB),intC),stringName)>");
     }
 
     [Fact]

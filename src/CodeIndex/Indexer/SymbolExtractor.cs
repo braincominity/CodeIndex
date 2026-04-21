@@ -54,18 +54,18 @@ public static class SymbolExtractor
     // 否定先読みで ctor 形状として弾きつつ、上流の property / method 行で本来のシンボルとして
     // 拾えるようにする。#349 のフォローアップ。
     private const string CSharpTupleSuffixPattern = @"(?:\s*(?:\?|\[[\],\s]*\]))*";
-    // Embedded tuple groups must contain at least one comma so method-call argument lists
-    // (`Make()`, `Parent(value)`) and primary-ctor parameter lists (`Child(int x)`) do not
-    // get reinterpreted as return-type segments when the shared C# type matcher is reused by
-    // method / property rows. Allow one nested paren level inside the tuple so generic return
-    // types like `Task<((int A, int B), string Name)>` still count as tuple-shaped while
-    // single-call parens without commas keep falling through to the existing non-match path.
-    // 埋め込み tuple group は最低 1 個の comma を必須にし、`Make()` / `Parent(value)` のような
-    // 呼び出し引数や `Child(int x)` のような primary ctor パラメータ列を、共有 C# 型 matcher が
-    // 戻り値型 segment と誤認しないようにする。さらに 1 段だけ入れ子括弧を許容し、
-    // `Task<((int A, int B), string Name)>` のような nested tuple も tuple 形状として扱える
-    // 一方、comma の無い通常の call paren は従来どおり不一致に落とす。
-    private const string CSharpTupleGroupPattern = @"\((?:[^()]|\([^()]*\))*?,(?:[^()]|\([^()]*\))*\)";
+    // Embedded tuple groups must contain a comma at the OUTER tuple level so ordinary
+    // call/ctor parens (`Make()`, `Parent(value)`) keep falling through, while real tuple
+    // segments inside generics can nest arbitrarily deep (`Task<((int A, int B), string Name)>`,
+    // `Task<(((int A, int B), int C), string Name)>`). The balancing-group variant tracks nested
+    // parens and only records commas seen at depth 0.
+    // 埋め込み tuple group は最外 tuple レベルの comma を必須にし、`Make()` / `Parent(value)` の
+    // ような通常の call/ctor 括弧列は従来どおり不一致に落としつつ、generic 内の実 tuple segment
+    // は `Task<((int A, int B), string Name)>` / `Task<(((int A, int B), int C), string Name)>`
+    // のような深い入れ子まで通せるようにする。balancing-group 版で入れ子括弧を追跡し、
+    // 深さ 0 で見えた comma だけを tuple 判定に使う。
+    private const string CSharpTupleGroupPattern =
+        @"\((?>(?:[^(),]+|\((?<TupleDepth>)|\)(?<-TupleDepth>)|(?(TupleDepth),|(?<TupleComma>,))))*(?(TupleDepth)(?!))(?(TupleComma)|(?!))\)";
     private const string CSharpTypeTokenCharsPattern = @"[\w?.<>\[\],:*]";
     private const string CSharpTypeSegmentPattern =
         @"(?:" + CSharpTypeTokenCharsPattern + @"+(?:" + CSharpTupleGroupPattern + CSharpTypeTokenCharsPattern + @"*)*|" + CSharpTupleGroupPattern + CSharpTypeTokenCharsPattern + @"*)";
