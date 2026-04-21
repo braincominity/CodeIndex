@@ -2165,6 +2165,28 @@ public static class ReferenceExtractor
         return true;
     }
 
+    private static bool IsCSharpTerminalQueryClauseKeyword(string keyword)
+    {
+        return string.Equals(keyword, "select", StringComparison.Ordinal)
+            || string.Equals(keyword, "group", StringComparison.Ordinal);
+    }
+
+    private static bool IsCSharpQueryClauseKeyword(string keyword)
+    {
+        return IsCSharpTerminalQueryClauseKeyword(keyword)
+            || string.Equals(keyword, "from", StringComparison.Ordinal)
+            || string.Equals(keyword, "let", StringComparison.Ordinal)
+            || string.Equals(keyword, "where", StringComparison.Ordinal)
+            || string.Equals(keyword, "orderby", StringComparison.Ordinal)
+            || string.Equals(keyword, "join", StringComparison.Ordinal)
+            || string.Equals(keyword, "on", StringComparison.Ordinal)
+            || string.Equals(keyword, "equals", StringComparison.Ordinal)
+            || string.Equals(keyword, "by", StringComparison.Ordinal)
+            || string.Equals(keyword, "into", StringComparison.Ordinal)
+            || string.Equals(keyword, "ascending", StringComparison.Ordinal)
+            || string.Equals(keyword, "descending", StringComparison.Ordinal);
+    }
+
     private static bool TryFindMatchingCSharpDelimiter(
         IReadOnlyList<string> structuralLines,
         int bodyEndIndex,
@@ -2232,14 +2254,9 @@ public static class ReferenceExtractor
                 if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0
                     && TryConsumeCSharpQueryClauseKeyword(line, column, out var keyword, out var nextColumn))
                 {
-                    if (string.Equals(keyword, "select", StringComparison.Ordinal)
-                        || string.Equals(keyword, "group", StringComparison.Ordinal))
+                    if (IsCSharpQueryClauseKeyword(keyword))
                     {
-                        terminalClauseSeen = true;
-                    }
-                    else if (terminalClauseSeen && string.Equals(keyword, "into", StringComparison.Ordinal))
-                    {
-                        terminalClauseSeen = false;
+                        terminalClauseSeen = IsCSharpTerminalQueryClauseKeyword(keyword);
                     }
 
                     column = nextColumn - 1;
