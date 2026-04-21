@@ -1484,7 +1484,8 @@ public static class ReferenceExtractor
             var callContainer = resolveContainerForCall(member.Start);
             var qualifier = TrimLeadingCSharpGlobalQualifier(NormalizeCSharpQualifiedSegments(preparedLine, parsed.Segments, parsed.Segments.Count - 1));
             var resolvedQualifier = ResolveCSharpQualifiedAliasTarget(qualifier, lineNumber, usingAliases);
-            if (HasCSharpValueReceiverConflict(qualifier, resolvedQualifier, lineNumber, member.Start, callContainer, valueReceiverNamesByContainingType, valueReceiverNamesByFunctionStartLine))
+            if (!parsed.HasLeadingGlobalQualifier
+                && HasCSharpValueReceiverConflict(qualifier, resolvedQualifier, lineNumber, member.Start, callContainer, valueReceiverNamesByContainingType, valueReceiverNamesByFunctionStartLine))
                 continue;
             if (!MatchesQualifiedEnumType(resolvedQualifier, targets))
                 continue;
@@ -1513,9 +1514,9 @@ public static class ReferenceExtractor
     private static bool TryReadCSharpQualifiedAccess(
         string preparedLine,
         int start,
-        out (List<(int Start, int End)> Segments, int NextIndex, bool LastSeparatorWasDot) parsed)
+        out (List<(int Start, int End)> Segments, int NextIndex, bool LastSeparatorWasDot, bool HasLeadingGlobalQualifier) parsed)
     {
-        parsed = (new List<(int Start, int End)>(), start, false);
+        parsed = (new List<(int Start, int End)>(), start, false, false);
 
         if (start > 0 && IsCSharpIdentifierPart(preparedLine[start - 1]))
             return false;
@@ -1525,6 +1526,7 @@ public static class ReferenceExtractor
         var segments = new List<(int Start, int End)>();
         var cursor = start;
         var lastSeparatorWasDot = false;
+        var hasLeadingGlobalQualifier = false;
         while (true)
         {
             if (!TryConsumeCSharpIdentifier(preparedLine, ref cursor, out var segmentStart, out var segmentEnd))
@@ -1537,6 +1539,13 @@ public static class ReferenceExtractor
                 && preparedLine[separatorStart] == ':'
                 && preparedLine[separatorStart + 1] == ':')
             {
+                if (segments.Count == 1
+                    && segmentEnd - segmentStart == "global".Length
+                    && string.CompareOrdinal(preparedLine, segmentStart, "global", 0, "global".Length) == 0)
+                {
+                    hasLeadingGlobalQualifier = true;
+                }
+
                 cursor = SkipWhitespace(preparedLine, separatorStart + 2);
                 lastSeparatorWasDot = false;
                 continue;
@@ -1549,7 +1558,7 @@ public static class ReferenceExtractor
                 continue;
             }
 
-            parsed = (segments, cursor, lastSeparatorWasDot);
+            parsed = (segments, cursor, lastSeparatorWasDot, hasLeadingGlobalQualifier);
             return true;
         }
     }
@@ -2271,7 +2280,10 @@ public static class ReferenceExtractor
                     if (IsCSharpQueryClauseKeyword(keyword)
                         && IsCSharpQueryClauseKeywordSuffix(line, nextColumn, keyword))
                     {
-                        if (string.Equals(keyword, "by", StringComparison.Ordinal) && terminalClauseSeen)
+                        if ((string.Equals(keyword, "by", StringComparison.Ordinal)
+                                || string.Equals(keyword, "ascending", StringComparison.Ordinal)
+                                || string.Equals(keyword, "descending", StringComparison.Ordinal))
+                            && terminalClauseSeen)
                         {
                             terminalClauseSeen = true;
                         }

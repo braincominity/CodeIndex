@@ -8691,6 +8691,53 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_ExactJson_CSharpGlobalQualifiedEnumMemberSurvivesPropertyShadowing()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_global_property_shadow");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                enum Color
+                {
+                    Red
+                }
+
+                class C
+                {
+                    int Color => 0;
+
+                    void M()
+                    {
+                        var x = global::Color.Red;
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var reference = Assert.Single(json.GetProperty("references").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("M", reference.GetProperty("container_name").GetString());
+            Assert.Equal(12, reference.GetProperty("line").GetInt32());
+            Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_ExactJson_CSharpIndentedLocalNamedLikeEnumDoesNotLeakReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_indented_local_collision");
@@ -9738,6 +9785,66 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpTerminalSelectIdentifierNamedDescendingPreservesLaterEnumReferenceContext()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_terminal_select_descending_identifier");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "cases.cs"),
+                """
+                using System.Collections.Generic;
+                using System.Linq;
+
+                namespace Demo;
+
+                public enum Status
+                {
+                    Ready
+                }
+
+                public static class Sink
+                {
+                    public static object Pick(object left, Status right) => right;
+                }
+
+                public sealed class Holder
+                {
+                    public int Ready { get; set; }
+                }
+
+                public sealed class Uses
+                {
+                    public object Read(IEnumerable<Holder> items)
+                    {
+                        var descending = 1;
+                        return Sink.Pick(from Status in items select descending, Status.Ready);
+                    }
+                }
+                """);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
+
+            var rows = ParseJsonLines(stdout);
+            var row = Assert.Single(rows).RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("Ready", row.GetProperty("symbol_name").GetString());
+            Assert.Equal(26, row.GetProperty("line").GetInt32());
+            Assert.Contains("Status.Ready", row.GetProperty("context").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpLambdaParameterNamedLikeEnumDoesNotLeakAfterLambda()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_lambda_scope_end");
@@ -10318,6 +10425,51 @@ public class QueryCommandRunnerTests
             Assert.Equal("call", json.GetProperty("reference_kind").GetString());
             Assert.Equal(19, json.GetProperty("line").GetInt32());
             Assert.Equal("Read", json.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_CSharpGlobalQualifiedEnumMemberSurvivesPropertyShadowing()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_global_property_shadow");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                enum Color
+                {
+                    Red
+                }
+
+                class C
+                {
+                    int Color => 0;
+
+                    void M()
+                    {
+                        var x = global::Color.Red;
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal(12, json.GetProperty("line").GetInt32());
+            Assert.Equal("M", json.GetProperty("container_name").GetString());
         }
         finally
         {

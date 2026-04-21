@@ -1298,6 +1298,34 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpGlobalQualifiedEnumMemberAccess_WithPropertyShadowing_PreservesReference()
+    {
+        const string content = """
+            enum Color
+            {
+                Red
+            }
+
+            class C
+            {
+                int Color => 0;
+
+                void M()
+                {
+                    var x = global::Color.Red;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var redRef = Assert.Single(references.Where(reference => reference.SymbolName == "Red" && reference.ReferenceKind == "call"));
+        Assert.Equal(12, redRef.Line);
+        Assert.Equal("M", redRef.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpQualifiedEnumMemberAccess_WithGetterLocalShadowing_DoesNotLeakIntoSetter()
     {
         const string content = """
@@ -2197,6 +2225,52 @@ public class ReferenceExtractorTests
 
         Assert.Single(readyRefs);
         Assert.Equal(25, readyRefs[0].Line);
+        Assert.Contains("Status.Ready", readyRefs[0].Context, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithTerminalSelectIdentifierNamedDescending_PreservesLaterEnumReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static object Pick(object left, Status right) => right;
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public object Read(IEnumerable<Holder> items)
+                {
+                    var descending = 1;
+                    return Sink.Pick(from Status in items select descending, Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .ToList();
+
+        Assert.Single(readyRefs);
+        Assert.Equal(26, readyRefs[0].Line);
         Assert.Contains("Status.Ready", readyRefs[0].Context, StringComparison.Ordinal);
     }
 

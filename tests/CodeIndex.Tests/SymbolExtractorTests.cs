@@ -9314,6 +9314,39 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_SameLineGenericBraceBodiedMembersStillExposeLaterCompactSiblings()
+    {
+        // After the #525 raw-column brace clamp, same-line generic brace-bodied
+        // members must translate their sibling-restart offset back into the
+        // collapsed match-line column domain before reopening the pattern scan.
+        // Otherwise `M<T1,           T2>() { }int P { get; }event ... E;`
+        // restarts too far to the right, drops `P` / `E`, or lets `M` absorb the
+        // following sibling text. Closes #533.
+        // #525 の raw-column brace clamp 後は、same-line の generic brace-body member が
+        // sibling scan を再開する位置を、pattern scan 再開前に collapsed match-line 側の
+        // 列空間へ戻す必要がある。そうしないと
+        // `M<T1,           T2>() { }int P { get; }event ... E;` で再開位置が右にずれ、
+        // `P` / `E` が欠落するか、`M` の signature が後続 sibling を飲み込む。Closes #533.
+        var content = "public interface I { void M<T1,           T2>() { }int P { get; }event System.Action<int,           string> E; }\n";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var m = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "M"));
+        Assert.Equal("interface", m.ContainerKind);
+        Assert.Equal("I", m.ContainerName);
+        Assert.Equal("void M<T1,           T2>() { }", m.Signature);
+
+        var p = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("interface", p.ContainerKind);
+        Assert.Equal("I", p.ContainerName);
+        Assert.Equal("int P { get; }", p.Signature);
+
+        var e = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E"));
+        Assert.Equal("interface", e.ContainerKind);
+        Assert.Equal("I", e.ContainerName);
+        Assert.Equal("event System.Action<int,           string> E;", e.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_GenericSameLineSemicolonMembersKeepTerminator()
     {
         // The same-line semicolon-boundary fix for #473 must translate collapsed generic
@@ -9347,6 +9380,83 @@ public class SymbolExtractorTests
         Assert.Equal("public delegate void Inner<T1, T2>();", inner.Signature);
         Assert.Equal("class", inner.ContainerKind);
         Assert.Equal("Holder", inner.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_GenericSameLineMembersKeepLaterBraceSiblingStartColumns()
+    {
+        // After earlier generic same-line members collapse whitespace in the per-line
+        // C# match buffer, later brace-bodied siblings must still slice their signature
+        // from the raw start column. Otherwise `int P { get; }` and `interface J { ... }`
+        // keep the preceding `;` / `{` from the raw line even though the symbols
+        // themselves are found. Pin both the direct property case and the nested
+        // interface case reported in #525. Closes #525.
+        // 先行する generic な same-line member によって C# の per-line match buffer 側で
+        // 空白が潰れても、後続 brace-bodied sibling の signature は raw start 列から
+        // 切り出されなければならない。そうでないと `int P { get; }` や
+        // `interface J { ... }` の先頭に、raw 行上の直前 delimiter (`;` / `{`) が残る。
+        // symbol 自体は見つかっていても signature が壊れるので、#525 の direct
+        // property ケースと nested interface ケースの両方を固定する。Closes #525.
+        var content = string.Join(
+            "\n",
+            "public interface I { void M<T1, T2>(); event System.Action<int, string> E; int P { get; } }",
+            "public interface I2 { void M<T1, T2>(); event System.Action<int, string> E; interface J { int P { get; } } }");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var directProperty = Assert.Single(symbols.Where(s =>
+            s.Kind == "property"
+            && s.Name == "P"
+            && s.ContainerKind == "interface"
+            && s.ContainerName == "I"));
+        Assert.Equal("int P { get; }", directProperty.Signature);
+
+        var nestedInterface = Assert.Single(symbols.Where(s =>
+            s.Kind == "interface"
+            && s.Name == "J"
+            && s.ContainerKind == "interface"
+            && s.ContainerName == "I2"));
+        Assert.Equal("interface J { int P { get; } }", nestedInterface.Signature);
+
+        var nestedProperty = Assert.Single(symbols.Where(s =>
+            s.Kind == "property"
+            && s.Name == "P"
+            && s.Line == 2
+            && s.Signature == "int P { get; }"));
+        Assert.Equal("int P { get; }", nestedProperty.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_GenericBraceMembersRestartCollapsedSameLineSiblingsFromCollapsedColumns()
+    {
+        // Raw-column brace fixes for same-line generic members must not leak into the
+        // sibling restart offset. The restart scan still runs on the collapsed C#
+        // match line, so using the raw closing-brace column directly can jump into/past
+        // a later compact sibling when generic whitespace was removed earlier in the
+        // line. Pin the no-space compact chain where `M<T1,           T2>() { }int P`
+        // used to lose both `P` and `E` and absorb `P` into `M`'s signature. Closes #533.
+        // same-line generic member の raw-column brace fix は、sibling 再開位置まで
+        // raw 列のまま漏れてはいけない。再開スキャン自体は collapsed な C# match 行
+        // 上で動くため、閉じ brace の raw 列をそのまま使うと、generic 内で先に消えた
+        // 空白ぶんだけ次の compact sibling の途中/後ろへ飛んでしまう。`M<T1, T2>() { }int P`
+        // 形で `P` / `E` が落ち、`M` の signature が `P` を飲み込んでいた回帰を固定する。
+        // Closes #533.
+        const string content = "public interface I { void M<T1,           T2>() { }int P { get; }event System.Action<int,           string> E; }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var method = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "M"));
+        Assert.Equal("void M<T1,           T2>() { }", method.Signature);
+        Assert.Equal("interface", method.ContainerKind);
+        Assert.Equal("I", method.ContainerName);
+
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("int P { get; }", property.Signature);
+        Assert.Equal("interface", property.ContainerKind);
+        Assert.Equal("I", property.ContainerName);
+
+        var evt = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E"));
+        Assert.Equal("event System.Action<int,           string> E;", evt.Signature);
+        Assert.Equal("interface", evt.ContainerKind);
+        Assert.Equal("I", evt.ContainerName);
     }
 
     [Fact]
