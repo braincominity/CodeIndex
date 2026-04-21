@@ -614,6 +614,17 @@ public static class ReferenceExtractor
                     }
                 }
 
+                if (language == "csharp")
+                {
+                    var sameLineContainer = FindInnermostSameLineCSharpContainer(
+                        containerCandidates,
+                        structuralLines[i],
+                        lineNumber,
+                        column);
+                    if (sameLineContainer != null)
+                        return sameLineContainer;
+                }
+
                 return container;
             }
 
@@ -3350,6 +3361,112 @@ public static class ReferenceExtractor
 
         return null;
     }
+
+    private static SymbolRecord? FindInnermostSameLineCSharpContainer(
+        IReadOnlyList<SymbolRecord> candidates,
+        string structuralLine,
+        int lineNumber,
+        int column)
+    {
+        SymbolRecord? best = null;
+        var bestStartColumn = -1;
+        var bestSpanLength = int.MaxValue;
+        var bestKindRank = int.MaxValue;
+
+        foreach (var candidate in candidates)
+        {
+            if (candidate.BodyStartLine == null
+                || candidate.BodyEndLine == null
+                || candidate.BodyStartLine.Value > lineNumber
+                || candidate.BodyEndLine.Value < lineNumber
+                || candidate.StartLine != lineNumber
+                || candidate.EndLine != lineNumber
+                || string.IsNullOrEmpty(candidate.Signature))
+            {
+                continue;
+            }
+
+            if (!TryGetSameLineSignatureSpan(candidate, structuralLine, out var startColumn, out var endColumn))
+                continue;
+
+            if (column < startColumn || column >= endColumn)
+                continue;
+
+            var spanLength = endColumn - startColumn;
+            var kindRank = GetSameLineContainerKindRank(candidate.Kind);
+            if (best == null
+                || startColumn > bestStartColumn
+                || (startColumn == bestStartColumn && spanLength < bestSpanLength)
+                || (startColumn == bestStartColumn && spanLength == bestSpanLength && kindRank < bestKindRank))
+            {
+                best = candidate;
+                bestStartColumn = startColumn;
+                bestSpanLength = spanLength;
+                bestKindRank = kindRank;
+            }
+        }
+
+        return best;
+    }
+
+    private static bool TryGetSameLineSignatureSpan(
+        SymbolRecord candidate,
+        string structuralLine,
+        out int startColumn,
+        out int endColumn)
+    {
+        startColumn = candidate.StartColumn ?? -1;
+        if (startColumn < 0 || startColumn > structuralLine.Length)
+        {
+            startColumn = FindSignatureOccurrenceStartColumn(
+                structuralLine,
+                candidate.Signature!,
+                candidate.SameLineSignatureOccurrenceIndex ?? 0);
+            if (startColumn < 0)
+            {
+                endColumn = -1;
+                return false;
+            }
+        }
+
+        endColumn = Math.Min(structuralLine.Length, startColumn + candidate.Signature!.Length);
+        return endColumn > startColumn;
+    }
+
+    private static int FindSignatureOccurrenceStartColumn(string structuralLine, string signature, int occurrenceIndex)
+    {
+        if (occurrenceIndex < 0 || string.IsNullOrEmpty(structuralLine) || string.IsNullOrEmpty(signature))
+            return -1;
+
+        var currentOccurrence = 0;
+        var searchStart = 0;
+        while (searchStart < structuralLine.Length)
+        {
+            var matchIndex = structuralLine.IndexOf(signature, searchStart, StringComparison.Ordinal);
+            if (matchIndex < 0)
+                return -1;
+
+            if (currentOccurrence == occurrenceIndex)
+                return matchIndex;
+
+            currentOccurrence++;
+            searchStart = matchIndex + signature.Length;
+        }
+
+        return -1;
+    }
+
+    private static int GetSameLineContainerKindRank(string? kind) => kind switch
+    {
+        "function" => 0,
+        "property" => 1,
+        "class" => 2,
+        "struct" => 3,
+        "interface" => 4,
+        "enum" => 5,
+        "namespace" => 6,
+        _ => 7,
+    };
 
     private static SymbolRecord? FindInnermostClassLike(IReadOnlyList<SymbolRecord> candidates, int lineNumber)
     {
