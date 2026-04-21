@@ -6792,6 +6792,7 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("Hook", json.GetProperty("caller_name").GetString());
             Assert.Equal("Changed", json.GetProperty("callee_name").GetString());
+            Assert.False(json.TryGetProperty("reference_kind", out _));
             Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
         }
         finally
