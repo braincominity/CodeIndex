@@ -1216,7 +1216,7 @@ public static class ReferenceExtractor
         c == '_' || c == '@' || char.IsLetter(c);
 
     private readonly record struct CSharpLineColumn(int Line, int Column);
-    private readonly record struct CSharpRecursivePatternValueNameRecord(string Name, int Offset, bool IsCasePattern);
+    private readonly record struct CSharpRecursivePatternValueNameRecord(string Name, int Offset, bool IsCasePattern, int ArrowIndex = -1);
     private sealed record CSharpUsingAliasRecord(string AliasName, string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpContainingTypeValueReceiverNames(HashSet<string> InstanceNames, HashSet<string> StaticNames);
     private sealed record CSharpFunctionValueReceiverNameRecord(string Name, int ScopeStartLine, int ScopeStartColumn, int ScopeEndLine, int ScopeEndColumn);
@@ -1520,11 +1520,17 @@ public static class ReferenceExtractor
 
             var callContainer = resolveContainerForCall(member.Start);
             var qualifier = TrimLeadingCSharpGlobalQualifier(NormalizeCSharpQualifiedSegments(preparedLine, parsed.Segments, parsed.Segments.Count - 1));
-            var resolvedQualifier = ResolveCSharpQualifiedAliasTarget(qualifier, lineNumber, usingAliases);
+            var resolvedQualifier = parsed.HasLeadingGlobalQualifier
+                ? qualifier
+                : ResolveCSharpQualifiedAliasTarget(qualifier, lineNumber, usingAliases);
             if (!parsed.HasLeadingGlobalQualifier
                 && HasCSharpValueReceiverConflict(qualifier, resolvedQualifier, lineNumber, member.Start, callContainer, valueReceiverNamesByContainingType, valueReceiverNamesByFunctionStartLine))
                 continue;
-            if (!MatchesQualifiedEnumType(resolvedQualifier, targets))
+            if (!MatchesQualifiedEnumType(
+                    resolvedQualifier,
+                    targets,
+                    allowShortNameFallback: !parsed.HasLeadingGlobalQualifier,
+                    allowSingleSegmentQualifiedMatch: parsed.HasLeadingGlobalQualifier))
                 continue;
 
             var nextTokenIndex = SkipWhitespace(preparedLine, member.End);
@@ -1876,7 +1882,7 @@ public static class ReferenceExtractor
             if (arrowIndex < 0)
                 break;
 
-            var lambdaScopeEnd = FindCSharpLambdaScopeEndPosition(bodyText, arrowIndex, startLineNumber, scopeEndLine);
+            var lambdaScopeEnd = FindCSharpArrowExpressionScopeEndPosition(bodyText, arrowIndex, startLineNumber, scopeEndLine);
             AddCSharpLambdaParametersBeforeArrow(names, bodyText, arrowIndex, startLineNumber, lambdaScopeEnd);
             searchIndex = arrowIndex + 2;
         }
@@ -1897,6 +1903,13 @@ public static class ReferenceExtractor
         {
             var position = GetLineColumnFromOffset(bodyText, pattern.Offset, startLineNumber);
             var declarationLineIndex = position.Line - 1;
+            if (pattern.ArrowIndex >= 0)
+            {
+                var scopeEnd = FindCSharpArrowExpressionScopeEndPosition(bodyText, pattern.ArrowIndex, startLineNumber, bodyEndIndex + 1);
+                AddCSharpFunctionValueReceiverName(names, pattern.Name, position.Line, position.Column, scopeEnd.Line, scopeEnd.Column);
+                continue;
+            }
+
             if (pattern.IsCasePattern)
             {
                 if (!TryFindCSharpSwitchCaseScopeEndPosition(structuralLines, bodyEndIndex, declarationLineIndex, position.Column, out var scopeEnd))
@@ -1934,6 +1947,117 @@ public static class ReferenceExtractor
 
             index--;
         }
+
+        foreach (var pattern in FindCSharpSwitchExpressionRecursivePatternValueNames(bodyText))
+            yield return pattern;
+    }
+
+    private static IEnumerable<CSharpRecursivePatternValueNameRecord> FindCSharpSwitchExpressionRecursivePatternValueNames(string bodyText)
+    {
+        if (string.IsNullOrWhiteSpace(bodyText))
+            yield break;
+
+        for (var searchIndex = 0; searchIndex < bodyText.Length;)
+        {
+            var arrowIndex = bodyText.IndexOf("=>", searchIndex, StringComparison.Ordinal);
+            if (arrowIndex < 0)
+                yield break;
+
+            searchIndex = arrowIndex + 2;
+            if (IsPotentialCSharpLambdaArrow(bodyText, arrowIndex))
+                continue;
+
+            if (!TryFindCSharpSwitchExpressionArmStartOffset(bodyText, arrowIndex, out var armStartOffset))
+                continue;
+
+            if (!TryParseCSharpSwitchExpressionArmRecursivePatternDesignation(bodyText, armStartOffset, arrowIndex, out var name, out var designationOffset))
+                continue;
+
+            yield return new CSharpRecursivePatternValueNameRecord(name, designationOffset, false, arrowIndex);
+        }
+    }
+
+    private static bool TryFindCSharpSwitchExpressionArmStartOffset(string bodyText, int arrowIndex, out int armStartOffset)
+    {
+        armStartOffset = 0;
+        if (arrowIndex <= 0 || arrowIndex > bodyText.Length)
+            return false;
+
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        for (var index = arrowIndex - 1; index >= 0; index--)
+        {
+            var current = bodyText[index];
+            switch (current)
+            {
+                case ')':
+                    parenDepth++;
+                    break;
+                case '(':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case ']':
+                    bracketDepth++;
+                    break;
+                case '[':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    break;
+                case '}':
+                    braceDepth++;
+                    break;
+                case '{':
+                    if (braceDepth > 0)
+                    {
+                        braceDepth--;
+                        break;
+                    }
+
+                    if (parenDepth == 0 && bracketDepth == 0)
+                    {
+                        armStartOffset = SkipWhitespaceForward(bodyText, index + 1);
+                        return armStartOffset < arrowIndex;
+                    }
+
+                    break;
+                case ',':
+                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                    {
+                        armStartOffset = SkipWhitespaceForward(bodyText, index + 1);
+                        return armStartOffset < arrowIndex;
+                    }
+
+                    break;
+                case ';':
+                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                        return false;
+                    break;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryParseCSharpSwitchExpressionArmRecursivePatternDesignation(
+        string bodyText,
+        int armStartOffset,
+        int arrowIndex,
+        out string name,
+        out int designationOffset)
+    {
+        name = string.Empty;
+        designationOffset = -1;
+        if (armStartOffset < 0 || armStartOffset >= arrowIndex || arrowIndex > bodyText.Length)
+            return false;
+
+        var armText = bodyText[armStartOffset..arrowIndex];
+        if (!TryParseCSharpRecursivePatternDesignation(armText, 0, false, out name, out var relativeOffset))
+            return false;
+
+        designationOffset = armStartOffset + relativeOffset;
+        return designationOffset < arrowIndex;
     }
 
     private static bool TryParseCSharpRecursivePatternDesignation(
@@ -2340,7 +2464,7 @@ public static class ReferenceExtractor
             if (!IsPotentialCSharpLambdaArrow(bodyText, arrowIndex))
                 continue;
 
-            var lambdaScopeEnd = FindCSharpLambdaScopeEndPosition(bodyText, arrowIndex, startLineNumber, fallbackScopeEndLine);
+            var lambdaScopeEnd = FindCSharpArrowExpressionScopeEndPosition(bodyText, arrowIndex, startLineNumber, fallbackScopeEndLine);
             var lambdaScopeEndOffset = GetTextOffsetFromLineColumn(bodyText, startLineNumber, lambdaScopeEnd);
             if (targetOffset > lambdaScopeEndOffset)
                 continue;
@@ -2501,6 +2625,15 @@ public static class ReferenceExtractor
         return trimmed.StartsWith("case ", StringComparison.Ordinal)
             || string.Equals(trimmed, "default:", StringComparison.Ordinal)
             || trimmed.StartsWith("default:", StringComparison.Ordinal);
+    }
+
+    private static int SkipWhitespaceForward(string text, int index)
+    {
+        var current = Math.Max(index, 0);
+        while (current < text.Length && char.IsWhiteSpace(text[current]))
+            current++;
+
+        return current;
     }
 
     private static int GetBodyTextOffset(
@@ -2702,7 +2835,7 @@ public static class ReferenceExtractor
         return FindCSharpStatementEndPosition(structuralLines, bodyEndIndex, startLineIndex, startColumn);
     }
 
-    private static CSharpLineColumn FindCSharpLambdaScopeEndPosition(string bodyText, int arrowIndex, int startLineNumber, int fallbackScopeEndLine)
+    private static CSharpLineColumn FindCSharpArrowExpressionScopeEndPosition(string bodyText, int arrowIndex, int startLineNumber, int fallbackScopeEndLine)
     {
         var foundContent = false;
         var parenDepth = 0;
@@ -2964,19 +3097,24 @@ public static class ReferenceExtractor
 
     private static bool MatchesQualifiedEnumType(
         string qualifier,
-        IReadOnlyList<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)> targets)
+        IReadOnlyList<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)> targets,
+        bool allowShortNameFallback = true,
+        bool allowSingleSegmentQualifiedMatch = false)
     {
         var hasMultipleQualifierSegments = qualifier.Contains('.') || qualifier.Contains("::", StringComparison.Ordinal);
-        foreach (var (enumName, qualifiedEnumName, allowShortNameFallback) in targets)
+        foreach (var (enumName, qualifiedEnumName, targetAllowsShortNameFallback) in targets)
         {
-            if (hasMultipleQualifierSegments
-                && !string.IsNullOrWhiteSpace(qualifiedEnumName)
-                && QualifiedNameHasSuffix(qualifiedEnumName!, qualifier))
+            if (!string.IsNullOrWhiteSpace(qualifiedEnumName)
+                && ((hasMultipleQualifierSegments && QualifiedNameHasSuffix(qualifiedEnumName!, qualifier))
+                    || (!hasMultipleQualifierSegments
+                        && allowSingleSegmentQualifiedMatch
+                        && string.Equals(qualifiedEnumName, qualifier, StringComparison.Ordinal))))
             {
                 return true;
             }
 
             if (allowShortNameFallback
+                && targetAllowsShortNameFallback
                 && string.Equals(GetLastQualifiedSegment(qualifier), enumName, StringComparison.Ordinal))
                 return true;
         }

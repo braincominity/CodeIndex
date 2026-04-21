@@ -1326,6 +1326,73 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpGlobalQualifiedEnumMemberAccess_WithConflictingUsingAlias_PreservesReference()
+    {
+        const string content = """
+            namespace Demo
+            {
+                public enum Color
+                {
+                    Red
+                }
+            }
+
+            namespace Shadow
+            {
+                public static class Demo
+                {
+                    public static int Red => 0;
+                }
+            }
+
+            using Demo = Shadow;
+
+            class C
+            {
+                Demo.Color M()
+                {
+                    return global::Demo.Color.Red;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var redRef = Assert.Single(references.Where(reference => reference.SymbolName == "Red" && reference.ReferenceKind == "call"));
+        Assert.Equal(23, redRef.Line);
+        Assert.Equal("M", redRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpGlobalQualifiedEnumMemberAccess_WithUsingAliasName_DoesNotCreateReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Color
+            {
+                Red
+            }
+
+            using Color = Demo.Color;
+
+            class C
+            {
+                void M()
+                {
+                    _ = global::Color.Red;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Red" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_CsharpQualifiedEnumMemberAccess_WithGetterLocalShadowing_DoesNotLeakIntoSetter()
     {
         const string content = """
@@ -2380,6 +2447,44 @@ public class ReferenceExtractorTests
         var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
         var readyRef = Assert.Single(readyRefs);
         Assert.Equal(24, readyRef.Line);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithSwitchExpressionRecursivePatternVariable_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(object value)
+                {
+                    return value switch
+                    {
+                        Holder { Ready: > 0 } Status => (Demo.Status)Status.Ready,
+                        _ => Demo.Status.Ready
+                    };
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal(20, readyRef.Line);
         Assert.Equal("Read", readyRef.ContainerName);
     }
 
