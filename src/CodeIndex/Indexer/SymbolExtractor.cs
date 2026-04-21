@@ -518,6 +518,18 @@ public static class SymbolExtractor
             // CSharpTupleSuffixPattern を CSharpTypePattern と共有することで、ctor 否定先読みと上流の
             // property / method / plain-field 行が tuple サフィックス戻り値の受理形について常に一致する。Closes #349.
             new("function",  new Regex($@"^\s*(?:(?:unsafe|extern)\s+)*(?<visibility>{CSharpVisibilityPattern})\s+(?:(?:unsafe|extern)\s+)*(?<name>\w+)\s*\((?!.*\){CSharpTupleSuffixPattern}\s*\w+\s*(?:[{{(;]|=>|=(?![=>])))", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Static constructor / 静的コンストラクタ
+            // Keep this ahead of the property rows so same-line compact bodies such as
+            // `class C { static C() { } public int P { get; set; } }` emit the static ctor
+            // before the later property match short-circuits the pattern scan. The shape is
+            // specific enough that it does not overlap with normal methods (no return type,
+            // empty parameter list, optional `unsafe` around `static`). Closes #478.
+            // 同一行のコンパクトな型本体
+            // (`class C { static C() { } public int P { get; set; } }`) では、後続 property が
+            // pattern scan を打ち切る前に static ctor を先に拾う必要があるため、property 行より前に置く。
+            // この形は「戻り値型なし・引数なし・`static` 前後の任意 `unsafe`」に限定されるため、
+            // 通常メソッドとは重ならない。Closes #478.
+            new("function",  new Regex(@"^\s*(?:unsafe\s+)?static\s+(?:unsafe\s+)?(?<name>\w+)\s*\(\s*\)\s*\{?", RegexOptions.Compiled), BodyStyle.Brace),
             // Property with get/set/init — visibility optional
             // Reject statement keywords (return/throw/switch/...) as the return type so that
             // multi-line statement fragments merged by BuildCSharpPropertyMatchLine — e.g.
@@ -590,10 +602,6 @@ public static class SymbolExtractor
             // member 拡張) ため、他の修飾子と並べて受け付ける。そうしないと `partial` indexer 宣言
             // が symbols / definition / outline から無言で欠落する。Closes #350.
             new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|readonly|unsafe|extern|partial|ref(?:\s+readonly)?)\s+)*(?<returnType>{CSharpTypePattern})\s+(?<name>this)\s*\[", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
-            // Static constructor / 静的コンストラクタ
-            // `unsafe` can appear before or after `static` (`unsafe static S()` ≡ `static unsafe S()`). Closes #355.
-            // `unsafe` は `static` の前後どちらにも置ける（`unsafe static S()` ≡ `static unsafe S()`）。Closes #355.
-            new("function",  new Regex(@"^\s*(?:unsafe\s+)?static\s+(?:unsafe\s+)?(?<name>\w+)\s*\(\s*\)\s*\{?", RegexOptions.Compiled), BodyStyle.Brace),
             // Finalizer (destructor) / ファイナライザ（デストラクタ）
             new("function",  new Regex(@"^\s*~(?<name>\w+)\s*\(\s*\)", RegexOptions.Compiled), BodyStyle.Brace),
             // Enum member (e.g. Red, Green = 1,) — requires 4+ spaces indent, name only,
