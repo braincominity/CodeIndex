@@ -3429,6 +3429,50 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithSwitchExpressionDeclarationPatternWhenInMultiLineComment_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(object value)
+                {
+                    return value switch
+                    {
+                        Holder /* trivia
+                                  when comment */ Status when Status.Ready > 0 => Demo.Status.Ready,
+                        _ => Demo.Status.Ready
+                    };
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .OrderBy(reference => reference.Line)
+            .ThenBy(reference => reference.Column)
+            .ToList();
+
+        Assert.Equal([20, 21], readyRefs.Select(reference => reference.Line).ToArray());
+        Assert.Equal([83, 30], readyRefs.Select(reference => reference.Column).ToArray());
+        Assert.All(readyRefs, reference => Assert.Equal("Read", reference.ContainerName));
+    }
+
+    [Fact]
     public void Extract_CsharpQualifiedEnumMemberAccess_WithStaticLambdaScopedDeclarationPatternVariable_DoesNotLeakIntoOuterIfBody()
     {
         const string content = """
