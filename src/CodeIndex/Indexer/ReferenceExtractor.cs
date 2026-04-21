@@ -1340,7 +1340,7 @@ public static class ReferenceExtractor
                     }
                     foreach (Match match in CSharpQueryRangeValueNameRegex.Matches(structuralLines[i]))
                     {
-                        var scopeEnd = FindCSharpExpressionEndPosition(structuralLines, end, i, match.Index);
+                        var scopeEnd = FindCSharpQueryExpressionEndPosition(structuralLines, end, i, match.Index);
                         AddCSharpFunctionValueReceiverName(
                             names,
                             NormalizeCSharpIdentifier(match.Groups["name"].Value),
@@ -2123,6 +2123,37 @@ public static class ReferenceExtractor
         return true;
     }
 
+    private static bool TryConsumeCSharpQueryClauseKeyword(string line, int startColumn, out string keyword, out int nextColumn)
+    {
+        keyword = string.Empty;
+        nextColumn = startColumn;
+        if (startColumn < 0 || startColumn >= line.Length)
+            return false;
+
+        if (startColumn > 0 && IsCSharpIdentifierPart(line[startColumn - 1]))
+            return false;
+
+        var tokenStart = startColumn;
+        if (line[tokenStart] == '@')
+        {
+            tokenStart++;
+            if (tokenStart >= line.Length || !IsCSharpIdentifierPart(line[tokenStart]))
+                return false;
+        }
+        else if (!IsCSharpIdentifierPart(line[tokenStart]))
+        {
+            return false;
+        }
+
+        var tokenEnd = tokenStart + 1;
+        while (tokenEnd < line.Length && IsCSharpIdentifierPart(line[tokenEnd]))
+            tokenEnd++;
+
+        keyword = line.Substring(tokenStart, tokenEnd - tokenStart);
+        nextColumn = tokenEnd;
+        return true;
+    }
+
     private static bool TryFindMatchingCSharpDelimiter(
         IReadOnlyList<string> structuralLines,
         int bodyEndIndex,
@@ -2160,13 +2191,94 @@ public static class ReferenceExtractor
         return false;
     }
 
-    private static CSharpLineColumn FindCSharpExpressionEndPosition(
+    private static CSharpLineColumn FindCSharpQueryExpressionEndPosition(
         IReadOnlyList<string> structuralLines,
         int bodyEndIndex,
         int startLineIndex,
         int startColumn)
     {
-        return FindCSharpStatementEndPosition(structuralLines, bodyEndIndex, startLineIndex, startColumn);
+        var foundContent = false;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var terminalClauseSeen = false;
+
+        for (var lineIndex = startLineIndex; lineIndex <= bodyEndIndex; lineIndex++)
+        {
+            var line = structuralLines[lineIndex];
+            var columnStart = lineIndex == startLineIndex ? Math.Min(startColumn, line.Length) : 0;
+            for (var column = columnStart; column < line.Length; column++)
+            {
+                var current = line[column];
+                if (!foundContent)
+                {
+                    if (char.IsWhiteSpace(current))
+                        continue;
+
+                    foundContent = true;
+                }
+
+                if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0
+                    && TryConsumeCSharpQueryClauseKeyword(line, column, out var keyword, out var nextColumn))
+                {
+                    if (string.Equals(keyword, "select", StringComparison.Ordinal)
+                        || string.Equals(keyword, "group", StringComparison.Ordinal))
+                    {
+                        terminalClauseSeen = true;
+                    }
+                    else if (terminalClauseSeen && string.Equals(keyword, "into", StringComparison.Ordinal))
+                    {
+                        terminalClauseSeen = false;
+                    }
+
+                    column = nextColumn - 1;
+                    continue;
+                }
+
+                switch (current)
+                {
+                    case '(':
+                        parenDepth++;
+                        break;
+                    case ')':
+                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                            return new CSharpLineColumn(lineIndex + 1, column);
+                        if (parenDepth > 0)
+                            parenDepth--;
+                        break;
+                    case '[':
+                        bracketDepth++;
+                        break;
+                    case ']':
+                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                            return new CSharpLineColumn(lineIndex + 1, column);
+                        if (bracketDepth > 0)
+                            bracketDepth--;
+                        break;
+                    case '{':
+                        braceDepth++;
+                        break;
+                    case '}':
+                        if (braceDepth > 0)
+                        {
+                            braceDepth--;
+                            if (braceDepth == 0 && parenDepth == 0 && bracketDepth == 0)
+                                return new CSharpLineColumn(lineIndex + 1, column);
+                        }
+                        break;
+                    case ';':
+                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                            return new CSharpLineColumn(lineIndex + 1, column);
+                        break;
+                    case ',':
+                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && terminalClauseSeen)
+                            return new CSharpLineColumn(lineIndex + 1, column);
+                        break;
+                }
+            }
+        }
+
+        return new CSharpLineColumn(bodyEndIndex + 1, 0);
     }
 
     private static CSharpLineColumn FindCSharpLambdaScopeEndPosition(string bodyText, int arrowIndex, int startLineNumber, int fallbackScopeEndLine)
