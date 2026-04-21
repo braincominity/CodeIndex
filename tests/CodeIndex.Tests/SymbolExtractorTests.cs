@@ -9648,6 +9648,40 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_WrappedNestedTypeIgnoresMultilineCommentLookalikesWhenTrackingSameLineOccurrences()
+    {
+        // Same-line occurrence recovery must also respect block-comment state carried from
+        // earlier lines. Otherwise a declaration-shaped lookalike inside a multiline comment
+        // consumes the first occurrence slot and the later outer sibling is misattached under
+        // the inner wrapped type. Closes #567.
+        // same-line occurrence 復元は、前行から継続する block comment state も尊重しなければ
+        // ならない。そうしないと複数行コメント中の宣言風 lookalike が最初の occurrence slot を
+        // 奪い、後続 outer sibling が inner wrapped type 配下へ誤帰属する。Closes #567.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        /*",
+            "        public partial class Child { } */ public partial class Child { } } public partial class Child { }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var children = symbols
+            .Where(s => s.Kind == "class" && s.Name == "Child")
+            .OrderBy(s => s.ContainerName)
+            .ToList();
+        Assert.Equal(2, children.Count);
+
+        Assert.Contains(children, child => child.ContainerKind == "class" && child.ContainerName == "Wrapped");
+        Assert.Contains(children, child => child.ContainerKind == "class" && child.ContainerName == "Host");
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineMultipleFieldsAreAllCaptured()
     {
         // `public class Multi { public int A; public int B; public int C; }` must
