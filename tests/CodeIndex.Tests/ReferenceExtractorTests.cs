@@ -1298,6 +1298,34 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpGlobalQualifiedEnumMemberAccess_WithPropertyShadowing_PreservesReference()
+    {
+        const string content = """
+            enum Color
+            {
+                Red
+            }
+
+            class C
+            {
+                int Color => 0;
+
+                void M()
+                {
+                    var x = global::Color.Red;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var redRef = Assert.Single(references.Where(reference => reference.SymbolName == "Red" && reference.ReferenceKind == "call"));
+        Assert.Equal(12, redRef.Line);
+        Assert.Equal("M", redRef.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpQualifiedEnumMemberAccess_WithGetterLocalShadowing_DoesNotLeakIntoSetter()
     {
         const string content = """
