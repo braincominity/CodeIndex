@@ -505,6 +505,7 @@ public static class ReferenceExtractor
         var recordPrimaryCtorRanges = BuildCSharpPrimaryCtorContainers(language, symbols, structuralLines);
         var csharpQualifiedEnumMemberLookup = BuildCSharpQualifiedEnumMemberLookup(language, symbols);
         var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols);
+        var csharpValueReceiverNames = BuildCSharpValueReceiverNamesByContainingType(language, symbols);
 
         var references = new List<ReferenceRecord>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -880,6 +881,7 @@ public static class ReferenceExtractor
                     csharpQualifiedEnumMemberLookup,
                     csharpAttrRangesOnLine,
                     csharpUsingAliases,
+                    csharpValueReceiverNames,
                     references,
                     seen,
                     fileId,
@@ -1210,6 +1212,33 @@ public static class ReferenceExtractor
         return aliases;
     }
 
+    private static Dictionary<string, HashSet<string>> BuildCSharpValueReceiverNamesByContainingType(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        var lookup = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        if (language != "csharp")
+            return lookup;
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "property" || string.IsNullOrWhiteSpace(symbol.Name))
+                continue;
+
+            var containingType = GetContainingTypeQualifiedName(symbol);
+            if (string.IsNullOrWhiteSpace(containingType))
+                continue;
+
+            if (!lookup.TryGetValue(containingType!, out var names))
+            {
+                names = new HashSet<string>(StringComparer.Ordinal);
+                lookup[containingType!] = names;
+            }
+
+            names.Add(symbol.Name);
+        }
+
+        return lookup;
+    }
+
     private static Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> BuildCSharpQualifiedEnumMemberLookup(
         string language,
         IReadOnlyList<SymbolRecord> symbols)
@@ -1264,6 +1293,7 @@ public static class ReferenceExtractor
         IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> enumMemberLookup,
         IReadOnlyList<(int start, int end)>? csharpAttrRangesOnLine,
         IReadOnlyList<CSharpUsingAliasRecord> usingAliases,
+        IReadOnlyDictionary<string, HashSet<string>> valueReceiverNamesByContainingType,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -1289,8 +1319,11 @@ public static class ReferenceExtractor
             if (!enumMemberLookup.TryGetValue(memberName, out var targets))
                 continue;
 
+            var callContainer = resolveContainerForCall(member.Start);
             var qualifier = NormalizeCSharpQualifiedSegments(preparedLine, parsed.Segments, parsed.Segments.Count - 1);
             var resolvedQualifier = ResolveCSharpQualifiedAliasTarget(qualifier, lineNumber, usingAliases);
+            if (HasCSharpValueReceiverConflict(qualifier, resolvedQualifier, callContainer, valueReceiverNamesByContainingType))
+                continue;
             if (!MatchesQualifiedEnumType(resolvedQualifier, targets))
                 continue;
 
@@ -1311,7 +1344,7 @@ public static class ReferenceExtractor
                 referenceKind,
                 context,
                 lineNumber,
-                resolveContainerForCall(member.Start));
+                callContainer);
         }
     }
 
@@ -1448,6 +1481,44 @@ public static class ReferenceExtractor
         return qualifier.Length == firstSegment.Length
             ? aliasTarget
             : aliasTarget + qualifier[firstSegment.Length..];
+    }
+
+    private static bool HasCSharpValueReceiverConflict(
+        string qualifier,
+        string resolvedQualifier,
+        SymbolRecord? callContainer,
+        IReadOnlyDictionary<string, HashSet<string>> valueReceiverNamesByContainingType)
+    {
+        if (string.IsNullOrWhiteSpace(qualifier) || qualifier.Contains('.') || valueReceiverNamesByContainingType.Count == 0)
+            return false;
+        if (!string.Equals(qualifier, resolvedQualifier, StringComparison.Ordinal))
+            return false;
+
+        var containingType = GetContainingTypeQualifiedName(callContainer);
+        return containingType != null
+            && valueReceiverNamesByContainingType.TryGetValue(containingType, out var names)
+            && names.Contains(qualifier);
+    }
+
+    private static string? GetContainingTypeQualifiedName(SymbolRecord? symbol)
+    {
+        if (symbol == null)
+            return null;
+        if (IsTypeLikeSymbolKind(symbol.Kind))
+            return CombineQualifiedName(symbol.ContainerQualifiedName, symbol.Name);
+        return symbol.ContainerQualifiedName;
+    }
+
+    private static bool IsTypeLikeSymbolKind(string? kind) =>
+        kind is "class" or "struct" or "interface";
+
+    private static string? CombineQualifiedName(string? parentQualifiedName, string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return null;
+        if (string.IsNullOrWhiteSpace(parentQualifiedName))
+            return name;
+        return $"{parentQualifiedName}.{name}";
     }
 
     private static string GetFirstQualifiedSegment(string qualifiedName)
