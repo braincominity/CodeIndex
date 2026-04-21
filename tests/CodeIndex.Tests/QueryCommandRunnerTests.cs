@@ -4737,6 +4737,242 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_CSharpExactNameDoesNotReturnObjectInitializerNumericAssignments_Issue374()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_object_initializer_issue374");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.cs"),
+                """
+                using System.Collections.Generic;
+
+                namespace CsObjInitPhantom;
+
+                public class Person
+                {
+                    public string Name { get; set; } = "";
+                    public int Age { get; set; }
+                    public int Priority { get; set; }
+                }
+
+                public class Creator
+                {
+                    public Person CreatePerson() => new Person
+                    {
+                        Name = "Alice",
+                        Age = 30,
+                        Priority = 1
+                    };
+
+                    public List<Person> CreateMany() => new()
+                    {
+                        new Person { Name = "Bob", Age = 25, Priority = 2 },
+                        new Person
+                        {
+                            Name = "Carol",
+                            Age = 45,
+                            Priority = 3
+                        }
+                    };
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (ageExitCode, ageStdout, ageStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Age", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+            var (priorityExitCode, priorityStdout, priorityStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Priority", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            var ageRows = ParseJsonLines(ageStdout);
+            var priorityRows = ParseJsonLines(priorityStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, ageExitCode);
+            Assert.Equal(string.Empty, ageStderr);
+            Assert.Equal(CommandExitCodes.Success, priorityExitCode);
+            Assert.Equal(string.Empty, priorityStderr);
+
+            Assert.Single(ageRows);
+            Assert.Equal("property", ageRows[0].RootElement.GetProperty("kind").GetString());
+            Assert.Equal("Person", ageRows[0].RootElement.GetProperty("container_name").GetString());
+
+            Assert.Single(priorityRows);
+            Assert.Equal("property", priorityRows[0].RootElement.GetProperty("kind").GetString());
+            Assert.Equal("Person", priorityRows[0].RootElement.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_CSharpExactNameFindsEnumMembersWithComplexConstantExpressionValues_Issue357()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_enum_complex_value_issue357");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "E.cs"),
+                """
+                namespace CsEnumComplexValue;
+
+                public class K
+                {
+                    public const int Foo = 1;
+                }
+
+                public enum E1
+                {
+                    Plain = 0,
+                    Hex = 0xFF,
+                    Combined = Plain | 0,
+                    Shifted = 1 << 3,
+                    Arith = 1 + 2,
+                    ConstRef = K.Foo,
+                    Casted = (int)1.5,
+                    Paren = (1 + 2),
+                    CharCast = (int)'A',
+                    MemberAccess = System.Int32.MaxValue,
+                }
+
+                [System.Flags]
+                public enum Permissions
+                {
+                    None = 0,
+                    Read = 1,
+                    Write = 2,
+                    All = Read | Write,
+                    Execute = K.Foo,
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+
+            var expectedContainers = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["ConstRef"] = "E1",
+                ["Casted"] = "E1",
+                ["Paren"] = "E1",
+                ["CharCast"] = "E1",
+                ["MemberAccess"] = "E1",
+                ["Execute"] = "Permissions",
+            };
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            foreach (var pair in expectedContainers)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                    [pair.Key, "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                    _jsonOptions));
+
+                var rows = ParseJsonLines(stdout);
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Single(rows);
+                Assert.Equal(pair.Key, rows[0].RootElement.GetProperty("name").GetString());
+                Assert.Equal("enum", rows[0].RootElement.GetProperty("kind").GetString());
+                Assert.Equal("enum", rows[0].RootElement.GetProperty("container_kind").GetString());
+                Assert.Equal(pair.Value, rows[0].RootElement.GetProperty("container_name").GetString());
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDefinition_CSharpExactNameFindsEnumMembersWithComplexConstantExpressionValues_Issue357()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_csharp_enum_complex_value_issue357");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "E.cs"),
+                """
+                namespace CsEnumComplexValue;
+
+                public class K
+                {
+                    public const int Foo = 1;
+                }
+
+                public enum E1
+                {
+                    Plain = 0,
+                    Hex = 0xFF,
+                    Combined = Plain | 0,
+                    Shifted = 1 << 3,
+                    Arith = 1 + 2,
+                    ConstRef = K.Foo,
+                    Casted = (int)1.5,
+                    Paren = (1 + 2),
+                    CharCast = (int)'A',
+                    MemberAccess = System.Int32.MaxValue,
+                }
+
+                [System.Flags]
+                public enum Permissions
+                {
+                    None = 0,
+                    Read = 1,
+                    Write = 2,
+                    All = Read | Write,
+                    Execute = K.Foo,
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            foreach (var pair in new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["ConstRef"] = "E1",
+                ["Execute"] = "Permissions",
+            })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                    [pair.Key, "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                    _jsonOptions));
+
+                var rows = ParseJsonLines(stdout);
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Single(rows);
+                Assert.Equal(pair.Key, rows[0].RootElement.GetProperty("name").GetString());
+                Assert.Equal("enum", rows[0].RootElement.GetProperty("kind").GetString());
+                Assert.Equal("enum", rows[0].RootElement.GetProperty("container_kind").GetString());
+                Assert.Equal(pair.Value, rows[0].RootElement.GetProperty("container_name").GetString());
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_ExactNameStaleCSharpCanonicalNamesReportDegradedState()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_conversion_stale");

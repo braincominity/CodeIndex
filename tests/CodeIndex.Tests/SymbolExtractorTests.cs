@@ -5618,6 +5618,79 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_WrappedExpressionBodiedProperty_Issue345Repro_ShapesAndControls_AreCaptured()
+    {
+        // issue #345: explicit regression coverage for expression-bodied properties whose
+        // `=>` moves to the next physical line, including attributed/static variants and
+        // a multi-line expression body. Indexers and methods with wrapped `=>` remain the
+        // expected control cases and must not be reclassified as properties.
+        // issue #345: `=>` が次の物理行へ送られた式本体プロパティの明示的な回帰テスト。
+        // attribute/static 付きや multi-line 式本体も含めて property として抽出しつつ、
+        // wrapped `=>` の indexer / method は従来どおり control case として残す。
+        var content = """
+            namespace WrappedArrowProp;
+
+            public class Svc
+            {
+                public int Same => 1;
+
+                public int Wrapped
+                    => 2;
+
+                [System.Obsolete]
+                public int WrappedAttr
+                    => 3;
+
+                public static int WrappedStatic
+                    => 4;
+
+                public int WrappedMulti
+                    => 1
+                     + 2;
+
+                public int this[int i]
+                    => i;
+
+                public int WrappedMethod()
+                    => 5;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Same");
+
+        var wrapped = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Wrapped"));
+        Assert.Equal(7, wrapped.StartLine);
+        Assert.Equal(8, wrapped.EndLine);
+        Assert.Equal(7, wrapped.BodyStartLine);
+        Assert.Equal(8, wrapped.BodyEndLine);
+
+        var wrappedAttr = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "WrappedAttr"));
+        Assert.Equal(11, wrappedAttr.StartLine);
+        Assert.Equal(12, wrappedAttr.EndLine);
+        Assert.Equal(11, wrappedAttr.BodyStartLine);
+        Assert.Equal(12, wrappedAttr.BodyEndLine);
+
+        var wrappedStatic = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "WrappedStatic"));
+        Assert.Equal(14, wrappedStatic.StartLine);
+        Assert.Equal(15, wrappedStatic.EndLine);
+        Assert.Equal(14, wrappedStatic.BodyStartLine);
+        Assert.Equal(15, wrappedStatic.BodyEndLine);
+        Assert.Equal("public", wrappedStatic.Visibility);
+
+        var wrappedMulti = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "WrappedMulti"));
+        Assert.Equal(17, wrappedMulti.StartLine);
+        Assert.Equal(19, wrappedMulti.EndLine);
+        Assert.Equal(17, wrappedMulti.BodyStartLine);
+        Assert.Equal(19, wrappedMulti.BodyEndLine);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Item");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "WrappedMethod");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Item");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "WrappedMethod");
+    }
+
+    [Fact]
     public void Extract_CSharp_AllmanBlockBodiedProperty_WithIntermediateBlockComment_IsExtracted()
     {
         // issue #233 fourth review follow-up: when an Allman-style block-bodied property
@@ -6699,6 +6772,131 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Name == "Name");
         Assert.DoesNotContain(symbols, s => s.Name == "Age");
         Assert.DoesNotContain(symbols, s => s.Name == "Email");
+    }
+
+    [Fact]
+    public void Extract_CSharp_Issue374_ObjectInitializerNumericAssignmentsDoNotCreatePhantomSymbols()
+    {
+        // Closes #374: the full issue repro uses both multiline and inline object initializers
+        // with numeric assignments like `Age = 30,` and `Priority = 2`. Those lines must not
+        // reappear as phantom enum-member symbols just because they share the old `Name = 1,`
+        // surface shape.
+        // Closes #374: issue 本文の再現ケースでは `Age = 30,` や `Priority = 2` のような
+        // 数値代入を含む multiline / inline object initializer が混在する。旧来の
+        // `Name = 1,` 形に見えても phantom enum-member symbol を再発させてはいけない。
+        var content = """
+            using System.Collections.Generic;
+
+            namespace CsObjInitPhantom;
+
+            public class Person
+            {
+                public string Name { get; set; } = "";
+                public int Age { get; set; }
+                public int Priority { get; set; }
+            }
+
+            public class Creator
+            {
+                public Person CreatePerson() => new Person
+                {
+                    Name = "Alice",
+                    Age = 30,
+                    Priority = 1
+                };
+
+                public List<Person> CreateMany() => new()
+                {
+                    new Person { Name = "Bob", Age = 25, Priority = 2 },
+                    new Person
+                    {
+                        Name = "Carol",
+                        Age = 45,
+                        Priority = 3
+                    }
+                };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var ageSymbols = symbols.Where(s => s.Name == "Age").ToList();
+        Assert.Single(ageSymbols);
+        Assert.Equal("property", ageSymbols[0].Kind);
+        Assert.Equal("Person", ageSymbols[0].ContainerName);
+
+        var prioritySymbols = symbols.Where(s => s.Name == "Priority").ToList();
+        Assert.Single(prioritySymbols);
+        Assert.Equal("property", prioritySymbols[0].Kind);
+        Assert.Equal("Person", prioritySymbols[0].ContainerName);
+
+        var nameSymbols = symbols.Where(s => s.Name == "Name").ToList();
+        Assert.Single(nameSymbols);
+        Assert.Equal("property", nameSymbols[0].Kind);
+        Assert.Equal("Person", nameSymbols[0].ContainerName);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "CreatePerson" && s.ContainerName == "Creator");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "CreateMany" && s.ContainerName == "Creator");
+    }
+
+    [Fact]
+    public void Extract_CSharp_Issue357_EnumMembersWithComplexConstantExpressionsStayIndexed()
+    {
+        // Current main already captures these enum members, but the open issue fixture was not
+        // pinned in tests. Keep the exact value-shape mix here so future regex tightening does
+        // not silently re-drop member-access, cast, or parenthesized constant expressions.
+        // 現在の main はこれらの enum member を抽出できるが、open issue の fixture 自体は
+        // テストで固定されていなかった。将来の regex 調整で member access / cast /
+        // parenthesized constant expression が黙って再脱落しないよう、この value-shape
+        // の混在をここで固定する。
+        var content = """
+            namespace CsEnumComplexValue;
+
+            public class K
+            {
+                public const int Foo = 1;
+            }
+
+            public enum E1
+            {
+                Plain = 0,
+                Hex = 0xFF,
+                Combined = Plain | 0,
+                Shifted = 1 << 3,
+                Arith = 1 + 2,
+                ConstRef = K.Foo,
+                Casted = (int)1.5,
+                Paren = (1 + 2),
+                CharCast = (int)'A',
+                MemberAccess = System.Int32.MaxValue,
+            }
+
+            [System.Flags]
+            public enum Permissions
+            {
+                None = 0,
+                Read = 1,
+                Write = 2,
+                All = Read | Write,
+                Execute = K.Foo,
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        foreach (var name in new[] { "Plain", "Hex", "Combined", "Shifted", "Arith", "ConstRef", "Casted", "Paren", "CharCast", "MemberAccess" })
+        {
+            var symbol = Assert.Single(symbols.Where(s => s.Name == name));
+            Assert.Equal("enum", symbol.Kind);
+            Assert.Equal("E1", symbol.ContainerName);
+            Assert.Equal("enum", symbol.ContainerKind);
+        }
+
+        foreach (var name in new[] { "None", "Read", "Write", "All", "Execute" })
+        {
+            var symbol = Assert.Single(symbols.Where(s => s.Name == name));
+            Assert.Equal("enum", symbol.Kind);
+            Assert.Equal("Permissions", symbol.ContainerName);
+            Assert.Equal("enum", symbol.ContainerKind);
+        }
     }
 
     [Fact]
@@ -8614,6 +8812,121 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M"
             && s.ContainerKind == "class" && s.ContainerName == "D");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "local");
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineAutoPropertiesInsideTypeBodiesAreCaptured()
+    {
+        // Same-line C# type bodies already recover methods, events, and plain fields, so
+        // brace-body auto-properties must also survive when nested inside the same
+        // `class/struct/interface { ... }` physical line. Before #470, the brace-property
+        // skip guard inspected the line's first `{`, which belongs to the enclosing type
+        // body, and silently discarded `P { get; set; }` / `R { get; }` as "not a
+        // property". Closes #470.
+        // 同一行 C# 型本体では method / event / plain field は既に復元できるため、
+        // `class/struct/interface { ... }` と同じ物理行にある brace-body auto-property も
+        // 抽出されなければならない。#470 前は brace-property の skip guard が行頭側の
+        // 最初の `{`（外側型本体）を見てしまい、`P { get; set; }` / `R { get; }` を
+        // 「property ではない」と誤判定して無言で捨てていた。Closes #470.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public class C { public int P { get; set; } }",
+            "public struct S { public int Q { get; set; } }",
+            "public interface I { int R { get; } }",
+            "public class MethodsOk { public void M() { } }",
+            "public class EventsOk { public event System.EventHandler E; }");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var p = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("class", p.ContainerKind);
+        Assert.Equal("C", p.ContainerName);
+        Assert.Equal("public int P { get; set; }", p.Signature);
+
+        var q = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Q"));
+        Assert.Equal("struct", q.ContainerKind);
+        Assert.Equal("S", q.ContainerName);
+        Assert.Equal("public int Q { get; set; }", q.Signature);
+
+        var r = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "R"));
+        Assert.Equal("interface", r.ContainerKind);
+        Assert.Equal("I", r.ContainerName);
+        Assert.Equal("int R { get; }", r.Signature);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M"
+            && s.ContainerKind == "class" && s.ContainerName == "MethodsOk");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "E"
+            && s.ContainerKind == "class" && s.ContainerName == "EventsOk");
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineAutoPropertyAfterExpressionBodiedMethodIsCaptured()
+    {
+        // Outer-type false positives must still be skipped even when a later same-line
+        // member introduces `=>`. Before the follow-up fix for #470, the brace-property
+        // guard looked for `=>` anywhere in the remaining line, so
+        // `public class C { public int M() => 1; public int P { get; set; } }`
+        // treated the outer class header as an "expression-bodied property" and broke
+        // before reaching `P`. Closes #470.
+        // 同一行後半の member が `=>` を含んでいても、outer type 由来の偽陽性は
+        // 引き続き弾かれなければならない。#470 の追修正前は brace-property guard が
+        // 行末までのどこかに `=>` があるだけで式本体 property 扱いしてしまい、
+        // `public class C { public int M() => 1; public int P { get; set; } }`
+        // で outer class header を誤許可し、`P` まで到達できなかった。Closes #470.
+        var content = "public class C { public int M() => 1; public int P { get; set; } }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "C"));
+
+        var method = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "M"));
+        Assert.Equal("class", method.ContainerKind);
+        Assert.Equal("C", method.ContainerName);
+        Assert.Equal("public int M() => 1;", method.Signature);
+
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("class", property.ContainerKind);
+        Assert.Equal("C", property.ContainerName);
+        Assert.Equal("public int P { get; set; }", property.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineAutoPropertyAfterConstructorsIsCaptured()
+    {
+        // Same-line C# constructors must not stop later sibling declarations from
+        // reaching their own patterns. The #470 follow-up initially only resumed
+        // after method-like patterns with a return type, so
+        // `public class C { public C() { } public int P { get; set; } }`
+        // still dropped `P` while the same shape after a normal method worked.
+        // Lock both instance and static constructor forms because they share the
+        // same function-kind same-line stop path, even though the static ctor itself
+        // is not guaranteed to surface as a separate symbol in every shape here.
+        // Closes #470 review follow-up.
+        // 同一行の C# constructor は、その後ろに続く sibling 宣言の pattern 到達を
+        // 止めてはならない。#470 の追修正当初は戻り値型を持つ method 系だけを再開
+        // していたため、`public class C { public C() { } public int P { get; set; } }`
+        // では通常 method 後と違って `P` がまだ落ちていた。instance / static ctor は
+        // 同じ function-kind の same-line stop 経路を共有するため、後続 property を
+        // 両方固定する。Closes #470 review follow-up.
+        var content = string.Join(
+            "\n",
+            "public class C { public C() { } public int P { get; set; } }",
+            "public class D { static D() { } public int Q { get; set; } }");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var ctor = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "C"));
+        Assert.Equal("class", ctor.ContainerKind);
+        Assert.Equal("C", ctor.ContainerName);
+
+        var p = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("class", p.ContainerKind);
+        Assert.Equal("C", p.ContainerName);
+        Assert.Equal("public int P { get; set; }", p.Signature);
+
+        var q = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Q"));
+        Assert.Equal("class", q.ContainerKind);
+        Assert.Equal("D", q.ContainerName);
+        Assert.Equal("public int Q { get; set; }", q.Signature);
     }
 
     [Fact]
