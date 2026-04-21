@@ -1081,6 +1081,41 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithGlobalQualifierAndConflictingType_PreservesReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            namespace Other;
+
+            public static class Status
+            {
+                public static int Value = 1;
+            }
+
+            public class Uses
+            {
+                public Demo.Status Read()
+                {
+                    return global::Demo.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var ready = Assert.Single(references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call"));
+        Assert.Equal(19, ready.Line);
+        Assert.Equal("Read", ready.ContainerName);
+    }
+
+    [Fact]
     public void Extract_ConstructorCalls_AreInstantiateOnly()
     {
         const string content = """

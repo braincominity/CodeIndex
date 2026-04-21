@@ -1366,7 +1366,7 @@ public static class ReferenceExtractor
                 continue;
 
             var callContainer = resolveContainerForCall(member.Start);
-            var qualifier = NormalizeCSharpQualifiedSegments(preparedLine, parsed.Segments, parsed.Segments.Count - 1);
+            var qualifier = TrimLeadingCSharpGlobalQualifier(NormalizeCSharpQualifiedSegments(preparedLine, parsed.Segments, parsed.Segments.Count - 1));
             var resolvedQualifier = ResolveCSharpQualifiedAliasTarget(qualifier, lineNumber, usingAliases);
             if (HasCSharpValueReceiverConflict(qualifier, resolvedQualifier, callContainer, valueReceiverNamesByContainingType, valueReceiverNamesByFunctionStartLine))
                 continue;
@@ -1487,6 +1487,11 @@ public static class ReferenceExtractor
         }
         return builder.ToString();
     }
+
+    private static string TrimLeadingCSharpGlobalQualifier(string qualifiedName) =>
+        qualifiedName.StartsWith("global.", StringComparison.Ordinal)
+            ? qualifiedName["global.".Length..]
+            : qualifiedName;
 
     private static string? TryNormalizeCSharpQualifiedName(string candidate)
     {
