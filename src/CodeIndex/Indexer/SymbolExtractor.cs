@@ -1187,7 +1187,7 @@ public static class SymbolExtractor
             : null;
         int[]?[] csharpMatchColumnToRaw = null!;
         var csharpMatchLines = lang == "csharp"
-            ? BuildCSharpMatchLines(structuralLines, out csharpMatchColumnToRaw)
+            ? BuildCSharpMatchLines(lines, out csharpMatchColumnToRaw)
             : null;
         var csharpLineStartStates = lang == "csharp"
             ? BuildCSharpLineStartStates(lines)
@@ -1433,7 +1433,10 @@ public static class SymbolExtractor
                     // raw 列へ戻す必要がある。複数行を結合した match では単一行の map が
                     // 使えないため、単一行ケース（per-line collapsed line そのものにマッチした
                     // 場合）だけ変換する。Closes #400.
-                    var csharpGateRawStartColumn = absoluteStartColumn;
+                    var csharpNormalizedStartColumn = lang == "csharp"
+                        ? SkipWhitespace(patternMatchLine, absoluteStartColumn)
+                        : absoluteStartColumn;
+                    var csharpGateRawStartColumn = csharpNormalizedStartColumn;
                     if (lang == "csharp"
                         && csharpMatchLines != null
                         && ReferenceEquals(patternMatchLine, csharpMatchLines[i]))
@@ -1441,7 +1444,7 @@ public static class SymbolExtractor
                         csharpGateRawStartColumn = TranslateCSharpCollapsedColumnToRaw(
                             csharpMatchColumnToRaw,
                             i,
-                            absoluteStartColumn,
+                            csharpNormalizedStartColumn,
                             line.Length);
                     }
 

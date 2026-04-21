@@ -9682,6 +9682,49 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_MultilineCommentCloseLineDoesNotEmitPhantomSameLineClass()
+    {
+        // A multiline block comment that closes immediately before a real same-line class
+        // declaration must not leak comment-body lookalikes or `*/`-prefixed phantom rows
+        // into symbol extraction. The current branch regression around wrapped same-line
+        // occurrence recovery started emitting an extra `Child` row here. Closes #571.
+        // 複数行 block comment の閉じ `*/` 直後に実在する same-line class 宣言が続く場合でも、
+        // コメント本文の lookalike や `*/` 付き phantom 行を symbol 抽出へ漏らしてはならない。
+        // wrapped same-line occurrence 修正の枝では、この fixture で余計な `Child` 行が
+        // 追加で出る回帰が入っていた。Closes #571.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        /*",
+            "        public partial class Fake { } */ public partial class Child { } }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var children = symbols
+            .Where(s => s.Kind == "class" && s.Name == "Child")
+            .ToList();
+        var child = Assert.Single(children);
+        Assert.Equal("public partial class Child { }", child.Signature);
+        Assert.Equal("class", child.ContainerKind);
+        Assert.Equal("Wrapped", child.ContainerName);
+
+        Assert.DoesNotContain(symbols, s =>
+            s.Kind == "class"
+            && s.Signature != null
+            && s.Signature.Contains("Fake", StringComparison.Ordinal));
+        Assert.DoesNotContain(symbols, s =>
+            s.Kind == "class"
+            && s.Signature != null
+            && s.Signature.StartsWith("*/", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineMultipleFieldsAreAllCaptured()
     {
         // `public class Multi { public int A; public int B; public int C; }` must
