@@ -1341,7 +1341,18 @@ public static class SymbolExtractor
                             break;
                         }
 
-                        if (lang is "javascript" or "typescript" or "csharp" or "css")
+                        if (lang is "javascript" or "typescript" or "css"
+                            || (lang == "csharp"
+                                && pattern.Kind == "enum"
+                                && pattern.BodyStyle == BodyStyle.Brace
+                                && patternStartOffset > 0)
+                            || (lang == "csharp"
+                                && pattern.Kind == "property"
+                                && pattern.BodyStyle == BodyStyle.None
+                                && !TryMatchAnyRecoverableCSharpPattern(
+                                    matchLine[lineOffset..],
+                                    insideEnumBody: false,
+                                    attributeParenDepth: 0)))
                         {
                             lineOffset = FindNextSameLineBraceStatementStart(matchLine, lineOffset + 1, lang);
                             continue;
@@ -1531,11 +1542,49 @@ public static class SymbolExtractor
                     var sameLineEndColumn = pattern.BodyStyle == BodyStyle.Brace
                         && bodyEndLine == startLine
                         ? FindSameLineBraceEndColumn(line, absoluteStartColumn, lang, kind)
-                        : lang == "csharp"
-                            && kind == "event"
-                            && HasCSharpEventAccessorStart(patternMatchLine[absoluteStartColumn..])
-                            ? FindCSharpSameLineBraceEndColumn(line, absoluteStartColumn)
-                            : -1;
+                        : -1;
+                    if (lang == "csharp"
+                        && csharpMatchLines != null
+                        && ReferenceEquals(patternMatchLine, csharpMatchLines[i])
+                        && CanUseCSharpSameLineSemicolonEndColumn(kind))
+                    {
+                        var semicolonEndColumn = FindCSharpSameLineSemicolonEndColumn(patternMatchLine, absoluteStartColumn);
+                        if (semicolonEndColumn >= absoluteStartColumn
+                            && (sameLineEndColumn < absoluteStartColumn || semicolonEndColumn < sameLineEndColumn))
+                        {
+                            sameLineEndColumn = semicolonEndColumn;
+                        }
+                    }
+                    if (sameLineEndColumn < absoluteStartColumn
+                        && lang == "csharp"
+                        && kind == "event"
+                        && pattern.BodyStyle == BodyStyle.None
+                        && HasCSharpEventAccessorStart(patternMatchLine[absoluteStartColumn..]))
+                    {
+                        // Same-line accessor events (`event E { add {} remove {} }`) share the
+                        // sibling-stream requirement with semicolon-bodied members: their
+                        // signature must stop at the accessor block so later same-line siblings
+                        // can restart the full pattern scan. Without this brace clamp, the
+                        // stored event signature swallows the following declaration and the
+                        // later sibling never reaches earlier patterns such as property.
+                        // Closes #520.
+                        // 同一行 accessor event (`event E { add {} remove {} }`) も semicolon 系
+                        // member と同様に sibling stream として扱う必要がある。そのため
+                        // accessor block の閉じ `}` で signature を切り、後続の same-line
+                        // sibling が property など先頭側 pattern へ再到達できるようにする。
+                        // これが無いと event signature が後続宣言を飲み込み、後続 sibling が
+                        // earlier pattern に届かない。Closes #520.
+                        var braceEndColumn = FindCSharpSameLineBraceEndColumn(line, absoluteStartColumn);
+                        if (braceEndColumn >= absoluteStartColumn)
+                            sameLineEndColumn = braceEndColumn;
+                    }
+                    if (sameLineEndColumn < absoluteStartColumn
+                        && lang == "csharp"
+                        && kind == "enum"
+                        && pattern.BodyStyle == BodyStyle.None)
+                    {
+                        sameLineEndColumn = FindCSharpSameLineEnumMemberEndColumn(patternMatchLine, absoluteStartColumn);
+                    }
                     string signature;
                     if (csharpWrappedModifierPrefix != null)
                     {
@@ -1556,7 +1605,32 @@ public static class SymbolExtractor
                     }
                     else if (sameLineEndColumn >= absoluteStartColumn)
                     {
-                        signature = line[absoluteStartColumn..(sameLineEndColumn + 1)].Trim();
+                        if (lang == "csharp"
+                            && csharpMatchLines != null
+                            && ReferenceEquals(patternMatchLine, csharpMatchLines[i])
+                            && CanUseCSharpSameLineSemicolonEndColumn(kind))
+                        {
+                            var rawStart = TranslateCSharpCollapsedColumnToRaw(
+                                csharpMatchColumnToRaw,
+                                i,
+                                absoluteStartColumn,
+                                line.Length);
+                            var rawEndInclusive = TranslateCSharpCollapsedColumnToRaw(
+                                csharpMatchColumnToRaw,
+                                i,
+                                sameLineEndColumn,
+                                line.Length);
+                            var rawEndExclusive = Math.Min(rawEndInclusive + 1, line.Length);
+                            if (rawStart > line.Length)
+                                rawStart = line.Length;
+                            if (rawEndExclusive <= rawStart)
+                                rawEndExclusive = Math.Min(rawStart + Math.Max(1, match.Length), line.Length);
+                            signature = line[rawStart..rawEndExclusive].Trim();
+                        }
+                        else
+                        {
+                            signature = line[absoluteStartColumn..(sameLineEndColumn + 1)].Trim();
+                        }
                     }
                     else if (lang == "csharp"
                         && pattern.BodyStyle == BodyStyle.None
@@ -1630,7 +1704,7 @@ public static class SymbolExtractor
                         // 含めてはならない。plain field と同じ statement-end scanner を再利用し、
                         // アクセサ式 event 内部の `{}` は釣り合いを保ったまま、外側 `}` だけを
                         // 除外する。Closes #473 follow-up.
-                        var statementEnd = FindCSharpPlainFieldStatementEnd(patternMatchLine, absoluteStartColumn);
+                        var statementEnd = FindCSharpSameLineStatementEnd(patternMatchLine, absoluteStartColumn);
                         if (statementEnd > line.Length)
                             statementEnd = line.Length;
                         if (statementEnd <= absoluteStartColumn)
@@ -1660,7 +1734,7 @@ public static class SymbolExtractor
                         // trailing `} }` が signature に混入せず、AssignContainers の
                         // ContainsSymbol 判定が正しく動いて X が Inner ではなく Outer に
                         // ぶら下がる事故が起きない。Closes #400.
-                        var statementEnd = FindCSharpPlainFieldStatementEnd(patternMatchLine, absoluteStartColumn);
+                        var statementEnd = FindCSharpSameLineStatementEnd(patternMatchLine, absoluteStartColumn);
                         if (csharpMatchLines != null
                             && ReferenceEquals(patternMatchLine, csharpMatchLines[i]))
                         {
@@ -1835,7 +1909,7 @@ public static class SymbolExtractor
                         // `;` より先に囲む型本体の閉じ `}`（深さ 0）に到達した場合は、
                         // `stopAfterFirstPatternMatch` を立てずに break して同一行の他
                         // パターン（class 等）へ機会を残す。Closes #400.
-                        var statementEnd = FindCSharpPlainFieldStatementEnd(patternMatchLine, absoluteStartColumn);
+                        var statementEnd = FindCSharpSameLineStatementEnd(patternMatchLine, absoluteStartColumn);
                         if (statementEnd < patternMatchLine.Length
                             && patternMatchLine[statementEnd] == '}')
                         {
@@ -1887,38 +1961,32 @@ public static class SymbolExtractor
                     if (!CanContinueScanningSameLineBraceBody(lang, kind, pattern.BodyStyle, bodyEndLine, startLine, sameLineEndColumn, absoluteStartColumn))
                     {
                         if (lang == "csharp"
-                            && kind == "function"
-                            && pattern.BodyStyle == BodyStyle.Brace
-                            && bodyEndLine == startLine
-                            && sameLineEndColumn >= absoluteStartColumn)
+                            && sameLineEndColumn >= absoluteStartColumn
+                            && CanRestartCSharpSameLineSiblingScan(kind))
                         {
-                            // Same-line C# function-like members (methods, ctors, static ctors,
-                            // finalizers, indexers) can be followed by later sibling
-                            // declarations (`M() => 1; public int P { get; set; }`,
-                            // `C() { } public int P { get; set; }`) that should still reach
-                            // their own patterns. Restart the whole pattern list from the next
-                            // same-line statement so earlier patterns (notably the property
-                            // regex, which appears before ctor patterns) also get a chance to
-                            // see the sibling declaration. When there is no later statement, we
-                            // keep the old stop-after-first-match behavior so ordinary
-                            // single-declaration lines do not reopen duplicate-matching paths.
-                            // Closes #470 review follow-up.
-                            // 同一行の C# の function 系 member（method / ctor / static ctor /
-                            // finalizer / indexer）の後ろに別の sibling 宣言
-                            // (`M() => 1; public int P { get; set; }`,
-                            // `C() { } public int P { get; set; }`) が続く場合、その後続も
-                            // 各自の pattern に到達できる必要がある。ctor 系より前にある
-                            // property regex のような earlier pattern にも機会を戻すため、
-                            // 次の same-line statement 位置から pattern 列全体を再走査する。
+                            // Compact same-line C# members form a sibling stream rather than a
+                            // single terminal match: after `event E;`, `void M();`, or
+                            // `int P { get; set; }`, later same-line declarations still need
+                            // to reach earlier patterns in the list. Restart from the next
+                            // top-level statement boundary so mixed-kind siblings like
+                            // `event + property`, `method + property`, and `property + event`
+                            // are all visible. When there is no later statement, keep the old
+                            // stop-after-first-match behavior to avoid reopening duplicate
+                            // paths on ordinary single-declaration lines. Closes #470 / #473.
+                            // 同一行のコンパクトな C# member は 1 回限りの terminal match ではなく、
+                            // sibling 宣言のストリームとして扱う。`event E;` や `void M();`、
+                            // `int P { get; set; }` の後ろに続く宣言も、pattern 列の先頭側にある
+                            // property などへ到達できる必要がある。そこで次の top-level 文境界から
+                            // pattern 列全体を再走査し、`event + property`、`method + property`、
+                            // `property + event` のような mixed-kind sibling をすべて可視化する。
                             // 後続宣言が無い行では従来どおり stop-after-first-match を維持し、
-                            // 通常の単独宣言行で duplicate match 経路を再び開かない。Closes #470
-                            // review follow-up.
-                            var nextFunctionSiblingOffset = FindNextSameLineBraceStatementStart(matchLine, sameLineEndColumn + 1, lang);
-                            if (nextFunctionSiblingOffset > sameLineEndColumn
-                                && nextFunctionSiblingOffset < matchLine.Length
-                                && matchLine[nextFunctionSiblingOffset] != '}')
+                            // 通常の単独宣言行で duplicate 経路を再び開かない。Closes #470 / #473.
+                            var nextSiblingOffset = FindNextSameLineBraceStatementStart(matchLine, sameLineEndColumn + 1, lang);
+                            if (nextSiblingOffset > sameLineEndColumn
+                                && nextSiblingOffset < matchLine.Length
+                                && matchLine[nextSiblingOffset] != '}')
                             {
-                                restartPatternScanOffset = nextFunctionSiblingOffset;
+                                restartPatternScanOffset = nextSiblingOffset;
                                 break;
                             }
                         }
@@ -1966,9 +2034,20 @@ public static class SymbolExtractor
                     // の Inner）を拾えるようにする。JavaScript/TypeScript は class body の
                     // member 抽出を専用 lexer/state machine で行うため従来通り終端の後ろへ
                     // 進め、同一行 sibling（`class A {} class B {}` など）だけを扱う。Closes #400.
-                    var nextSameLineOffset = lang == "csharp" && kind is "class" or "struct" or "interface" or "enum" or "namespace"
-                        ? FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang)
-                        : FindNextSameLineBraceStatementStart(matchLine, sameLineEndColumn + 1, lang);
+                    if (lang == "csharp" && kind is "class" or "struct" or "interface" or "enum" or "namespace")
+                    {
+                        var nextTypeBodyOffset = FindNextSameLineBraceStatementStart(
+                            matchLine,
+                            absoluteStartColumn + Math.Max(1, match.Length),
+                            lang);
+                        if (nextTypeBodyOffset > absoluteStartColumn)
+                        {
+                            restartPatternScanOffset = nextTypeBodyOffset;
+                            break;
+                        }
+                    }
+
+                    var nextSameLineOffset = FindNextSameLineBraceStatementStart(matchLine, sameLineEndColumn + 1, lang);
                     if (lang == "csharp"
                         && kind == "property"
                         && pattern.BodyStyle == BodyStyle.Brace
@@ -9261,7 +9340,7 @@ public static class SymbolExtractor
     // 閉じ括弧）は、その位置をそのまま返すため signature と advance の両方がラッパー
     // 終端の手前で止まる。入力は構造的にマスク済みのマッチ行を想定し、文字列リテラル内の
     // `{` / `;` が深さトラッカを誤認させないようにしている。
-    private static int FindCSharpPlainFieldStatementEnd(string maskedLine, int startIndex)
+    private static int FindCSharpSameLineStatementEnd(string maskedLine, int startIndex)
     {
         int parenDepth = 0;
         int bracketDepth = 0;
@@ -9312,6 +9391,76 @@ public static class SymbolExtractor
         return maskedLine.Length;
     }
 
+    // Reuse the same top-level `;` scan as plain fields for other compact same-line C#
+    // members (`event E;`, interface/abstract methods like `void M();`, delegates, etc.).
+    // Returns the inclusive `;` column when one exists on the same physical line and -1
+    // when the declaration instead runs into the enclosing `}` or simply has no same-line
+    // semicolon terminator. Closes #473.
+    // 通常フィールドと同じ top-level `;` 探索を、他のコンパクトな同一行 C# member
+    // (`event E;`、`void M();` 形の interface/abstract method、delegate など) にも
+    // 再利用する。同一物理行に `;` があればその包含列を返し、囲み `}` にぶつかる、
+    // あるいは同一行終端 `;` 自体が無い場合は -1 を返す。Closes #473.
+    private static int FindCSharpSameLineSemicolonEndColumn(string maskedLine, int startIndex)
+    {
+        var statementEnd = FindCSharpSameLineStatementEnd(maskedLine, startIndex);
+        var semicolonIndex = statementEnd - 1;
+        return semicolonIndex >= startIndex
+            && semicolonIndex < maskedLine.Length
+            && maskedLine[semicolonIndex] == ';'
+            ? semicolonIndex
+            : -1;
+    }
+
+    private static int FindCSharpSameLineEnumMemberEndColumn(string maskedLine, int startIndex)
+    {
+        int parenDepth = 0;
+        int bracketDepth = 0;
+        int braceDepth = 0;
+        for (var index = Math.Max(0, startIndex); index < maskedLine.Length; index++)
+        {
+            var ch = maskedLine[index];
+            if (ch == '(')
+            {
+                parenDepth++;
+            }
+            else if (ch == ')')
+            {
+                if (parenDepth > 0)
+                    parenDepth--;
+            }
+            else if (ch == '[')
+            {
+                bracketDepth++;
+            }
+            else if (ch == ']')
+            {
+                if (bracketDepth > 0)
+                    bracketDepth--;
+            }
+            else if (ch == '{')
+            {
+                braceDepth++;
+            }
+            else if (ch == '}')
+            {
+                if (braceDepth > 0)
+                {
+                    braceDepth--;
+                }
+                else
+                {
+                    return index;
+                }
+            }
+            else if (ch == ',' && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
     private static int FindSameLineBraceEndColumn(string line, int startColumn, string? lang, string kind)
     {
         return lang switch
@@ -9351,6 +9500,16 @@ public static class SymbolExtractor
     private static bool CanContinueScanningSameLineCSharpBraceBody(string kind)
     {
         return kind is "namespace" or "class" or "struct" or "interface" or "enum" or "property";
+    }
+
+    private static bool CanUseCSharpSameLineSemicolonEndColumn(string kind)
+    {
+        return kind is "function" or "event" or "delegate";
+    }
+
+    private static bool CanRestartCSharpSameLineSiblingScan(string kind)
+    {
+        return kind is "function" or "property" or "event" or "delegate" or "enum";
     }
 
     private static int FindCSharpSameLineBraceEndColumn(string line, int startColumn)
@@ -9909,7 +10068,7 @@ public static class SymbolExtractor
         if (startColumn < 0 || startColumn >= matchLine.Length)
             return false;
 
-        var statementEnd = FindCSharpPlainFieldStatementEnd(matchLine, startColumn);
+        var statementEnd = FindCSharpSameLineStatementEnd(matchLine, startColumn);
         if (statementEnd <= startColumn)
             return false;
 
