@@ -1659,6 +1659,46 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedLambdaParameterNamedLikeEnum_DoesNotSuppressEarlierSameLineReference()
+    {
+        const string content = """
+            using System;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(Demo.Status left, Func<Holder, int> right) => left;
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read()
+                {
+                    return Sink.Pick(Demo.Status.Ready, (Holder Status) => Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryRangeVariableNamedLikeEnum_DoesNotLeakAsEnumMemberReference()
     {
         const string content = """

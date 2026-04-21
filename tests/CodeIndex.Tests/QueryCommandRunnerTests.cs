@@ -9178,6 +9178,62 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpParenthesizedLambdaParameterNamedLikeEnumDoesNotSuppressEarlierSameLineReference()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_lambda_prefix_scope");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                using System;
+
+                namespace Demo;
+
+                public enum Status
+                {
+                    Ready
+                }
+
+                public static class Sink
+                {
+                    public static Demo.Status Pick(Demo.Status left, Func<Holder, int> right) => left;
+                }
+
+                public sealed class Holder
+                {
+                    public int Ready { get; set; }
+                }
+
+                public sealed class Uses
+                {
+                    public Demo.Status Read()
+                    {
+                        return Sink.Pick(Demo.Status.Ready, (Holder Status) => Status.Ready);
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("Read", json.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpQueryRangeVariableNamedLikeEnumDoesNotLeakAfterQuery()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_query_scope_end");

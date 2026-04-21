@@ -1850,11 +1850,12 @@ public static class ReferenceExtractor
             if (!TryFindMatchingOpenParen(bodyText, leftIndex, out var openParenIndex))
                 return;
 
+            var scopeStart = GetLineColumnFromOffset(bodyText, openParenIndex, startLineNumber);
             var parameters = bodyText[(openParenIndex + 1)..leftIndex];
             foreach (var segment in SplitTopLevelCSharpParameterSegments(parameters))
             {
                 if (TryExtractTrailingCSharpParameterName(segment, out var parameterName))
-                    AddCSharpFunctionValueReceiverName(names, parameterName, declarationLine, 0, scopeEnd.Line, scopeEnd.Column);
+                    AddCSharpFunctionValueReceiverName(names, parameterName, scopeStart.Line, scopeStart.Column, scopeEnd.Line, scopeEnd.Column);
             }
 
             return;
