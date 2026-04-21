@@ -666,7 +666,7 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_AnalyzeSymbol_NonExactEnumMemberMarksGraphAsDegraded()
+    public void ToolsCall_AnalyzeSymbol_NonExactEnumMemberStaysGraphSupported()
     {
         InsertIndexedFile("src/colors.cs", "csharp",
             """
@@ -693,11 +693,10 @@ public class McpServerTests : IDisposable
         Assert.Equal("enum", definition["containerKind"]!.GetValue<string>());
         Assert.Equal("Color", definition["containerName"]!.GetValue<string>());
         Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
-        Assert.False(structured["graphSupported"]!.GetValue<bool>());
-        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
-        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
-        Assert.Contains("enum-member access edges are not indexed yet", structured["graphSupportReason"]!.GetValue<string>());
-        Assert.DoesNotContain("not indexed for 'csharp'", structured["graphSupportReason"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.True(structured["graphSupported"]!.GetValue<bool>());
+        Assert.Null(structured["graphDegraded"]);
+        Assert.Null(structured["unsupportedSymbolKind"]);
+        Assert.Equal("Shade", structured["references"]![0]!["containerName"]!.GetValue<string>());
     }
 
     [Fact]
@@ -735,8 +734,8 @@ public class McpServerTests : IDisposable
         Assert.Equal("web/app.js", structured["file"]!["path"]!.GetValue<string>());
         Assert.Equal("javascript", structured["graphLanguage"]!.GetValue<string>());
         Assert.True(structured["graphSupported"]!.GetValue<bool>());
-        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
-        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
+        Assert.Null(structured["graphDegraded"]);
+        Assert.Null(structured["unsupportedSymbolKind"]);
         Assert.Contains("web/app.js", nearbyPaths);
         Assert.DoesNotContain("src/status.cs", nearbyPaths);
         Assert.Contains(structured["nearbySymbols"]!.AsArray(),
@@ -869,7 +868,7 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_References_ExactEnumMember_UsesSymbolKindGapSummary()
+    public void ToolsCall_References_ExactEnumMember_ReturnsIndexedReference()
     {
         InsertIndexedFile("src/colors.cs", "csharp",
             """
@@ -891,12 +890,12 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
         var structured = response["result"]!["structuredContent"]!;
 
-        Assert.Equal("No references found. C# enum-member access edges are not indexed yet.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
-        Assert.False(structured["graphSupported"]!.GetValue<bool>());
-        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
-        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
-        Assert.Contains("enum-member access edges are not indexed yet", structured["graphSupportReason"]!.GetValue<string>());
-        Assert.DoesNotContain("not indexed for 'csharp'", structured["graphSupportReason"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal("Found 1 references.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Equal("Shade", structured["results"]![0]!["containerName"]!.GetValue<string>());
+        Assert.True(structured["graphSupported"]!.GetValue<bool>());
+        Assert.Null(structured["graphDegraded"]);
+        Assert.Null(structured["unsupportedSymbolKind"]);
     }
 
     [Fact]
@@ -927,11 +926,10 @@ public class McpServerTests : IDisposable
         var structured = response["result"]!["structuredContent"]!;
 
         Assert.True(structured["graphSupported"]!.GetValue<bool>());
-        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
-        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
+        Assert.Null(structured["graphDegraded"]);
+        Assert.Null(structured["unsupportedSymbolKind"]);
         Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
-        Assert.Contains("Call-graph extraction is indexed for 'csharp'.", structured["graphSupportReason"]!.GetValue<string>());
-        Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", structured["graphSupportReason"]!.GetValue<string>());
+        Assert.Equal("Use", structured["results"]![0]!["containerName"]!.GetValue<string>());
     }
 
     [Fact]
@@ -958,12 +956,10 @@ public class McpServerTests : IDisposable
         var structured = response["result"]!["structuredContent"]!;
 
         Assert.Equal(1, structured["count"]!.GetValue<int>());
-        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
-        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
         Assert.Equal("javascript", structured["graphLanguage"]!.GetValue<string>());
         Assert.True(structured["graphSupported"]!.GetValue<bool>());
-        Assert.Contains("Call-graph extraction is indexed for 'javascript'.", structured["graphSupportReason"]!.GetValue<string>());
-        Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", structured["graphSupportReason"]!.GetValue<string>());
+        Assert.Null(structured["graphDegraded"]);
+        Assert.Null(structured["unsupportedSymbolKind"]);
     }
 
     [Fact]
@@ -980,7 +976,7 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_Callers_ExactEnumMember_ReturnsUnsupportedGraphMetadata()
+    public void ToolsCall_Callers_ExactEnumMember_ReturnsIndexedCaller()
     {
         InsertIndexedFile("src/cases.cs", "csharp",
             """
@@ -1002,13 +998,13 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
         var structured = response["result"]!["structuredContent"]!;
 
-        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
         Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
-        Assert.False(structured["graphSupported"]!.GetValue<bool>());
-        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
-        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
-        Assert.Contains("enum-member access edges are not indexed yet", structured["graphSupportReason"]!.GetValue<string>());
-        Assert.Equal("No callers found. C# enum-member access edges are not indexed yet.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.True(structured["graphSupported"]!.GetValue<bool>());
+        Assert.Null(structured["graphDegraded"]);
+        Assert.Null(structured["unsupportedSymbolKind"]);
+        Assert.Equal("Value", structured["results"]![0]!["callerName"]!.GetValue<string>());
+        Assert.Equal("Found 1 callers.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
     [Fact]
@@ -1039,11 +1035,10 @@ public class McpServerTests : IDisposable
         var structured = response["result"]!["structuredContent"]!;
 
         Assert.True(structured["graphSupported"]!.GetValue<bool>());
-        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
-        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
+        Assert.Null(structured["graphDegraded"]);
+        Assert.Null(structured["unsupportedSymbolKind"]);
         Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
-        Assert.Contains("Call-graph extraction is indexed for 'csharp'.", structured["graphSupportReason"]!.GetValue<string>());
-        Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", structured["graphSupportReason"]!.GetValue<string>());
+        Assert.Equal("Use", structured["results"]![0]!["callerName"]!.GetValue<string>());
     }
 
     [Fact]
@@ -1071,7 +1066,7 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_Callees_ExactEnumMember_ReturnsUnsupportedGraphMetadata()
+    public void ToolsCall_Callees_ExactEnumMember_UsesZeroSchema()
     {
         InsertIndexedFile("src/cases.cs", "csharp",
             """
@@ -1095,11 +1090,10 @@ public class McpServerTests : IDisposable
 
         Assert.Equal(0, structured["count"]!.GetValue<int>());
         Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
-        Assert.False(structured["graphSupported"]!.GetValue<bool>());
-        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
-        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
-        Assert.Contains("enum-member access edges are not indexed yet", structured["graphSupportReason"]!.GetValue<string>());
-        Assert.Equal("No callees found. C# enum-member access edges are not indexed yet.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.True(structured["graphSupported"]!.GetValue<bool>());
+        Assert.Null(structured["graphDegraded"]);
+        Assert.Null(structured["unsupportedSymbolKind"]);
+        Assert.Equal("No callees found.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
     [Fact]
@@ -1130,11 +1124,10 @@ public class McpServerTests : IDisposable
         var structured = response["result"]!["structuredContent"]!;
 
         Assert.True(structured["graphSupported"]!.GetValue<bool>());
-        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
-        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
+        Assert.Null(structured["graphDegraded"]);
+        Assert.Null(structured["unsupportedSymbolKind"]);
         Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
-        Assert.Contains("Call-graph extraction is indexed for 'csharp'.", structured["graphSupportReason"]!.GetValue<string>());
-        Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", structured["graphSupportReason"]!.GetValue<string>());
+        Assert.Equal("Next", structured["results"]![0]!["calleeName"]!.GetValue<string>());
     }
 
     [Fact]
@@ -4177,7 +4170,7 @@ public class McpServerTests : IDisposable
         Assert.True(structured["graph_supported"]!.GetValue<bool>());
         Assert.True(structured["graph_degraded"]!.GetValue<bool>());
         Assert.Equal("enum_member", structured["unsupported_symbol_kind"]!.GetValue<string>());
-        Assert.Contains("enum members are excluded from unused", structured["graph_support_reason"]!.GetValue<string>());
+        Assert.Contains("currently excluded from unused analysis", structured["graph_support_reason"]!.GetValue<string>());
         Assert.Contains("Color", names);
         Assert.Contains("TrulyUnused", names);
         Assert.DoesNotContain("Red", names);
@@ -4234,7 +4227,7 @@ public class McpServerTests : IDisposable
             Assert.True(structured["count"]!.GetValue<int>() >= 2);
             Assert.True(structured["graph_degraded"]!.GetValue<bool>());
             Assert.Equal("enum_member", structured["unsupported_symbol_kind"]!.GetValue<string>());
-            Assert.Contains("enum members are excluded from unused", structured["graph_support_reason"]!.GetValue<string>());
+            Assert.Contains("currently excluded from unused analysis", structured["graph_support_reason"]!.GetValue<string>());
             Assert.Contains("Color", names);
             Assert.Contains("TrulyUnused", names);
             Assert.Contains(

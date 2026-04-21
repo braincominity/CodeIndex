@@ -561,7 +561,8 @@ public partial class DbReader
         var definitionLimit = Math.Min(limit, 5);
         var definitions = GetDefinitions(query, definitionLimit, kind: null, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since: null, exact);
         DefinitionResult? primaryDefinition = definitions
-            .FirstOrDefault(definition => ReferenceExtractor.SupportsSymbolGraph(definition.Lang, definition.Kind, definition.ContainerKind) == true)
+            .FirstOrDefault(definition => ReferenceExtractor.SupportsLanguage(definition.Lang) == true && !IsCSharpEnumMemberDefinition(definition))
+            ?? definitions.FirstOrDefault(definition => ReferenceExtractor.SupportsLanguage(definition.Lang) == true)
             ?? definitions.FirstOrDefault();
         if (exact)
             definitions = BuildAnalysisDefinitions(primaryDefinition, definitions, definitionLimit);
@@ -569,19 +570,14 @@ public partial class DbReader
         var freshness = GetWorkspaceFreshness();
         var hasGraphApplicableFiles = HasGraphApplicableFiles(lang, pathPatterns, excludePathPatterns, excludeTests);
         var graphLanguage = lang ?? file?.Lang;
-        var hasUnsupportedEnumMember = exact
-            ? HasExactUnsupportedCSharpEnumMember(query, lang, pathPatterns, excludePathPatterns, excludeTests)
-            : (primaryDefinition != null && IsCSharpEnumMemberDefinition(primaryDefinition))
-                || definitions.Any(IsCSharpEnumMemberDefinition);
+        const bool hasUnsupportedEnumMember = false;
         var hasSupportedGraphDefinition = exact
             ? HasExactGraphSupportedDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests)
             : definitions.Any(definition => ReferenceExtractor.SupportsSymbolGraph(definition.Lang, definition.Kind, definition.ContainerKind) == true);
         var baseGraphSupported = graphLanguage == null
             ? (bool?)null
             : ReferenceExtractor.SupportsLanguage(graphLanguage);
-        bool? graphSupported = hasUnsupportedEnumMember && !hasSupportedGraphDefinition
-            ? false
-            : baseGraphSupported;
+        bool? graphSupported = baseGraphSupported;
         var graphSupportReason = ReferenceExtractor.BuildGraphSupportReasonWithUnsupportedEnumMemberGap(
             graphLanguage,
             graphSupported,
@@ -656,16 +652,7 @@ public partial class DbReader
         IReadOnlyList<string>? excludePathPatterns,
         bool excludeTests)
     {
-        if (lang != null && !string.Equals(lang, "csharp", StringComparison.Ordinal))
-            return false;
-
-        return HasExactDefinitionMatch(
-            query,
-            lang,
-            pathPatterns,
-            excludePathPatterns,
-            excludeTests,
-            $"f.lang = 'csharp' AND s.kind = 'enum' AND {GetSymbolColumnSql("container_kind", "''")} = 'enum'");
+        return false;
     }
 
     public bool HasExactGraphSupportedDefinition(
@@ -685,6 +672,18 @@ public partial class DbReader
         IReadOnlyList<string>? excludePathPatterns,
         bool excludeTests)
     {
+        return TryGetExactGraphSupportedDefinitionLanguage(query, lang, pathPatterns, excludePathPatterns, excludeTests, preferNonEnumMember: true)
+            ?? TryGetExactGraphSupportedDefinitionLanguage(query, lang, pathPatterns, excludePathPatterns, excludeTests, preferNonEnumMember: false);
+    }
+
+    private string? TryGetExactGraphSupportedDefinitionLanguage(
+        string query,
+        string? lang,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests,
+        bool preferNonEnumMember)
+    {
         using var cmd = _conn.CreateCommand();
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "supportedGraphLang");
         var nameCondition = _foldReady
@@ -696,10 +695,11 @@ public partial class DbReader
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE " + nameCondition + @"
-              AND " + supportedLangFilter + @"
-              AND NOT (f.lang = 'csharp' AND s.kind = 'enum' AND " + GetSymbolColumnSql("container_kind", "''") + @" = 'enum')";
+              AND " + supportedLangFilter;
         if (lang != null)
             sql += " AND f.lang = @lang";
+        if (preferNonEnumMember)
+            sql += " AND NOT (f.lang = 'csharp' AND s.kind = 'enum' AND s.container_kind = 'enum')";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += " LIMIT 1";
 

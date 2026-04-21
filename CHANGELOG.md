@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Fixed
+- **C# enum-member shadowing now uses offset-scoped lifetimes for same-line lambdas, query expressions, and brace-less embedded statements (#371)** — `ReferenceExtractor` no longer drops real enum-member references merely because a same-line lambda parameter, `foreach` variable, or LINQ range variable reuses the same identifier later on the line. Shadow scopes are now tracked by exact start/end offsets instead of line-wide suppression, parenthesized lambdas start at the actual `(` position, query range variables stop at the enclosing subexpression boundary, and brace-less `if/else` embedded statements are parsed as a single scope-bearing unit so later tails are not cut off. Added extractor and CLI regressions covering same-line lambda/foreach tails, query-in-argument cases, parenthesized lambda prefixes, and brace-less `if/else` forms. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`. Closes #371.
+
 ### [1.13.0] - 2026-04-21
 
 #### Changed
@@ -767,6 +770,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 修正
+- **C# enum member shadowing が同一行ラムダ・query 式・波括弧なし埋め込み文でも offset 単位の寿命で判定されるよう修正 (#371)** — `ReferenceExtractor` は、同じ行の後半で同名のラムダ引数、`foreach` 変数、LINQ range variable が出てくるだけで本物の enum member 参照まで落としてしまわないようになった。shadow scope は行全体ではなく正確な開始/終了 offset で追跡し、丸括弧付きラムダは実際の `(` 位置から開始、query range variable はその部分式の終端で寿命を切り、波括弧なしの `if/else` 埋め込み文も 1 つの scope 単位として解析することで、後続の tail を誤って削らない。same-line の lambda/foreach tail、引数内 query、parenthesized lambda prefix、brace-less `if/else` を固定する extractor / CLI 回帰テストも追加した。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`。Closes #371。
 
 ### [1.13.0] - 2026-04-21
 
