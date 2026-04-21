@@ -2987,6 +2987,68 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_Issue363RawInterpolatedAndVerbatimStrings_DoNotLeakPhantomSymbols()
+    {
+        // Regression for issue #363 exact repro: code-shaped members inside C# raw,
+        // interpolated raw, and multi-line verbatim strings must not be indexed as
+        // real symbols. The current main branch already handles this correctly; this
+        // test locks the user-reported fixture in place so future refactors cannot
+        // silently reopen it.
+        // issue #363 の exact repro 回帰: C# の raw string / 補間付き raw string /
+        // 複数行 verbatim string 内のコード風メンバーを本物の symbol として
+        // index してはならない。現行 main では直っているため、このテストで
+        // ユーザー報告フィクスチャを固定し、将来の refactor での再発を防ぐ。
+        var content = """""
+            namespace CsRawStringPhantom;
+
+            public class Svc
+            {
+                public int RealMethod() => 0;
+
+                public string DocsExample() => """
+                    public void FakeMethod() { }
+                    public int FakeProp { get; set; }
+                    public class FakeClass { }
+                    public interface IFakeIface { }
+                    public delegate int FakeDel();
+                    public event System.EventHandler FakeEvent;
+                    public Foo() { }
+                    """;
+
+                public string VerbatimExample() => @"
+                    public void VerbatimFake() { }
+                ";
+
+                public string InterpExample() => $"""
+                    public void InterpFake() { }
+                    """;
+
+                public int AnotherReal() => 1;
+            }
+            """"";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "namespace" && symbol.Name == "CsRawStringPhantom");
+        Assert.Contains(symbols, symbol => symbol.Kind == "class" && symbol.Name == "Svc");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "RealMethod");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "DocsExample");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "VerbatimExample");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "InterpExample");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "AnotherReal");
+        Assert.Equal(7, symbols.Count);
+
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "FakeMethod");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "FakeProp");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "FakeClass");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "IFakeIface");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "FakeDel");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "FakeEvent");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "Foo");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "VerbatimFake");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name == "InterpFake");
+    }
+
+    [Fact]
     public void Extract_CSharp_CommentedTripleQuotesDoNotHideFollowingMembers()
     {
         var content = "public class FixtureHost\n{\n    // \"\"\" this is only a comment marker\n    public void Run() { }\n}";
@@ -5691,6 +5753,85 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_SplitReturnTypeLine_StillCapturesMethodPropertyAndIndexer()
+    {
+        // issue #361: when a long C# return type wraps onto the previous line, the
+        // method/property/indexer must still be emitted instead of being silently
+        // dropped by a per-line-only regex pass.
+        // issue #361: C# の長い戻り値型が前行へ折り返されても、method/property/indexer は
+        // per-line 前提の regex で silent drop されず、引き続き抽出される必要がある。
+        var content = """
+            using System.Collections.Generic;
+
+            namespace CsMultilineSig;
+
+            public class Svc
+            {
+                public Dictionary<string, List<int>>
+                    GetMapping(
+                        string key,
+                        int defaultValue) => new();
+
+                public Dictionary<string, int>
+                    Cache { get; } = new();
+
+                public T Create<T>(string name)
+                    where T : class, new()
+                    => default!;
+
+                public int
+                    this[string key] { get => 0; set { } }
+
+                public int Simple() => 0;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var getMapping = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "GetMapping"));
+        Assert.Equal("public", getMapping.Visibility);
+        Assert.Equal("Dictionary<string,List<int>>", getMapping.ReturnType);
+        Assert.Equal(7, getMapping.StartLine);
+        Assert.Equal(10, getMapping.EndLine);
+
+        var cache = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Cache"));
+        Assert.Equal("public", cache.Visibility);
+        Assert.Equal("Dictionary<string,int>", cache.ReturnType);
+        Assert.Equal(12, cache.StartLine);
+        Assert.Equal(13, cache.EndLine);
+
+        var create = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Create"));
+        Assert.Equal("public", create.Visibility);
+        Assert.Equal("T", create.ReturnType);
+        Assert.Equal(15, create.StartLine);
+        Assert.Equal(17, create.EndLine);
+
+        var indexer = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Item"));
+        Assert.Equal("public", indexer.Visibility);
+        Assert.Equal("int", indexer.ReturnType);
+        Assert.Equal(19, indexer.StartLine);
+        Assert.Equal(20, indexer.EndLine);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Simple" && s.ReturnType == "int");
+        Assert.Equal(
+            new[]
+            {
+                ("class", "Svc"),
+                ("function", "Create"),
+                ("function", "GetMapping"),
+                ("function", "Item"),
+                ("function", "Simple"),
+                ("namespace", "CsMultilineSig"),
+                ("property", "Cache"),
+            },
+            symbols
+                .Where(s => s.Kind != "import")
+                .Select(s => (s.Kind, s.Name))
+                .OrderBy(x => x.Kind, StringComparer.Ordinal)
+                .ThenBy(x => x.Name, StringComparer.Ordinal)
+                .ToArray());
+    }
+
+    [Fact]
     public void Extract_CSharp_AllmanBlockBodiedProperty_WithIntermediateBlockComment_IsExtracted()
     {
         // issue #233 fourth review follow-up: when an Allman-style block-bodied property
@@ -5893,6 +6034,73 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "GetCount" && s.ReturnType == "int");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "NullableArg" && s.ReturnType == "string");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ArrayArg" && s.ReturnType == "string");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DetectsGenericOverTupleReturnTypes()
+    {
+        // Issue #241 / #344 / #484: the shared C# return-type matcher must allow tuple groups
+        // inside generic arguments so ordinary methods, interface declarations, and
+        // explicit-interface implementations do not silently disappear, even when tuple
+        // elements themselves contain nested tuples.
+        // Issue #241 / #344 / #484: 共有の C# 戻り値型 matcher は generic 引数内の tuple を
+        // 許容し、通常メソッド・interface 宣言・明示的インターフェース実装が
+        // 無言で消えないようにしなければならず、tuple 要素側の入れ子 tuple も扱えなければならない。
+        var content = """
+            namespace Demo;
+
+            public interface IFoo
+            {
+                System.Collections.Generic.List<(int, int)> GetList();
+                System.Threading.Tasks.Task<((int A, int B), string Name)> Nested();
+                System.Threading.Tasks.Task<(((int A, int B), int C), string Name)> TooDeep();
+            }
+
+            public class Service : IFoo
+            {
+                public System.Threading.Tasks.Task<(int, string)> MultiAsync() => System.Threading.Tasks.Task.FromResult((1, "x"));
+                public System.Collections.Generic.Dictionary<string, (int x, int y)> Coords() => new();
+                public System.Collections.Generic.IEnumerable<(string Key, int Value)> Items() => [];
+                System.Collections.Generic.List<(int, int)> IFoo.GetList() => [];
+                public System.Threading.Tasks.Task<((int A, int B), string Name)> NestedAsync() => System.Threading.Tasks.Task.FromResult(((1, 2), "n"));
+                public System.Threading.Tasks.Task<(((int A, int B), int C), string Name)> TooDeepAsync() => System.Threading.Tasks.Task.FromResult((((1, 2), 3), "deep"));
+                System.Threading.Tasks.Task<((int A, int B), string Name)> IFoo.Nested() => System.Threading.Tasks.Task.FromResult(((1, 2), "n"));
+                System.Threading.Tasks.Task<(((int A, int B), int C), string Name)> IFoo.TooDeep() => System.Threading.Tasks.Task.FromResult((((1, 2), 3), "deep"));
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var multiAsync = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "MultiAsync"));
+        Assert.Equal("System.Threading.Tasks.Task<(int,string)>", multiAsync.ReturnType);
+
+        var coords = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Coords"));
+        Assert.Equal("System.Collections.Generic.Dictionary<string,(intx,inty)>", coords.ReturnType);
+
+        var items = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Items"));
+        Assert.Equal("System.Collections.Generic.IEnumerable<(stringKey,intValue)>", items.ReturnType);
+
+        var getListDeclarations = symbols.Where(s => s.Kind == "function" && s.Name == "GetList").ToList();
+        Assert.Equal(2, getListDeclarations.Count);
+        Assert.Contains(getListDeclarations, s => s.ContainerKind == "interface" && s.ContainerName == "IFoo" && s.ReturnType == "System.Collections.Generic.List<(int,int)>");
+        Assert.Contains(getListDeclarations, s => s.ContainerKind == "class" && s.ContainerName == "Service" && s.ReturnType == "System.Collections.Generic.List<(int,int)>");
+
+        var nestedAsync = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "NestedAsync"));
+        Assert.Equal("System.Threading.Tasks.Task<((intA,intB),stringName)>", nestedAsync.ReturnType);
+        Assert.Contains("System.Threading.Tasks.Task<((int A, int B), string Name)> NestedAsync()", nestedAsync.Signature);
+
+        var nestedDeclarations = symbols.Where(s => s.Kind == "function" && s.Name == "Nested").ToList();
+        Assert.Equal(2, nestedDeclarations.Count);
+        Assert.Contains(nestedDeclarations, s => s.ContainerKind == "interface" && s.ContainerName == "IFoo" && s.ReturnType == "System.Threading.Tasks.Task<((intA,intB),stringName)>");
+        Assert.Contains(nestedDeclarations, s => s.ContainerKind == "class" && s.ContainerName == "Service" && s.ReturnType == "System.Threading.Tasks.Task<((intA,intB),stringName)>");
+
+        var tooDeepAsync = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "TooDeepAsync"));
+        Assert.Equal("System.Threading.Tasks.Task<(((intA,intB),intC),stringName)>", tooDeepAsync.ReturnType);
+        Assert.Contains("System.Threading.Tasks.Task<(((int A, int B), int C), string Name)> TooDeepAsync()", tooDeepAsync.Signature);
+
+        var tooDeepDeclarations = symbols.Where(s => s.Kind == "function" && s.Name == "TooDeep").ToList();
+        Assert.Equal(2, tooDeepDeclarations.Count);
+        Assert.Contains(tooDeepDeclarations, s => s.ContainerKind == "interface" && s.ContainerName == "IFoo" && s.ReturnType == "System.Threading.Tasks.Task<(((intA,intB),intC),stringName)>");
+        Assert.Contains(tooDeepDeclarations, s => s.ContainerKind == "class" && s.ContainerName == "Service" && s.ReturnType == "System.Threading.Tasks.Task<(((intA,intB),intC),stringName)>");
     }
 
     [Fact]
@@ -8831,16 +9039,19 @@ public class SymbolExtractorTests
         // after method-like patterns with a return type, so
         // `public class C { public C() { } public int P { get; set; } }`
         // still dropped `P` while the same shape after a normal method worked.
-        // Lock both instance and static constructor forms because they share the
-        // same function-kind same-line stop path, even though the static ctor itself
-        // is not guaranteed to surface as a separate symbol in every shape here.
-        // Closes #470 review follow-up.
+        // Issue #478 showed an additional starvation path: the dedicated static-ctor
+        // regex sat after property rows, so
+        // `public class D { static D() { } public int Q { get; set; } }`
+        // indexed `Q` but silently lost the static ctor itself. Lock both ctor kinds
+        // and the later properties in one same-line fixture. Closes #470 / #478.
         // 同一行の C# constructor は、その後ろに続く sibling 宣言の pattern 到達を
         // 止めてはならない。#470 の追修正当初は戻り値型を持つ method 系だけを再開
         // していたため、`public class C { public C() { } public int P { get; set; } }`
-        // では通常 method 後と違って `P` がまだ落ちていた。instance / static ctor は
-        // 同じ function-kind の same-line stop 経路を共有するため、後続 property を
-        // 両方固定する。Closes #470 review follow-up.
+        // では通常 method 後と違って `P` がまだ落ちていた。さらに #478 では、
+        // static ctor 専用 regex が property 行より後ろにあったため
+        // `public class D { static D() { } public int Q { get; set; } }`
+        // で `Q` は出ても static ctor 自体が欠落していた。instance / static ctor と
+        // 後続 property の両方をこの same-line fixture で固定する。Closes #470 / #478.
         var content = string.Join(
             "\n",
             "public class C { public C() { } public int P { get; set; } }",
@@ -8855,6 +9066,11 @@ public class SymbolExtractorTests
         Assert.Equal("class", p.ContainerKind);
         Assert.Equal("C", p.ContainerName);
         Assert.Equal("public int P { get; set; }", p.Signature);
+
+        var staticCtor = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "D"));
+        Assert.Equal("class", staticCtor.ContainerKind);
+        Assert.Equal("D", staticCtor.ContainerName);
+        Assert.Equal("static D() { }", staticCtor.Signature);
 
         var q = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Q"));
         Assert.Equal("class", q.ContainerKind);
@@ -9435,6 +9651,37 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Name == "GetResult");
         Assert.DoesNotContain(symbols, s => s.Name == "SendAsync");
         Assert.DoesNotContain(symbols, s => s.Name == "CreateException");
+    }
+
+    [Fact]
+    public void Extract_CSharp_DoesNotMatchQualifiedNewExpressionsAsExplicitInterfaceDefinitions()
+    {
+        // Issue #362: qualified constructor expressions (`new Namespace.Type()`) must not be
+        // misread as `returnType + interface.member` by the explicit-interface regex.
+        // Issue #362: 修飾付きコンストラクタ式 (`new Namespace.Type()`) を、明示的インターフェース
+        // 実装 regex の `returnType + interface.member` と誤認しないこと。
+        var content = """
+            public class Service : IDisposable
+            {
+                public void Build()
+                {
+                    new System.Text.StringBuilder().Append("a").Append("b").ToString();
+                    _ = new System.Text.RegularExpressions.Regex("pattern");
+                    new System.Net.Http.HttpClient().Dispose();
+                }
+
+                void IDisposable.Dispose()
+                {
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Build" && s.ReturnType == "void");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Dispose" && s.ReturnType == "void");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "StringBuilder");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Regex");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "HttpClient");
     }
 
     [Fact]

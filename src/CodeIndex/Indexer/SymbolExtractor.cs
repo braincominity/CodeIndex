@@ -17,17 +17,23 @@ public static class SymbolExtractor
     // (`(int, int)[]`, `(int, int)?`, `(int, int)[][]`, `(int, int)[,]`, and whitespaced
     // variants like `(int, int) []` / `(int, int) ?`) so tuple-array and nullable-tuple
     // return types are captured on methods, properties, indexers, and explicit interface
-    // implementations. Delegate and event declarations with tuple-array returns remain
-    // blocked by pre-existing pattern-order / generic-over-tuple issues (#340, #241) and are
-    // out of scope for this loop. The identifier branch already absorbs these characters via
-    // its char class, but keeping the suffix loop outside both branches is harmless and
-    // makes the tuple branch's responsibilities explicit.
+    // implementations. The shared segment matcher also allows tuple groups inside generic
+    // arguments (`Task<(int, int)>`, `Dictionary<string, (int x, int y)>`,
+    // `List<(int, int)> IFoo.GetList()`), so ordinary methods and explicit-interface
+    // implementations stay aligned. Delegate and event declarations with tuple-array returns
+    // remain blocked by the pre-existing pattern-order issue (#340); the identifier branch
+    // already absorbs non-tuple suffix characters via its char class, but keeping the suffix
+    // loop outside both branches is harmless and makes the tuple branch's responsibilities
+    // explicit.
     // 戻り値型のクラスに `*` を含め、ポインタ / 関数ポインタ戻り値型（`int*` / `void**` / `delegate*<int, int>` / `int*[]`）を取りこぼさない。
     // 末尾の CSharpTupleSuffixPattern で tuple 分岐にも `[]` / `?` / `[][]` / `[,]` と、
     // `(int, int) []` / `(int, int) ?` のような空白を挟んだ整形バリエーションまで許容し、
     // tuple-array / nullable-tuple 戻り値をメソッド・プロパティ・インデクサ・明示的
-    // インターフェース実装で捕捉できるようにする。delegate / event 宣言で tuple-array 戻り値を
-    // 扱う件はパターン評価順や generic-over-tuple 側の既存バグ（#340、#241）が残っており、この
+    // インターフェース実装で捕捉できるようにする。共有の segment matcher により
+    // `Task<(int, int)>` / `Dictionary<string, (int x, int y)>` /
+    // `List<(int, int)> IFoo.GetList()` のような generic-over-tuple も通常メソッドと
+    // 明示的インターフェース実装の両方で同じ経路で扱える。delegate / event 宣言で
+    // tuple-array 戻り値を扱う件は既存のパターン評価順問題 (#340) が残っており、この
     // ループの範囲外。識別子側の分岐は文字クラスに `[`/`]`/`?` を既に含むため無害な冗長だが、
     // tuple 分岐側の責務が明確になる。
     // Tuple / array / nullable suffix tokens that may trail a C# return type. Each iteration
@@ -48,7 +54,23 @@ public static class SymbolExtractor
     // 否定先読みで ctor 形状として弾きつつ、上流の property / method 行で本来のシンボルとして
     // 拾えるようにする。#349 のフォローアップ。
     private const string CSharpTupleSuffixPattern = @"(?:\s*(?:\?|\[[\],\s]*\]))*";
-    private const string CSharpTypePattern = @"(?:(?:\([^)]+\)|(?:global::)?[\w?.<>\[\],:*]+(?:\s+[\w?.<>\[\],:*]+)*)" + CSharpTupleSuffixPattern + @")";
+    // Embedded tuple groups must contain a comma at the OUTER tuple level so ordinary
+    // call/ctor parens (`Make()`, `Parent(value)`) keep falling through, while real tuple
+    // segments inside generics can nest arbitrarily deep (`Task<((int A, int B), string Name)>`,
+    // `Task<(((int A, int B), int C), string Name)>`). The balancing-group variant tracks nested
+    // parens and only records commas seen at depth 0.
+    // 埋め込み tuple group は最外 tuple レベルの comma を必須にし、`Make()` / `Parent(value)` の
+    // ような通常の call/ctor 括弧列は従来どおり不一致に落としつつ、generic 内の実 tuple segment
+    // は `Task<((int A, int B), string Name)>` / `Task<(((int A, int B), int C), string Name)>`
+    // のような深い入れ子まで通せるようにする。balancing-group 版で入れ子括弧を追跡し、
+    // 深さ 0 で見えた comma だけを tuple 判定に使う。
+    private const string CSharpTupleGroupPattern =
+        @"\((?>(?:[^(),]+|\((?<TupleDepth>)|\)(?<-TupleDepth>)|(?(TupleDepth),|(?<TupleComma>,))))*(?(TupleDepth)(?!))(?(TupleComma)|(?!))\)";
+    private const string CSharpTypeTokenCharsPattern = @"[\w?.<>\[\],:*]";
+    private const string CSharpTypeSegmentPattern =
+        @"(?:" + CSharpTypeTokenCharsPattern + @"+(?:" + CSharpTupleGroupPattern + CSharpTypeTokenCharsPattern + @"*)*|" + CSharpTupleGroupPattern + CSharpTypeTokenCharsPattern + @"*)";
+    private const string CSharpTypePattern =
+        @"(?:(?:global::)?(?:" + CSharpTypeSegmentPattern + @")(?:\s+(?:" + CSharpTypeSegmentPattern + @"))*" + CSharpTupleSuffixPattern + @")";
     // `delegate` is a non-type keyword only when it is NOT followed by `*` — `delegate*<...>` is a valid return type.
     // `delegate` は `*` を伴わないときだけ非型キーワード扱い。`delegate*<...>` は戻り値型として有効。
     private const string CSharpNonTypeKeywordPattern = @"(?:(?:public|private|protected|internal|static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|required|ref)\b|delegate\b(?!\s*\*))";
@@ -518,6 +540,18 @@ public static class SymbolExtractor
             // CSharpTupleSuffixPattern を CSharpTypePattern と共有することで、ctor 否定先読みと上流の
             // property / method / plain-field 行が tuple サフィックス戻り値の受理形について常に一致する。Closes #349.
             new("function",  new Regex($@"^\s*(?:(?:unsafe|extern)\s+)*(?<visibility>{CSharpVisibilityPattern})\s+(?:(?:unsafe|extern)\s+)*(?<name>\w+)\s*\((?!.*\){CSharpTupleSuffixPattern}\s*\w+\s*(?:[{{(;]|=>|=(?![=>])))", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Static constructor / 静的コンストラクタ
+            // Keep this ahead of the property rows so same-line compact bodies such as
+            // `class C { static C() { } public int P { get; set; } }` emit the static ctor
+            // before the later property match short-circuits the pattern scan. The shape is
+            // specific enough that it does not overlap with normal methods (no return type,
+            // empty parameter list, optional `unsafe` around `static`). Closes #478.
+            // 同一行のコンパクトな型本体
+            // (`class C { static C() { } public int P { get; set; } }`) では、後続 property が
+            // pattern scan を打ち切る前に static ctor を先に拾う必要があるため、property 行より前に置く。
+            // この形は「戻り値型なし・引数なし・`static` 前後の任意 `unsafe`」に限定されるため、
+            // 通常メソッドとは重ならない。Closes #478.
+            new("function",  new Regex(@"^\s*(?:unsafe\s+)?static\s+(?:unsafe\s+)?(?<name>\w+)\s*\(\s*\)\s*\{?", RegexOptions.Compiled), BodyStyle.Brace),
             // Property with get/set/init — visibility optional
             // Reject statement keywords (return/throw/switch/...) as the return type so that
             // multi-line statement fragments merged by BuildCSharpPropertyMatchLine — e.g.
@@ -569,7 +603,7 @@ public static class SymbolExtractor
             // 有効な戻り値型（ステートメントキーワードではない）とドット前のインターフェース名を要求。
             // qualified call site を伴う named-argument label のみ除外し、
             // `global::System.String` や `Alias::Type` のような alias-qualified 型は許可する。
-            new("function",  new Regex($@"^\s*(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\w+\s*:\s*(?:global::)?[\w.<>:]+\.\w+\s*(?:<[^>]+>\s*)?[\(\[])(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>\w+)\s*(?:<[^>]+>\s*)?[\(\[]", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("function",  new Regex($@"^\s*(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|new|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\w+\s*:\s*(?:global::)?[\w.<>:]+\.\w+\s*(?:<[^>]+>\s*)?[\(\[])(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>\w+)\s*(?:<[^>]+>\s*)?[\(\[]", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             // Explicit interface property implementation (brace body), e.g. int IThing.Value { get; set; }
             // Mirrors the explicit-interface method row above: the qualifier is non-capturing so the
             // short property name (Value) is recorded as name, consistent with how the method row
@@ -590,10 +624,6 @@ public static class SymbolExtractor
             // member 拡張) ため、他の修飾子と並べて受け付ける。そうしないと `partial` indexer 宣言
             // が symbols / definition / outline から無言で欠落する。Closes #350.
             new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|readonly|unsafe|extern|partial|ref(?:\s+readonly)?)\s+)*(?<returnType>{CSharpTypePattern})\s+(?<name>this)\s*\[", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
-            // Static constructor / 静的コンストラクタ
-            // `unsafe` can appear before or after `static` (`unsafe static S()` ≡ `static unsafe S()`). Closes #355.
-            // `unsafe` は `static` の前後どちらにも置ける（`unsafe static S()` ≡ `static unsafe S()`）。Closes #355.
-            new("function",  new Regex(@"^\s*(?:unsafe\s+)?static\s+(?:unsafe\s+)?(?<name>\w+)\s*\(\s*\)\s*\{?", RegexOptions.Compiled), BodyStyle.Brace),
             // Finalizer (destructor) / ファイナライザ（デストラクタ）
             new("function",  new Regex(@"^\s*~(?<name>\w+)\s*\(\s*\)", RegexOptions.Compiled), BodyStyle.Brace),
             // Enum member (e.g. Red, Green = 1,) — requires 4+ spaces indent, name only,

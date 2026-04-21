@@ -151,6 +151,8 @@ public class CallerResult
     public string? CallerKind { get; set; }
     public string? CallerName { get; set; }
     public string CalleeName { get; set; } = string.Empty;
+    [JsonIgnore]
+    public string ReferenceKind { get; set; } = string.Empty;
     public int FirstLine { get; set; }
     public int ReferenceCount { get; set; }
 }
