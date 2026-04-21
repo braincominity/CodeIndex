@@ -9426,6 +9426,31 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_SameLineNestedInterfacePropertyUsesInnermostContainer()
+    {
+        // Same-line nested interface members must stay attached to the nested interface,
+        // even when earlier same-line siblings are longer and would otherwise reorder the
+        // container walk by signature length. Before #529, `P` attached to outer `I2`
+        // because `AssignContainers` processed same-line symbols out of source order and
+        // popped `J` before reaching the later property. Closes #529.
+        // 同一行の nested interface member は、先行 sibling の signature 長によって
+        // same-line の処理順が崩れても、外側 `I2` ではなく内側 `J` に属し続ける必要が
+        // ある。#529 前は `AssignContainers` が source order を失い、後続 property に
+        // 到達する前に `J` を stack から外してしまうため `P` が `I2` に誤帰属していた。
+        const string content = "public interface I2 { void M<T1, T2>(); event System.Action<int, string> E; interface J { int P { get; } } }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var nestedInterface = Assert.Single(symbols.Where(s => s.Kind == "interface" && s.Name == "J"));
+        Assert.Equal("interface", nestedInterface.ContainerKind);
+        Assert.Equal("I2", nestedInterface.ContainerName);
+
+        var nestedProperty = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("int P { get; }", nestedProperty.Signature);
+        Assert.Equal("interface", nestedProperty.ContainerKind);
+        Assert.Equal("J", nestedProperty.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CSharp_GenericBraceMembersRestartCollapsedSameLineSiblingsFromCollapsedColumns()
     {
         // Raw-column brace fixes for same-line generic members must not leak into the
