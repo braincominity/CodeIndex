@@ -2130,8 +2130,22 @@ public static class ReferenceExtractor
         if (startColumn < 0 || startColumn >= line.Length)
             return false;
 
-        if (startColumn > 0 && !char.IsWhiteSpace(line[startColumn - 1]))
-            return false;
+        if (startColumn > 0)
+        {
+            if (!char.IsWhiteSpace(line[startColumn - 1]))
+                return false;
+
+            for (var probe = startColumn - 1; probe >= 0; probe--)
+            {
+                if (char.IsWhiteSpace(line[probe]))
+                    continue;
+
+                if (line[probe] == '.' || line[probe] == ':')
+                    return false;
+
+                break;
+            }
+        }
 
         var tokenStart = startColumn;
         if (line[tokenStart] == '@')
