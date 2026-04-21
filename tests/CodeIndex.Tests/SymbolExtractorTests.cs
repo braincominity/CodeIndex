@@ -9251,6 +9251,40 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_GenericBraceMembersRestartCollapsedSameLineSiblingsFromCollapsedColumns()
+    {
+        // Raw-column brace fixes for same-line generic members must not leak into the
+        // sibling restart offset. The restart scan still runs on the collapsed C#
+        // match line, so using the raw closing-brace column directly can jump into/past
+        // a later compact sibling when generic whitespace was removed earlier in the
+        // line. Pin the no-space compact chain where `M<T1,           T2>() { }int P`
+        // used to lose both `P` and `E` and absorb `P` into `M`'s signature. Closes #533.
+        // same-line generic member の raw-column brace fix は、sibling 再開位置まで
+        // raw 列のまま漏れてはいけない。再開スキャン自体は collapsed な C# match 行
+        // 上で動くため、閉じ brace の raw 列をそのまま使うと、generic 内で先に消えた
+        // 空白ぶんだけ次の compact sibling の途中/後ろへ飛んでしまう。`M<T1, T2>() { }int P`
+        // 形で `P` / `E` が落ち、`M` の signature が `P` を飲み込んでいた回帰を固定する。
+        // Closes #533.
+        const string content = "public interface I { void M<T1,           T2>() { }int P { get; }event System.Action<int,           string> E; }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var method = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "M"));
+        Assert.Equal("void M<T1,           T2>() { }", method.Signature);
+        Assert.Equal("interface", method.ContainerKind);
+        Assert.Equal("I", method.ContainerName);
+
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("int P { get; }", property.Signature);
+        Assert.Equal("interface", property.ContainerKind);
+        Assert.Equal("I", property.ContainerName);
+
+        var evt = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E"));
+        Assert.Equal("event System.Action<int,           string> E;", evt.Signature);
+        Assert.Equal("interface", evt.ContainerKind);
+        Assert.Equal("I", evt.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineMultipleFieldsAreAllCaptured()
     {
         // `public class Multi { public int A; public int B; public int C; }` must

@@ -1597,6 +1597,7 @@ public static class SymbolExtractor
                     {
                         if (lang == "csharp"
                             && csharpSingleLineCollapsedMatch
+                            && !sameLineEndUsesRawColumns
                             && CanUseCSharpSameLineSemicolonEndColumn(kind))
                         {
                             var rawStart = TranslateCSharpCollapsedColumnToRaw(
@@ -1943,8 +1944,16 @@ public static class SymbolExtractor
                             // `property + event` のような mixed-kind sibling をすべて可視化する。
                             // 後続宣言が無い行では従来どおり stop-after-first-match を維持し、
                             // 通常の単独宣言行で duplicate 経路を再び開かない。Closes #470 / #473.
-                            var nextSameLineOffset = FindNextSameLineBraceStatementStart(matchLine, sameLineEndColumn + 1, lang);
-                            if (nextSameLineOffset > sameLineEndColumn)
+                            var restartScanColumn = csharpSingleLineCollapsedMatch && sameLineEndUsesRawColumns
+                                ? TranslateCSharpRawColumnToCollapsed(
+                                    csharpMatchColumnToRaw,
+                                    i,
+                                    sameLineEndColumn,
+                                    matchLine.Length,
+                                    line.Length)
+                                : sameLineEndColumn;
+                            var nextSameLineOffset = FindNextSameLineBraceStatementStart(matchLine, restartScanColumn + 1, lang);
+                            if (nextSameLineOffset > restartScanColumn)
                             {
                                 restartPatternScanOffset = nextSameLineOffset;
                                 break;
@@ -11017,6 +11026,53 @@ public static class SymbolExtractor
         if (collapsedColumn >= map.Length)
             return rawLength;
         return map[collapsedColumn];
+    }
+
+    // Convert a raw-line column back into the per-line collapsed C# match-line domain.
+    // Same-line brace-bodied generic members now keep raw columns for signature slicing,
+    // but sibling rescan still runs on `csharpMatchLines[i]` (collapsed). Map the
+    // closing-brace column back before calling `FindNextSameLineBraceStatementStart`, or
+    // a raw column shifted right by removed generic whitespace can restart inside/past the
+    // next compact sibling and make later declarations disappear. Closes #533.
+    // raw 行の列を、per-line collapsed な C# match 行の列へ戻す。same-line の
+    // brace-bodied generic member は signature 切り出しのため raw 列を保持するが、
+    // sibling 再スキャン自体は `csharpMatchLines[i]`（collapsed）上で動く。そこで
+    // `FindNextSameLineBraceStatementStart` に渡す前に閉じ brace 列を collapsed 側へ戻し、
+    // generic 内で消えた空白ぶん右へずれた raw 列が次 sibling の途中/後ろから再開して
+    // 後続宣言を落とすのを防ぐ。Closes #533.
+    private static int TranslateCSharpRawColumnToCollapsed(int[]?[] mapPerLine, int lineIndex, int rawColumn, int collapsedLength, int rawLength)
+    {
+        if (mapPerLine == null || lineIndex < 0 || lineIndex >= mapPerLine.Length)
+            return rawColumn;
+        var map = mapPerLine[lineIndex];
+        if (map == null)
+            return rawColumn;
+        if (rawColumn <= 0)
+            return 0;
+        if (map.Length == 0)
+            return Math.Clamp(rawColumn, 0, collapsedLength);
+        if (rawColumn >= rawLength)
+            return collapsedLength;
+
+        var lo = 0;
+        var hi = map.Length - 1;
+        while (lo <= hi)
+        {
+            var mid = lo + ((hi - lo) / 2);
+            var mappedRaw = map[mid];
+            if (mappedRaw == rawColumn)
+                return mid;
+            if (mappedRaw < rawColumn)
+                lo = mid + 1;
+            else
+                hi = mid - 1;
+        }
+
+        if (hi < 0)
+            return 0;
+        if (hi >= map.Length)
+            return collapsedLength;
+        return hi;
     }
 
     // Gate only the block-bodied property pattern (requires `{ get|set|init ... }`).
