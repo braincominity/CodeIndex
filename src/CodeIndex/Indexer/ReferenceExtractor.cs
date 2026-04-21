@@ -1173,13 +1173,20 @@ public static class ReferenceExtractor
     private static bool IsCSharpIdentifierStart(char c) =>
         c == '_' || c == '@' || char.IsLetter(c);
 
-    private static Dictionary<string, List<(string EnumName, string? QualifiedEnumName)>> BuildCSharpQualifiedEnumMemberLookup(
+    private static Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> BuildCSharpQualifiedEnumMemberLookup(
         string language,
         IReadOnlyList<SymbolRecord> symbols)
     {
-        var lookup = new Dictionary<string, List<(string EnumName, string? QualifiedEnumName)>>(StringComparer.Ordinal);
+        var lookup = new Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
         if (language != "csharp")
             return lookup;
+
+        var conflictingNonEnumTypeNames = new HashSet<string>(
+            symbols
+                .Where(symbol => symbol.Kind is "class" or "struct" or "interface" or "delegate")
+                .Select(symbol => symbol.Name)
+                .Where(name => !string.IsNullOrWhiteSpace(name))!,
+            StringComparer.Ordinal);
 
         foreach (var symbol in symbols)
         {
@@ -1206,7 +1213,10 @@ public static class ReferenceExtractor
             }
 
             if (!exists)
-                targets.Add((symbol.ContainerName!, symbol.ContainerQualifiedName));
+                targets.Add((
+                    symbol.ContainerName!,
+                    symbol.ContainerQualifiedName,
+                    AllowShortNameFallback: !conflictingNonEnumTypeNames.Contains(symbol.ContainerName!)));
         }
 
         return lookup;
@@ -1214,7 +1224,7 @@ public static class ReferenceExtractor
 
     private static void EmitCSharpQualifiedEnumMemberReferences(
         string preparedLine,
-        IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName)>> enumMemberLookup,
+        IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> enumMemberLookup,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -1352,17 +1362,20 @@ public static class ReferenceExtractor
 
     private static bool MatchesQualifiedEnumType(
         string qualifier,
-        IReadOnlyList<(string EnumName, string? QualifiedEnumName)> targets)
+        IReadOnlyList<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)> targets)
     {
-        foreach (var (enumName, qualifiedEnumName) in targets)
+        var hasMultipleQualifierSegments = qualifier.Contains('.') || qualifier.Contains("::", StringComparison.Ordinal);
+        foreach (var (enumName, qualifiedEnumName, allowShortNameFallback) in targets)
         {
-            if (!string.IsNullOrWhiteSpace(qualifiedEnumName)
+            if (hasMultipleQualifierSegments
+                && !string.IsNullOrWhiteSpace(qualifiedEnumName)
                 && QualifiedNameHasSuffix(qualifiedEnumName!, qualifier))
             {
                 return true;
             }
 
-            if (string.Equals(GetLastQualifiedSegment(qualifier), enumName, StringComparison.Ordinal))
+            if (allowShortNameFallback
+                && string.Equals(GetLastQualifiedSegment(qualifier), enumName, StringComparison.Ordinal))
                 return true;
         }
 

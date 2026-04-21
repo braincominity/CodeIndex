@@ -869,6 +869,39 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithConflictingNonEnumType_DoesNotLeakAcrossNamespaces()
+    {
+        const string content = """
+            namespace A;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            namespace B;
+
+            public static class Status
+            {
+                public static int Ready = 1;
+            }
+
+            public class Uses
+            {
+                public int Read()
+                {
+                    return Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_ConstructorCalls_AreInstantiateOnly()
     {
         const string content = """
