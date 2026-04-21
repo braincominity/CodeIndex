@@ -9130,6 +9130,48 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_SameLineAccessorEventsStillExposeSiblingMembers()
+    {
+        // Accessor-based same-line events must clamp their signature at the accessor body
+        // and still reopen earlier patterns for later siblings. Without that brace-end
+        // clamp, `event E { add {} remove {} } public int P { get; set; }` stores the
+        // event signature through the property and silently drops `P`. Also pin the
+        // reverse `property + accessor event` order, including a generic event type with
+        // internal whitespace, so both sibling directions remain visible. Closes #520.
+        // 同一行の accessor event は accessor 本体の閉じ `}` で signature を切り、
+        // 後続 sibling のために earlier pattern を再び開く必要がある。そうしないと
+        // `event E { add {} remove {} } public int P { get; set; }` で event signature が
+        // property まで飲み込み、`P` が無言で欠落する。逆順の `property + accessor event`
+        // も、空白入り generic event 型を含めて固定し、両方向の sibling が可視なまま
+        // であることを保証する。Closes #520.
+        var content = string.Join(
+            "\n",
+            "public class C { public event System.EventHandler E { add {} remove {} } public int P { get; set; } }",
+            "public struct S { public int Q { get; set; } public event System.Action<int, string> F { add {} remove {} } }");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var e = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E"));
+        Assert.Equal("class", e.ContainerKind);
+        Assert.Equal("C", e.ContainerName);
+        Assert.Equal("public event System.EventHandler E { add {} remove {} }", e.Signature);
+
+        var p = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("class", p.ContainerKind);
+        Assert.Equal("C", p.ContainerName);
+        Assert.Equal("public int P { get; set; }", p.Signature);
+
+        var q = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Q"));
+        Assert.Equal("struct", q.ContainerKind);
+        Assert.Equal("S", q.ContainerName);
+        Assert.Equal("public int Q { get; set; }", q.Signature);
+
+        var f = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "F"));
+        Assert.Equal("struct", f.ContainerKind);
+        Assert.Equal("S", f.ContainerName);
+        Assert.Equal("public event System.Action<int, string> F { add {} remove {} }", f.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_GenericSameLineSemicolonMembersKeepTerminator()
     {
         // The same-line semicolon-boundary fix for #473 must translate collapsed generic

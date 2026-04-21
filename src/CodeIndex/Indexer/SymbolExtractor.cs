@@ -1532,6 +1532,28 @@ public static class SymbolExtractor
                     }
                     if (sameLineEndColumn < absoluteStartColumn
                         && lang == "csharp"
+                        && kind == "event"
+                        && pattern.BodyStyle == BodyStyle.None)
+                    {
+                        // Same-line accessor events (`event E { add {} remove {} }`) share the
+                        // sibling-stream requirement with semicolon-bodied members: their
+                        // signature must stop at the accessor block so later same-line siblings
+                        // can restart the full pattern scan. Without this brace clamp, the
+                        // stored event signature swallows the following declaration and the
+                        // later sibling never reaches earlier patterns such as property.
+                        // Closes #520.
+                        // 同一行 accessor event (`event E { add {} remove {} }`) も semicolon 系
+                        // member と同様に sibling stream として扱う必要がある。そのため
+                        // accessor block の閉じ `}` で signature を切り、後続の same-line
+                        // sibling が property など先頭側 pattern へ再到達できるようにする。
+                        // これが無いと event signature が後続宣言を飲み込み、後続 sibling が
+                        // earlier pattern に届かない。Closes #520.
+                        var braceEndColumn = FindSameLineBraceEndColumn(line, absoluteStartColumn, lang, kind);
+                        if (braceEndColumn >= absoluteStartColumn)
+                            sameLineEndColumn = braceEndColumn;
+                    }
+                    if (sameLineEndColumn < absoluteStartColumn
+                        && lang == "csharp"
                         && kind == "enum"
                         && pattern.BodyStyle == BodyStyle.None)
                     {

@@ -10,7 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### Fixed
-- **C# same-line mixed member streams no longer drop earlier siblings behind later pattern families (#473)** — `SymbolExtractor` now treats compact same-line C# type-body members as a statement stream instead of letting earlier pattern families scan past sibling boundaries, so shapes like `event E; public int P { get; set; }`, `void M(); int P { get; }`, and reverse-order `property + event` lines all emit each member with the correct same-line signature boundary. Added regression coverage for class/struct/interface mixed-kind fixtures. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`. Closes #473.
+- **C# same-line mixed member streams no longer drop earlier siblings behind later pattern families (#473)** — `SymbolExtractor` now treats compact same-line C# type-body members as a statement stream instead of letting earlier pattern families scan past sibling boundaries, so shapes like `event E; public int P { get; set; }`, `void M(); int P { get; }`, accessor-event forms like `event E { add {} remove {} } public int P { get; set; }`, and reverse-order `property + event` lines all emit each member with the correct same-line signature boundary. Added regression coverage for class/struct/interface mixed-kind fixtures, including accessor-event follow-up coverage from #520. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`. Closes #473, #520.
 
 ### [1.13.0] - 2026-04-21
 
@@ -772,7 +772,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 修正
-- **C# の同一行 mixed member ストリームで、後続パターンのせいで先行 sibling が脱落しなくなりました (#473)** — `SymbolExtractor` がコンパクトな同一行 C# 型本体 member を sibling 境界付きの statement stream として扱うようになり、`event E; public int P { get; set; }`、`void M(); int P { get; }`、および逆順の `property + event` でも各 member を正しい同一行シグネチャ境界つきで抽出します。class/struct/interface の mixed-kind fixture を回帰テストで固定しました。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`。Closes #473.
+- **C# の同一行 mixed member ストリームで、後続パターンのせいで先行 sibling が脱落しなくなりました (#473)** — `SymbolExtractor` がコンパクトな同一行 C# 型本体 member を sibling 境界付きの statement stream として扱うようになり、`event E; public int P { get; set; }`、`void M(); int P { get; }`、`event E { add {} remove {} } public int P { get; set; }` のような accessor event 形、および逆順の `property + event` でも各 member を正しい同一行シグネチャ境界つきで抽出します。class/struct/interface の mixed-kind fixture と accessor event の follow-up (#520) を回帰テストで固定しました。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`。Closes #473, #520.
 
 ### [1.13.0] - 2026-04-21
 
