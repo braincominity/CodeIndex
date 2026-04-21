@@ -11891,6 +11891,196 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_ExactJson_CSharpSwitchExpressionDeclarationPatternWhenInCommentDoesNotLeakReferenceContext()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_switch_expression_declaration_pattern_when_comment_collision");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Status
+                {
+                    Ready
+                }
+
+                public sealed class Holder
+                {
+                    public int Ready { get; set; }
+                }
+
+                public sealed class Uses
+                {
+                    public Demo.Status Read(object value)
+                    {
+                        return value switch
+                        {
+                            Holder Status /* when comment */ => (Demo.Status)Status.Ready,
+                            _ => Demo.Status.Ready
+                        };
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var referenceLines = json.GetProperty("references")
+                .EnumerateArray()
+                .Select(reference => reference.GetProperty("line").GetInt32())
+                .ToArray();
+            var callerReferenceCounts = json.GetProperty("callers")
+                .EnumerateArray()
+                .Select(caller => caller.GetProperty("reference_count").GetInt32())
+                .ToArray();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal([20], referenceLines);
+            Assert.Equal([1], callerReferenceCounts);
+            Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
+            Assert.True(json.GetProperty("graph_supported").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_CSharpSwitchExpressionDeclarationPatternWhenInMultiLineCommentDoesNotLeakReferenceContext()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_switch_expression_declaration_pattern_when_multiline_comment_collision");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Status
+                {
+                    Ready
+                }
+
+                public sealed class Holder
+                {
+                    public int Ready { get; set; }
+                }
+
+                public sealed class Uses
+                {
+                    public Demo.Status Read(object value)
+                    {
+                        return value switch
+                        {
+                            Holder /* trivia
+                                      when comment */ Status when Status.Ready > 0 => Demo.Status.Ready,
+                            _ => Demo.Status.Ready
+                        };
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var first = ParseJsonOutput(stdout);
+            var firstJson = first.RootElement;
+            var rows = ParseJsonLines(stdout)
+                .Select(document => (
+                    Line: document.RootElement.GetProperty("line").GetInt32(),
+                    Column: document.RootElement.GetProperty("column").GetInt32(),
+                    ContainerName: document.RootElement.GetProperty("container_name").GetString()))
+                .OrderBy(row => row.Line)
+                .ThenBy(row => row.Column)
+                .ToArray();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("call", firstJson.GetProperty("reference_kind").GetString());
+            Assert.Equal([20, 21], rows.Select(row => row.Line).ToArray());
+            Assert.Equal([83, 30], rows.Select(row => row.Column).ToArray());
+            Assert.All(rows, row => Assert.Equal("Read", row.ContainerName));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_CSharpSwitchExpressionDeclarationPatternWhenGuardDoesNotLeakReferenceContext()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_switch_expression_declaration_pattern_when_guard_collision");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Status
+                {
+                    Ready
+                }
+
+                public sealed class Holder
+                {
+                    public int Ready { get; set; }
+                }
+
+                public sealed class Uses
+                {
+                    public Demo.Status Read(object value)
+                    {
+                        return value switch
+                        {
+                            Holder Status when Status.Ready > 0 => Demo.Status.Ready,
+                            _ => Demo.Status.Ready
+                        };
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var first = ParseJsonOutput(stdout);
+            var firstJson = first.RootElement;
+            var rows = ParseJsonLines(stdout)
+                .Select(document => (
+                    Line: document.RootElement.GetProperty("line").GetInt32(),
+                    Column: document.RootElement.GetProperty("column").GetInt32(),
+                    ContainerName: document.RootElement.GetProperty("container_name").GetString()))
+                .OrderBy(row => row.Line)
+                .ThenBy(row => row.Column)
+                .ToArray();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("call", firstJson.GetProperty("reference_kind").GetString());
+            Assert.Equal([19, 20], rows.Select(row => row.Line).ToArray());
+            Assert.Equal([64, 30], rows.Select(row => row.Column).ToArray());
+            Assert.All(rows, row => Assert.Equal("Read", row.ContainerName));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpSwitchExpressionRecursivePatternVariableDoesNotLeakReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_switch_expression_recursive_pattern_collision");

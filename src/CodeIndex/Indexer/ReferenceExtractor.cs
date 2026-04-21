@@ -259,6 +259,9 @@ public static class ReferenceExtractor
     private static readonly Regex CSharpDeclarationPatternValueNameRegex = new(
         @"\bis\s+" + CSharpDeclarationPatternTypeRegex + CSharpRecursivePatternClauseRegex + @"\s+(?<name>@?[A-Za-z_]\w*)\b",
         RegexOptions.Compiled);
+    private static readonly Regex CSharpSwitchExpressionDeclarationPatternValueNameRegex = new(
+        @"^\s*" + CSharpDeclarationPatternTypeRegex + @"\s+(?<name>@?[A-Za-z_]\w*)\s*$",
+        RegexOptions.Compiled);
     private static readonly Regex CSharpCaseDeclarationPatternValueNameRegex = new(
         @"\bcase\s+" + CSharpDeclarationPatternTypeRegex + CSharpRecursivePatternClauseRegex + @"\s+(?<name>@?[A-Za-z_]\w*)\b(?=\s*(?::|\bwhen\b))",
         RegexOptions.Compiled);
@@ -1959,11 +1962,11 @@ public static class ReferenceExtractor
             index--;
         }
 
-        foreach (var pattern in FindCSharpSwitchExpressionRecursivePatternValueNames(bodyText))
+        foreach (var pattern in FindCSharpSwitchExpressionPatternValueNames(bodyText))
             yield return pattern;
     }
 
-    private static IEnumerable<CSharpRecursivePatternValueNameRecord> FindCSharpSwitchExpressionRecursivePatternValueNames(string bodyText)
+    private static IEnumerable<CSharpRecursivePatternValueNameRecord> FindCSharpSwitchExpressionPatternValueNames(string bodyText)
     {
         if (string.IsNullOrWhiteSpace(bodyText))
             yield break;
@@ -1981,7 +1984,7 @@ public static class ReferenceExtractor
             if (!TryFindCSharpSwitchExpressionArmStartOffset(bodyText, arrowIndex, out var armStartOffset))
                 continue;
 
-            if (!TryParseCSharpSwitchExpressionArmRecursivePatternDesignation(bodyText, armStartOffset, arrowIndex, out var name, out var designationOffset))
+            if (!TryParseCSharpSwitchExpressionArmPatternDesignation(bodyText, armStartOffset, arrowIndex, out var name, out var designationOffset))
                 continue;
 
             yield return new CSharpRecursivePatternValueNameRecord(name, designationOffset, false, arrowIndex);
@@ -2051,7 +2054,7 @@ public static class ReferenceExtractor
         return false;
     }
 
-    private static bool TryParseCSharpSwitchExpressionArmRecursivePatternDesignation(
+    private static bool TryParseCSharpSwitchExpressionArmPatternDesignation(
         string bodyText,
         int armStartOffset,
         int arrowIndex,
@@ -2064,11 +2067,40 @@ public static class ReferenceExtractor
             return false;
 
         var armText = bodyText[armStartOffset..arrowIndex];
-        if (!TryParseCSharpRecursivePatternDesignation(armText, 0, false, out name, out var relativeOffset))
+        var preparedArmLines = StructuralLineMasker.MaskLines("csharp", armText.Split('\n'));
+        for (var i = 0; i < preparedArmLines.Length; i++)
+            preparedArmLines[i] = PrepareLine("csharp", preparedArmLines[i]);
+
+        var preparedArmText = string.Join("\n", preparedArmLines);
+        if (!TryParseCSharpRecursivePatternDesignation(preparedArmText, 0, false, out name, out var relativeOffset)
+            && !TryParseCSharpSwitchExpressionArmDeclarationPatternDesignation(preparedArmText, out name, out relativeOffset))
+        {
             return false;
+        }
 
         designationOffset = armStartOffset + relativeOffset;
         return designationOffset < arrowIndex;
+    }
+
+    private static bool TryParseCSharpSwitchExpressionArmDeclarationPatternDesignation(
+        string armText,
+        out string name,
+        out int designationOffset)
+    {
+        name = string.Empty;
+        designationOffset = -1;
+        if (string.IsNullOrWhiteSpace(armText))
+            return false;
+
+        var whenOffset = FindTopLevelCSharpWhenKeywordOffset(armText);
+        var patternText = whenOffset >= 0 ? armText[..whenOffset] : armText;
+        var match = CSharpSwitchExpressionDeclarationPatternValueNameRegex.Match(patternText);
+        if (!match.Success)
+            return false;
+
+        name = NormalizeCSharpIdentifier(match.Groups["name"].Value);
+        designationOffset = match.Groups["name"].Index;
+        return designationOffset >= 0;
     }
 
     private static bool TryParseCSharpRecursivePatternDesignation(
@@ -2148,6 +2180,51 @@ public static class ReferenceExtractor
 
     private static bool IsCSharpPatternControlKeyword(string token) =>
         token is "and" or "or" or "not" or "when" or "null" or "true" or "false";
+
+    private static int FindTopLevelCSharpWhenKeywordOffset(string text)
+    {
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        for (var i = 0; i < text.Length; i++)
+        {
+            var current = text[i];
+            switch (current)
+            {
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    break;
+            }
+
+            if (parenDepth == 0
+                && bracketDepth == 0
+                && braceDepth == 0
+                && TryConsumeCSharpKeyword(text, i, "when", out _))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
 
     private static void AddCSharpLambdaParametersBeforeArrow(
         List<CSharpFunctionValueReceiverNameRecord> names,
