@@ -2187,6 +2187,20 @@ public static class ReferenceExtractor
             || string.Equals(keyword, "descending", StringComparison.Ordinal);
     }
 
+    private static bool IsCSharpQueryClauseKeywordSuffix(string line, int nextColumn, string keyword)
+    {
+        if (nextColumn >= line.Length)
+            return true;
+
+        var next = line[nextColumn];
+        if (char.IsWhiteSpace(next))
+            return true;
+
+        return (string.Equals(keyword, "ascending", StringComparison.Ordinal)
+                || string.Equals(keyword, "descending", StringComparison.Ordinal))
+            && (next == ',' || next == ')' || next == ']' || next == '}' || next == ';');
+    }
+
     private static bool TryFindMatchingCSharpDelimiter(
         IReadOnlyList<string> structuralLines,
         int bodyEndIndex,
@@ -2254,7 +2268,8 @@ public static class ReferenceExtractor
                 if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0
                     && TryConsumeCSharpQueryClauseKeyword(line, column, out var keyword, out var nextColumn))
                 {
-                    if (IsCSharpQueryClauseKeyword(keyword))
+                    if (IsCSharpQueryClauseKeyword(keyword)
+                        && IsCSharpQueryClauseKeywordSuffix(line, nextColumn, keyword))
                     {
                         terminalClauseSeen = IsCSharpTerminalQueryClauseKeyword(keyword);
                     }

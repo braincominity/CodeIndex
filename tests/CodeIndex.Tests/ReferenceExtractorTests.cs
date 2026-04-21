@@ -2112,6 +2112,50 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryKeywordNamedLocalFunctionInSelectExpression_PreservesLaterEnumReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Status Pick(IEnumerable<int> left, Status right) => right;
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Status Read(IEnumerable<Holder> items)
+                {
+                    static int from(IEnumerable<Holder> xs) => xs.Count();
+                    return Sink.Pick(from Status in items select from(items), Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Ready"
+            && reference.ReferenceKind == "call"
+            && reference.Line == 26
+            && reference.Context.Contains("Status.Ready", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Extract_CsharpQualifiedEnumMemberAccess_WithForeachValueNamedLikeEnum_DoesNotLeakAfterEmbeddedStatement()
     {
         const string content = """
