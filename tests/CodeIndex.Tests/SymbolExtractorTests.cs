@@ -9796,6 +9796,66 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_EmptySameLineNestedInterfaceBodyKeepsLaterOuterClassSibling()
+    {
+        // An empty same-line nested interface body must not consume a later outer class
+        // sibling of a different kind. The #585 repro previously emitted `Outer` + `I`
+        // but dropped `Sibling` after the interface's compact `{ }` body. Closes #585.
+        // 空の same-line nested interface body は、kind が異なる後続 outer class sibling を
+        // 飲み込んではならない。#585 の repro では、以前は interface の compact な `{ }`
+        // 本体の後で `Outer` と `I` だけが出力され、`Sibling` が落ちていた。Closes #585.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "[A]",
+            "public class Outer { public interface I<T1,           T2> { } public class Sibling { } }");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var outer = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Outer"));
+        Assert.Equal("namespace", outer.ContainerKind);
+        Assert.Equal("Demo", outer.ContainerName);
+
+        var nestedInterface = Assert.Single(symbols.Where(s => s.Kind == "interface" && s.Name == "I"));
+        Assert.Equal("class", nestedInterface.ContainerKind);
+        Assert.Equal("Outer", nestedInterface.ContainerName);
+
+        var sibling = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Sibling"));
+        Assert.Equal("class", sibling.ContainerKind);
+        Assert.Equal("Outer", sibling.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedEmptySameLineNestedTypeBodyKeepsLaterOuterPropertySibling()
+    {
+        // A wrapped nested type whose last inner member is `Child { } }` must still leave a
+        // later outer property visible on that same closing-brace line. The #585 repro
+        // previously kept `Child` but dropped `P` from the outer `Host`. Closes #585.
+        // wrapped nested type の最後の inner member が `Child { } }` でも、同じ closing-brace
+        // 行に続く outer property は見え続けなければならない。#585 の repro では、以前は
+        // `Child` は残る一方で outer `Host` の `P` が落ちていた。Closes #585.
+        var content = string.Join(
+            "\n",
+            "public class Host",
+            "{",
+            "    public class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        public class Child { } } public int P { get; set; }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
+        Assert.Equal("class", child.ContainerKind);
+        Assert.Equal("Wrapped", child.ContainerName);
+
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("class", property.ContainerKind);
+        Assert.Equal("Host", property.ContainerName);
+        Assert.Equal("public int P { get; set; }", property.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_WrappedNestedTypeKeepsSameLineDuplicateSignatureSiblings()
     {
         // Duplicate suppression must not collapse distinct same-line siblings just because
