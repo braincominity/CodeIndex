@@ -1539,13 +1539,23 @@ public static class SymbolExtractor
                         break;
                     }
 
+                    var isSingleLineCSharpMatch = lang == "csharp"
+                        && csharpMatchLines != null
+                        && ReferenceEquals(patternMatchLine, csharpMatchLines[i]);
                     var sameLineEndColumn = pattern.BodyStyle == BodyStyle.Brace
                         && bodyEndLine == startLine
-                        ? FindSameLineBraceEndColumn(line, absoluteStartColumn, lang, kind)
+                        ? FindSameLineBraceEndColumn(
+                            line,
+                            isSingleLineCSharpMatch ? csharpGateRawStartColumn : absoluteStartColumn,
+                            lang,
+                            kind)
                         : -1;
+                    var sameLineEndColumnIsRaw = isSingleLineCSharpMatch
+                        && pattern.BodyStyle == BodyStyle.Brace
+                        && bodyEndLine == startLine
+                        && sameLineEndColumn >= absoluteStartColumn;
                     if (lang == "csharp"
-                        && csharpMatchLines != null
-                        && ReferenceEquals(patternMatchLine, csharpMatchLines[i])
+                        && isSingleLineCSharpMatch
                         && CanUseCSharpSameLineSemicolonEndColumn(kind))
                     {
                         var semicolonEndColumn = FindCSharpSameLineSemicolonEndColumn(patternMatchLine, absoluteStartColumn);
@@ -1553,6 +1563,7 @@ public static class SymbolExtractor
                             && (sameLineEndColumn < absoluteStartColumn || semicolonEndColumn < sameLineEndColumn))
                         {
                             sameLineEndColumn = semicolonEndColumn;
+                            sameLineEndColumnIsRaw = false;
                         }
                     }
                     if (sameLineEndColumn < absoluteStartColumn
@@ -1574,9 +1585,14 @@ public static class SymbolExtractor
                         // sibling が property など先頭側 pattern へ再到達できるようにする。
                         // これが無いと event signature が後続宣言を飲み込み、後続 sibling が
                         // earlier pattern に届かない。Closes #520.
-                        var braceEndColumn = FindCSharpSameLineBraceEndColumn(line, absoluteStartColumn);
+                        var braceEndColumn = FindCSharpSameLineBraceEndColumn(
+                            line,
+                            isSingleLineCSharpMatch ? csharpGateRawStartColumn : absoluteStartColumn);
                         if (braceEndColumn >= absoluteStartColumn)
+                        {
                             sameLineEndColumn = braceEndColumn;
+                            sameLineEndColumnIsRaw = isSingleLineCSharpMatch;
+                        }
                     }
                     if (sameLineEndColumn < absoluteStartColumn
                         && lang == "csharp"
@@ -1584,6 +1600,7 @@ public static class SymbolExtractor
                         && pattern.BodyStyle == BodyStyle.None)
                     {
                         sameLineEndColumn = FindCSharpSameLineEnumMemberEndColumn(patternMatchLine, absoluteStartColumn);
+                        sameLineEndColumnIsRaw = false;
                     }
                     string signature;
                     if (csharpWrappedModifierPrefix != null)
@@ -1598,28 +1615,47 @@ public static class SymbolExtractor
                         // (`static Foo() { ... }`) を保存する。同一行に brace 本体が閉じる
                         // ケースではその末尾で切り詰め、シグネチャが本体全体を飲み込まない
                         // ようにする。Closes #348.
+                        var wrappedNameLineStart = isSingleLineCSharpMatch
+                            ? TranslateCSharpCollapsedColumnToRaw(
+                                csharpMatchColumnToRaw,
+                                i,
+                                absoluteStartColumn,
+                                line.Length)
+                            : absoluteStartColumn;
+                        var wrappedNameLineEndExclusive = sameLineEndColumn >= absoluteStartColumn
+                            ? (sameLineEndColumnIsRaw
+                                ? Math.Min(sameLineEndColumn + 1, line.Length)
+                                : Math.Min(
+                                    TranslateCSharpCollapsedColumnToRaw(
+                                        csharpMatchColumnToRaw,
+                                        i,
+                                        sameLineEndColumn,
+                                        line.Length) + 1,
+                                    line.Length))
+                            : line.Length;
                         var nameLineContent = sameLineEndColumn >= absoluteStartColumn
-                            ? line[absoluteStartColumn..(sameLineEndColumn + 1)]
-                            : line[absoluteStartColumn..];
+                            ? line[wrappedNameLineStart..wrappedNameLineEndExclusive]
+                            : line[wrappedNameLineStart..];
                         signature = (csharpWrappedModifierPrefix + " " + nameLineContent.TrimStart()).Trim();
                     }
                     else if (sameLineEndColumn >= absoluteStartColumn)
                     {
                         if (lang == "csharp"
-                            && csharpMatchLines != null
-                            && ReferenceEquals(patternMatchLine, csharpMatchLines[i])
-                            && CanUseCSharpSameLineSemicolonEndColumn(kind))
+                            && isSingleLineCSharpMatch
+                            && (sameLineEndColumnIsRaw || CanUseCSharpSameLineSemicolonEndColumn(kind)))
                         {
                             var rawStart = TranslateCSharpCollapsedColumnToRaw(
                                 csharpMatchColumnToRaw,
                                 i,
                                 absoluteStartColumn,
                                 line.Length);
-                            var rawEndInclusive = TranslateCSharpCollapsedColumnToRaw(
-                                csharpMatchColumnToRaw,
-                                i,
-                                sameLineEndColumn,
-                                line.Length);
+                            var rawEndInclusive = sameLineEndColumnIsRaw
+                                ? sameLineEndColumn
+                                : TranslateCSharpCollapsedColumnToRaw(
+                                    csharpMatchColumnToRaw,
+                                    i,
+                                    sameLineEndColumn,
+                                    line.Length);
                             var rawEndExclusive = Math.Min(rawEndInclusive + 1, line.Length);
                             if (rawStart > line.Length)
                                 rawStart = line.Length;
@@ -1981,8 +2017,18 @@ public static class SymbolExtractor
                             // `property + event` のような mixed-kind sibling をすべて可視化する。
                             // 後続宣言が無い行では従来どおり stop-after-first-match を維持し、
                             // 通常の単独宣言行で duplicate 経路を再び開かない。Closes #470 / #473.
-                            var nextSiblingOffset = FindNextSameLineBraceStatementStart(matchLine, sameLineEndColumn + 1, lang);
-                            if (nextSiblingOffset > sameLineEndColumn
+                            var sameLineRestartColumn = sameLineEndColumn;
+                            if (sameLineEndColumnIsRaw)
+                            {
+                                sameLineRestartColumn = TranslateCSharpRawColumnToCollapsed(
+                                    csharpMatchColumnToRaw,
+                                    i,
+                                    sameLineEndColumn,
+                                    matchLine.Length);
+                            }
+
+                            var nextSiblingOffset = FindNextSameLineBraceStatementStart(matchLine, sameLineRestartColumn + 1, lang);
+                            if (nextSiblingOffset > sameLineRestartColumn
                                 && nextSiblingOffset < matchLine.Length
                                 && matchLine[nextSiblingOffset] != '}')
                             {
@@ -2047,11 +2093,21 @@ public static class SymbolExtractor
                         }
                     }
 
-                    var nextSameLineOffset = FindNextSameLineBraceStatementStart(matchLine, sameLineEndColumn + 1, lang);
+                    var nextSameLineStartColumn = sameLineEndColumn;
+                    if (sameLineEndColumnIsRaw)
+                    {
+                        nextSameLineStartColumn = TranslateCSharpRawColumnToCollapsed(
+                            csharpMatchColumnToRaw,
+                            i,
+                            sameLineEndColumn,
+                            matchLine.Length);
+                    }
+
+                    var nextSameLineOffset = FindNextSameLineBraceStatementStart(matchLine, nextSameLineStartColumn + 1, lang);
                     if (lang == "csharp"
                         && kind == "property"
                         && pattern.BodyStyle == BodyStyle.Brace
-                        && nextSameLineOffset > sameLineEndColumn
+                        && nextSameLineOffset > nextSameLineStartColumn
                         && nextSameLineOffset < matchLine.Length
                         && matchLine[nextSameLineOffset] != '}')
                     {
@@ -11206,6 +11262,37 @@ public static class SymbolExtractor
         if (collapsedColumn >= map.Length)
             return rawLength;
         return map[collapsedColumn];
+    }
+
+    // Convert a raw-source column back into the collapsed match-line column used by the
+    // single-line C# regex scan. This is the inverse of TranslateCSharpCollapsedColumnToRaw
+    // for columns that survive CollapseCSharpGenericTypeWhitespace, and keeps same-line
+    // sibling restart offsets aligned with the active match-line domain. Closes #533.
+    // CollapseCSharpGenericTypeWhitespace 前の raw 列を、単一行 C# regex 走査で使う
+    // collapsed match-line 列へ戻す。Collapse 後も残る列に対する
+    // TranslateCSharpCollapsedColumnToRaw の逆変換であり、same-line sibling の
+    // restart offset を現在の match-line 列空間へ揃える。Closes #533.
+    private static int TranslateCSharpRawColumnToCollapsed(int[]?[] mapPerLine, int lineIndex, int rawColumn, int collapsedLength)
+    {
+        if (mapPerLine == null || lineIndex < 0 || lineIndex >= mapPerLine.Length)
+            return rawColumn;
+        var map = mapPerLine[lineIndex];
+        if (map == null)
+            return rawColumn;
+        if (rawColumn < 0)
+            return 0;
+        if (rawColumn >= map[^1])
+            return collapsedLength;
+
+        var collapsedColumn = Array.BinarySearch(map, rawColumn);
+        if (collapsedColumn >= 0)
+            return Math.Min(collapsedColumn, collapsedLength);
+
+        collapsedColumn = ~collapsedColumn;
+        if (collapsedColumn <= 0)
+            return 0;
+
+        return Math.Min(collapsedColumn - 1, collapsedLength);
     }
 
     // Gate only the block-bodied property pattern (requires `{ get|set|init ... }`).

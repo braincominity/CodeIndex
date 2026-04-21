@@ -9314,6 +9314,39 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_SameLineGenericBraceBodiedMembersStillExposeLaterCompactSiblings()
+    {
+        // After the #525 raw-column brace clamp, same-line generic brace-bodied
+        // members must translate their sibling-restart offset back into the
+        // collapsed match-line column domain before reopening the pattern scan.
+        // Otherwise `M<T1,           T2>() { }int P { get; }event ... E;`
+        // restarts too far to the right, drops `P` / `E`, or lets `M` absorb the
+        // following sibling text. Closes #533.
+        // #525 の raw-column brace clamp 後は、same-line の generic brace-body member が
+        // sibling scan を再開する位置を、pattern scan 再開前に collapsed match-line 側の
+        // 列空間へ戻す必要がある。そうしないと
+        // `M<T1,           T2>() { }int P { get; }event ... E;` で再開位置が右にずれ、
+        // `P` / `E` が欠落するか、`M` の signature が後続 sibling を飲み込む。Closes #533.
+        var content = "public interface I { void M<T1,           T2>() { }int P { get; }event System.Action<int,           string> E; }\n";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var m = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "M"));
+        Assert.Equal("interface", m.ContainerKind);
+        Assert.Equal("I", m.ContainerName);
+        Assert.Equal("void M<T1,           T2>() { }", m.Signature);
+
+        var p = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("interface", p.ContainerKind);
+        Assert.Equal("I", p.ContainerName);
+        Assert.Equal("int P { get; }", p.Signature);
+
+        var e = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E"));
+        Assert.Equal("interface", e.ContainerKind);
+        Assert.Equal("I", e.ContainerName);
+        Assert.Equal("event System.Action<int,           string> E;", e.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_GenericSameLineSemicolonMembersKeepTerminator()
     {
         // The same-line semicolon-boundary fix for #473 must translate collapsed generic
