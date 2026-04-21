@@ -2925,6 +2925,7 @@ public static class ReferenceExtractor
         var parenDepth = 0;
         var bracketDepth = 0;
         var braceDepth = 0;
+        var angleDepth = 0;
         var terminalClauseSeen = false;
 
         for (var lineIndex = startLineIndex; lineIndex <= bodyEndIndex; lineIndex++)
@@ -2942,7 +2943,7 @@ public static class ReferenceExtractor
                     foundContent = true;
                 }
 
-                if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0
+                if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0
                     && TryConsumeCSharpQueryClauseKeyword(line, column, out var keyword, out var nextColumn))
                 {
                     if (IsCSharpQueryClauseKeyword(keyword)
@@ -2967,11 +2968,26 @@ public static class ReferenceExtractor
 
                 switch (current)
                 {
+                    case '<':
+                        if (parenDepth == 0
+                            && bracketDepth == 0
+                            && braceDepth == 0
+                            && LooksLikeCSharpQueryGenericTypeArgumentStart(structuralLines, bodyEndIndex, lineIndex, column))
+                        {
+                            angleDepth++;
+                        }
+                        break;
+                    case '>':
+                        if (angleDepth > 0)
+                        {
+                            angleDepth--;
+                        }
+                        break;
                     case '(':
                         parenDepth++;
                         break;
                     case ')':
-                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0)
                             return new CSharpLineColumn(lineIndex + 1, column);
                         if (parenDepth > 0)
                             parenDepth--;
@@ -2980,7 +2996,7 @@ public static class ReferenceExtractor
                         bracketDepth++;
                         break;
                     case ']':
-                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0)
                             return new CSharpLineColumn(lineIndex + 1, column);
                         if (bracketDepth > 0)
                             bracketDepth--;
@@ -2993,11 +3009,11 @@ public static class ReferenceExtractor
                             braceDepth--;
                         break;
                     case ';':
-                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0)
                             return new CSharpLineColumn(lineIndex + 1, column);
                         break;
                     case ',':
-                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && terminalClauseSeen)
+                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0 && terminalClauseSeen)
                             return new CSharpLineColumn(lineIndex + 1, column);
                         break;
                 }
@@ -3005,6 +3021,121 @@ public static class ReferenceExtractor
         }
 
         return new CSharpLineColumn(bodyEndIndex + 1, 0);
+    }
+
+    private static bool LooksLikeCSharpQueryGenericTypeArgumentStart(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int startLineIndex,
+        int startColumn)
+    {
+        var line = structuralLines[startLineIndex];
+        if (startColumn < 0 || startColumn >= line.Length || line[startColumn] != '<')
+            return false;
+        if (HasCSharpQueryGenericOperatorOnRight(line, startColumn + 1))
+            return false;
+        if (!HasCSharpQueryGenericReceiverOnLeft(line, startColumn - 1))
+            return false;
+
+        var angleDepth = 1;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        for (var lineIndex = startLineIndex; lineIndex <= bodyEndIndex; lineIndex++)
+        {
+            var currentLine = structuralLines[lineIndex];
+            var columnStart = lineIndex == startLineIndex ? startColumn + 1 : 0;
+            for (var column = columnStart; column < currentLine.Length; column++)
+            {
+                var current = currentLine[column];
+                switch (current)
+                {
+                    case '<':
+                        angleDepth++;
+                        break;
+                    case '>':
+                        angleDepth--;
+                        if (angleDepth == 0)
+                            return HasCSharpQueryGenericSuffix(structuralLines, bodyEndIndex, lineIndex, column + 1);
+                        break;
+                    case '(':
+                        parenDepth++;
+                        break;
+                    case ')':
+                        if (parenDepth == 0)
+                            return false;
+                        parenDepth--;
+                        break;
+                    case '[':
+                        bracketDepth++;
+                        break;
+                    case ']':
+                        if (bracketDepth == 0)
+                            return false;
+                        bracketDepth--;
+                        break;
+                    case '{':
+                        braceDepth++;
+                        break;
+                    case '}':
+                        if (braceDepth == 0)
+                            return false;
+                        braceDepth--;
+                        break;
+                    case ';':
+                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                            return false;
+                        break;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasCSharpQueryGenericOperatorOnRight(string line, int index)
+    {
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+        if (index >= line.Length)
+            return false;
+
+        return line[index] is '<' or '=';
+    }
+
+    private static bool HasCSharpQueryGenericReceiverOnLeft(string line, int index)
+    {
+        while (index >= 0 && char.IsWhiteSpace(line[index]))
+            index--;
+        if (index < 0)
+            return false;
+
+        var current = line[index];
+        return IsCSharpIdentifierPart(current) || current is '>' or ']' or ')';
+    }
+
+    private static bool HasCSharpQueryGenericSuffix(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int startLineIndex,
+        int startColumn)
+    {
+        for (var lineIndex = startLineIndex; lineIndex <= bodyEndIndex; lineIndex++)
+        {
+            var line = structuralLines[lineIndex];
+            var columnStart = lineIndex == startLineIndex ? startColumn : 0;
+            for (var column = columnStart; column < line.Length; column++)
+            {
+                var current = line[column];
+                if (char.IsWhiteSpace(current))
+                    continue;
+
+                return current is '(' or ')' or ']' or '[' or '.' or ',' or ';' or '{' or ':' or '?'
+                    || IsCSharpIdentifierStart(current);
+            }
+        }
+
+        return true;
     }
 
     private static CSharpLineColumn FindCSharpArrowExpressionScopeEndPosition(string bodyText, int arrowIndex, int startLineNumber, int fallbackScopeEndLine)
