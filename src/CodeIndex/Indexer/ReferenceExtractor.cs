@@ -203,11 +203,11 @@ public static class ReferenceExtractor
     // SQL Server が許す省略形（`..`）でも末尾の proc 名まで到達できる。識別子候補にはバッククォート引用も含め、
     // MySQL / MariaDB の `` `proc-name` `` 形にも対応する。
     private const string SqlQuotedIdentifierPattern = @"(?:\[[^\[\]\r\n]+\]|`[^`\r\n]+`)";
-    private const string SqlBareIdentifierPattern = @"\w+";
+    private const string SqlBareIdentifierPattern = @"(?:##?\w+|\w+)";
     private const string SqlQualifiedIdentifierPattern =
         @"(?:(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")\s*\.\s*)*(?<name>" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")";
     private static readonly Regex SqlProcCallRegex = new(
-        @"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?(?:(?:\[[^\[\]\r\n]+\]|`[^`\r\n]+`|\w+)?\.)*(?<name>\[[^\[\]\r\n]+\]|`[^`\r\n]+`|\w+)",
+        $@"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?(?:(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern})?\.)*(?<name>{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // SQL named source references that should become `reference` edges rather than `call` edges.
     // `FROM dbo.fn_TableValued(...)` intentionally stays out because the trailing `(` means the
@@ -224,7 +224,7 @@ public static class ReferenceExtractor
     // `INSERT INTO tbl (` は関数呼び出しではなくテーブル参照なので、直後に `(` がある場合は後段で
     // 同じ識別子の generic CallRegex を抑止する。
     private static readonly Regex SqlTargetReferenceRegex = new(
-        $@"(?<![\w$])(?:INTO|UPDATE|TRUNCATE\s+TABLE|MERGE\s+INTO)\b\s+{SqlQualifiedIdentifierPattern}",
+        $@"(?<![\w$])(?:INSERT\s+INTO|UPDATE|TRUNCATE\s+TABLE|MERGE\s+INTO)\b\s+{SqlQualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // C# event subscription/unsubscription: Click += OnClick — both LHS and RHS must be PascalCase identifiers
     // C# イベント購読・解除: Click += OnClick — LHS と RHS の両方が PascalCase 識別子のみ
@@ -772,7 +772,7 @@ public static class ReferenceExtractor
                         var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
                         AddReference(references, seen, fileId, resolvedName, nameIndex, "reference", context, lineNumber, sqlReferenceContainer);
                         if (IsFollowedByOpenParen(sqlScanLine, nameGroup.Index + nameGroup.Length))
-                            sqlSuppressedCallIndices?.Add(nameIndex);
+                            sqlSuppressedCallIndices?.Add(GetSqlCallLikeSuppressionIndex(sqlScanLine, nameIndex));
                     }
                 }
             }
@@ -1106,6 +1106,14 @@ public static class ReferenceExtractor
             index++;
 
         return index < line.Length && line[index] == '(';
+    }
+
+    private static int GetSqlCallLikeSuppressionIndex(string line, int index)
+    {
+        while (index < line.Length && line[index] == '#')
+            index++;
+
+        return index;
     }
 
     /// <summary>
@@ -6375,14 +6383,53 @@ public static class ReferenceExtractor
             }
             if (c == '#')
             {
-                commentStart = i;
-                break;
+                if (ShouldTreatHashAsSqlComment(result, i))
+                {
+                    commentStart = i;
+                    break;
+                }
             }
         }
         if (commentStart >= 0)
             result = result[..commentStart];
 
         return result;
+    }
+
+    private static bool ShouldTreatHashAsSqlComment(string line, int hashIndex)
+    {
+        if (hashIndex < 0 || hashIndex >= line.Length || line[hashIndex] != '#')
+            return false;
+
+        int next = hashIndex + 1;
+        if (next >= line.Length || !(char.IsLetterOrDigit(line[next]) || line[next] == '_'))
+            return true;
+
+        int probe = hashIndex - 1;
+        while (probe >= 0 && char.IsWhiteSpace(line[probe]))
+            probe--;
+        if (probe < 0)
+            return true;
+        if (line[probe] == '.')
+            return false;
+
+        int tokenEnd = probe;
+        while (probe >= 0 && char.IsLetter(line[probe]))
+            probe--;
+        int tokenStart = probe + 1;
+        if (tokenStart > tokenEnd)
+            return true;
+
+        var token = line[tokenStart..(tokenEnd + 1)];
+        return !string.Equals(token, "FROM", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "JOIN", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "USING", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "INTO", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "UPDATE", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "TABLE", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "CALL", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "EXEC", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "EXECUTE", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string PrepareLine(string lang, string line)

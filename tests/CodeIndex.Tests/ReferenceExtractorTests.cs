@@ -5336,6 +5336,38 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_HandlesTempTablesAndDoesNotTreatSelectIntoVariablesAsReferences()
+    {
+        // issue #638 / #639: T-SQL temp tables should behave like table references, while
+        // PL/pgSQL-style `SELECT ... INTO variable` must not leak a variable into the object graph.
+        // issue #638 / #639: T-SQL の temp table はテーブル参照として扱い、PL/pgSQL の
+        // `SELECT ... INTO variable` は object graph に混ぜない。
+        const string content = """
+            INSERT INTO #audit_log (action) VALUES ('login');
+            UPDATE #audit_log SET action = 'logout';
+            SELECT * FROM #audit_log;
+
+            SELECT id INTO target_var FROM users;
+
+            MERGE INTO audit_log AS t
+            USING staging_log AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(3, references.Count(r => r.SymbolName == "#audit_log" && r.ReferenceKind == "reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "target_var");
+    }
+
+    [Fact]
     public void Extract_FSharp_DetectsParenthesizedCalls()
     {
         const string content = """
