@@ -3107,23 +3107,244 @@ public static class ReferenceExtractor
         if (trimmed.Length == 0)
             return false;
 
-        foreach (var current in trimmed)
+        var index = 0;
+        if (!TryConsumeCSharpCastType(trimmed, ref index))
+            return false;
+
+        SkipCSharpCastTypeWhitespace(trimmed, ref index);
+        return index == trimmed.Length;
+    }
+
+    private static bool TryConsumeCSharpCastType(string text, ref int index)
+    {
+        if (!TryConsumeCSharpCastTypeCore(text, ref index, out var sawTypeLikeIdentifier))
+            return false;
+
+        if (!sawTypeLikeIdentifier)
+            return false;
+
+        while (true)
         {
-            if (char.IsLetterOrDigit(current) || current == '_' || char.IsWhiteSpace(current))
+            var checkpoint = index;
+            SkipCSharpCastTypeWhitespace(text, ref index);
+            if (TryConsumeCSharpCastArraySuffix(text, ref index)
+                || TryConsumeCSharpCastNullableSuffix(text, ref index))
+            {
                 continue;
+            }
 
-            if (current is '.' or ':' or '<' or '>' or '[' or ']' or '?' or ',')
-                continue;
+            index = checkpoint;
+            return true;
+        }
+    }
 
+    private static bool TryConsumeCSharpCastTypeCore(string text, ref int index, out bool sawTypeLikeIdentifier)
+    {
+        SkipCSharpCastTypeWhitespace(text, ref index);
+        if (index < text.Length && text[index] == '(')
+            return TryConsumeCSharpCastTupleType(text, ref index, out sawTypeLikeIdentifier);
+
+        return TryConsumeCSharpCastQualifiedType(text, ref index, out sawTypeLikeIdentifier);
+    }
+
+    private static bool TryConsumeCSharpCastQualifiedType(string text, ref int index, out bool sawTypeLikeIdentifier)
+    {
+        sawTypeLikeIdentifier = false;
+        if (!TryConsumeCSharpCastIdentifier(text, ref index, out var token))
+            return false;
+
+        sawTypeLikeIdentifier = IsLikelyCSharpTypeIdentifier(token);
+        if (!TryConsumeCSharpCastGenericArgumentList(text, ref index))
+            return false;
+
+        while (true)
+        {
+            var checkpoint = index;
+            SkipCSharpCastTypeWhitespace(text, ref index);
+            if (!TryConsumeCSharpCastQualifiedTypeSeparator(text, ref index))
+            {
+                index = checkpoint;
+                return true;
+            }
+
+            if (!TryConsumeCSharpCastIdentifier(text, ref index, out token))
+                return false;
+
+            sawTypeLikeIdentifier |= IsLikelyCSharpTypeIdentifier(token);
+            if (!TryConsumeCSharpCastGenericArgumentList(text, ref index))
+                return false;
+        }
+    }
+
+    private static bool TryConsumeCSharpCastTupleType(string text, ref int index, out bool sawTypeLikeIdentifier)
+    {
+        sawTypeLikeIdentifier = false;
+        if (index >= text.Length || text[index] != '(')
+            return false;
+
+        index++;
+        while (true)
+        {
+            if (!TryConsumeCSharpCastType(text, ref index))
+                return false;
+
+            sawTypeLikeIdentifier = true;
+            var checkpoint = index;
+            if (TryConsumeCSharpCastIdentifier(text, ref index, out _))
+            {
+                // Tuple element names are optional and do not affect type-likeness.
+            }
+            else
+            {
+                index = checkpoint;
+            }
+
+            SkipCSharpCastTypeWhitespace(text, ref index);
+            if (index >= text.Length)
+                return false;
+
+            if (text[index] == ')')
+            {
+                index++;
+                return true;
+            }
+
+            if (text[index] != ',')
+                return false;
+
+            index++;
+        }
+    }
+
+    private static bool TryConsumeCSharpCastGenericArgumentList(string text, ref int index)
+    {
+        var checkpoint = index;
+        SkipCSharpCastTypeWhitespace(text, ref index);
+        if (index >= text.Length || text[index] != '<')
+        {
+            index = checkpoint;
+            return true;
+        }
+
+        index++;
+        while (true)
+        {
+            if (!TryConsumeCSharpCastType(text, ref index))
+                return false;
+
+            SkipCSharpCastTypeWhitespace(text, ref index);
+            if (index >= text.Length)
+                return false;
+
+            if (text[index] == '>')
+            {
+                index++;
+                return true;
+            }
+
+            if (text[index] != ',')
+                return false;
+
+            index++;
+        }
+    }
+
+    private static bool TryConsumeCSharpCastArraySuffix(string text, ref int index)
+    {
+        if (index >= text.Length || text[index] != '[')
+            return false;
+
+        index++;
+        SkipCSharpCastTypeWhitespace(text, ref index);
+        while (index < text.Length && text[index] == ',')
+        {
+            index++;
+            SkipCSharpCastTypeWhitespace(text, ref index);
+        }
+
+        if (index >= text.Length || text[index] != ']')
+            return false;
+
+        index++;
+        return true;
+    }
+
+    private static bool TryConsumeCSharpCastNullableSuffix(string text, ref int index)
+    {
+        if (index >= text.Length || text[index] != '?')
+            return false;
+
+        index++;
+        return true;
+    }
+
+    private static bool TryConsumeCSharpCastQualifiedTypeSeparator(string text, ref int index)
+    {
+        if (index >= text.Length)
+            return false;
+
+        if (text[index] == '.')
+        {
+            index++;
+            return true;
+        }
+
+        if (index + 1 < text.Length && text[index] == ':' && text[index + 1] == ':')
+        {
+            index += 2;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryConsumeCSharpCastIdentifier(string text, ref int index, out string token)
+    {
+        SkipCSharpCastTypeWhitespace(text, ref index);
+        token = string.Empty;
+        if (index >= text.Length)
+            return false;
+
+        var start = index;
+        if (text[index] == '@')
+        {
+            index++;
+            if (index >= text.Length || !IsCSharpIdentifierStart(text[index]))
+            {
+                index = start;
+                return false;
+            }
+        }
+        else if (!IsCSharpIdentifierStart(text[index]))
+        {
             return false;
         }
 
-        return trimmed.IndexOf('.') >= 0
-            || trimmed.IndexOf(':') >= 0
-            || trimmed.IndexOf('<') >= 0
-            || trimmed.IndexOf('[') >= 0
-            || trimmed.IndexOf('?') >= 0
-            || IsCSharpBuiltInTypeKeyword(trimmed);
+        index++;
+        while (index < text.Length && IsCSharpIdentifierPart(text[index]))
+            index++;
+
+        token = text.Substring(start, index - start);
+        return true;
+    }
+
+    private static bool IsLikelyCSharpTypeIdentifier(string token)
+    {
+        if (string.IsNullOrEmpty(token))
+            return false;
+
+        var normalized = token[0] == '@' ? token.Substring(1) : token;
+        if (normalized.Length == 0)
+            return false;
+
+        return IsCSharpBuiltInTypeKeyword(normalized)
+            || char.IsUpper(normalized[0]);
+    }
+
+    private static void SkipCSharpCastTypeWhitespace(string text, ref int index)
+    {
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+            index++;
     }
 
     private static bool IsCSharpBuiltInTypeKeyword(string text)
