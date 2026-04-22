@@ -2944,29 +2944,36 @@ public static class ReferenceExtractor
     private static bool IsCSharpQueryClauseKeywordSuffix(
         IReadOnlyList<string> structuralLines,
         int bodyEndIndex,
+        int lineIndex,
         string line,
         int nextColumn,
         string keyword,
         int previousTopLevelSignificantLineIndex,
         int previousTopLevelSignificantColumn)
     {
+        if (IsCSharpParenthesizedQueryClauseKeyword(keyword)
+            && TryGetNextTopLevelSignificantChar(
+                structuralLines,
+                lineIndex,
+                nextColumn,
+                out _,
+                out _,
+                out var nextTopLevelSignificantChar)
+            && nextTopLevelSignificantChar == '(')
+        {
+            return CanStartCSharpParenthesizedQueryClause(
+                structuralLines,
+                bodyEndIndex,
+                previousTopLevelSignificantLineIndex,
+                previousTopLevelSignificantColumn);
+        }
+
         if (nextColumn >= line.Length)
             return true;
 
         var next = line[nextColumn];
         if (char.IsWhiteSpace(next))
             return true;
-
-        if (next == '('
-            && IsCSharpParenthesizedQueryClauseKeyword(keyword)
-            && CanStartCSharpParenthesizedQueryClause(
-                structuralLines,
-                bodyEndIndex,
-                previousTopLevelSignificantLineIndex,
-                previousTopLevelSignificantColumn))
-        {
-            return true;
-        }
 
         return (string.Equals(keyword, "ascending", StringComparison.Ordinal)
                 || string.Equals(keyword, "descending", StringComparison.Ordinal))
@@ -3153,6 +3160,43 @@ public static class ReferenceExtractor
         return false;
     }
 
+    private static bool TryGetNextTopLevelSignificantChar(
+        IReadOnlyList<string> structuralLines,
+        int startLineIndex,
+        int startColumn,
+        out int lineIndex,
+        out int column,
+        out char value)
+    {
+        lineIndex = -1;
+        column = -1;
+        value = '\0';
+
+        if (structuralLines.Count == 0)
+            return false;
+
+        var clampedLineIndex = Math.Max(0, Math.Min(startLineIndex, structuralLines.Count - 1));
+        for (var currentLineIndex = clampedLineIndex; currentLineIndex < structuralLines.Count; currentLineIndex++)
+        {
+            var line = structuralLines[currentLineIndex];
+            var currentColumn = currentLineIndex == clampedLineIndex
+                ? Math.Max(0, startColumn)
+                : 0;
+            for (var probe = currentColumn; probe < line.Length; probe++)
+            {
+                if (char.IsWhiteSpace(line[probe]))
+                    continue;
+
+                lineIndex = currentLineIndex;
+                column = probe;
+                value = line[probe];
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static bool LooksLikeCSharpQueryGenericTypeArgumentClose(
         IReadOnlyList<string> structuralLines,
         int bodyEndIndex,
@@ -3264,6 +3308,7 @@ public static class ReferenceExtractor
                         && IsCSharpQueryClauseKeywordSuffix(
                             structuralLines,
                             bodyEndIndex,
+                            lineIndex,
                             line,
                             nextColumn,
                             keyword,
