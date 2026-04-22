@@ -2201,7 +2201,8 @@ public static class SymbolExtractor
                             absoluteStartColumn + Math.Max(1, match.Length),
                             lang);
                         if (nextTypeBodyOffset > absoluteStartColumn
-                            && nextTypeBodyOffset < sameLineRestartComparisonColumn)
+                            && nextTypeBodyOffset < sameLineRestartComparisonColumn
+                            && (nextTypeBodyOffset >= matchLine.Length || matchLine[nextTypeBodyOffset] != '}'))
                         {
                             restartPatternScanOffset = nextTypeBodyOffset;
                             break;
@@ -2233,6 +2234,15 @@ public static class SymbolExtractor
                         nextSameLineOffset = FindNextSameLineBraceStatementStart(matchLine, sameLineEndColumn + 1, lang);
                     }
                     var sameLineAdvanceComparisonColumn = sameLineRestartComparisonColumn;
+                    if (lang == "csharp"
+                        && kind is "class" or "struct" or "interface" or "enum" or "namespace"
+                        && nextSameLineOffset > sameLineAdvanceComparisonColumn
+                        && nextSameLineOffset < matchLine.Length
+                        && matchLine[nextSameLineOffset] != '}')
+                    {
+                        restartPatternScanOffset = nextSameLineOffset;
+                        break;
+                    }
                     if (lang == "csharp"
                         && kind == "property"
                         && pattern.BodyStyle == BodyStyle.Brace

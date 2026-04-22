@@ -8946,6 +8946,66 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_EmptySameLineNestedTypeStillExposesLaterSiblingType()
+    {
+        // Stepping into a same-line nested type body must only happen when there is an
+        // actual member after the opening `{`. For an empty nested interface body, the
+        // next statement start is the closing `}`, and restarting there would skip the
+        // later same-line sibling type entirely. Closes #572/#567 review follow-up.
+        // same-line の nested type 本体へ潜る再開は、開き `{` の後に実際の member がある
+        // ときだけ行う必要がある。空の nested interface 本体では次の文頭が closing `}`
+        // になり、そこへ再開すると後続の same-line sibling type が丸ごと落ちる。
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "[A]",
+            "public class Outer { public interface I<T1,           T2> { } public class Sibling { } }");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "interface"
+            && s.Name == "I"
+            && s.ContainerName == "Outer");
+        Assert.Contains(symbols, s => s.Kind == "class"
+            && s.Name == "Sibling"
+            && s.ContainerName == "Outer"
+            && s.Signature == "public class Sibling { }");
+    }
+
+    [Fact]
+    public void Extract_CSharp_EmptySameLineNestedTypeStillExposesLaterOuterProperty()
+    {
+        // When a real nested same-line type ends before a later outer sibling property on
+        // the same physical line, extraction must skip the nested type's closing `}` and
+        // resume at the later property instead of treating the empty body as a restart
+        // target. This is the closing-line outer-sibling variant found during review.
+        // 実在する same-line nested type の後ろに outer 側の sibling property が同じ物理行
+        // で続く場合、抽出は nested type の closing `}` を飛ばして後続 property から
+        // 再開しなければならない。空本体そのものを再開先にしてしまうと outer sibling が
+        // 欠落する。review で見つかった closing-line outer-sibling 変種を固定する。
+        var content = """
+            namespace Demo;
+
+            public class Host
+            {
+                public class Wrapped<T>
+                    where T : class
+                {
+                    public class Child { } } public int P { get; set; }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class"
+            && s.Name == "Child"
+            && s.ContainerName == "Wrapped");
+        Assert.Contains(symbols, s => s.Kind == "property"
+            && s.Name == "P"
+            && s.ContainerName == "Host"
+            && s.Signature == "public int P { get; set; }");
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineClassBodyFieldIsCapturedAndLocalIsRejected()
     {
         // Column-aware scope tracking: `public class C { public int X; }` must capture
