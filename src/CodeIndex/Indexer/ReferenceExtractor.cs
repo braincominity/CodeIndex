@@ -2941,7 +2941,7 @@ public static class ReferenceExtractor
             || string.Equals(keyword, "descending", StringComparison.Ordinal);
     }
 
-    private static bool IsCSharpQueryClauseKeywordSuffix(string line, int nextColumn, string keyword)
+    private static bool IsCSharpQueryClauseKeywordSuffix(string line, int nextColumn, string keyword, char? previousTopLevelSignificantChar)
     {
         if (nextColumn >= line.Length)
             return true;
@@ -2950,9 +2950,33 @@ public static class ReferenceExtractor
         if (char.IsWhiteSpace(next))
             return true;
 
+        if (next == '('
+            && IsCSharpParenthesizedQueryClauseKeyword(keyword)
+            && CanStartCSharpParenthesizedQueryClause(previousTopLevelSignificantChar))
+        {
+            return true;
+        }
+
         return (string.Equals(keyword, "ascending", StringComparison.Ordinal)
                 || string.Equals(keyword, "descending", StringComparison.Ordinal))
             && (next == ',' || next == ')' || next == ']' || next == '}' || next == ';');
+    }
+
+    private static bool IsCSharpParenthesizedQueryClauseKeyword(string keyword)
+    {
+        return string.Equals(keyword, "select", StringComparison.Ordinal)
+            || string.Equals(keyword, "group", StringComparison.Ordinal)
+            || string.Equals(keyword, "orderby", StringComparison.Ordinal);
+    }
+
+    private static bool CanStartCSharpParenthesizedQueryClause(char? previousTopLevelSignificantChar)
+    {
+        return previousTopLevelSignificantChar is null
+            || previousTopLevelSignificantChar switch
+            {
+                '(' or '[' or '{' or ',' or ';' or ':' or '?' or '+' or '-' or '*' or '/' or '%' or '&' or '|' or '^' or '=' or '~' => false,
+                _ => true
+            };
     }
 
     private static bool TryFindMatchingCSharpDelimiter(
@@ -3004,6 +3028,9 @@ public static class ReferenceExtractor
         var braceDepth = 0;
         var angleDepth = 0;
         var terminalClauseSeen = false;
+        var queryClauseSeen = false;
+        var clauseHasTopLevelExpressionContent = false;
+        char? lastTopLevelSignificantChar = null;
 
         for (var lineIndex = startLineIndex; lineIndex <= bodyEndIndex; lineIndex++)
         {
@@ -3023,8 +3050,9 @@ public static class ReferenceExtractor
                 if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0
                     && TryConsumeCSharpQueryClauseKeyword(line, column, out var keyword, out var nextColumn))
                 {
-                    if (IsCSharpQueryClauseKeyword(keyword)
-                        && IsCSharpQueryClauseKeywordSuffix(line, nextColumn, keyword))
+                    if ((!queryClauseSeen || clauseHasTopLevelExpressionContent)
+                        && IsCSharpQueryClauseKeyword(keyword)
+                        && IsCSharpQueryClauseKeywordSuffix(line, nextColumn, keyword, lastTopLevelSignificantChar))
                     {
                         if ((string.Equals(keyword, "by", StringComparison.Ordinal)
                                 || string.Equals(keyword, "ascending", StringComparison.Ordinal)
@@ -3037,10 +3065,13 @@ public static class ReferenceExtractor
                         {
                             terminalClauseSeen = IsCSharpTerminalQueryClauseKeyword(keyword);
                         }
-                    }
 
-                    column = nextColumn - 1;
-                    continue;
+                        queryClauseSeen = true;
+                        clauseHasTopLevelExpressionContent = false;
+                        lastTopLevelSignificantChar = keyword[keyword.Length - 1];
+                        column = nextColumn - 1;
+                        continue;
+                    }
                 }
 
                 switch (current)
@@ -3092,7 +3123,24 @@ public static class ReferenceExtractor
                     case ',':
                         if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0 && terminalClauseSeen)
                             return new CSharpLineColumn(lineIndex + 1, column);
+                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0)
+                        {
+                            clauseHasTopLevelExpressionContent = false;
+                            lastTopLevelSignificantChar = current;
+                        }
                         break;
+                }
+
+                if (!char.IsWhiteSpace(current)
+                    && parenDepth == 0
+                    && bracketDepth == 0
+                    && braceDepth == 0
+                    && angleDepth == 0
+                    && current != ','
+                    && current != ';')
+                {
+                    clauseHasTopLevelExpressionContent = true;
+                    lastTopLevelSignificantChar = current;
                 }
             }
         }
