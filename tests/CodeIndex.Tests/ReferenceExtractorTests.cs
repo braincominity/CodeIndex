@@ -6884,12 +6884,17 @@ public class ReferenceExtractorTests
     [Fact]
     public void Extract_CsharpCaseLogicalAndNegatedTypePatterns_CaptureTypeReferences()
     {
-        // issue #668: logical/negated type patterns must keep the left-hand type dependency.
-        // issue #668: logical/negated な型パターンでも左端の型依存を落としてはならない。
+        // issues #668/#670: logical/negated type patterns must keep the left-hand type
+        // dependency for both unqualified and qualified heads without reclassifying enum
+        // member labels such as `Color.Red or Probe.Color.Blue` as type dependencies.
+        // issues #668/#670: logical/negated な型パターンは unqualified / qualified の両方で
+        // 左端の型依存を残しつつ、`Color.Red or Probe.Color.Blue` のような enum member label を
+        // 型依存へ再分類してはならない。
         const string content = """
             namespace Probe;
 
             class Point {}
+            enum Color { Red, Blue }
 
             class Demo
             {
@@ -6901,6 +6906,14 @@ public class ReferenceExtractorTests
                             break;
                         case not Point:
                             break;
+                        case Probe.Point or null:
+                            break;
+                        case not Probe.Point:
+                            break;
+                        case global::Probe.Point or null:
+                            break;
+                        case Color.Red or Probe.Color.Blue:
+                            break;
                     }
                 }
             }
@@ -6910,9 +6923,12 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
-        Assert.Equal(2, pointRefs.Count);
+        Assert.Equal(5, pointRefs.Count);
         Assert.All(pointRefs, r => Assert.Equal("Run", r.ContainerName));
         Assert.DoesNotContain(references, r => r.SymbolName == "null" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Color" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference");
     }
 
     [Fact]

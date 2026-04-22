@@ -753,6 +753,8 @@ public static class ReferenceExtractor
                 EmitCSharpTypePositionReferences(
                     preparedLine,
                     originalLine,
+                    csharpQualifiedEnumMemberLookup,
+                    csharpUsingAliases,
                     references,
                     seen,
                     fileId,
@@ -1328,6 +1330,8 @@ public static class ReferenceExtractor
     private static void EmitCSharpTypePositionReferences(
         string preparedLine,
         string originalLine,
+        IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> csharpQualifiedEnumMemberLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -1360,6 +1364,8 @@ public static class ReferenceExtractor
 
         EmitCSharpCaseTypePatternReferences(
             preparedLine,
+            csharpQualifiedEnumMemberLookup,
+            csharpUsingAliases,
             references,
             seen,
             fileId,
@@ -1370,6 +1376,8 @@ public static class ReferenceExtractor
 
     private static void EmitCSharpCaseTypePatternReferences(
         string preparedLine,
+        IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> csharpQualifiedEnumMemberLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -1390,7 +1398,14 @@ public static class ReferenceExtractor
 
             var typeGroup = typeMatch.Groups["type"];
             int continuationIndex = SkipWhitespace(preparedLine, typeGroup.Index + typeGroup.Length);
-            if (!IsCSharpCaseTypePatternContinuation(preparedLine, typeGroup.Value, continuationIndex, hadLeadingNot))
+            if (!IsCSharpCaseTypePatternContinuation(
+                    preparedLine,
+                    typeGroup.Value,
+                    continuationIndex,
+                    hadLeadingNot,
+                    csharpQualifiedEnumMemberLookup,
+                    csharpUsingAliases,
+                    lineNumber))
                 continue;
 
             AddTypeExpressionSegments(
@@ -2905,9 +2920,16 @@ public static class ReferenceExtractor
         string preparedLine,
         string typeExpression,
         int cursor,
-        bool hadLeadingNot)
+        bool hadLeadingNot,
+        IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> csharpQualifiedEnumMemberLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        int lineNumber)
     {
-        if (IsCSharpNonTypePatternExpression(typeExpression))
+        if (!CanCSharpCaseHeadContinueAsTypePattern(
+                typeExpression,
+                lineNumber,
+                csharpQualifiedEnumMemberLookup,
+                csharpUsingAliases))
             return false;
 
         if (cursor >= preparedLine.Length)
@@ -2915,9 +2937,16 @@ public static class ReferenceExtractor
 
         return preparedLine[cursor] switch
         {
-            ':' => hadLeadingNot && IsCSharpSimpleCaseTypeHead(typeExpression),
+            ':' => hadLeadingNot,
             '{' or '(' or '[' => true,
-            _ => IsCSharpCaseTypePatternIdentifier(preparedLine, typeExpression, cursor, hadLeadingNot)
+            _ => IsCSharpCaseTypePatternIdentifier(
+                preparedLine,
+                typeExpression,
+                cursor,
+                hadLeadingNot,
+                csharpQualifiedEnumMemberLookup,
+                csharpUsingAliases,
+                lineNumber)
         };
     }
 
@@ -2925,7 +2954,10 @@ public static class ReferenceExtractor
         string preparedLine,
         string typeExpression,
         int cursor,
-        bool hadLeadingNot)
+        bool hadLeadingNot,
+        IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> csharpQualifiedEnumMemberLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        int lineNumber)
     {
         int tokenCursor = cursor;
         if (!TryConsumeCSharpIdentifier(preparedLine, ref tokenCursor, out var start, out var end))
@@ -2937,10 +2969,59 @@ public static class ReferenceExtractor
 
         return rawToken switch
         {
-            "when" => hadLeadingNot && IsCSharpSimpleCaseTypeHead(typeExpression),
-            "or" or "and" => IsCSharpSimpleCaseTypeHead(typeExpression),
+            "when" => hadLeadingNot,
+            "or" or "and" => CanCSharpCaseHeadContinueAsTypePattern(
+                typeExpression,
+                lineNumber,
+                csharpQualifiedEnumMemberLookup,
+                csharpUsingAliases),
             _ => true,
         };
+    }
+
+    private static bool CanCSharpCaseHeadContinueAsTypePattern(
+        string typeExpression,
+        int lineNumber,
+        IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> csharpQualifiedEnumMemberLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
+    {
+        if (IsCSharpNonTypePatternExpression(typeExpression))
+            return false;
+
+        return !IsCSharpQualifiedCaseEnumConstantHead(
+            typeExpression,
+            lineNumber,
+            csharpQualifiedEnumMemberLookup,
+            csharpUsingAliases);
+    }
+
+    private static bool IsCSharpQualifiedCaseEnumConstantHead(
+        string typeExpression,
+        int lineNumber,
+        IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> csharpQualifiedEnumMemberLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
+    {
+        if (!TryReadCSharpQualifiedAccess(typeExpression, 0, out var parsed)
+            || !parsed.LastSeparatorWasDot
+            || parsed.Segments.Count < 2)
+        {
+            return false;
+        }
+
+        var member = parsed.Segments[^1];
+        var memberName = typeExpression.Substring(member.Start, member.End - member.Start);
+        if (!csharpQualifiedEnumMemberLookup.TryGetValue(memberName, out var targets))
+            return false;
+
+        var qualifier = TrimLeadingCSharpGlobalQualifier(NormalizeCSharpQualifiedSegments(typeExpression, parsed.Segments, parsed.Segments.Count - 1));
+        var resolvedQualifier = parsed.HasLeadingGlobalQualifier
+            ? qualifier
+            : ResolveCSharpQualifiedAliasTarget(qualifier, lineNumber, csharpUsingAliases);
+        return MatchesQualifiedEnumType(
+            resolvedQualifier,
+            targets,
+            allowShortNameFallback: !parsed.HasLeadingGlobalQualifier,
+            allowSingleSegmentQualifiedMatch: parsed.HasLeadingGlobalQualifier);
     }
 
     private static bool IsCSharpNonTypePatternExpression(string typeExpression)
@@ -2953,12 +3034,6 @@ public static class ReferenceExtractor
             && candidate.IndexOf('?') < 0
             && candidate.IndexOf(' ') < 0
             && CSharpNonTypePatternTokens.Contains(candidate);
-    }
-
-    private static bool IsCSharpSimpleCaseTypeHead(string typeExpression)
-    {
-        var trimmed = typeExpression.Trim();
-        return trimmed.IndexOf('.') < 0 && !trimmed.Contains("::", StringComparison.Ordinal);
     }
 
     private static int SkipWhitespace(string text, int index)
