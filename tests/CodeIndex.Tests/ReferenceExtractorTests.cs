@@ -6915,6 +6915,51 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpQualifiedNestedTypePattern_SurvivesConflictingConstMemberShortNames()
+    {
+        // issue #671: a qualified nested type pattern must not disappear just because some
+        // other namespace/type in the same file exposes a const member with the same short name.
+        // issue #671: qualified な nested type pattern は、同じ短い名前の const member を
+        // 別 namespace/type が持っていても消えてはならない。
+        const string content = """
+            namespace N1 { class Color { public const int Red = 1; } }
+            namespace N2
+            {
+                class Color
+                {
+                    public class Red { public int Value { get; } }
+                }
+
+                class Demo
+                {
+                    void Run(object value)
+                    {
+                        switch (value)
+                        {
+                            case N2.Color.Red r:
+                                break;
+                            case N2.Color.Red { Value: 0 }:
+                                break;
+                        }
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var runTypeRefs = references
+            .Where(r => r.ContainerName == "Run" && r.ReferenceKind == "type_reference")
+            .Select(r => r.SymbolName)
+            .ToList();
+
+        Assert.Equal(2, runTypeRefs.Count(name => name == "N2"));
+        Assert.Equal(2, runTypeRefs.Count(name => name == "Color"));
+        Assert.Equal(2, runTypeRefs.Count(name => name == "Red"));
+    }
+
+    [Fact]
     public void Extract_CsharpCaseRecursiveAndPositionalPatterns_CaptureTypeReferences()
     {
         // issue #661: recursive/property and positional `case Type ...` patterns without
