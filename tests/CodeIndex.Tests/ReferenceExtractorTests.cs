@@ -5315,6 +5315,8 @@ public class ReferenceExtractorTests
             SELECT * FROM user_summary_view WHERE region = 'EU';
             EXEC usp_ProcessOrders @BatchSize = 100;
             SELECT * FROM dbo.fn_GetUserStats(42);
+            SELECT * FROM [dbo].[fn_GetOrderStats](7);
+            SELECT * FROM `fn_get_backtick_stats`(9);
             INSERT INTO audit_log (action, user_id)
             SELECT 'login', user_id FROM ActiveUsers;
             """;
@@ -5331,7 +5333,11 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "usp_ProcessOrders" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "fn_GetUserStats" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "fn_GetOrderStats" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "fn_get_backtick_stats" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "fn_GetUserStats" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fn_GetOrderStats" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fn_get_backtick_stats" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "fn_GetUserStat");
     }
 

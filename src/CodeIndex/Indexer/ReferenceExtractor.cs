@@ -763,11 +763,20 @@ public static class ReferenceExtractor
                     foreach (Match match in SqlSourceReferenceRegex.Matches(sqlScanLine))
                     {
                         var nameGroup = match.Groups["name"];
-                        if (IsFollowedByOpenParen(sqlScanLine, nameGroup.Index + nameGroup.Length))
-                            continue;
+                        var followedByOpenParen = IsFollowedByOpenParen(sqlScanLine, nameGroup.Index + nameGroup.Length);
                         NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
                         if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
                             continue;
+                        if (followedByOpenParen)
+                        {
+                            var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
+                            AddChainReference(
+                                references, seen, fileId, resolvedName, nameIndex + 1,
+                                "call", context, lineNumber, sqlCallContainer);
+                            if (!wasQuoted)
+                                sqlSuppressedCallIndices?.Add(GetSqlCallLikeSuppressionIndex(sqlScanLine, nameIndex));
+                            continue;
+                        }
                         if (resolvedName.StartsWith("#", StringComparison.Ordinal)
                             && (sqlEstablishedTempObjectNames == null || !sqlEstablishedTempObjectNames.Contains(resolvedName)))
                             continue;
