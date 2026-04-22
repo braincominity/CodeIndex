@@ -2798,7 +2798,7 @@ public class DbReaderTests : IDisposable
         var dependency = Assert.Single(dependencies);
         Assert.Equal("src/Caller.cs", dependency.SourcePath);
         Assert.Equal("src/Foo.cs", dependency.TargetPath);
-        Assert.Equal(1, dependency.ReferenceCount);
+        Assert.Equal(2, dependency.ReferenceCount);
         Assert.DoesNotContain("foo.py", dependency.TargetPath, StringComparison.Ordinal);
     }
 
@@ -4998,8 +4998,8 @@ public class DbReaderTests : IDisposable
 
         Assert.Equal("file_dependency_hints", analysis.ImpactMode);
         var edge = Assert.Single(analysis.FileImpacts);
-        Assert.Equal(3, edge.ReferenceCount);
-        Assert.Equal("ExecuteFolderDiffAsync", edge.Symbols);
+        Assert.Equal(4, edge.ReferenceCount);
+        Assert.Equal("ExecuteFolderDiffAsync,FolderDiffService", edge.Symbols);
     }
 
     [Fact]

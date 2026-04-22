@@ -1791,8 +1791,8 @@ public class McpServerTests : IDisposable
 
         Assert.Equal("file_dependency_hints", structured["impact_mode"]!.GetValue<string>());
         Assert.Equal(1, structured["count"]!.GetValue<int>());
-        Assert.Equal(3, structured["file_impacts"]![0]!["referenceCount"]!.GetValue<int>());
-        Assert.Equal("ExecuteFolderDiffAsync", structured["file_impacts"]![0]!["symbols"]!.GetValue<string>());
+        Assert.Equal(4, structured["file_impacts"]![0]!["referenceCount"]!.GetValue<int>());
+        Assert.Equal("ExecuteFolderDiffAsync,FolderDiffService", structured["file_impacts"]![0]!["symbols"]!.GetValue<string>());
     }
 
     [Fact]
@@ -4171,7 +4171,7 @@ public class McpServerTests : IDisposable
         Assert.True(structured["graph_degraded"]!.GetValue<bool>());
         Assert.Equal("enum_member", structured["unsupported_symbol_kind"]!.GetValue<string>());
         Assert.Contains("currently excluded from unused analysis", structured["graph_support_reason"]!.GetValue<string>());
-        Assert.Contains("Color", names);
+        Assert.DoesNotContain("Color", names);
         Assert.Contains("TrulyUnused", names);
         Assert.DoesNotContain("Red", names);
         Assert.DoesNotContain("Blue", names);
@@ -4228,7 +4228,7 @@ public class McpServerTests : IDisposable
             Assert.True(structured["graph_degraded"]!.GetValue<bool>());
             Assert.Equal("enum_member", structured["unsupported_symbol_kind"]!.GetValue<string>());
             Assert.Contains("currently excluded from unused analysis", structured["graph_support_reason"]!.GetValue<string>());
-            Assert.Contains("Color", names);
+            Assert.DoesNotContain("Color", names);
             Assert.Contains("TrulyUnused", names);
             Assert.Contains(
                 "Found",
