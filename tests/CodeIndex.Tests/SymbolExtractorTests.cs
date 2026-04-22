@@ -9121,6 +9121,50 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_HeaderLineAutoPropertyInsideMultilineTypeBodyIsCaptured()
+    {
+        // A C# type can open its body on the header line while still closing on a later
+        // line (`public class C { public int P { get; }` + next-line `}`). Before #580,
+        // the outer class/struct/interface match stopped the same-line scan because the
+        // type body was not fully compact on one line, so the first member that shared
+        // the header line silently disappeared. Closes #580.
+        // C# の型は、本体開始 `{` をヘッダ行に置いたまま閉じ `}` を後続行へ送れる
+        // (`public class C { public int P { get; }` + 次行 `}`)。#580 前は outer
+        // class/struct/interface のマッチ時点で same-line scan が止まり、ヘッダ行を
+        // 共有する最初の member が無言で脱落していた。Closes #580.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public class Outer { public int P { get; }",
+            "}",
+            "public struct Holder { public int Q { get; }",
+            "}",
+            "public interface IOuter { int R { get; }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var p = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("class", p.ContainerKind);
+        Assert.Equal("Outer", p.ContainerName);
+        Assert.Equal("public int P { get; }", p.Signature);
+
+        var q = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Q"));
+        Assert.Equal("struct", q.ContainerKind);
+        Assert.Equal("Holder", q.ContainerName);
+        Assert.Equal("public int Q { get; }", q.Signature);
+
+        var r = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "R"));
+        Assert.Equal("interface", r.ContainerKind);
+        Assert.Equal("IOuter", r.ContainerName);
+        Assert.Equal("int R { get; }", r.Signature);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Outer");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Holder");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "IOuter");
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineAutoPropertyAfterExpressionBodiedPropertyIsCaptured()
     {
         // Same-line C# type bodies must not skip the first real member just because an

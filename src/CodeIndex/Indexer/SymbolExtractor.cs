@@ -2016,6 +2016,36 @@ public static class SymbolExtractor
                     if (!CanContinueScanningSameLineBraceBody(lang, kind, pattern.BodyStyle, bodyEndLine, startLine, sameLineEndColumn, absoluteStartColumn))
                     {
                         if (lang == "csharp"
+                            && pattern.BodyStyle == BodyStyle.Brace
+                            && bodyStartLine == startLine
+                            && kind is "class" or "struct" or "interface" or "enum" or "namespace")
+                        {
+                            // Hybrid same-line C# type headers can open the body on the header
+                            // line and still close on a later line (`class C { int P { get; }`
+                            // + next-line `}`). They are not compact same-line bodies, so the
+                            // generic same-line brace-body path does not restart inside them.
+                            // Explicitly restart just after the opening `{` so the first member
+                            // that shares the header line is still visible to the full pattern
+                            // list. Closes #580.
+                            // ハイブリッドな C# の same-line 型ヘッダは、本体開始 `{` がヘッダ行に
+                            // ありつつ閉じ `}` は後続行に置かれうる (`class C { int P { get; }`
+                            // + 次行 `}`)。これは compact な same-line body ではないため、
+                            // 既定の same-line brace-body 経路だけでは本体内へ再開できない。
+                            // そこで開始 `{` の直後から明示的に再開し、ヘッダ行を共有する最初の
+                            // member も通常の pattern 列で拾えるようにする。Closes #580.
+                            var nextHeaderLineMemberOffset = FindNextSameLineNonClosingBraceStatementStart(
+                                matchLine,
+                                absoluteStartColumn + Math.Max(1, match.Length),
+                                lang);
+                            if (nextHeaderLineMemberOffset > absoluteStartColumn
+                                && nextHeaderLineMemberOffset < matchLine.Length)
+                            {
+                                restartPatternScanOffset = nextHeaderLineMemberOffset;
+                                break;
+                            }
+                        }
+
+                        if (lang == "csharp"
                             && sameLineEndColumn >= absoluteStartColumn
                             && CanRestartCSharpSameLineSiblingScan(kind))
                         {
