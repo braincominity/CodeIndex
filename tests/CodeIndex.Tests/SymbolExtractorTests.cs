@@ -2896,6 +2896,30 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_NormalizesVerbatimIdentifiers()
+    {
+        var content = """
+            namespace CsVerbatimIdent;
+
+            public class @class
+            {
+                public int @int { get; set; }
+                public string @return => string.Empty;
+                public static @class Make() => new @class();
+                public void @if() { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "class");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "int");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "return");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Make");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "if");
+        Assert.DoesNotContain(symbols, s => s.Name.StartsWith("@", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Extract_CSharp_RawStringFixturesDoNotLeakPhantomSymbols()
     {
         var content = """""
