@@ -3192,7 +3192,7 @@ public static class ReferenceExtractor
                     currentColumn = tokenStartColumn - 1;
                     continue;
                 case ',':
-                    if (angleDepth > 0)
+                    if (angleDepth > 0 || bracketDepth > 0)
                     {
                         currentLineIndex = tokenLineIndex;
                         currentColumn = tokenStartColumn - 1;
