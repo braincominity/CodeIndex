@@ -9386,6 +9386,50 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_SameLineDelegateBeforeAccessorEventWithLaterSiblingIsCaptured()
+    {
+        // After a leading delegate restarts the same-line scan at a later accessor-bodied event,
+        // the defer checks for function/property/event/delegate rows must still see the raw event
+        // statement start. If they inspect the property/function merged candidate instead, they
+        // can skip directly to the trailing sibling and silently drop the middle custom event.
+        // Lock the issue #603 repro plus the sibling-family matrix (`property` / `method` /
+        // `delegate` / `event`) in one fixture. Closes #603.
+        // 先頭 delegate から later accessor-bodied event へ same-line restart した後でも、
+        // function/property/event/delegate 各 row の defer 判定は raw の event 文開始位置を
+        // 見続けなければならない。property/function 用の merged candidate を見てしまうと、
+        // 後続 sibling へ直接飛んで中間 custom event が無言で欠落する。#603 の最小再現と、
+        // 後続 sibling family (`property` / `method` / `delegate` / `event`) を 1 fixture で
+        // 固定する。Closes #603.
+        var content = string.Join(
+            "\n",
+            "public class PropertyCase { public delegate void D(); public event System.Action E { add { } remove { } } public int P { get; set; } }",
+            "public class MethodCase { public delegate void D(); public event System.Action E { add { } remove { } } public void M() { } }",
+            "public class DelegateCase { public delegate void D1(); public event System.Action E { add { } remove { } } public delegate void D2(); }",
+            "public class EventCase { public delegate void D1(); public event System.Action E { add { } remove { } } public event System.Action E2; }");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var propertyEvent = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E" && s.ContainerName == "PropertyCase"));
+        Assert.Equal("public event System.Action E { add { } remove { } }", propertyEvent.Signature);
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P" && s.ContainerName == "PropertyCase"));
+        Assert.Equal("public int P { get; set; }", property.Signature);
+
+        var methodEvent = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E" && s.ContainerName == "MethodCase"));
+        Assert.Equal("public event System.Action E { add { } remove { } }", methodEvent.Signature);
+        var method = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "M" && s.ContainerName == "MethodCase"));
+        Assert.Equal("public void M() { }", method.Signature);
+
+        var delegateEvent = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E" && s.ContainerName == "DelegateCase"));
+        Assert.Equal("public event System.Action E { add { } remove { } }", delegateEvent.Signature);
+        var delegateTail = Assert.Single(symbols.Where(s => s.Kind == "delegate" && s.Name == "D2" && s.ContainerName == "DelegateCase"));
+        Assert.Equal("public delegate void D2();", delegateTail.Signature);
+
+        var eventEvent = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E" && s.ContainerName == "EventCase"));
+        Assert.Equal("public event System.Action E { add { } remove { } }", eventEvent.Signature);
+        var trailingEvent = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E2" && s.ContainerName == "EventCase"));
+        Assert.Equal("public event System.Action E2;", trailingEvent.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineAutoPropertyAfterConstructorsIsCaptured()
     {
         // Same-line C# constructors must not stop later sibling declarations from

@@ -1347,14 +1347,14 @@ public static class SymbolExtractor
                         if (lang == "csharp"
                             && pattern.Kind == "property"
                             && pattern.BodyStyle == BodyStyle.Brace
-                            && ShouldDeferCSharpBracePropertySameLineAdvance(patternMatchLine, lineOffset))
+                            && ShouldDeferCSharpBracePropertySameLineAdvance(matchLine, lineOffset))
                         {
                             break;
                         }
 
                         if (lang == "csharp"
                             && pattern.Kind == "function"
-                            && ShouldDeferCSharpFunctionSameLineAdvance(patternMatchLine, lineOffset))
+                            && ShouldDeferCSharpFunctionSameLineAdvance(matchLine, lineOffset))
                         {
                             break;
                         }
@@ -1362,7 +1362,7 @@ public static class SymbolExtractor
                         if (lang == "csharp"
                             && pattern.Kind is "event" or "delegate"
                             && pattern.BodyStyle == BodyStyle.None
-                            && ShouldDeferCSharpEventOrDelegateSameLineAdvance(patternMatchLine, lineOffset, pattern.Kind))
+                            && ShouldDeferCSharpEventOrDelegateSameLineAdvance(matchLine, lineOffset, pattern.Kind))
                         {
                             break;
                         }
@@ -10335,7 +10335,8 @@ public static class SymbolExtractor
             return false;
 
         var remaining = matchLine[startColumn..];
-        if (!HasCSharpEventAccessorStart(remaining))
+        if (!CSharpSameLineEventStatementStartRegex.IsMatch(remaining)
+            || !HasCSharpEventAccessorStart(remaining))
             return false;
 
         var bodyEnd = FindCSharpSameLineBraceEndColumn(matchLine, startColumn);
