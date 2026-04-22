@@ -5089,6 +5089,95 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunDefinition_CSharpExactNameFindsNormalizedVerbatimQualifiedNames_Issues626And627()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_csharp_verbatim_qualified_issue626_627");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "Verbatim.cs"),
+                """
+                using Outer.@class;
+                using System.Collections.Generic;
+
+                namespace Outer.@class;
+
+                public class Target
+                {
+                }
+
+                public class C
+                {
+                    public static implicit operator List<@class>(C value) => new();
+                }
+                """);
+
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "GlobalType.cs"),
+                """
+                public class @class
+                {
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            var (namespaceExitCode, namespaceStdout, namespaceStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Outer.class", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp", "--kind", "namespace"],
+                _jsonOptions));
+
+            var namespaceRows = ParseJsonLines(namespaceStdout);
+            Assert.Equal(CommandExitCodes.Success, namespaceExitCode);
+            Assert.Equal(string.Empty, namespaceStderr);
+            Assert.Single(namespaceRows);
+            Assert.Equal("Outer.class", namespaceRows[0].RootElement.GetProperty("name").GetString());
+
+            var (importExitCode, importStdout, importStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "import", "--name", "Outer.class", "--exact-name"],
+                _jsonOptions));
+
+            using var importDocument = ParseJsonOutput(importStdout);
+            var importSymbol = importDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, importExitCode);
+            Assert.Equal(string.Empty, importStderr);
+            Assert.Equal("Outer.class", importSymbol.GetProperty("name").GetString());
+
+            var (classExitCode, classStdout, classStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["C", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+
+            var classRows = ParseJsonLines(classStdout);
+            Assert.Equal(CommandExitCodes.Success, classExitCode);
+            Assert.Equal(string.Empty, classStderr);
+            Assert.Single(classRows);
+            Assert.Equal("Outer.class", classRows[0].RootElement.GetProperty("container_name").GetString());
+
+            var (operatorExitCode, operatorStdout, operatorStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--name", "implicit operator List<class>", "--exact-name"],
+                _jsonOptions));
+
+            using var operatorDocument = ParseJsonOutput(operatorStdout);
+            var operatorSymbol = operatorDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, operatorExitCode);
+            Assert.Equal(string.Empty, operatorStderr);
+            Assert.Equal("implicit operator List<class>", operatorSymbol.GetProperty("name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_ExactNameStaleCSharpCanonicalNamesReportDegradedState()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_conversion_stale");

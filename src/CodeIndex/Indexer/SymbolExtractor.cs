@@ -14260,7 +14260,7 @@ public static class SymbolExtractor
         if (name == "this" && match.Value.Contains("this", StringComparison.Ordinal) && match.Value.Contains('[', StringComparison.Ordinal))
             return "Item";
 
-        return name[0] == '@' ? name[1..] : name;
+        return NormalizeCSharpVerbatimIdentifiers(name);
     }
 
     private static string NormalizeKotlinSymbolName(string name, string matchLine)
@@ -14396,8 +14396,50 @@ public static class SymbolExtractor
         var normalized = CSharpTypeWhitespaceRegex.Replace(typeName.Trim(), " ");
         normalized = CSharpTypeDoubleColonWhitespaceRegex.Replace(normalized, "::");
         normalized = CSharpTypeDotWhitespaceRegex.Replace(normalized, ".");
-        return NormalizeCSharpTypeTokenSpacing(normalized);
+        normalized = NormalizeCSharpTypeTokenSpacing(normalized);
+        return NormalizeCSharpVerbatimIdentifiers(normalized);
     }
+
+    private static string NormalizeCSharpVerbatimIdentifiers(string value)
+    {
+        if (string.IsNullOrEmpty(value) || value.IndexOf('@', StringComparison.Ordinal) < 0)
+            return value;
+
+        StringBuilder? builder = null;
+        var segmentStart = 0;
+
+        for (var index = 0; index < value.Length; index++)
+        {
+            if (!IsCSharpVerbatimIdentifierPrefix(value, index))
+                continue;
+
+            builder ??= new StringBuilder(value.Length);
+            if (index > segmentStart)
+                builder.Append(value, segmentStart, index - segmentStart);
+            segmentStart = index + 1;
+        }
+
+        if (builder is null)
+            return value;
+
+        if (segmentStart < value.Length)
+            builder.Append(value, segmentStart, value.Length - segmentStart);
+        return builder.ToString();
+    }
+
+    private static bool IsCSharpVerbatimIdentifierPrefix(string value, int index)
+    {
+        if (value[index] != '@' || index + 1 >= value.Length || !IsCSharpIdentifierStart(value[index + 1]))
+            return false;
+
+        return index == 0 || !IsCSharpIdentifierChar(value[index - 1]);
+    }
+
+    private static bool IsCSharpIdentifierStart(char ch) =>
+        ch == '_' || char.IsLetter(ch);
+
+    private static bool IsCSharpIdentifierChar(char ch) =>
+        ch == '_' || char.IsLetterOrDigit(ch);
 
     private static string NormalizeCSharpTypeTokenSpacing(string typeName)
     {

@@ -2920,6 +2920,64 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_NormalizesVerbatimQualifiedNamespaceAndImportNames()
+    {
+        var content = """
+            using Outer.@class;
+
+            namespace Outer.@class
+            {
+                public class Container
+                {
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var namespaceSymbol = Assert.Single(symbols.Where(s => s.Kind == "namespace"));
+        var importSymbol = Assert.Single(symbols.Where(s => s.Kind == "import"));
+        var containerSymbol = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Container"));
+
+        Assert.Equal("Outer.class", namespaceSymbol.Name);
+        Assert.Equal("Outer.class", importSymbol.Name);
+        Assert.Equal("namespace", containerSymbol.ContainerKind);
+        Assert.Equal("Outer.class", containerSymbol.ContainerName);
+        Assert.DoesNotContain(symbols, s => s.Name.Contains("@", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Extract_CSharp_NormalizesVerbatimConversionOperatorTargetTypes()
+    {
+        var content = """
+            using System.Collections.Generic;
+
+            namespace Outer.@class
+            {
+                public class Target
+                {
+                }
+            }
+
+            public class @class
+            {
+            }
+
+            public class Source
+            {
+                public static implicit operator @class(Source value) => new @class();
+                public static explicit operator Outer.@class.Target(Source value) => new Outer.@class.Target();
+                public static explicit operator List<@class>(Source value) => new();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "implicit operator class");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator Outer.class.Target");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator List<class>");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name.Contains("@", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Extract_CSharp_RawStringFixturesDoNotLeakPhantomSymbols()
     {
         var content = """""
