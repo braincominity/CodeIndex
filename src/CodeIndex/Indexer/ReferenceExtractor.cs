@@ -2989,21 +2989,158 @@ public static class ReferenceExtractor
         if (previousTopLevelSignificantLineIndex < 0 || previousTopLevelSignificantColumn < 0)
             return true;
 
-        var previousLine = structuralLines[previousTopLevelSignificantLineIndex];
-        if (previousTopLevelSignificantColumn >= previousLine.Length)
+        if (!TryGetPreviousTopLevelToken(
+                structuralLines,
+                previousTopLevelSignificantLineIndex,
+                previousTopLevelSignificantColumn,
+                out var previousTokenLineIndex,
+                out var previousTokenStartColumn,
+                out _,
+                out var previousIdentifierToken,
+                out var previousPunctuationToken))
+        {
             return true;
+        }
 
-        var previousTopLevelSignificantChar = previousLine[previousTopLevelSignificantColumn];
-        return previousTopLevelSignificantChar switch
+        if (!string.IsNullOrEmpty(previousIdentifierToken))
+            return !IsCSharpParenthesizedQueryClausePrefixIdentifier(previousIdentifierToken);
+
+        return previousPunctuationToken switch
         {
             '(' or '[' or '{' or ',' or ';' or ':' or '?' or '+' or '-' or '*' or '/' or '%' or '&' or '|' or '^' or '=' or '~' or '<' => false,
+            '!' => CanStartCSharpParenthesizedQueryClauseAfterBang(
+                structuralLines,
+                bodyEndIndex,
+                previousTokenLineIndex,
+                previousTokenStartColumn),
             '>' => LooksLikeCSharpQueryGenericTypeArgumentClose(
                 structuralLines,
                 bodyEndIndex,
-                previousTopLevelSignificantLineIndex,
-                previousTopLevelSignificantColumn),
+                previousTokenLineIndex,
+                previousTokenStartColumn),
             _ => true
         };
+    }
+
+    private static bool CanStartCSharpParenthesizedQueryClauseAfterBang(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int bangLineIndex,
+        int bangColumn)
+    {
+        if (!TryGetPreviousTopLevelToken(
+                structuralLines,
+                bangLineIndex,
+                bangColumn - 1,
+                out var previousTokenLineIndex,
+                out var previousTokenStartColumn,
+                out _,
+                out var previousIdentifierToken,
+                out var previousPunctuationToken))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrEmpty(previousIdentifierToken))
+            return !IsCSharpParenthesizedQueryClausePrefixIdentifier(previousIdentifierToken);
+
+        return previousPunctuationToken switch
+        {
+            ')' or ']' or '}' or '"' or '\'' => true,
+            '>' => LooksLikeCSharpQueryGenericTypeArgumentClose(
+                structuralLines,
+                bodyEndIndex,
+                previousTokenLineIndex,
+                previousTokenStartColumn),
+            _ => false
+        };
+    }
+
+    private static bool IsCSharpParenthesizedQueryClausePrefixIdentifier(string token)
+    {
+        return string.Equals(token, "await", StringComparison.Ordinal)
+            || IsCSharpQueryClauseKeyword(token);
+    }
+
+    private static bool TryGetPreviousTopLevelToken(
+        IReadOnlyList<string> structuralLines,
+        int startLineIndex,
+        int startColumn,
+        out int tokenLineIndex,
+        out int tokenStartColumn,
+        out int tokenEndColumn,
+        out string identifierToken,
+        out char punctuationToken)
+    {
+        tokenLineIndex = -1;
+        tokenStartColumn = -1;
+        tokenEndColumn = -1;
+        identifierToken = string.Empty;
+        punctuationToken = '\0';
+
+        if (!TryGetPreviousTopLevelSignificantChar(
+                structuralLines,
+                startLineIndex,
+                startColumn,
+                out tokenLineIndex,
+                out tokenEndColumn,
+                out var tokenChar))
+        {
+            return false;
+        }
+
+        tokenStartColumn = tokenEndColumn;
+        if (IsCSharpIdentifierPart(tokenChar))
+        {
+            var line = structuralLines[tokenLineIndex];
+            while (tokenStartColumn > 0 && IsCSharpIdentifierPart(line[tokenStartColumn - 1]))
+                tokenStartColumn--;
+
+            identifierToken = line.Substring(tokenStartColumn, tokenEndColumn - tokenStartColumn + 1);
+        }
+        else
+        {
+            punctuationToken = tokenChar;
+        }
+
+        return true;
+    }
+
+    private static bool TryGetPreviousTopLevelSignificantChar(
+        IReadOnlyList<string> structuralLines,
+        int startLineIndex,
+        int startColumn,
+        out int lineIndex,
+        out int column,
+        out char value)
+    {
+        lineIndex = -1;
+        column = -1;
+        value = '\0';
+
+        if (structuralLines.Count == 0)
+            return false;
+
+        var clampedLineIndex = Math.Min(startLineIndex, structuralLines.Count - 1);
+        for (var currentLineIndex = clampedLineIndex; currentLineIndex >= 0; currentLineIndex--)
+        {
+            var line = structuralLines[currentLineIndex];
+            var currentColumn = currentLineIndex == clampedLineIndex
+                ? Math.Min(startColumn, line.Length - 1)
+                : line.Length - 1;
+            for (var probe = currentColumn; probe >= 0; probe--)
+            {
+                if (char.IsWhiteSpace(line[probe]))
+                    continue;
+
+                lineIndex = currentLineIndex;
+                column = probe;
+                value = line[probe];
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool LooksLikeCSharpQueryGenericTypeArgumentClose(
