@@ -6890,6 +6890,28 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatFourSlashCommentsAsDocComments()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                //// <see cref="Foo"/>
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 4);
+    }
+
+    [Fact]
     public void Extract_TypeReferenceSegmentColumnMatchesOriginalLine()
     {
         // Column positions must point to the start of each dot-segment in the original line

@@ -5821,7 +5821,9 @@ public static class ReferenceExtractor
         if (string.IsNullOrWhiteSpace(line))
             return false;
 
-        return line.TrimStart().StartsWith("///", StringComparison.Ordinal);
+        var trimmed = line.TrimStart();
+        return trimmed.StartsWith("///", StringComparison.Ordinal)
+            && (trimmed.Length == 3 || trimmed[3] != '/');
     }
 
     private static SymbolRecord? FindInnermostSameLineCSharpContainer(
