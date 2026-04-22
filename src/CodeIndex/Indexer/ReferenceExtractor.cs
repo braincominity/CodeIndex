@@ -2941,7 +2941,14 @@ public static class ReferenceExtractor
             || string.Equals(keyword, "descending", StringComparison.Ordinal);
     }
 
-    private static bool IsCSharpQueryClauseKeywordSuffix(string line, int nextColumn, string keyword, char? previousTopLevelSignificantChar)
+    private static bool IsCSharpQueryClauseKeywordSuffix(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        string line,
+        int nextColumn,
+        string keyword,
+        int previousTopLevelSignificantLineIndex,
+        int previousTopLevelSignificantColumn)
     {
         if (nextColumn >= line.Length)
             return true;
@@ -2952,7 +2959,11 @@ public static class ReferenceExtractor
 
         if (next == '('
             && IsCSharpParenthesizedQueryClauseKeyword(keyword)
-            && CanStartCSharpParenthesizedQueryClause(previousTopLevelSignificantChar))
+            && CanStartCSharpParenthesizedQueryClause(
+                structuralLines,
+                bodyEndIndex,
+                previousTopLevelSignificantLineIndex,
+                previousTopLevelSignificantColumn))
         {
             return true;
         }
@@ -2969,14 +2980,64 @@ public static class ReferenceExtractor
             || string.Equals(keyword, "orderby", StringComparison.Ordinal);
     }
 
-    private static bool CanStartCSharpParenthesizedQueryClause(char? previousTopLevelSignificantChar)
+    private static bool CanStartCSharpParenthesizedQueryClause(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int previousTopLevelSignificantLineIndex,
+        int previousTopLevelSignificantColumn)
     {
-        return previousTopLevelSignificantChar is null
-            || previousTopLevelSignificantChar switch
+        if (previousTopLevelSignificantLineIndex < 0 || previousTopLevelSignificantColumn < 0)
+            return true;
+
+        var previousLine = structuralLines[previousTopLevelSignificantLineIndex];
+        if (previousTopLevelSignificantColumn >= previousLine.Length)
+            return true;
+
+        var previousTopLevelSignificantChar = previousLine[previousTopLevelSignificantColumn];
+        return previousTopLevelSignificantChar switch
+        {
+            '(' or '[' or '{' or ',' or ';' or ':' or '?' or '+' or '-' or '*' or '/' or '%' or '&' or '|' or '^' or '=' or '~' or '<' => false,
+            '>' => LooksLikeCSharpQueryGenericTypeArgumentClose(
+                structuralLines,
+                bodyEndIndex,
+                previousTopLevelSignificantLineIndex,
+                previousTopLevelSignificantColumn),
+            _ => true
+        };
+    }
+
+    private static bool LooksLikeCSharpQueryGenericTypeArgumentClose(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int closeLineIndex,
+        int closeColumn)
+    {
+        if (closeLineIndex < 0 || closeLineIndex >= structuralLines.Count)
+            return false;
+
+        var angleDepth = 1;
+        for (var lineIndex = closeLineIndex; lineIndex >= 0; lineIndex--)
+        {
+            var line = structuralLines[lineIndex];
+            var columnStart = lineIndex == closeLineIndex ? Math.Min(closeColumn - 1, line.Length - 1) : line.Length - 1;
+            for (var column = columnStart; column >= 0; column--)
             {
-                '(' or '[' or '{' or ',' or ';' or ':' or '?' or '+' or '-' or '*' or '/' or '%' or '&' or '|' or '^' or '=' or '~' => false,
-                _ => true
-            };
+                var current = line[column];
+                switch (current)
+                {
+                    case '>':
+                        angleDepth++;
+                        break;
+                    case '<':
+                        angleDepth--;
+                        if (angleDepth == 0)
+                            return LooksLikeCSharpQueryGenericTypeArgumentStart(structuralLines, bodyEndIndex, lineIndex, column);
+                        break;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static bool TryFindMatchingCSharpDelimiter(
@@ -3030,7 +3091,8 @@ public static class ReferenceExtractor
         var terminalClauseSeen = false;
         var queryClauseSeen = false;
         var clauseHasTopLevelExpressionContent = false;
-        char? lastTopLevelSignificantChar = null;
+        var lastTopLevelSignificantLineIndex = -1;
+        var lastTopLevelSignificantColumn = -1;
 
         for (var lineIndex = startLineIndex; lineIndex <= bodyEndIndex; lineIndex++)
         {
@@ -3052,7 +3114,14 @@ public static class ReferenceExtractor
                 {
                     if ((!queryClauseSeen || clauseHasTopLevelExpressionContent)
                         && IsCSharpQueryClauseKeyword(keyword)
-                        && IsCSharpQueryClauseKeywordSuffix(line, nextColumn, keyword, lastTopLevelSignificantChar))
+                        && IsCSharpQueryClauseKeywordSuffix(
+                            structuralLines,
+                            bodyEndIndex,
+                            line,
+                            nextColumn,
+                            keyword,
+                            lastTopLevelSignificantLineIndex,
+                            lastTopLevelSignificantColumn))
                     {
                         if ((string.Equals(keyword, "by", StringComparison.Ordinal)
                                 || string.Equals(keyword, "ascending", StringComparison.Ordinal)
@@ -3068,7 +3137,8 @@ public static class ReferenceExtractor
 
                         queryClauseSeen = true;
                         clauseHasTopLevelExpressionContent = false;
-                        lastTopLevelSignificantChar = keyword[keyword.Length - 1];
+                        lastTopLevelSignificantLineIndex = lineIndex;
+                        lastTopLevelSignificantColumn = nextColumn - 1;
                         column = nextColumn - 1;
                         continue;
                     }
@@ -3126,7 +3196,8 @@ public static class ReferenceExtractor
                         if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0)
                         {
                             clauseHasTopLevelExpressionContent = false;
-                            lastTopLevelSignificantChar = current;
+                            lastTopLevelSignificantLineIndex = lineIndex;
+                            lastTopLevelSignificantColumn = column;
                         }
                         break;
                 }
@@ -3140,7 +3211,8 @@ public static class ReferenceExtractor
                     && current != ';')
                 {
                     clauseHasTopLevelExpressionContent = true;
-                    lastTopLevelSignificantChar = current;
+                    lastTopLevelSignificantLineIndex = lineIndex;
+                    lastTopLevelSignificantColumn = column;
                 }
             }
         }
