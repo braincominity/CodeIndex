@@ -382,7 +382,7 @@ Supported symbol kinds by language (33 languages with symbol extraction):
 | Go | func, methods | type alias | struct | interface | -- | -- | -- | import | yes |
 | Rust | fn, macro_rules!, const, static | impl, type alias | struct, union | trait | enum | -- | -- | use | yes |
 | Java | methods, static final, enum members (body-scoped scanner that tracks strings/chars/comments/text blocks and stops at the first top-level `;`, so method calls like `\tRED();` outside the enum body are not captured) | class, record, sealed, @interface | -- | interface | enum | record primary components | -- | import | yes |
-| Kotlin | fun, extension fun | class, object, companion, data/sealed/value class | -- | interface | enum class | val/var | -- | import | yes |
+| Kotlin | fun, extension fun | class, object, companion (anonymous companions normalize to `Companion`), data/sealed/value class | -- | interface | enum class | val/var | -- | import | yes |
 | Ruby | def, Rails DSL | class, module | -- | -- | -- | attr_accessor/reader/writer | -- | require | yes |
 | C | functions | -- | struct | -- | enum | -- | -- | #include | yes |
 | C++ | functions | class | struct | -- | enum, enum class | -- | -- | #include | yes |
@@ -1458,7 +1458,7 @@ LIMIT 20;
 | Go | func, メソッド | 型エイリアス | struct | interface | -- | -- | -- | import | yes |
 | Rust | fn, macro_rules!, const, static | impl, type alias | struct, union | trait | enum | -- | -- | use | yes |
 | Java | メソッド, static final, enum メンバー（文字列・char・コメント・text block を追跡する body-scoped scanner で抽出し、最初の top-level `;` で停止するため、enum 本体外の `\tRED();` のようなメソッド呼び出しを誤検出しない） | class, record, sealed, @interface | -- | interface | enum | record primary component | -- | import | yes |
-| Kotlin | fun, 拡張関数 | class, object, companion, data/sealed/value class | -- | interface | enum class | val/var | -- | import | yes |
+| Kotlin | fun, 拡張関数 | class, object, companion（無名 companion は `Companion` に正規化）, data/sealed/value class | -- | interface | enum class | val/var | -- | import | yes |
 | Ruby | def, Rails DSL | class, module | -- | -- | -- | attr_accessor/reader/writer | -- | require | yes |
 | C | 関数 | -- | struct | -- | enum | -- | -- | #include | yes |
 | C++ | 関数 | class | struct | -- | enum, enum class | -- | -- | #include | yes |

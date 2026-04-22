@@ -707,7 +707,7 @@ public static class SymbolExtractor
         ["kotlin"] =
         [
             // Companion object / コンパニオンオブジェクト
-            new("class",    new Regex(@"^\s*companion\s+object\s*(?<name>\w*)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*companion\s+object(?:\s+(?<name>\w+))?", RegexOptions.Compiled), BodyStyle.Brace),
             // Interface / インターフェース
             new("interface", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:sealed|expect|actual)\s+)*interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Enum class / enum クラス
@@ -1528,7 +1528,7 @@ public static class SymbolExtractor
                     var name = match.Groups["name"].Success
                         ? match.Groups["name"].Value.Trim()
                         : match.Value.Trim();
-                    name = NormalizeCSharpSymbolName(lang, name, match, matchLine);
+                    name = NormalizeExtractedSymbolName(lang, name, match, matchLine);
 
                     var rangeLines = lang == "css" && cssScannerLines != null
                         ? cssScannerLines
@@ -6747,6 +6747,9 @@ public static class SymbolExtractor
         SymbolRecord symbol,
         string? rawLine = null)
     {
+        if (string.IsNullOrWhiteSpace(symbol.Name))
+            return;
+
         if (cssSeenSymbols != null)
         {
             var key = $"{lineNumber}:{symbol.Kind}:{symbol.Name}";
@@ -14231,9 +14234,19 @@ public static class SymbolExtractor
         return value.Trim();
     }
 
-    private static string NormalizeCSharpSymbolName(string? lang, string name, Match match, string matchLine)
+    private static string NormalizeExtractedSymbolName(string? lang, string name, Match match, string matchLine)
     {
-        if (lang != "csharp")
+        return lang switch
+        {
+            "csharp" => NormalizeCSharpSymbolName(name, match, matchLine),
+            "kotlin" => NormalizeKotlinSymbolName(name, matchLine),
+            _ => name,
+        };
+    }
+
+    private static string NormalizeCSharpSymbolName(string name, Match match, string matchLine)
+    {
+        if (string.IsNullOrWhiteSpace(name))
             return name;
 
         if (match.Groups["conversionKind"].Success
@@ -14246,6 +14259,19 @@ public static class SymbolExtractor
             return "Item";
 
         return name;
+    }
+
+    private static string NormalizeKotlinSymbolName(string name, string matchLine)
+    {
+        var trimmedLine = matchLine.TrimStart();
+        if (!trimmedLine.StartsWith("companion object", StringComparison.Ordinal))
+            return name;
+
+        var trimmedName = name.Trim();
+        return string.IsNullOrWhiteSpace(trimmedName)
+            || string.Equals(trimmedName, "companion object", StringComparison.Ordinal)
+            ? "Companion"
+            : name;
     }
 
     private static bool TryReadCSharpConversionOperatorName(Match match, string matchLine, out string name)

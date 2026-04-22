@@ -8388,12 +8388,57 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Email");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Handler");
         // Companion object (unnamed) / コンパニオンオブジェクト（無名）
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Signature != null && s.Signature.Contains("companion object"));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Companion" && s.Signature != null && s.Signature.Contains("companion object"));
         // Extension function / 拡張関数
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "truncate");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fetchData");
         // const val / 定数プロパティ
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "MAX");
+    }
+
+    [Fact]
+    public void Extract_Kotlin_AnonymousCompanionDefaultsToCompanionName()
+    {
+        var content = """
+            class Widget {
+                companion object {
+                    const val MAX = 100
+                    fun create(): Widget = Widget()
+                }
+            }
+
+            class Named {
+                companion object Factory {
+                    fun build(): Named = Named()
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+
+        Assert.DoesNotContain(symbols, s => string.IsNullOrWhiteSpace(s.Name));
+
+        var anonymousCompanion = Assert.Single(symbols.Where(s =>
+            s.Kind == "class"
+            && s.Name == "Companion"
+            && s.ContainerKind == "class"
+            && s.ContainerName == "Widget"));
+        Assert.Equal("companion object {", anonymousCompanion.Signature);
+
+        Assert.Contains(symbols, s =>
+            s.Kind == "property"
+            && s.Name == "MAX"
+            && s.ContainerKind == "class"
+            && s.ContainerName == "Companion");
+        Assert.Contains(symbols, s =>
+            s.Kind == "function"
+            && s.Name == "create"
+            && s.ContainerKind == "class"
+            && s.ContainerName == "Companion");
+        Assert.Contains(symbols, s =>
+            s.Kind == "class"
+            && s.Name == "Factory"
+            && s.ContainerKind == "class"
+            && s.ContainerName == "Named");
     }
 
     [Fact]
