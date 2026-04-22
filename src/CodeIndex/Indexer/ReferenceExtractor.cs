@@ -202,8 +202,29 @@ public static class ReferenceExtractor
     // 修飾子の各セグメントを optional にすることで、`EXEC AdventureWorks..sp_GetCustomer;` のように
     // SQL Server が許す省略形（`..`）でも末尾の proc 名まで到達できる。識別子候補にはバッククォート引用も含め、
     // MySQL / MariaDB の `` `proc-name` `` 形にも対応する。
+    private const string SqlQuotedIdentifierPattern = @"(?:\[[^\[\]\r\n]+\]|`[^`\r\n]+`)";
+    private const string SqlBareIdentifierPattern = @"\w+";
+    private const string SqlQualifiedIdentifierPattern =
+        @"(?:(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")\s*\.\s*)*(?<name>" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")";
     private static readonly Regex SqlProcCallRegex = new(
         @"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?(?:(?:\[[^\[\]\r\n]+\]|`[^`\r\n]+`|\w+)?\.)*(?<name>\[[^\[\]\r\n]+\]|`[^`\r\n]+`|\w+)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // SQL named source references that should become `reference` edges rather than `call` edges.
+    // `FROM dbo.fn_TableValued(...)` intentionally stays out because the trailing `(` means the
+    // shared CallRegex already captures it as a function call. issue #284.
+    // SQL のソース参照で、`call` ではなく `reference` として扱うべき形。
+    // `FROM dbo.fn_TableValued(...)` は末尾 `(` により既存 CallRegex が `call` を出すため除外する。
+    private static readonly Regex SqlSourceReferenceRegex = new(
+        $@"(?<![\w$])(?:FROM|JOIN|USING|(?:CROSS|OUTER)\s+APPLY)\b\s+{SqlQualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // SQL mutation targets such as `INSERT INTO tbl (...)` / `UPDATE tbl` / `TRUNCATE TABLE tbl`.
+    // `INSERT INTO tbl (` is a table reference, not a function call; we later suppress the generic
+    // CallRegex match at the same identifier when an opening `(` immediately follows the target.
+    // `INSERT INTO tbl (...)` / `UPDATE tbl` / `TRUNCATE TABLE tbl` などの更新対象。
+    // `INSERT INTO tbl (` は関数呼び出しではなくテーブル参照なので、直後に `(` がある場合は後段で
+    // 同じ識別子の generic CallRegex を抑止する。
+    private static readonly Regex SqlTargetReferenceRegex = new(
+        $@"(?<![\w$])(?:INTO|UPDATE|TRUNCATE\s+TABLE|MERGE\s+INTO)\b\s+{SqlQualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // C# event subscription/unsubscription: Click += OnClick — both LHS and RHS must be PascalCase identifiers
     // C# イベント購読・解除: Click += OnClick — LHS と RHS の両方が PascalCase 識別子のみ
@@ -685,6 +706,8 @@ public static class ReferenceExtractor
                 }
             }
 
+            var sqlSuppressedCallIndices = language is "sql" ? new HashSet<int>() : null;
+
             // SQL stored-procedure calls without parentheses: `EXEC`, `EXECUTE`, and `CALL` forms that
             // the shared CallRegex cannot see because there is no trailing `(`. Emits the same
             // reference kind ("call") so the edge merges with the rare parenthesized form via dedupe.
@@ -707,28 +730,7 @@ public static class ReferenceExtractor
                     foreach (Match match in SqlProcCallRegex.Matches(sqlScanLine))
                     {
                         var nameGroup = match.Groups["name"];
-                        var rawName = nameGroup.Value;
-                        int nameIndex = nameGroup.Index;
-                        string resolvedName;
-                        bool wasQuoted;
-                        if (rawName.Length >= 2
-                            && ((rawName[0] == '[' && rawName[^1] == ']')
-                                || (rawName[0] == '`' && rawName[^1] == '`')))
-                        {
-                            // Normalize `[sp_Target]` / `` `sp_Target` `` to `sp_Target` so it matches the
-                            // indexed symbol name, and point the column at the inner identifier instead
-                            // of the opening quote.
-                            // `[sp_Target]` / `` `sp_Target` `` は識別子名と一致させるため引用を除去し、
-                            // 列位置は中身の先頭に寄せる。
-                            resolvedName = rawName.Substring(1, rawName.Length - 2);
-                            nameIndex += 1;
-                            wasQuoted = true;
-                        }
-                        else
-                        {
-                            resolvedName = rawName;
-                            wasQuoted = false;
-                        }
+                        NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
 
                         // Bracketed / backtick-quoted identifiers are explicitly quoted to allow reserved
                         // words (`[ORDER]`, `[USER]`, `[AS]`, `[IMMEDIATE]`, `` `order` ``) as real object
@@ -745,6 +747,32 @@ public static class ReferenceExtractor
                         AddChainReference(
                             references, seen, fileId, resolvedName, nameIndex + 1,
                             "call", context, lineNumber, sqlCallContainer);
+                    }
+
+                    foreach (Match match in SqlSourceReferenceRegex.Matches(sqlScanLine))
+                    {
+                        var nameGroup = match.Groups["name"];
+                        if (IsFollowedByOpenParen(sqlScanLine, nameGroup.Index + nameGroup.Length))
+                            continue;
+                        NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                        if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                            continue;
+
+                        var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
+                        AddReference(references, seen, fileId, resolvedName, nameIndex, "reference", context, lineNumber, sqlReferenceContainer);
+                    }
+
+                    foreach (Match match in SqlTargetReferenceRegex.Matches(sqlScanLine))
+                    {
+                        var nameGroup = match.Groups["name"];
+                        NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                        if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                            continue;
+
+                        var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
+                        AddReference(references, seen, fileId, resolvedName, nameIndex, "reference", context, lineNumber, sqlReferenceContainer);
+                        if (IsFollowedByOpenParen(sqlScanLine, nameGroup.Index + nameGroup.Length))
+                            sqlSuppressedCallIndices?.Add(nameIndex);
                     }
                 }
             }
@@ -908,6 +936,8 @@ public static class ReferenceExtractor
             {
                 var name = match.Groups["name"].Value;
                 var callIndex = match.Groups["name"].Index;
+                if (sqlSuppressedCallIndices != null && sqlSuppressedCallIndices.Contains(callIndex))
+                    continue;
                 matchedCallIndices.Add(callIndex);
                 AddCallLikeReference(name, callIndex);
             }
@@ -1042,6 +1072,40 @@ public static class ReferenceExtractor
             ContainerKind = container?.Kind,
             ContainerName = container?.Name,
         });
+    }
+
+    private static void NormalizeSqlIdentifier(
+        string rawName,
+        int rawIndex,
+        out string resolvedName,
+        out int resolvedIndex,
+        out bool wasQuoted)
+    {
+        if (rawName.Length >= 2
+            && ((rawName[0] == '[' && rawName[^1] == ']')
+                || (rawName[0] == '`' && rawName[^1] == '`')))
+        {
+            // Normalize `[name]` / `` `name` `` to `name` so SQL-specific regexes and the shared
+            // CallRegex converge on the same symbol spelling and dedupe key.
+            // `[name]` / `` `name` `` を `name` に正規化し、SQL 専用 regex と共有 CallRegex の
+            // symbol 名と dedupe key を一致させる。
+            resolvedName = rawName.Substring(1, rawName.Length - 2);
+            resolvedIndex = rawIndex + 1;
+            wasQuoted = true;
+            return;
+        }
+
+        resolvedName = rawName;
+        resolvedIndex = rawIndex;
+        wasQuoted = false;
+    }
+
+    private static bool IsFollowedByOpenParen(string line, int index)
+    {
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+
+        return index < line.Length && line[index] == '(';
     }
 
     /// <summary>

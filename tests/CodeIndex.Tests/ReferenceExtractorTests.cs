@@ -5291,6 +5291,51 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_CapturesNamedSourceReferences()
+    {
+        // issue #284: SQL source/target identifiers such as FROM/JOIN/INTO/view/CTE usages should
+        // surface as `reference` edges, while table-valued functions keep their `call` edge.
+        // issue #284: SQL の FROM/JOIN/INTO/view/CTE 使用は `reference` として出し、TVF は `call`
+        // のまま維持する。
+        const string content = """
+            WITH ActiveUsers AS (
+                SELECT user_id, name
+                FROM users
+                WHERE status = 'active'
+            ),
+            RecentOrders AS (
+                SELECT order_id, user_id, total
+                FROM orders
+                WHERE created_at > '2024-01-01'
+            )
+            SELECT au.name, ro.total
+            FROM ActiveUsers au
+            JOIN RecentOrders ro ON ro.user_id = au.user_id;
+
+            SELECT * FROM user_summary_view WHERE region = 'EU';
+            EXEC usp_ProcessOrders @BatchSize = 100;
+            SELECT * FROM dbo.fn_GetUserStats(42);
+            INSERT INTO audit_log (action, user_id)
+            SELECT 'login', user_id FROM ActiveUsers;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "ActiveUsers" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "RecentOrders" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "orders" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "user_summary_view" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "usp_ProcessOrders" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "fn_GetUserStats" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fn_GetUserStats" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fn_GetUserStat");
+    }
+
+    [Fact]
     public void Extract_FSharp_DetectsParenthesizedCalls()
     {
         const string content = """
