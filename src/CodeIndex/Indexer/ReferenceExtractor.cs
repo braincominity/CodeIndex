@@ -3002,7 +3002,7 @@ public static class ReferenceExtractor
                 previousTopLevelSignificantColumn,
                 out var previousTokenLineIndex,
                 out var previousTokenStartColumn,
-                out _,
+                out var previousTokenEndColumn,
                 out var previousIdentifierToken,
                 out var previousPunctuationToken))
         {
@@ -3017,7 +3017,18 @@ public static class ReferenceExtractor
 
         return previousPunctuationToken switch
         {
-            '(' or '[' or '{' or ',' or ';' or ':' or '?' or '+' or '-' or '*' or '/' or '%' or '&' or '|' or '^' or '=' or '~' or '<' => false,
+            '(' or '[' or '{' or ',' or ';' or ':' or '*' or '/' or '%' or '&' or '|' or '^' or '=' or '~' or '<' => false,
+            '?' => LooksLikeCSharpNullableTypeSuffixInCastOrTypeTest(
+                structuralLines,
+                previousTokenLineIndex,
+                previousTokenStartColumn),
+            '+' or '-' => CanStartCSharpParenthesizedQueryClauseAfterPlusOrMinus(
+                structuralLines,
+                bodyEndIndex,
+                previousTokenLineIndex,
+                previousTokenStartColumn,
+                previousTokenEndColumn,
+                previousPunctuationToken),
             '!' => CanStartCSharpParenthesizedQueryClauseAfterBang(
                 structuralLines,
                 bodyEndIndex,
@@ -3029,6 +3040,66 @@ public static class ReferenceExtractor
                 previousTokenLineIndex,
                 previousTokenStartColumn),
             _ => true
+        };
+    }
+
+    private static bool CanStartCSharpParenthesizedQueryClauseAfterPlusOrMinus(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int operatorLineIndex,
+        int operatorColumn,
+        int operatorEndColumn,
+        char operatorToken)
+    {
+        if (operatorLineIndex < 0 || operatorColumn < 0)
+            return false;
+
+        if (!TryGetPreviousTopLevelToken(
+                structuralLines,
+                operatorLineIndex,
+                operatorColumn - 1,
+                out var previousTokenLineIndex,
+                out var previousTokenStartColumn,
+                out var previousTokenEndColumn,
+                out var previousIdentifierToken,
+                out var previousPunctuationToken))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrEmpty(previousIdentifierToken)
+            || previousPunctuationToken != operatorToken
+            || previousTokenLineIndex != operatorLineIndex
+            || previousTokenEndColumn != operatorEndColumn - 1)
+        {
+            return false;
+        }
+
+        if (!TryGetPreviousTopLevelToken(
+                structuralLines,
+                previousTokenLineIndex,
+                previousTokenStartColumn - 1,
+                out var operandTokenLineIndex,
+                out var operandTokenStartColumn,
+                out _,
+                out var operandIdentifierToken,
+                out var operandPunctuationToken))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrEmpty(operandIdentifierToken))
+            return true;
+
+        return operandPunctuationToken switch
+        {
+            ')' or ']' or '}' or '"' or '\'' => true,
+            '>' => LooksLikeCSharpQueryGenericTypeArgumentClose(
+                structuralLines,
+                bodyEndIndex,
+                operandTokenLineIndex,
+                operandTokenStartColumn),
+            _ => false
         };
     }
 
@@ -3077,6 +3148,90 @@ public static class ReferenceExtractor
         return string.Equals(token, "await", StringComparison.Ordinal)
             || string.Equals(token, "throw", StringComparison.Ordinal)
             || IsCSharpQueryClauseKeyword(token);
+    }
+
+    private static bool LooksLikeCSharpNullableTypeSuffixInCastOrTypeTest(
+        IReadOnlyList<string> structuralLines,
+        int questionLineIndex,
+        int questionColumn)
+    {
+        var angleDepth = 0;
+        var bracketDepth = 0;
+        var currentLineIndex = questionLineIndex;
+        var currentColumn = questionColumn - 1;
+        while (TryGetPreviousTopLevelToken(
+                   structuralLines,
+                   currentLineIndex,
+                   currentColumn,
+                   out var tokenLineIndex,
+                   out var tokenStartColumn,
+                   out _,
+                   out var identifierToken,
+                   out var punctuationToken))
+        {
+            if (!string.IsNullOrEmpty(identifierToken))
+            {
+                if (angleDepth == 0
+                    && bracketDepth == 0
+                    && (string.Equals(identifierToken, "as", StringComparison.Ordinal)
+                        || string.Equals(identifierToken, "is", StringComparison.Ordinal)))
+                {
+                    return true;
+                }
+
+                currentLineIndex = tokenLineIndex;
+                currentColumn = tokenStartColumn - 1;
+                continue;
+            }
+
+            switch (punctuationToken)
+            {
+                case '.':
+                case '?':
+                    currentLineIndex = tokenLineIndex;
+                    currentColumn = tokenStartColumn - 1;
+                    continue;
+                case ',':
+                    if (angleDepth > 0)
+                    {
+                        currentLineIndex = tokenLineIndex;
+                        currentColumn = tokenStartColumn - 1;
+                        continue;
+                    }
+
+                    return false;
+                case '>':
+                    angleDepth++;
+                    currentLineIndex = tokenLineIndex;
+                    currentColumn = tokenStartColumn - 1;
+                    continue;
+                case '<':
+                    if (angleDepth == 0)
+                        return false;
+
+                    angleDepth--;
+                    currentLineIndex = tokenLineIndex;
+                    currentColumn = tokenStartColumn - 1;
+                    continue;
+                case ']':
+                    bracketDepth++;
+                    currentLineIndex = tokenLineIndex;
+                    currentColumn = tokenStartColumn - 1;
+                    continue;
+                case '[':
+                    if (bracketDepth == 0)
+                        return false;
+
+                    bracketDepth--;
+                    currentLineIndex = tokenLineIndex;
+                    currentColumn = tokenStartColumn - 1;
+                    continue;
+                default:
+                    return false;
+            }
+        }
+
+        return false;
     }
 
     private static bool TryGetPreviousTopLevelToken(
