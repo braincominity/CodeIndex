@@ -7040,6 +7040,54 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpMixedLogicalPatterns_KeepFirstGenuineTypeHead()
+    {
+        // issue #674: when a logical pattern mixes constant/member heads with a real type head,
+        // the first genuine type head must still produce a compile-time dependency.
+        // issue #674: logical pattern で定数/member head と本物の型 head が混在しても、
+        // 最初に現れる genuine な型 head の compile-time 依存は残さなければならない。
+        const string content = """
+            namespace Probe;
+
+            enum Color { Red, Blue }
+            class Point {}
+
+            class Demo
+            {
+                bool Match1(object value) => value is Color.Red or Point;
+                bool Match2(object value) => value is Point or Color.Red;
+
+                void Run1(object value)
+                {
+                    switch (value)
+                    {
+                        case Color.Red or Point:
+                            break;
+                    }
+                }
+
+                void Run2(object value)
+                {
+                    switch (value)
+                    {
+                        case Point or Color.Red:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Equal(4, references.Count(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference"));
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match1");
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match2");
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run1");
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run2");
+    }
+
+    [Fact]
     public void Extract_CsharpCaseRecursiveAndPositionalPatterns_CaptureTypeReferences()
     {
         // issue #661: recursive/property and positional `case Type ...` patterns without

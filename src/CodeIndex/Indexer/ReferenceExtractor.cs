@@ -1352,6 +1352,31 @@ public static class ReferenceExtractor
         {
             var typeGroup = match.Groups["type"];
             int continuationIndex = SkipWhitespace(preparedLine, typeGroup.Index + typeGroup.Length);
+            if (TryFindFirstCSharpLogicalTypePatternHead(
+                    preparedLine,
+                    typeGroup.Value,
+                    typeGroup.Index,
+                    continuationIndex,
+                    lineNumber,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpQualifiedTypePatternLookup,
+                    csharpUsingAliases,
+                    out var logicalTypeExpression,
+                    out var logicalTypeIndex))
+            {
+                AddTypeExpressionSegments(
+                    references,
+                    seen,
+                    fileId,
+                    logicalTypeExpression,
+                    logicalTypeIndex,
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn(logicalTypeIndex),
+                    "csharp");
+                continue;
+            }
+
             if (IsCSharpNonTypePatternExpression(typeGroup.Value)
                 || IsCSharpQualifiedConstantPatternMemberHead(
                     typeGroup.Value,
@@ -1420,6 +1445,31 @@ public static class ReferenceExtractor
 
             var typeGroup = typeMatch.Groups["type"];
             int continuationIndex = SkipWhitespace(preparedLine, typeGroup.Index + typeGroup.Length);
+            if (TryFindFirstCSharpLogicalTypePatternHead(
+                    preparedLine,
+                    typeGroup.Value,
+                    typeGroup.Index,
+                    continuationIndex,
+                    lineNumber,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpQualifiedTypePatternLookup,
+                    csharpUsingAliases,
+                    out var logicalTypeExpression,
+                    out var logicalTypeIndex))
+            {
+                AddTypeExpressionSegments(
+                    references,
+                    seen,
+                    fileId,
+                    logicalTypeExpression,
+                    logicalTypeIndex,
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn(logicalTypeIndex),
+                    "csharp");
+                continue;
+            }
+
             if (!IsCSharpCaseTypePatternContinuation(
                     preparedLine,
                     typeGroup.Value,
@@ -3121,6 +3171,72 @@ public static class ReferenceExtractor
         };
     }
 
+    private static bool TryFindFirstCSharpLogicalTypePatternHead(
+        string preparedLine,
+        string initialTypeExpression,
+        int initialTypeIndex,
+        int continuationIndex,
+        int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        out string typeExpression,
+        out int typeIndex)
+    {
+        typeExpression = initialTypeExpression;
+        typeIndex = initialTypeIndex;
+
+        var currentTypeExpression = initialTypeExpression;
+        var currentTypeIndex = initialTypeIndex;
+        var currentContinuationIndex = continuationIndex;
+        var sawLogicalKeyword = false;
+        while (TryConsumeCSharpLogicalPatternKeyword(preparedLine, currentContinuationIndex, out var nextHeadCursor))
+        {
+            sawLogicalKeyword = true;
+            if (!IsCSharpLogicalConstantPatternHead(
+                    preparedLine,
+                    currentTypeExpression,
+                    nextHeadCursor,
+                    lineNumber,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpQualifiedTypePatternLookup,
+                    csharpUsingAliases))
+            {
+                typeExpression = currentTypeExpression;
+                typeIndex = currentTypeIndex;
+                return true;
+            }
+
+            int nextTypeCursor = nextHeadCursor;
+            if (TryConsumeCSharpPatternKeyword(preparedLine, ref nextTypeCursor, "not"))
+                nextTypeCursor = SkipWhitespace(preparedLine, nextTypeCursor);
+
+            var nextMatch = CSharpTypeExpressionAtCursorRegex.Match(preparedLine, nextTypeCursor);
+            if (!nextMatch.Success)
+                return false;
+
+            var nextTypeGroup = nextMatch.Groups["type"];
+            currentTypeExpression = nextTypeGroup.Value;
+            currentTypeIndex = nextTypeGroup.Index;
+            currentContinuationIndex = SkipWhitespace(preparedLine, nextTypeGroup.Index + nextTypeGroup.Length);
+        }
+
+        if (sawLogicalKeyword
+            && !IsCSharpNonTypePatternExpression(currentTypeExpression)
+            && !IsCSharpQualifiedConstantPatternMemberHead(
+                currentTypeExpression,
+                lineNumber,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpUsingAliases))
+        {
+            typeExpression = currentTypeExpression;
+            typeIndex = currentTypeIndex;
+            return true;
+        }
+
+        return false;
+    }
+
     private static bool IsCSharpLogicalConstantPatternAtCursor(
         string preparedLine,
         string typeExpression,
@@ -3146,6 +3262,24 @@ public static class ReferenceExtractor
             csharpQualifiedConstantPatternMemberLookup,
             csharpQualifiedTypePatternLookup,
             csharpUsingAliases);
+    }
+
+    private static bool TryConsumeCSharpLogicalPatternKeyword(
+        string preparedLine,
+        int cursor,
+        out int nextHeadCursor)
+    {
+        nextHeadCursor = cursor;
+        int tokenCursor = cursor;
+        if (!TryConsumeCSharpIdentifier(preparedLine, ref tokenCursor, out var start, out var end))
+            return false;
+
+        var rawToken = preparedLine[start..end];
+        if (rawToken is not ("or" or "and"))
+            return false;
+
+        nextHeadCursor = SkipWhitespace(preparedLine, tokenCursor);
+        return true;
     }
 
     private static bool IsCSharpLogicalConstantPatternHead(

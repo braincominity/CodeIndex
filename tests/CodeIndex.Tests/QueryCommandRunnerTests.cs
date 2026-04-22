@@ -14268,6 +14268,62 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpMixedLogicalPatternKeepsTypeHead()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_mixed_logical_type_pattern");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Probe;
+
+                enum Color { Red, Blue }
+                class Point {}
+
+                class Demo
+                {
+                    bool Match1(object value) => value is Color.Red or Point;
+                    bool Match2(object value) => value is Point or Color.Red;
+
+                    void Run1(object value)
+                    {
+                        switch (value)
+                        {
+                            case Color.Red or Point:
+                                break;
+                        }
+                    }
+
+                    void Run2(object value)
+                    {
+                        switch (value)
+                        {
+                            case Point or Color.Red:
+                                break;
+                        }
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Point", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            var rows = ParseJsonLines(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(4, rows.Count);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpGlobalQualifiedUsingAliasNameDoesNotCreateReference()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_global_alias_name_invalid");
