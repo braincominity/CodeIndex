@@ -9307,6 +9307,129 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_SameLineAccessorEventBeforePropertyIsCaptured()
+    {
+        // Accessor-bodied events must stop at their own closing `}` even when the next same-line
+        // sibling is a property. Otherwise the semicolon fallback keeps scanning until the later
+        // property terminator, the event signature absorbs `public int P`, and the property never
+        // gets a restart chance. Closes #519.
+        // accessor body を持つ event は、次の same-line sibling が property の場合でも
+        // 自身の閉じ `}` で終端しなければならない。そうしないと semicolon fallback が
+        // 後続 property の終端まで進み、event signature に `public int P` が混入し、
+        // property 側の再開機会も失われる。Closes #519.
+        var content = "public class C { public event System.Action E { add { } remove { } } public int P { get; set; } }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "C"));
+
+        var eventSymbol = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E"));
+        Assert.Equal("class", eventSymbol.ContainerKind);
+        Assert.Equal("C", eventSymbol.ContainerName);
+        Assert.Equal("public event System.Action E { add { } remove { } }", eventSymbol.Signature);
+
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("class", property.ContainerKind);
+        Assert.Equal("C", property.ContainerName);
+        Assert.Equal("public int P { get; set; }", property.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineEventBeforeDelegateIsCaptured()
+    {
+        // Delegate rows sit ahead of event rows in the C# pattern list, so a failed delegate
+        // match at `event E;` must not keep scanning forward and claim the later delegate.
+        // Otherwise the earlier event never reaches its own regex family and silently drops.
+        // Closes #522.
+        // C# の pattern 順では delegate 行が event 行より前にあるため、`event E;` で失敗した
+        // delegate row が後続 delegate まで進んではならない。進んでしまうと手前の event が
+        // 自分の regex family に到達できず、無言で欠落する。Closes #522.
+        var content = "public class C { public event System.Action E; public delegate void D(); }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "C"));
+
+        var eventSymbol = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E"));
+        Assert.Equal("class", eventSymbol.ContainerKind);
+        Assert.Equal("C", eventSymbol.ContainerName);
+        Assert.Equal("public event System.Action E;", eventSymbol.Signature);
+
+        var delegateSymbol = Assert.Single(symbols.Where(s => s.Kind == "delegate" && s.Name == "D"));
+        Assert.Equal("class", delegateSymbol.ContainerKind);
+        Assert.Equal("C", delegateSymbol.ContainerName);
+        Assert.Equal("public delegate void D();", delegateSymbol.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineAccessorEventBeforeDelegateIsCaptured()
+    {
+        // The same cross-family starvation also applies when the earlier declaration is an
+        // accessor-bodied event: the event must clamp at its own accessor block, and the later
+        // delegate must only be reached via the explicit restart path rather than by skipping
+        // past the event statement. Closes #519 / #522.
+        // 同じ cross-family の starvation は、手前が accessor-bodied event の場合にも起こる。
+        // event 自身は accessor block で正しく切れ、後続 delegate には event 文を飛び越える
+        // のではなく明示的な restart 経路で到達しなければならない。Closes #519 / #522.
+        var content = "public class C { public event System.Action E { add { } remove { } } public delegate void D(); }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "C"));
+
+        var eventSymbol = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E"));
+        Assert.Equal("class", eventSymbol.ContainerKind);
+        Assert.Equal("C", eventSymbol.ContainerName);
+        Assert.Equal("public event System.Action E { add { } remove { } }", eventSymbol.Signature);
+
+        var delegateSymbol = Assert.Single(symbols.Where(s => s.Kind == "delegate" && s.Name == "D"));
+        Assert.Equal("class", delegateSymbol.ContainerKind);
+        Assert.Equal("C", delegateSymbol.ContainerName);
+        Assert.Equal("public delegate void D();", delegateSymbol.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineDelegateBeforeAccessorEventWithLaterSiblingIsCaptured()
+    {
+        // After a leading delegate restarts the same-line scan at a later accessor-bodied event,
+        // the defer checks for function/property/event/delegate rows must still see the raw event
+        // statement start. If they inspect the property/function merged candidate instead, they
+        // can skip directly to the trailing sibling and silently drop the middle custom event.
+        // Lock the issue #603 repro plus the sibling-family matrix (`property` / `method` /
+        // `delegate` / `event`) in one fixture. Closes #603.
+        // 先頭 delegate から later accessor-bodied event へ same-line restart した後でも、
+        // function/property/event/delegate 各 row の defer 判定は raw の event 文開始位置を
+        // 見続けなければならない。property/function 用の merged candidate を見てしまうと、
+        // 後続 sibling へ直接飛んで中間 custom event が無言で欠落する。#603 の最小再現と、
+        // 後続 sibling family (`property` / `method` / `delegate` / `event`) を 1 fixture で
+        // 固定する。Closes #603.
+        var content = string.Join(
+            "\n",
+            "public class PropertyCase { public delegate void D(); public event System.Action E { add { } remove { } } public int P { get; set; } }",
+            "public class MethodCase { public delegate void D(); public event System.Action E { add { } remove { } } public void M() { } }",
+            "public class DelegateCase { public delegate void D1(); public event System.Action E { add { } remove { } } public delegate void D2(); }",
+            "public class EventCase { public delegate void D1(); public event System.Action E { add { } remove { } } public event System.Action E2; }");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var propertyEvent = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E" && s.ContainerName == "PropertyCase"));
+        Assert.Equal("public event System.Action E { add { } remove { } }", propertyEvent.Signature);
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P" && s.ContainerName == "PropertyCase"));
+        Assert.Equal("public int P { get; set; }", property.Signature);
+
+        var methodEvent = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E" && s.ContainerName == "MethodCase"));
+        Assert.Equal("public event System.Action E { add { } remove { } }", methodEvent.Signature);
+        var method = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "M" && s.ContainerName == "MethodCase"));
+        Assert.Equal("public void M() { }", method.Signature);
+
+        var delegateEvent = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E" && s.ContainerName == "DelegateCase"));
+        Assert.Equal("public event System.Action E { add { } remove { } }", delegateEvent.Signature);
+        var delegateTail = Assert.Single(symbols.Where(s => s.Kind == "delegate" && s.Name == "D2" && s.ContainerName == "DelegateCase"));
+        Assert.Equal("public delegate void D2();", delegateTail.Signature);
+
+        var eventEvent = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E" && s.ContainerName == "EventCase"));
+        Assert.Equal("public event System.Action E { add { } remove { } }", eventEvent.Signature);
+        var trailingEvent = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E2" && s.ContainerName == "EventCase"));
+        Assert.Equal("public event System.Action E2;", trailingEvent.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineAutoPropertyAfterConstructorsIsCaptured()
     {
         // Same-line C# constructors must not stop later sibling declarations from

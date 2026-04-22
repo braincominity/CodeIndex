@@ -244,6 +244,12 @@ public static class SymbolExtractor
     private static readonly Regex CSharpSameLinePropertyStatementStartRegex = new(
         $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?:ref(?:\s+readonly)?)\s+)?(?:{CSharpTypePattern})\s+(?:{CSharpExplicitInterfaceQualifierPattern}\.)?\w+\s*(?:\{{|=>\s*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpSameLineEventStatementStartRegex = new(
+        $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern|virtual|override|abstract|sealed|new|partial|file)\s+)*event\s+(?:{CSharpTypePattern})\s+\w+\s*(?:[;=]|\{{)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpSameLineDelegateStatementStartRegex = new(
+        $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|unsafe|file|new)\s+)*delegate\s+(?:{CSharpTypePattern})\s+\w+\s*[\(<]",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpSameLineEventOrDelegateStatementStartRegex = new(
         $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern|virtual|override|abstract|sealed|new|partial|file)\s+)*(?:event\s+(?:{CSharpTypePattern})\s+\w+\s*(?:[;=]|\{{)|delegate\s+(?:{CSharpTypePattern})\s+\w+\s*[\(<])",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -1341,14 +1347,22 @@ public static class SymbolExtractor
                         if (lang == "csharp"
                             && pattern.Kind == "property"
                             && pattern.BodyStyle == BodyStyle.Brace
-                            && ShouldDeferCSharpBracePropertySameLineAdvance(patternMatchLine, lineOffset))
+                            && ShouldDeferCSharpBracePropertySameLineAdvance(matchLine, lineOffset))
                         {
                             break;
                         }
 
                         if (lang == "csharp"
                             && pattern.Kind == "function"
-                            && ShouldDeferCSharpFunctionSameLineAdvance(patternMatchLine, lineOffset))
+                            && ShouldDeferCSharpFunctionSameLineAdvance(matchLine, lineOffset))
+                        {
+                            break;
+                        }
+
+                        if (lang == "csharp"
+                            && pattern.Kind is "event" or "delegate"
+                            && pattern.BodyStyle == BodyStyle.None
+                            && ShouldDeferCSharpEventOrDelegateSameLineAdvance(matchLine, lineOffset, pattern.Kind))
                         {
                             break;
                         }
@@ -1579,8 +1593,7 @@ public static class SymbolExtractor
                             sameLineEndUsesRawColumns = false;
                         }
                     }
-                    if (sameLineEndColumn < absoluteStartColumn
-                        && lang == "csharp"
+                    if (lang == "csharp"
                         && kind == "event"
                         && pattern.BodyStyle == BodyStyle.None
                         && HasCSharpEventAccessorStart(patternMatchLine[absoluteStartColumn..]))
@@ -1599,7 +1612,8 @@ public static class SymbolExtractor
                         // これが無いと event signature が後続宣言を飲み込み、後続 sibling が
                         // earlier pattern に届かない。Closes #520.
                         var braceEndColumn = FindSameLineBraceEndColumn(line, csharpSameLineBraceStartColumn, lang, kind);
-                        if (braceEndColumn >= absoluteStartColumn)
+                        if (braceEndColumn >= absoluteStartColumn
+                            && (sameLineEndColumn < absoluteStartColumn || braceEndColumn < sameLineEndColumn))
                         {
                             sameLineEndColumn = braceEndColumn;
                             sameLineEndUsesRawColumns = true;
@@ -10276,6 +10290,23 @@ public static class SymbolExtractor
             && CSharpSameLinePropertyStatementStartRegex.IsMatch(remaining);
     }
 
+    private static bool ShouldDeferCSharpEventOrDelegateSameLineAdvance(string matchLine, int startColumn, string kind)
+    {
+        if (startColumn < 0 || startColumn >= matchLine.Length)
+            return false;
+
+        var remaining = matchLine[startColumn..];
+        if (CSharpTypeBodyDeclarationMarker.IsMatch(remaining))
+            return false;
+
+        return kind switch
+        {
+            "event" => CSharpSameLineDelegateStatementStartRegex.IsMatch(remaining),
+            "delegate" => CSharpSameLineEventStatementStartRegex.IsMatch(remaining),
+            _ => false,
+        };
+    }
+
     private static bool TryGetCSharpSameLineSemicolonSiblingOffset(string matchLine, int startColumn, out int nextSameLineOffset)
     {
         nextSameLineOffset = -1;
@@ -10304,7 +10335,8 @@ public static class SymbolExtractor
             return false;
 
         var remaining = matchLine[startColumn..];
-        if (!HasCSharpEventAccessorStart(remaining))
+        if (!CSharpSameLineEventStatementStartRegex.IsMatch(remaining)
+            || !HasCSharpEventAccessorStart(remaining))
             return false;
 
         var bodyEnd = FindCSharpSameLineBraceEndColumn(matchLine, startColumn);
