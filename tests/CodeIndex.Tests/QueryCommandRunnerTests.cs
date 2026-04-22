@@ -8311,7 +8311,7 @@ public class QueryCommandRunnerTests
             Assert.True(document.RootElement.GetProperty("graph_degraded").GetBoolean());
             Assert.Equal("enum_member", document.RootElement.GetProperty("unsupported_symbol_kind").GetString());
             Assert.Contains("currently excluded from unused analysis", document.RootElement.GetProperty("graph_support_reason").GetString());
-            Assert.Contains("Color", names);
+            Assert.DoesNotContain("Color", names);
             Assert.Contains("TrulyUnused", names);
             Assert.DoesNotContain("Red", names);
             Assert.DoesNotContain("Blue", names);
@@ -8367,7 +8367,7 @@ public class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Contains("Color", names);
+            Assert.DoesNotContain("Color", names);
             Assert.Contains("TrulyUnused", names);
             Assert.DoesNotContain("Red", names);
             Assert.DoesNotContain("Blue", names);
@@ -15414,8 +15414,8 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("file_dependency_hints", json.GetProperty("impact_mode").GetString());
             Assert.Equal(1, json.GetProperty("count").GetInt32());
-            Assert.Equal(3, json.GetProperty("file_impacts")[0].GetProperty("reference_count").GetInt32());
-            Assert.Equal("ExecuteFolderDiffAsync", json.GetProperty("file_impacts")[0].GetProperty("symbols").GetString());
+            Assert.Equal(4, json.GetProperty("file_impacts")[0].GetProperty("reference_count").GetInt32());
+            Assert.Equal("ExecuteFolderDiffAsync,FolderDiffService", json.GetProperty("file_impacts")[0].GetProperty("symbols").GetString());
         }
         finally
         {

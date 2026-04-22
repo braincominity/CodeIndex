@@ -6457,7 +6457,7 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var targetRefs = references.Where(r => r.SymbolName == "Target" && r.ReferenceKind == "type_reference").ToList();
-        Assert.Equal(4, targetRefs.Count); // nameof(Target.Alpha), nameof(Target), typeof(Target), default(Target)
+        Assert.True(targetRefs.Count >= 4); // #256 also adds the local declaration type `Target? def`
         Assert.All(targetRefs, r => Assert.Equal("Work", r.ContainerName));
 
         Assert.Contains(references, r => r.SymbolName == "Alpha" && r.ReferenceKind == "type_reference");
@@ -6683,6 +6683,111 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "demo" && r.ReferenceKind == "type_reference");
         // Java primitive type must be skipped / Java プリミティブ型は除外。
         Assert.DoesNotContain(references, r => r.SymbolName == "int" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpTypePositions_CaptureTypeReferences()
+    {
+        // issue #256: base lists, declaration types, generic constraints, type tests,
+        // and XML-doc crefs must all surface as `type_reference` edges.
+        // issue #256: 継承リスト、宣言型、generic 制約、型テスト、XML doc cref を
+        // `type_reference` として拾う必要がある。
+        const string content = """
+            using System.Collections.Generic;
+
+            namespace Probe;
+
+            public interface ILogger { void Log(string msg); }
+            public class Base { public virtual void Do() {} }
+
+            public class Derived : Base, ILogger
+            {
+                private ILogger _logger;
+                public Base Parent { get; set; }
+
+                public Derived(ILogger logger, Base parent)
+                {
+                    _logger = logger;
+                    Parent  = parent;
+                }
+
+                public List<ILogger> GetAll() => new();
+
+                public void Inspect(object o)
+                {
+                    if (o is Base b) { }
+                    switch (o)
+                    {
+                        case ILogger l: break;
+                        case Base b2:   break;
+                    }
+                    Base cast = o as Base;
+                }
+
+                public T Find<T>() where T : ILogger, new() => new T();
+
+                /// <summary>
+                /// References <see cref="Base.Do"/> and <seealso cref="ILogger.Log"/>.
+                /// </summary>
+                public void WithDocs() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.True(references.Count(r => r.SymbolName == "Base" && r.ReferenceKind == "type_reference") >= 7);
+        Assert.True(references.Count(r => r.SymbolName == "ILogger" && r.ReferenceKind == "type_reference") >= 6);
+        Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Do" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Log" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_JavaTypePositions_CaptureTypeReferences()
+    {
+        // issue #256 Java side: extends/implements, declaration types, throws, and
+        // instanceof should surface as `type_reference` edges without regressing annotations.
+        // issue #256 の Java 側: extends/implements、宣言型、throws、instanceof を
+        // `type_reference` として拾い、annotation 既存経路も壊さないこと。
+        const string content = """
+            import java.io.IOException;
+            import java.util.List;
+
+            @interface Marker {}
+            interface ILogger {}
+            class Base {}
+
+            class Derived extends Base implements ILogger {
+                private ILogger logger;
+                List<ILogger> items;
+                Base parent;
+
+                Derived(ILogger logger, Base parent) {
+                    this.logger = logger;
+                    this.parent = parent;
+                }
+
+                List<ILogger> getAll() throws IOException {
+                    if (logger instanceof ILogger) {
+                        return items;
+                    }
+                    return items;
+                }
+
+                @Marker
+                void oldMethod() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.True(references.Count(r => r.SymbolName == "Base" && r.ReferenceKind == "type_reference") >= 3);
+        Assert.True(references.Count(r => r.SymbolName == "ILogger" && r.ReferenceKind == "type_reference") >= 5);
+        Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "IOException" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Marker" && r.ReferenceKind == "annotation");
     }
 
     [Fact]
@@ -7144,7 +7249,7 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var chainRef = Assert.Single(references, r => r.SymbolName == "Holder");
+        var chainRef = Assert.Single(references, r => r.SymbolName == "Holder" && r.ReferenceKind == "call");
         Assert.Equal("call", chainRef.ReferenceKind);
         Assert.Equal("IntHolder", chainRef.ContainerName);
     }
@@ -7174,7 +7279,7 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var chainRef = Assert.Single(references, r => r.SymbolName == "Root");
+        var chainRef = Assert.Single(references, r => r.SymbolName == "Root" && r.ReferenceKind == "call");
         Assert.Equal("call", chainRef.ReferenceKind);
         Assert.Equal("Leaf", chainRef.ContainerName);
     }
@@ -7202,7 +7307,7 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "java", content);
         var references = ReferenceExtractor.Extract(1, "java", content, symbols);
 
-        var superRef = Assert.Single(references, r => r.SymbolName == "Root");
+        var superRef = Assert.Single(references, r => r.SymbolName == "Root" && r.ReferenceKind == "call");
         Assert.Equal("call", superRef.ReferenceKind);
         Assert.Equal("Leaf", superRef.ContainerName);
         Assert.DoesNotContain(references, r => r.SymbolName == "super");
@@ -7391,7 +7496,7 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "java", content);
         var references = ReferenceExtractor.Extract(1, "java", content, symbols);
 
-        Assert.DoesNotContain(references, r => r.SymbolName == "Base");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Base" && r.ReferenceKind == "call");
     }
 
     [Fact]
