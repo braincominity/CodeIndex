@@ -6816,6 +6816,45 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpCaseRecursiveAndPositionalPatterns_CaptureTypeReferences()
+    {
+        // issue #661: recursive/property and positional `case Type ...` patterns without
+        // a designation are still real type-pattern sites and must keep `type_reference`.
+        // issue #661: designation を持たない recursive/property / positional の
+        // `case Type ...` パターンも本物の型パターンなので `type_reference` を残す。
+        const string content = """
+            namespace Probe;
+
+            class Point
+            {
+                public int X { get; }
+                public int Y { get; }
+            }
+
+            class Demo
+            {
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case Point { X: 0, Y: 0 }:
+                            break;
+                        case Point(var x, var y):
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(2, pointRefs.Count);
+        Assert.All(pointRefs, r => Assert.Equal("Run", r.ContainerName));
+    }
+
+    [Fact]
     public void Extract_JavaTypePositions_CaptureTypeReferences()
     {
         // issue #256 Java side: extends/implements, declaration types, throws, and

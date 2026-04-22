@@ -347,10 +347,17 @@ public static class ReferenceExtractor
     private static readonly Regex CSharpIsAsTypeTestRegex = new(
         $@"(?<![\w$])(?:is\s+(?:not\s+)?|as\s+)(?<type>{CSharpTypeExpressionPattern})",
         RegexOptions.Compiled);
-    // C# declaration patterns in switch labels (`case ILogger x:`, `case Base b when ...:`).
-    // `case` ラベルの宣言パターン (`case ILogger x:`, `case Base b when ...:`)。
-    private static readonly Regex CSharpCaseTypePatternRegex = new(
-        $@"(?<![\w$])case\s+(?<type>{CSharpTypeExpressionPattern})(?=\s+{CSharpIdentifierPattern}\s*(?::|\bwhen\b))",
+    // C# `case` labels use a small structural follow-token check so declaration / recursive /
+    // positional / list patterns stay visible while constant member labels like `case Color.Red:`
+    // do not leak `type_reference` edges.
+    // C# の `case` ラベルは後続 token を小さく構文判定し、declaration / recursive /
+    // positional / list pattern を残しつつ `case Color.Red:` のような定数ラベルは
+    // `type_reference` にしない。
+    private static readonly Regex CSharpCaseLabelRegex = new(
+        @"(?<![\w$])case\s+",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpTypeExpressionAtCursorRegex = new(
+        $@"\G(?<type>{CSharpTypeExpressionPattern})",
         RegexOptions.Compiled);
     // C# XML-doc cross-reference (`<see cref="Base.Do"/>`, `<seealso cref="ILogger.Log"/>`).
     // C# XML doc の `<see cref="Base.Do"/>` / `<seealso cref="ILogger.Log"/>`。
@@ -1337,9 +1344,40 @@ public static class ReferenceExtractor
                 "csharp");
         }
 
-        foreach (Match match in CSharpCaseTypePatternRegex.Matches(preparedLine))
+        EmitCSharpCaseTypePatternReferences(
+            preparedLine,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn);
+    }
+
+    private static void EmitCSharpCaseTypePatternReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (Match caseMatch in CSharpCaseLabelRegex.Matches(preparedLine))
         {
-            var typeGroup = match.Groups["type"];
+            int cursor = SkipWhitespace(preparedLine, caseMatch.Index + caseMatch.Length);
+            if (TryConsumeCSharpPatternKeyword(preparedLine, ref cursor, "not"))
+                cursor = SkipWhitespace(preparedLine, cursor);
+
+            var typeMatch = CSharpTypeExpressionAtCursorRegex.Match(preparedLine, cursor);
+            if (!typeMatch.Success)
+                continue;
+
+            var typeGroup = typeMatch.Groups["type"];
+            int continuationIndex = SkipWhitespace(preparedLine, typeGroup.Index + typeGroup.Length);
+            if (!IsCSharpCaseTypePatternContinuation(preparedLine, continuationIndex))
+                continue;
+
             AddTypeExpressionSegments(
                 references,
                 seen,
@@ -2833,6 +2871,41 @@ public static class ReferenceExtractor
 
         end = cursor;
         return true;
+    }
+
+    private static bool TryConsumeCSharpPatternKeyword(string preparedLine, ref int cursor, string keyword)
+    {
+        if (!preparedLine.AsSpan(cursor).StartsWith(keyword, StringComparison.Ordinal))
+            return false;
+
+        int afterKeyword = cursor + keyword.Length;
+        if (afterKeyword < preparedLine.Length && !char.IsWhiteSpace(preparedLine[afterKeyword]))
+            return false;
+
+        cursor = afterKeyword;
+        return true;
+    }
+
+    private static bool IsCSharpCaseTypePatternContinuation(string preparedLine, int cursor)
+    {
+        if (cursor >= preparedLine.Length)
+            return false;
+
+        return preparedLine[cursor] switch
+        {
+            '{' or '(' or '[' => true,
+            _ => IsCSharpCaseTypePatternIdentifier(preparedLine, cursor)
+        };
+    }
+
+    private static bool IsCSharpCaseTypePatternIdentifier(string preparedLine, int cursor)
+    {
+        int tokenCursor = cursor;
+        if (!TryConsumeCSharpIdentifier(preparedLine, ref tokenCursor, out var start, out var end))
+            return false;
+
+        var token = NormalizeCSharpIdentifier(preparedLine[start..end]);
+        return !string.Equals(token, "when", StringComparison.Ordinal);
     }
 
     private static int SkipWhitespace(string text, int index)
