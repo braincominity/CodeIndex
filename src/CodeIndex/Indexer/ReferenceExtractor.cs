@@ -144,18 +144,13 @@ public static class ReferenceExtractor
     private static readonly Regex StringLiteralRegex = new(
         "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`",
         RegexOptions.Compiled);
-    // SQL-specific string-literal stripper: preserve backticks because MySQL / MariaDB use them
-    // for identifier quoting (`` CALL `proc-name`; ``) rather than string literals. Strip only
-    // ANSI single-quoted and double-quoted literals plus comments. ANSI / SQL-PSM delimited
-    // identifiers (`"..."`) are intentionally treated as string literals here because the dominant
-    // real-world SQL codebase uses `"..."` for string content when double-quoted identifiers are
-    // not in effect, and #232 focuses on T-SQL brackets + MySQL backticks — not ANSI delimited
-    // identifiers.
-    // SQL 専用の文字列リテラル除去: MySQL / MariaDB はバッククォートを識別子引用に使うため保持し、
-    // `'...'` / `"..."` のみを除去する。ANSI / SQL-PSM の `"..."` delimited identifier は
-    // 実運用で文字列として使われる頻度が高く、今回の #232 の対象から外れるため意図的に文字列扱いとする。
-    private static readonly Regex SqlStringLiteralRegex = new(
-        "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'",
+    // SQL-specific single-quoted string stripper: preserve identifier quoting (`[...]`, `` `...` ``,
+    // and ANSI `"..."`) so the SQL graph path can still see real object names while literal payloads
+    // stay masked.
+    // SQL 専用の単引用符文字列リテラル除去。識別子引用（`[...]` / `` `...` `` / ANSI `"..."`）は
+    // 残しつつ、文字列リテラルだけを隠して SQL graph 抽出が実オブジェクト名を見失わないようにする。
+    private static readonly Regex SqlSingleQuotedStringLiteralRegex = new(
+        "'(?:''|\\\\.|[^'\\\\])*'",
         RegexOptions.Compiled);
     private static readonly Regex InlineBlockCommentRegex = new(@"/\*.*?\*/", RegexOptions.Compiled);
     private const string CSharpIdentifierPattern = @"@?[_\p{L}]\w*";
@@ -202,9 +197,12 @@ public static class ReferenceExtractor
     // 修飾子の各セグメントを optional にすることで、`EXEC AdventureWorks..sp_GetCustomer;` のように
     // SQL Server が許す省略形（`..`）でも末尾の proc 名まで到達できる。識別子候補にはバッククォート引用も含め、
     // MySQL / MariaDB の `` `proc-name` `` 形にも対応する。
-    private const string SqlQuotedIdentifierPattern = @"(?:\[[^\[\]\r\n]+\]|`[^`\r\n]+`)";
+    private const string SqlDoubleQuotedIdentifierPattern = "\"(?:\"\"|[^\"\\r\\n])+\"";
+    private const string SqlQuotedIdentifierPattern =
+        @"(?:\[[^\[\]\r\n]+\]|`[^`\r\n]+`|" + SqlDoubleQuotedIdentifierPattern + @")";
     private const string SqlBareIdentifierPattern = @"(?:##?\w+|\w+)";
-    private const string SqlTempIdentifierPattern = @"(?:\[(?:##?\w+)\]|`(?:##?\w+)`|##?\w+)";
+    private const string SqlTempIdentifierPattern =
+        @"(?:\[(?:##?\w+)\]|`(?:##?\w+)`|" + "\"(?:##?\\w+)\"" + @"|##?\w+)";
     private const string SqlQualifiedIdentifierPattern =
         @"(?:(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")\s*\.\s*)*(?<name>" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")";
     private static readonly Regex SqlProcCallRegex = new(
@@ -233,6 +231,12 @@ public static class ReferenceExtractor
     // 手続き系の `SELECT ... INTO variable` は意図的に除外したままにする。issue #649。
     private static readonly Regex SqlSelectIntoTempTargetRegex = new(
         $@"(?<![\w$])SELECT\b.*?\bINTO\s+(?<name>{SqlTempIdentifierPattern})",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlSelectIntoTempTargetStatementRegex = new(
+        $@"(?<![\w$])SELECT\b.*?\bINTO\s+(?<name>{SqlTempIdentifierPattern})",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
+    private static readonly Regex SqlCreateTempTableRegex = new(
+        $@"(?<![\w$])CREATE(?:\s+(?:TEMP|TEMPORARY))?\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+(?<name>{SqlTempIdentifierPattern})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // C# event subscription/unsubscription: Click += OnClick — both LHS and RHS must be PascalCase identifiers
     // C# イベント購読・解除: Click += OnClick — LHS と RHS の両方が PascalCase 識別子のみ
@@ -579,9 +583,13 @@ public static class ReferenceExtractor
 
         var references = new List<ReferenceRecord>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        var sqlEstablishedTempObjectNames = language == "sql"
-            ? CollectSqlEstablishedTempObjectNames(structuralLines)
-            : null;
+        HashSet<string>? sqlEstablishedTempObjectNames = null;
+        string? sqlStatementPrefix = null;
+        if (language == "sql")
+        {
+            sqlEstablishedTempObjectNames = new HashSet<string>(StringComparer.Ordinal);
+            sqlStatementPrefix = string.Empty;
+        }
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -729,19 +737,23 @@ public static class ReferenceExtractor
             {
                 // The shared PrepareLine strips backtick-quoted content because several other
                 // languages use backticks for string literals (shell command substitution,
-                // JavaScript template literals, Go raw strings). In SQL, backticks quote
-                // identifiers (MySQL / MariaDB), so we re-prepare the raw line with
-                // a SQL-aware stripper that only drops `'...'` / `"..."` literals and comments.
+                // JavaScript template literals, Go raw strings). In SQL, backticks and double
+                // quotes can both quote identifiers, so we re-prepare the raw line with a
+                // SQL-aware stripper that only drops single-quoted literals and comments.
                 // 共有 PrepareLine はバッククォート内容を文字列として除去する（他言語のテンプレート
-                // リテラル等に対応するため）。SQL ではバッククォートは識別子引用なので、SQL 向けに
-                // `'...'` / `"..."` とコメントだけを除去する sanitization を別途適用する。
-                var sqlScanLine = PrepareSqlLineForIdentifierScan(structuralLines[i]);
-                if (!string.IsNullOrWhiteSpace(sqlScanLine))
+                // リテラル等に対応するため）。SQL ではバッククォートと二重引用符が識別子引用になり得る
+                // ため、単引用符リテラルとコメントだけを除去する sanitization を別途適用する。
+                var sqlLineFragment = PrepareSqlLineForIdentifierScan(structuralLines[i], out var sqlLineEndedByLineComment);
+                if (!string.IsNullOrWhiteSpace(sqlLineFragment))
                 {
+                    var sqlScanLine = CombineSqlStatementPrefix(sqlStatementPrefix!, sqlLineFragment, out var sqlLineOffset);
                     foreach (Match match in SqlProcCallRegex.Matches(sqlScanLine))
                     {
                         var nameGroup = match.Groups["name"];
+                        if (nameGroup.Index < sqlLineOffset)
+                            continue;
                         NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                        nameIndex -= sqlLineOffset;
 
                         // Bracketed / backtick-quoted identifiers are explicitly quoted to allow reserved
                         // words (`[ORDER]`, `[USER]`, `[AS]`, `[IMMEDIATE]`, `` `order` ``) as real object
@@ -763,8 +775,11 @@ public static class ReferenceExtractor
                     foreach (Match match in SqlSourceReferenceRegex.Matches(sqlScanLine))
                     {
                         var nameGroup = match.Groups["name"];
+                        if (nameGroup.Index < sqlLineOffset)
+                            continue;
                         var followedByOpenParen = IsFollowedByOpenParen(sqlScanLine, nameGroup.Index + nameGroup.Length);
                         NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                        nameIndex -= sqlLineOffset;
                         if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
                             continue;
                         if (followedByOpenParen)
@@ -774,7 +789,7 @@ public static class ReferenceExtractor
                                 references, seen, fileId, resolvedName, nameIndex + 1,
                                 "call", context, lineNumber, sqlCallContainer);
                             if (!wasQuoted)
-                                sqlSuppressedCallIndices?.Add(GetSqlCallLikeSuppressionIndex(sqlScanLine, nameIndex));
+                                sqlSuppressedCallIndices?.Add(GetSqlCallLikeSuppressionIndex(sqlScanLine, nameGroup.Index) - sqlLineOffset);
                             continue;
                         }
                         if (resolvedName.StartsWith("#", StringComparison.Ordinal)
@@ -785,10 +800,13 @@ public static class ReferenceExtractor
                         AddReference(references, seen, fileId, resolvedName, nameIndex, "reference", context, lineNumber, sqlReferenceContainer);
                     }
 
-                    foreach (Match match in SqlSelectIntoTempTargetRegex.Matches(sqlScanLine))
+                    foreach (Match match in SqlSelectIntoTempTargetStatementRegex.Matches(sqlScanLine))
                     {
                         var nameGroup = match.Groups["name"];
+                        if (nameGroup.Index < sqlLineOffset)
+                            continue;
                         NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                        nameIndex -= sqlLineOffset;
                         if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
                             continue;
 
@@ -799,16 +817,25 @@ public static class ReferenceExtractor
                     foreach (Match match in SqlTargetReferenceRegex.Matches(sqlScanLine))
                     {
                         var nameGroup = match.Groups["name"];
+                        if (nameGroup.Index < sqlLineOffset)
+                            continue;
                         NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                        nameIndex -= sqlLineOffset;
                         if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
                             continue;
 
                         var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
                         AddReference(references, seen, fileId, resolvedName, nameIndex, "reference", context, lineNumber, sqlReferenceContainer);
                         if (IsFollowedByOpenParen(sqlScanLine, nameGroup.Index + nameGroup.Length))
-                            sqlSuppressedCallIndices?.Add(GetSqlCallLikeSuppressionIndex(sqlScanLine, nameIndex));
+                            sqlSuppressedCallIndices?.Add(GetSqlCallLikeSuppressionIndex(sqlScanLine, nameGroup.Index) - sqlLineOffset);
                     }
                 }
+
+                sqlStatementPrefix = AdvanceSqlStatementPrefix(
+                    sqlStatementPrefix!,
+                    sqlLineFragment,
+                    sqlLineEndedByLineComment,
+                    sqlEstablishedTempObjectNames!);
             }
 
             // C# / Java parenless initializers: `new T { ... }` / `new T<U> { ... }` /
@@ -1117,13 +1144,16 @@ public static class ReferenceExtractor
     {
         if (rawName.Length >= 2
             && ((rawName[0] == '[' && rawName[^1] == ']')
-                || (rawName[0] == '`' && rawName[^1] == '`')))
+                || (rawName[0] == '`' && rawName[^1] == '`')
+                || (rawName[0] == '"' && rawName[^1] == '"')))
         {
-            // Normalize `[name]` / `` `name` `` to `name` so SQL-specific regexes and the shared
+            // Normalize `[name]` / `` `name` `` / `"name"` to `name` so SQL-specific regexes and the shared
             // CallRegex converge on the same symbol spelling and dedupe key.
-            // `[name]` / `` `name` `` を `name` に正規化し、SQL 専用 regex と共有 CallRegex の
+            // `[name]` / `` `name` `` / `"name"` を `name` に正規化し、SQL 専用 regex と共有 CallRegex の
             // symbol 名と dedupe key を一致させる。
             resolvedName = rawName.Substring(1, rawName.Length - 2);
+            if (rawName[0] == '"')
+                resolvedName = resolvedName.Replace("\"\"", "\"", StringComparison.Ordinal);
             resolvedIndex = rawIndex + 1;
             wasQuoted = true;
             return;
@@ -1150,21 +1180,111 @@ public static class ReferenceExtractor
         return index;
     }
 
-    private static HashSet<string> CollectSqlEstablishedTempObjectNames(IReadOnlyList<string> structuralLines)
+    private static string CombineSqlStatementPrefix(string prefix, string line, out int lineOffset)
     {
-        var names = new HashSet<string>(StringComparer.Ordinal);
-
-        foreach (var rawLine in structuralLines)
+        if (string.IsNullOrEmpty(prefix))
         {
-            var sqlScanLine = PrepareSqlLineForIdentifierScan(rawLine);
-            if (string.IsNullOrWhiteSpace(sqlScanLine))
-                continue;
-
-            CollectSqlTempObjectNamesFromMatches(SqlTargetReferenceRegex.Matches(sqlScanLine), names);
-            CollectSqlTempObjectNamesFromMatches(SqlSelectIntoTempTargetRegex.Matches(sqlScanLine), names);
+            lineOffset = 0;
+            return line;
         }
 
-        return names;
+        lineOffset = prefix.Length + 1;
+        return prefix + "\n" + line;
+    }
+
+    private static string AdvanceSqlStatementPrefix(
+        string prefix,
+        string line,
+        bool lineEndedByLineComment,
+        HashSet<string> establishedTempObjectNames)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+            return prefix;
+
+        var combined = CombineSqlStatementPrefix(prefix, line, out _);
+        int statementStart = 0;
+
+        while (true)
+        {
+            int terminatorIndex = FindSqlStatementTerminator(combined, statementStart);
+            if (terminatorIndex < 0)
+                break;
+
+            CollectSqlTempObjectNamesFromStatement(
+                combined[statementStart..(terminatorIndex + 1)],
+                establishedTempObjectNames);
+            statementStart = terminatorIndex + 1;
+
+            while (statementStart < combined.Length && char.IsWhiteSpace(combined[statementStart]))
+                statementStart++;
+        }
+
+        if (lineEndedByLineComment)
+            return string.Empty;
+
+        return statementStart == 0 ? combined : combined[statementStart..];
+    }
+
+    private static int FindSqlStatementTerminator(string text, int startIndex)
+    {
+        for (int i = startIndex; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (c == ';')
+                return i;
+            if (c == '`')
+            {
+                int closing = text.IndexOf('`', i + 1);
+                if (closing < 0)
+                    return -1;
+                i = closing;
+                continue;
+            }
+            if (c == '[')
+            {
+                int closing = text.IndexOf(']', i + 1);
+                if (closing < 0)
+                    return -1;
+                i = closing;
+                continue;
+            }
+            if (c == '"')
+            {
+                int closing = FindClosingSqlDoubleQuote(text, i + 1);
+                if (closing < 0)
+                    return -1;
+                i = closing;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int FindClosingSqlDoubleQuote(string text, int startIndex)
+    {
+        for (int i = startIndex; i < text.Length; i++)
+        {
+            if (text[i] != '"')
+                continue;
+            if (i + 1 < text.Length && text[i + 1] == '"')
+            {
+                i++;
+                continue;
+            }
+
+            return i;
+        }
+
+        return -1;
+    }
+
+    private static void CollectSqlTempObjectNamesFromStatement(
+        string statement,
+        HashSet<string> names)
+    {
+        CollectSqlTempObjectNamesFromMatches(SqlTargetReferenceRegex.Matches(statement), names);
+        CollectSqlTempObjectNamesFromMatches(SqlSelectIntoTempTargetStatementRegex.Matches(statement), names);
+        CollectSqlTempObjectNamesFromMatches(SqlCreateTempTableRegex.Matches(statement), names);
     }
 
     private static void CollectSqlTempObjectNamesFromMatches(MatchCollection matches, HashSet<string> names)
@@ -6409,13 +6529,15 @@ public static class ReferenceExtractor
     // `--` (ANSI / T-SQL / MySQL) and `#` (MySQL / MariaDB) are scanned with awareness of
     // backtick and bracket identifier quoting, so a legitimate name containing `#` or `-` such
     // as `` CALL `proc#1`; `` or `EXEC [proc-name]` is not truncated mid-identifier.
-    // `EXEC` / `EXECUTE` / `CALL` の括弧なし抽出向けの SQL 特化サニタイザ。バッククォート引用
-    // （MySQL / MariaDB の識別子引用）は保持したまま、`'...'` / `"..."` と `--` / `#` / `/* ... */`
-    // の SQL コメントを除去する。`--` と `#` の走査は backtick / bracket 引用を尊重するため、
-    // `` CALL `proc#1`; `` や `EXEC [proc-name]` のような識別子が途中で切られない。
-    private static string PrepareSqlLineForIdentifierScan(string line)
+    // `EXEC` / `EXECUTE` / `CALL` の括弧なし抽出向けの SQL 特化サニタイザ。バッククォート引用と
+    // ANSI 二重引用符識別子は保持したまま、`'...'` と `--` / `#` / `/* ... */`
+    // の SQL コメントを除去する。`--` と `#` の走査は backtick / bracket / double-quoted
+    // identifier を尊重するため、`` CALL `proc#1`; `` や `EXEC [proc-name]`、
+    // `SELECT * FROM "proc#1"` のような識別子が途中で切られない。
+    private static string PrepareSqlLineForIdentifierScan(string line, out bool lineEndedByLineComment)
     {
-        var result = SqlStringLiteralRegex.Replace(line, "\"\"");
+        lineEndedByLineComment = false;
+        var result = SqlSingleQuotedStringLiteralRegex.Replace(line, "\"\"");
         result = InlineBlockCommentRegex.Replace(result, " ");
 
         int commentStart = -1;
@@ -6438,8 +6560,17 @@ public static class ReferenceExtractor
                 i = closing;
                 continue;
             }
+            if (c == '"')
+            {
+                int closing = FindClosingSqlDoubleQuote(result, i + 1);
+                if (closing < 0)
+                    break;
+                i = closing;
+                continue;
+            }
             if (c == '-' && i + 1 < result.Length && result[i + 1] == '-')
             {
+                lineEndedByLineComment = true;
                 commentStart = i;
                 break;
             }
@@ -6447,6 +6578,7 @@ public static class ReferenceExtractor
             {
                 if (ShouldTreatHashAsSqlComment(result, i))
                 {
+                    lineEndedByLineComment = true;
                     commentStart = i;
                     break;
                 }

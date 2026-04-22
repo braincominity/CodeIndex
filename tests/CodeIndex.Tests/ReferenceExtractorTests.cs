@@ -5293,10 +5293,11 @@ public class ReferenceExtractorTests
     [Fact]
     public void Extract_SQL_CapturesNamedSourceReferences()
     {
-        // issue #284: SQL source/target identifiers such as FROM/JOIN/INTO/view/CTE usages should
-        // surface as `reference` edges, while table-valued functions keep their `call` edge.
-        // issue #284: SQL の FROM/JOIN/INTO/view/CTE 使用は `reference` として出し、TVF は `call`
-        // のまま維持する。
+        // issue #284 / #665: SQL source/target identifiers such as FROM/JOIN/INTO/view/CTE usages
+        // should surface as `reference` edges, while table-valued functions keep their `call` edge,
+        // including bracketed/backtick/double-quoted identifier forms.
+        // issue #284 / #665: SQL の FROM/JOIN/INTO/view/CTE 使用は `reference` として出し、TVF は
+        // `call` のまま維持する。角括弧 / バッククォート / 二重引用符の識別子形も含む。
         const string content = """
             WITH ActiveUsers AS (
                 SELECT user_id, name
@@ -5317,6 +5318,9 @@ public class ReferenceExtractorTests
             SELECT * FROM dbo.fn_GetUserStats(42);
             SELECT * FROM [dbo].[fn_GetOrderStats](7);
             SELECT * FROM `fn_get_backtick_stats`(9);
+            SELECT * FROM "quoted_users";
+            SELECT * FROM "reporting"."quoted_orders";
+            SELECT * FROM "fn_quoted_stats"(11);
             INSERT INTO audit_log (action, user_id)
             SELECT 'login', user_id FROM ActiveUsers;
             """;
@@ -5335,9 +5339,13 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "fn_GetUserStats" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "fn_GetOrderStats" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "fn_get_backtick_stats" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "quoted_users" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "quoted_orders" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "fn_quoted_stats" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "fn_GetUserStats" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "fn_GetOrderStats" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "fn_get_backtick_stats" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fn_quoted_stats" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "fn_GetUserStat");
     }
 
@@ -5385,6 +5393,35 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "target_var");
         Assert.DoesNotContain(references, r => r.SymbolName == "##ignored_temp");
+    }
+
+    [Fact]
+    public void Extract_SQL_TempTablesRequirePriorEstablishmentAndSupportMultilineDefinitions()
+    {
+        // issue #664: temp reads should only succeed after an earlier statement established the temp
+        // object, and multiline `SELECT ... INTO #temp` / `CREATE TABLE #temp` forms should still
+        // establish later reads.
+        // issue #664: temp read は先行 statement で temp object が確立された後だけ成功し、
+        // 複数行の `SELECT ... INTO #temp` / `CREATE TABLE #temp` でも後続 read を確立できるべき。
+        const string content = """
+            SELECT * FROM #later_temp;
+            SELECT id
+            INTO #later_temp
+            FROM users;
+            SELECT * FROM #later_temp;
+            CREATE TABLE #created_temp (id int);
+            SELECT * FROM #created_temp;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "#later_temp" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "#later_temp" && r.ReferenceKind == "reference" && r.Line == 3);
+        Assert.Contains(references, r => r.SymbolName == "#later_temp" && r.ReferenceKind == "reference" && r.Line == 5);
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#later_temp" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "#created_temp" && r.ReferenceKind == "reference" && r.Line == 7);
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 4);
     }
 
     [Fact]
