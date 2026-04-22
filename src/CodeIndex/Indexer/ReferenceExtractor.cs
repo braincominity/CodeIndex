@@ -159,6 +159,12 @@ public static class ReferenceExtractor
         RegexOptions.Compiled);
     private static readonly Regex InlineBlockCommentRegex = new(@"/\*.*?\*/", RegexOptions.Compiled);
     private const string CSharpIdentifierPattern = @"@?[_\p{L}]\w*";
+    private const string CSharpTypeExpressionPattern =
+        @"(?:global::)?(?:"
+        + CSharpIdentifierPattern
+        + @"\s*(?:(?:\.|::)\s*"
+        + CSharpIdentifierPattern
+        + @")*)(?:\s*<[^)\];{}]+>)?(?:\s*\[[^\]\n]*\])*";
     // The `(?:\?\.)?` segment captures JavaScript / TypeScript optional chaining calls such as
     // `callback?.()` and `callback?.<T>()`. Without it the `?.` stops the regex from reaching the
     // trailing `(`, and the call reference to `callback` is silently dropped. Other supported
@@ -336,10 +342,15 @@ public static class ReferenceExtractor
     private static readonly Regex JavaDotClassArgRegex = new(
         @"(?<![\w$.])(?<arg>[A-Za-z_][\w.]*)\s*(?:\[\s*\])*\s*\.class\b",
         RegexOptions.Compiled);
-    // C# type tests / pattern cases (`o is Base`, `o as Base`, `case ILogger x:`).
-    // `is` / `as` / `case` の型位置 (`o is Base`, `o as Base`, `case ILogger x:`)。
-    private static readonly Regex CSharpTypeTestRegex = new(
-        $@"(?<![\w$])(?:is|as|case)\s+(?<type>(?:global::)?(?:{CSharpIdentifierPattern}\s*(?:(?:\.|::)\s*{CSharpIdentifierPattern})*)(?:\s*<[^)\];{{}}]+>)?(?:\s*\[[^\]\n]*\])*)",
+    // C# type tests (`o is Base`, `o is not Base`, `o as Base`).
+    // `is` / `is not` / `as` の型位置 (`o is Base`, `o is not Base`, `o as Base`)。
+    private static readonly Regex CSharpIsAsTypeTestRegex = new(
+        $@"(?<![\w$])(?:is\s+(?:not\s+)?|as\s+)(?<type>{CSharpTypeExpressionPattern})",
+        RegexOptions.Compiled);
+    // C# declaration patterns in switch labels (`case ILogger x:`, `case Base b when ...:`).
+    // `case` ラベルの宣言パターン (`case ILogger x:`, `case Base b when ...:`)。
+    private static readonly Regex CSharpCaseTypePatternRegex = new(
+        $@"(?<![\w$])case\s+(?<type>{CSharpTypeExpressionPattern})(?=\s+{CSharpIdentifierPattern}\s*(?::|\bwhen\b))",
         RegexOptions.Compiled);
     // C# XML-doc cross-reference (`<see cref="Base.Do"/>`, `<seealso cref="ILogger.Log"/>`).
     // C# XML doc の `<see cref="Base.Do"/>` / `<seealso cref="ILogger.Log"/>`。
@@ -1311,7 +1322,22 @@ public static class ReferenceExtractor
         EmitCSharpWhereConstraintReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitDeclarationTypeReferences("csharp", preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
 
-        foreach (Match match in CSharpTypeTestRegex.Matches(preparedLine))
+        foreach (Match match in CSharpIsAsTypeTestRegex.Matches(preparedLine))
+        {
+            var typeGroup = match.Groups["type"];
+            AddTypeExpressionSegments(
+                references,
+                seen,
+                fileId,
+                typeGroup.Value,
+                typeGroup.Index,
+                context,
+                lineNumber,
+                resolveContainerForColumn(typeGroup.Index),
+                "csharp");
+        }
+
+        foreach (Match match in CSharpCaseTypePatternRegex.Matches(preparedLine))
         {
             var typeGroup = match.Groups["type"];
             AddTypeExpressionSegments(

@@ -6744,6 +6744,78 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpIsNotPattern_CapturesActualTypeReference()
+    {
+        // issue #645: `is not Foo` must point at `Foo`, not emit a phantom `not`.
+        // issue #645: `is not Foo` は `Foo` を指す必要があり、偽の `not` を出してはならない。
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                bool Run(object x)
+                {
+                    return x is not Foo;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var fooRef = Assert.Single(references.Where(r => r.SymbolName == "Foo" && r.ReferenceKind == "type_reference"));
+        Assert.Equal("Run", fooRef.ContainerName);
+        Assert.DoesNotContain(references, r => r.SymbolName == "not" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpCaseDeclarationPatterns_SkipEnumMemberLabels()
+    {
+        // issue #647: `case Type name:` is a declaration pattern, but `case Color.Red:`
+        // must not be reclassified as a compile-time type dependency.
+        // issue #647: `case Type name:` は宣言パターンだが、`case Color.Red:` を
+        // compile-time な型依存として再分類してはならない。
+        const string content = """
+            namespace Probe;
+
+            public enum Color { Red, Blue }
+            public interface ILogger {}
+
+            public class Demo
+            {
+                public void Run(object value, Color color)
+                {
+                    switch (value)
+                    {
+                        case ILogger logger:
+                            break;
+                    }
+
+                    switch (color)
+                    {
+                        case Color.Red:
+                            break;
+                        case Probe.Color.Blue:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "ILogger" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run");
+
+        var colorRefs = references.Where(r => r.SymbolName == "Color" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Single(colorRefs);
+
+        Assert.Contains(references, r => r.SymbolName == "Red" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_JavaTypePositions_CaptureTypeReferences()
     {
         // issue #256 Java side: extends/implements, declaration types, throws, and
