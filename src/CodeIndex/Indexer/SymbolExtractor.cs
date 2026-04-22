@@ -2160,13 +2160,23 @@ public static class SymbolExtractor
                     // の Inner）を拾えるようにする。JavaScript/TypeScript は class body の
                     // member 抽出を専用 lexer/state machine で行うため従来通り終端の後ろへ
                     // 進め、同一行 sibling（`class A {} class B {}` など）だけを扱う。Closes #400.
+                    var sameLineRestartComparisonColumn = csharpSingleLineCollapsedMatch && sameLineEndUsesRawColumns
+                        ? TranslateCSharpRawColumnToCollapsed(
+                            csharpMatchColumnToRaw,
+                            i,
+                            sameLineEndColumn,
+                            matchLine.Length,
+                            line.Length)
+                        : sameLineEndColumn;
                     if (lang == "csharp" && kind is "class" or "struct" or "interface" or "enum" or "namespace")
                     {
                         var nextTypeBodyOffset = FindNextSameLineNonClosingBraceStatementStart(
                             matchLine,
                             absoluteStartColumn + Math.Max(1, match.Length),
                             lang);
-                        if (nextTypeBodyOffset > absoluteStartColumn)
+                        if (nextTypeBodyOffset > absoluteStartColumn
+                            && nextTypeBodyOffset < sameLineRestartComparisonColumn
+                            && (nextTypeBodyOffset >= matchLine.Length || matchLine[nextTypeBodyOffset] != '}'))
                         {
                             restartPatternScanOffset = nextTypeBodyOffset;
                             break;
@@ -2191,14 +2201,16 @@ public static class SymbolExtractor
                     {
                         nextSameLineOffset = FindNextSameLineNonClosingBraceStatementStart(matchLine, sameLineEndColumn + 1, lang);
                     }
-                    var sameLineAdvanceComparisonColumn = csharpSingleLineCollapsedMatch && sameLineEndUsesRawColumns
-                        ? TranslateCSharpRawColumnToCollapsed(
-                            csharpMatchColumnToRaw,
-                            i,
-                            sameLineEndColumn,
-                            matchLine.Length,
-                            line.Length)
-                        : sameLineEndColumn;
+                    var sameLineAdvanceComparisonColumn = sameLineRestartComparisonColumn;
+                    if (lang == "csharp"
+                        && kind is "class" or "struct" or "interface" or "enum" or "namespace"
+                        && nextSameLineOffset > sameLineAdvanceComparisonColumn
+                        && nextSameLineOffset < matchLine.Length
+                        && matchLine[nextSameLineOffset] != '}')
+                    {
+                        restartPatternScanOffset = nextSameLineOffset;
+                        break;
+                    }
                     if (lang == "csharp"
                         && kind == "property"
                         && pattern.BodyStyle == BodyStyle.Brace
