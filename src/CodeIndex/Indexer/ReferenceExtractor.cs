@@ -538,8 +538,14 @@ public static class ReferenceExtractor
         var recordPrimaryCtorRanges = BuildCSharpPrimaryCtorContainers(language, symbols, structuralLines);
         var csharpQualifiedEnumMemberLookup = BuildCSharpQualifiedEnumMemberLookup(language, symbols);
         var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols);
+        var csharpKnownTypeNames = BuildCSharpKnownTypeNames(language, symbols);
         var csharpValueReceiverNames = BuildCSharpValueReceiverNamesByContainingType(language, symbols);
-        var csharpFunctionValueReceiverNames = BuildCSharpValueReceiverNamesByFunctionStartLine(language, symbols, structuralLines);
+        var csharpFunctionValueReceiverNames = BuildCSharpValueReceiverNamesByFunctionStartLine(
+            language,
+            symbols,
+            structuralLines,
+            csharpKnownTypeNames,
+            csharpUsingAliases);
 
         var references = new List<ReferenceRecord>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -1232,6 +1238,7 @@ public static class ReferenceExtractor
     private readonly record struct CSharpLineColumn(int Line, int Column);
     private readonly record struct CSharpRecursivePatternValueNameRecord(string Name, int Offset, bool IsCasePattern, int ArrowIndex = -1);
     private sealed record CSharpUsingAliasRecord(string AliasName, string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
+    private sealed record CSharpCastTypeShape(IReadOnlyList<string> IdentifierSegments, string? SimpleQualifiedName, bool HasTypeOnlySyntax, bool AllIdentifiersTypeLike);
     private sealed record CSharpContainingTypeValueReceiverNames(HashSet<string> InstanceNames, HashSet<string> StaticNames);
     private sealed record CSharpFunctionValueReceiverNameRecord(string Name, int ScopeStartLine, int ScopeStartColumn, int ScopeEndLine, int ScopeEndColumn);
 
@@ -1287,6 +1294,33 @@ public static class ReferenceExtractor
         return aliases;
     }
 
+    private static HashSet<string> BuildCSharpKnownTypeNames(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        if (language != "csharp")
+            return names;
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is not ("class" or "struct" or "interface" or "enum" or "delegate"))
+                continue;
+
+            var normalizedName = NormalizeCSharpIdentifier(symbol.Name);
+            if (!string.IsNullOrWhiteSpace(normalizedName))
+                names.Add(normalizedName);
+
+            var qualifiedContainer = !string.IsNullOrWhiteSpace(symbol.ContainerQualifiedName)
+                ? symbol.ContainerQualifiedName
+                : symbol.ContainerKind == "namespace" && !string.IsNullOrWhiteSpace(symbol.ContainerName)
+                    ? symbol.ContainerName
+                    : null;
+            if (!string.IsNullOrWhiteSpace(qualifiedContainer) && !string.IsNullOrWhiteSpace(normalizedName))
+                names.Add(qualifiedContainer + "." + normalizedName);
+        }
+
+        return names;
+    }
+
     private static Dictionary<string, CSharpContainingTypeValueReceiverNames> BuildCSharpValueReceiverNamesByContainingType(string language, IReadOnlyList<SymbolRecord> symbols)
     {
         var lookup = new Dictionary<string, CSharpContainingTypeValueReceiverNames>(StringComparer.Ordinal);
@@ -1322,7 +1356,9 @@ public static class ReferenceExtractor
     private static Dictionary<int, List<CSharpFunctionValueReceiverNameRecord>> BuildCSharpValueReceiverNamesByFunctionStartLine(
         string language,
         IReadOnlyList<SymbolRecord> symbols,
-        IReadOnlyList<string> structuralLines)
+        IReadOnlyList<string> structuralLines,
+        IReadOnlySet<string> csharpKnownTypeNames,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
     {
         var lookup = new Dictionary<int, List<CSharpFunctionValueReceiverNameRecord>>();
         if (language != "csharp")
@@ -1364,7 +1400,13 @@ public static class ReferenceExtractor
                     }
                     foreach (Match match in CSharpQueryRangeValueNameRegex.Matches(structuralLines[i]))
                     {
-                        var scopeEnd = FindCSharpQueryExpressionEndPosition(structuralLines, end, i, match.Index);
+                        var scopeEnd = FindCSharpQueryExpressionEndPosition(
+                            structuralLines,
+                            end,
+                            i,
+                            match.Index,
+                            csharpKnownTypeNames,
+                            csharpUsingAliases);
                         AddCSharpFunctionValueReceiverName(
                             names,
                             NormalizeCSharpIdentifier(match.Groups["name"].Value),
@@ -2949,7 +2991,9 @@ public static class ReferenceExtractor
         int nextColumn,
         string keyword,
         int previousTopLevelSignificantLineIndex,
-        int previousTopLevelSignificantColumn)
+        int previousTopLevelSignificantColumn,
+        IReadOnlySet<string> csharpKnownTypeNames,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
     {
         if (IsCSharpParenthesizedQueryClauseKeyword(keyword)
             && TryGetNextTopLevelSignificantChar(
@@ -2965,7 +3009,9 @@ public static class ReferenceExtractor
                 structuralLines,
                 bodyEndIndex,
                 previousTopLevelSignificantLineIndex,
-                previousTopLevelSignificantColumn);
+                previousTopLevelSignificantColumn,
+                csharpKnownTypeNames,
+                csharpUsingAliases);
         }
 
         if (nextColumn >= line.Length)
@@ -2991,7 +3037,9 @@ public static class ReferenceExtractor
         IReadOnlyList<string> structuralLines,
         int bodyEndIndex,
         int previousTopLevelSignificantLineIndex,
-        int previousTopLevelSignificantColumn)
+        int previousTopLevelSignificantColumn,
+        IReadOnlySet<string> csharpKnownTypeNames,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
     {
         if (previousTopLevelSignificantLineIndex < 0 || previousTopLevelSignificantColumn < 0)
             return true;
@@ -3021,7 +3069,9 @@ public static class ReferenceExtractor
             ')' => !LooksLikeCSharpCastCloseParen(
                 structuralLines,
                 previousTokenLineIndex,
-                previousTokenStartColumn),
+                previousTokenStartColumn,
+                csharpKnownTypeNames,
+                csharpUsingAliases),
             '?' => LooksLikeCSharpNullableTypeSuffixInCastOrTypeTest(
                 structuralLines,
                 previousTokenLineIndex,
@@ -3050,7 +3100,9 @@ public static class ReferenceExtractor
     private static bool LooksLikeCSharpCastCloseParen(
         IReadOnlyList<string> structuralLines,
         int closeParenLineIndex,
-        int closeParenColumn)
+        int closeParenColumn,
+        IReadOnlySet<string> csharpKnownTypeNames,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
     {
         if (!TryFindMatchingCSharpOpenParenBackwards(
                 structuralLines,
@@ -3068,7 +3120,11 @@ public static class ReferenceExtractor
             openParenColumn + 1,
             closeParenLineIndex,
             closeParenColumn);
-        if (!LooksLikeCSharpCastTypeText(castTargetText))
+        if (!LooksLikeCSharpCastTypeText(
+                castTargetText,
+                closeParenLineIndex + 1,
+                csharpKnownTypeNames,
+                csharpUsingAliases))
             return false;
 
         if (!TryGetPreviousTopLevelToken(
@@ -3101,7 +3157,11 @@ public static class ReferenceExtractor
             || IsCSharpQueryClauseKeyword(token);
     }
 
-    private static bool LooksLikeCSharpCastTypeText(string text)
+    private static bool LooksLikeCSharpCastTypeText(
+        string text,
+        int lineNumber,
+        IReadOnlySet<string> csharpKnownTypeNames,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
     {
         var trimmed = text.Trim();
         if (trimmed.Length == 0)
@@ -3112,15 +3172,42 @@ public static class ReferenceExtractor
             return false;
 
         SkipCSharpCastTypeWhitespace(trimmed, ref index);
-        return index == trimmed.Length;
+        if (index != trimmed.Length)
+            return false;
+
+        var shape = AnalyzeCSharpCastTypeShape(trimmed);
+        if (shape.IdentifierSegments.Count == 0)
+            return shape.HasTypeOnlySyntax;
+
+        var resolvedQualifiedName = shape.SimpleQualifiedName == null
+            ? null
+            : ResolveCSharpQualifiedAliasTarget(shape.SimpleQualifiedName, lineNumber, csharpUsingAliases);
+        var resolvedBareName = resolvedQualifiedName == null
+            ? null
+            : ExtractBareTypeName(resolvedQualifiedName);
+
+        var lastSegment = shape.IdentifierSegments[^1];
+        if (HasKnownNonTerminalTypeSegment(shape.IdentifierSegments, csharpKnownTypeNames)
+            && !IsKnownCSharpCastTypeName(lastSegment, resolvedBareName, csharpKnownTypeNames))
+        {
+            return false;
+        }
+
+        if (IsKnownCSharpCastTypeName(lastSegment, resolvedBareName, csharpKnownTypeNames)
+            || (!string.IsNullOrWhiteSpace(resolvedQualifiedName) && csharpKnownTypeNames.Contains(resolvedQualifiedName)))
+        {
+            return true;
+        }
+
+        if (shape.HasTypeOnlySyntax)
+            return true;
+
+        return shape.AllIdentifiersTypeLike && shape.IdentifierSegments.Count <= 2;
     }
 
     private static bool TryConsumeCSharpCastType(string text, ref int index)
     {
-        if (!TryConsumeCSharpCastTypeCore(text, ref index, out var sawTypeLikeIdentifier))
-            return false;
-
-        if (!sawTypeLikeIdentifier)
+        if (!TryConsumeCSharpCastTypeCore(text, ref index))
             return false;
 
         while (true)
@@ -3138,22 +3225,20 @@ public static class ReferenceExtractor
         }
     }
 
-    private static bool TryConsumeCSharpCastTypeCore(string text, ref int index, out bool sawTypeLikeIdentifier)
+    private static bool TryConsumeCSharpCastTypeCore(string text, ref int index)
     {
         SkipCSharpCastTypeWhitespace(text, ref index);
         if (index < text.Length && text[index] == '(')
-            return TryConsumeCSharpCastTupleType(text, ref index, out sawTypeLikeIdentifier);
+            return TryConsumeCSharpCastTupleType(text, ref index);
 
-        return TryConsumeCSharpCastQualifiedType(text, ref index, out sawTypeLikeIdentifier);
+        return TryConsumeCSharpCastQualifiedType(text, ref index);
     }
 
-    private static bool TryConsumeCSharpCastQualifiedType(string text, ref int index, out bool sawTypeLikeIdentifier)
+    private static bool TryConsumeCSharpCastQualifiedType(string text, ref int index)
     {
-        sawTypeLikeIdentifier = false;
         if (!TryConsumeCSharpCastIdentifier(text, ref index, out var token))
             return false;
 
-        sawTypeLikeIdentifier = IsLikelyCSharpTypeIdentifier(token);
         if (!TryConsumeCSharpCastGenericArgumentList(text, ref index))
             return false;
 
@@ -3170,15 +3255,13 @@ public static class ReferenceExtractor
             if (!TryConsumeCSharpCastIdentifier(text, ref index, out token))
                 return false;
 
-            sawTypeLikeIdentifier |= IsLikelyCSharpTypeIdentifier(token);
             if (!TryConsumeCSharpCastGenericArgumentList(text, ref index))
                 return false;
         }
     }
 
-    private static bool TryConsumeCSharpCastTupleType(string text, ref int index, out bool sawTypeLikeIdentifier)
+    private static bool TryConsumeCSharpCastTupleType(string text, ref int index)
     {
-        sawTypeLikeIdentifier = false;
         if (index >= text.Length || text[index] != '(')
             return false;
 
@@ -3188,7 +3271,6 @@ public static class ReferenceExtractor
             if (!TryConsumeCSharpCastType(text, ref index))
                 return false;
 
-            sawTypeLikeIdentifier = true;
             var checkpoint = index;
             if (TryConsumeCSharpCastIdentifier(text, ref index, out _))
             {
@@ -3326,6 +3408,107 @@ public static class ReferenceExtractor
 
         token = text.Substring(start, index - start);
         return true;
+    }
+
+    private static CSharpCastTypeShape AnalyzeCSharpCastTypeShape(string text)
+    {
+        var segments = new List<string>();
+        var simpleQualifiedName = new System.Text.StringBuilder();
+        var hasTypeOnlySyntax = false;
+        var allIdentifiersTypeLike = true;
+        var simpleQualifiedCandidate = true;
+
+        for (var index = 0; index < text.Length;)
+        {
+            var current = text[index];
+            if (char.IsWhiteSpace(current))
+            {
+                index++;
+                continue;
+            }
+
+            if (current == '@' || IsCSharpIdentifierStart(current))
+            {
+                var start = index;
+                if (current == '@')
+                    index++;
+                if (index < text.Length)
+                    index++;
+                while (index < text.Length && IsCSharpIdentifierPart(text[index]))
+                    index++;
+
+                var token = text.Substring(start, index - start);
+                segments.Add(token);
+                allIdentifiersTypeLike &= IsLikelyCSharpTypeIdentifier(token);
+                if (simpleQualifiedCandidate)
+                    simpleQualifiedName.Append(token);
+                continue;
+            }
+
+            switch (current)
+            {
+                case '.':
+                    if (simpleQualifiedCandidate)
+                        simpleQualifiedName.Append(current);
+                    index++;
+                    continue;
+                case ':':
+                    if (index + 1 < text.Length && text[index + 1] == ':')
+                    {
+                        hasTypeOnlySyntax = true;
+                        if (simpleQualifiedCandidate)
+                            simpleQualifiedName.Append("::");
+                        index += 2;
+                        continue;
+                    }
+
+                    simpleQualifiedCandidate = false;
+                    index++;
+                    continue;
+                case '<':
+                case '[':
+                case '?':
+                case '(':
+                    hasTypeOnlySyntax = true;
+                    simpleQualifiedCandidate = false;
+                    index++;
+                    continue;
+                case '>':
+                case ']':
+                case ')':
+                case ',':
+                    simpleQualifiedCandidate = false;
+                    index++;
+                    continue;
+                default:
+                    simpleQualifiedCandidate = false;
+                    index++;
+                    continue;
+            }
+        }
+
+        return new CSharpCastTypeShape(
+            segments,
+            simpleQualifiedCandidate && simpleQualifiedName.Length > 0 ? simpleQualifiedName.ToString() : null,
+            hasTypeOnlySyntax,
+            allIdentifiersTypeLike);
+    }
+
+    private static bool HasKnownNonTerminalTypeSegment(IReadOnlyList<string> segments, IReadOnlySet<string> csharpKnownTypeNames)
+    {
+        for (var index = 0; index < segments.Count - 1; index++)
+        {
+            if (csharpKnownTypeNames.Contains(NormalizeCSharpIdentifier(segments[index])))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsKnownCSharpCastTypeName(string candidate, string? resolvedCandidate, IReadOnlySet<string> csharpKnownTypeNames)
+    {
+        return csharpKnownTypeNames.Contains(NormalizeCSharpIdentifier(candidate))
+            || (!string.IsNullOrWhiteSpace(resolvedCandidate) && csharpKnownTypeNames.Contains(NormalizeCSharpIdentifier(resolvedCandidate)));
     }
 
     private static bool IsLikelyCSharpTypeIdentifier(string token)
@@ -3814,7 +3997,9 @@ public static class ReferenceExtractor
         IReadOnlyList<string> structuralLines,
         int bodyEndIndex,
         int startLineIndex,
-        int startColumn)
+        int startColumn,
+        IReadOnlySet<string> csharpKnownTypeNames,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
     {
         var foundContent = false;
         var parenDepth = 0;
@@ -3855,7 +4040,9 @@ public static class ReferenceExtractor
                             nextColumn,
                             keyword,
                             lastTopLevelSignificantLineIndex,
-                            lastTopLevelSignificantColumn))
+                            lastTopLevelSignificantColumn,
+                            csharpKnownTypeNames,
+                            csharpUsingAliases))
                     {
                         if ((string.Equals(keyword, "by", StringComparison.Ordinal)
                                 || string.Equals(keyword, "ascending", StringComparison.Ordinal)

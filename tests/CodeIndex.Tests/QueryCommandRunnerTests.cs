@@ -11187,6 +11187,124 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpParenthesizedQualifiedMemberAccessBeforeParenthesizedTerminalSelectPreservesOnlyRealEnumReferences()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_qualified_member_access_before_parenthesized_select");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "cases.cs"),
+                """
+                using System.Collections.Generic;
+                using System.Linq;
+
+                namespace Demo;
+
+                public enum Status
+                {
+                    Ready
+                }
+
+                public static class Sink
+                {
+                    public static Status Pick(object left, Status right) => right;
+                }
+
+                public sealed class Uses
+                {
+                    public Status Read(IEnumerable<object> items)
+                    {
+                        return Sink.Pick(from Status in items
+                                         orderby (Demo.Status.Ready)
+                                         select(Status.Ready),
+                                         Demo.Status.Ready);
+                    }
+                }
+                """);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
+
+            var rows = ParseJsonLines(stdout);
+            var parsedRows = rows.Select(document => document.RootElement).ToList();
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, parsedRows.Count);
+            Assert.All(parsedRows, row => Assert.Equal("Read", row.GetProperty("container_name").GetString()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_CSharpLowercaseAliasCastedLocalSelectCallInOrderByPreservesLaterEnumReferenceContext()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_orderby_lowercase_alias_casted_select_local_function");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "cases.cs"),
+                """
+                using System.Collections.Generic;
+                using System.Linq;
+                using customType = Demo.CustomType;
+
+                namespace Demo;
+
+                public enum Status
+                {
+                    Ready
+                }
+
+                public static class Sink
+                {
+                    public static Status Pick(object left, Status right) => right;
+                }
+
+                public sealed class CustomType
+                {
+                }
+
+                public sealed class Uses
+                {
+                    public Status Read(IEnumerable<object> items)
+                    {
+                        static customType select(IEnumerable<object> xs) => new();
+                        return Sink.Pick(from Status in items
+                                         orderby (customType)select(items)
+                                         select Status.Ready,
+                                         Demo.Status.Ready);
+                    }
+                }
+                """);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
+
+            var rows = ParseJsonLines(stdout);
+            var row = Assert.Single(rows).RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("Ready", row.GetProperty("symbol_name").GetString());
+            Assert.Equal("Read", row.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpParenthesizedTerminalSelectAfterGenericClosePreservesLaterEnumReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_terminal_select_after_generic_close");
