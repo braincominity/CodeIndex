@@ -5382,6 +5382,33 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_HashCommentsDoNotLeakAsTempObjects()
+    {
+        // issue #653: after restoring temp-table support, MySQL-style `# comment` tails that begin
+        // with identifier-looking text must not be mistaken for temp tables or procedures.
+        // issue #653: temp-table 対応を戻した後でも、識別子風テキストで始まる MySQL 形式の
+        // `# comment` は temp table / procedure と誤認しない。
+        const string content = """
+            CALL #commented_out;
+            EXEC #tempProc;
+            SELECT * FROM #commented_source;
+            INSERT INTO #audit_log (action) VALUES ('login');
+            SELECT * FROM #audit_log;
+            SELECT * FROM users #trailing_comment;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "#commented_out");
+        Assert.Contains(references, r => r.SymbolName == "#tempProc" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "#commented_source");
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#audit_log" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "#trailing_comment");
+    }
+
+    [Fact]
     public void Extract_FSharp_DetectsParenthesizedCalls()
     {
         const string content = """

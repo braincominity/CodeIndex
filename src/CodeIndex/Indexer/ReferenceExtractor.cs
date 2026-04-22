@@ -579,6 +579,9 @@ public static class ReferenceExtractor
 
         var references = new List<ReferenceRecord>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        var sqlEstablishedTempObjectNames = language == "sql"
+            ? CollectSqlEstablishedTempObjectNames(structuralLines)
+            : null;
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -764,6 +767,9 @@ public static class ReferenceExtractor
                             continue;
                         NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
                         if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                            continue;
+                        if (resolvedName.StartsWith("#", StringComparison.Ordinal)
+                            && (sqlEstablishedTempObjectNames == null || !sqlEstablishedTempObjectNames.Contains(resolvedName)))
                             continue;
 
                         var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
@@ -1133,6 +1139,34 @@ public static class ReferenceExtractor
             index++;
 
         return index;
+    }
+
+    private static HashSet<string> CollectSqlEstablishedTempObjectNames(IReadOnlyList<string> structuralLines)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var rawLine in structuralLines)
+        {
+            var sqlScanLine = PrepareSqlLineForIdentifierScan(rawLine);
+            if (string.IsNullOrWhiteSpace(sqlScanLine))
+                continue;
+
+            CollectSqlTempObjectNamesFromMatches(SqlTargetReferenceRegex.Matches(sqlScanLine), names);
+            CollectSqlTempObjectNamesFromMatches(SqlSelectIntoTempTargetRegex.Matches(sqlScanLine), names);
+        }
+
+        return names;
+    }
+
+    private static void CollectSqlTempObjectNamesFromMatches(MatchCollection matches, HashSet<string> names)
+    {
+        foreach (Match match in matches)
+        {
+            var nameGroup = match.Groups["name"];
+            NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out _, out _);
+            if (resolvedName.StartsWith("#", StringComparison.Ordinal))
+                names.Add(resolvedName);
+        }
     }
 
     /// <summary>
@@ -6455,7 +6489,6 @@ public static class ReferenceExtractor
             && !string.Equals(token, "INTO", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(token, "UPDATE", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(token, "TABLE", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(token, "CALL", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(token, "EXEC", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(token, "EXECUTE", StringComparison.OrdinalIgnoreCase);
     }
