@@ -573,7 +573,7 @@ public static class ReferenceExtractor
             var preparedLine = preparedLines[i];
             if (language == "csharp" && originalLine.IndexOf("cref=\"", StringComparison.OrdinalIgnoreCase) >= 0)
             {
-                var docContainer = FindInnermostContainer(containerCandidates, lineNumber);
+                var docContainer = FindDocumentedContainer(containerCandidates, lineNumber);
                 EmitCSharpDocCrefReferences(
                     originalLine,
                     references,
@@ -1694,6 +1694,8 @@ public static class ReferenceExtractor
             var token = prefix.Substring(tokens[i].Start, tokens[i].Length);
             if (IsCallablePrefixModifier(language, token) || token.StartsWith("[", StringComparison.Ordinal) || token.StartsWith("@", StringComparison.Ordinal))
                 continue;
+            if (!HasWhitespaceGap(prefix, tokens[i].Start + tokens[i].Length))
+                return false;
             typeStart = tokens[i].Start;
             typeLength = tokens[i].Length;
             return true;
@@ -2313,6 +2315,19 @@ public static class ReferenceExtractor
         for (int i = 1; i < token.Length; i++)
         {
             if (!IsTypeExpressionIdentifierPart(language, token[i]))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool HasWhitespaceGap(string text, int start)
+    {
+        if (start >= text.Length)
+            return false;
+        for (int i = start; i < text.Length; i++)
+        {
+            if (!char.IsWhiteSpace(text[i]))
                 return false;
         }
 
@@ -5776,6 +5791,27 @@ public static class ReferenceExtractor
         }
 
         return null;
+    }
+
+    private static SymbolRecord? FindDocumentedContainer(IReadOnlyList<SymbolRecord> candidates, int lineNumber)
+    {
+        SymbolRecord? best = null;
+        foreach (var candidate in candidates)
+        {
+            if (candidate.StartLine <= lineNumber)
+                continue;
+
+            if (best == null
+                || candidate.StartLine < best.StartLine
+                || (candidate.StartLine == best.StartLine
+                    && ((candidate.BodyEndLine ?? candidate.EndLine) - (candidate.BodyStartLine ?? candidate.StartLine))
+                       < ((best.BodyEndLine ?? best.EndLine) - (best.BodyStartLine ?? best.StartLine))))
+            {
+                best = candidate;
+            }
+        }
+
+        return best ?? FindInnermostContainer(candidates, lineNumber);
     }
 
     private static SymbolRecord? FindInnermostSameLineCSharpContainer(
