@@ -571,7 +571,9 @@ public static class ReferenceExtractor
             var lineNumber = i + 1;
             var originalLine = lines[i];
             var preparedLine = preparedLines[i];
-            if (language == "csharp" && originalLine.IndexOf("cref=\"", StringComparison.OrdinalIgnoreCase) >= 0)
+            if (language == "csharp"
+                && originalLine.IndexOf("cref=\"", StringComparison.OrdinalIgnoreCase) >= 0
+                && IsCSharpXmlDocCommentLine(originalLine))
             {
                 var docContainer = FindDocumentedContainer(containerCandidates, lineNumber);
                 EmitCSharpDocCrefReferences(
@@ -5812,6 +5814,14 @@ public static class ReferenceExtractor
         }
 
         return best ?? FindInnermostContainer(candidates, lineNumber);
+    }
+
+    private static bool IsCSharpXmlDocCommentLine(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+            return false;
+
+        return line.TrimStart().StartsWith("///", StringComparison.Ordinal);
     }
 
     private static SymbolRecord? FindInnermostSameLineCSharpContainer(
