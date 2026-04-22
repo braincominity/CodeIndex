@@ -1406,7 +1406,8 @@ public static class ReferenceExtractor
                             i,
                             match.Index,
                             csharpKnownTypeNames,
-                            csharpUsingAliases);
+                            csharpUsingAliases,
+                            names);
                         AddCSharpFunctionValueReceiverName(
                             names,
                             NormalizeCSharpIdentifier(match.Groups["name"].Value),
@@ -2993,7 +2994,8 @@ public static class ReferenceExtractor
         int previousTopLevelSignificantLineIndex,
         int previousTopLevelSignificantColumn,
         IReadOnlySet<string> csharpKnownTypeNames,
-        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpFunctionValueReceiverNameRecord> csharpFunctionValueReceiverNames)
     {
         if (IsCSharpParenthesizedQueryClauseKeyword(keyword)
             && TryGetNextTopLevelSignificantChar(
@@ -3011,7 +3013,8 @@ public static class ReferenceExtractor
                 previousTopLevelSignificantLineIndex,
                 previousTopLevelSignificantColumn,
                 csharpKnownTypeNames,
-                csharpUsingAliases);
+                csharpUsingAliases,
+                csharpFunctionValueReceiverNames);
         }
 
         if (nextColumn >= line.Length)
@@ -3039,7 +3042,8 @@ public static class ReferenceExtractor
         int previousTopLevelSignificantLineIndex,
         int previousTopLevelSignificantColumn,
         IReadOnlySet<string> csharpKnownTypeNames,
-        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpFunctionValueReceiverNameRecord> csharpFunctionValueReceiverNames)
     {
         if (previousTopLevelSignificantLineIndex < 0 || previousTopLevelSignificantColumn < 0)
             return true;
@@ -3071,7 +3075,8 @@ public static class ReferenceExtractor
                 previousTokenLineIndex,
                 previousTokenStartColumn,
                 csharpKnownTypeNames,
-                csharpUsingAliases),
+                csharpUsingAliases,
+                csharpFunctionValueReceiverNames),
             '?' => LooksLikeCSharpNullableTypeSuffixInCastOrTypeTest(
                 structuralLines,
                 previousTokenLineIndex,
@@ -3102,7 +3107,8 @@ public static class ReferenceExtractor
         int closeParenLineIndex,
         int closeParenColumn,
         IReadOnlySet<string> csharpKnownTypeNames,
-        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpFunctionValueReceiverNameRecord> csharpFunctionValueReceiverNames)
     {
         if (!TryFindMatchingCSharpOpenParenBackwards(
                 structuralLines,
@@ -3123,8 +3129,10 @@ public static class ReferenceExtractor
         if (!LooksLikeCSharpCastTypeText(
                 castTargetText,
                 closeParenLineIndex + 1,
+                closeParenColumn,
                 csharpKnownTypeNames,
-                csharpUsingAliases))
+                csharpUsingAliases,
+                csharpFunctionValueReceiverNames))
             return false;
 
         if (!TryGetPreviousTopLevelToken(
@@ -3160,8 +3168,10 @@ public static class ReferenceExtractor
     private static bool LooksLikeCSharpCastTypeText(
         string text,
         int lineNumber,
+        int column,
         IReadOnlySet<string> csharpKnownTypeNames,
-        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpFunctionValueReceiverNameRecord> csharpFunctionValueReceiverNames)
     {
         var trimmed = text.Trim();
         if (trimmed.Length == 0)
@@ -3197,6 +3207,17 @@ public static class ReferenceExtractor
             || (!string.IsNullOrWhiteSpace(resolvedQualifiedName) && csharpKnownTypeNames.Contains(resolvedQualifiedName)))
         {
             return true;
+        }
+
+        if (shape.SimpleQualifiedName != null
+            && string.Equals(shape.SimpleQualifiedName, resolvedQualifiedName, StringComparison.Ordinal)
+            && HasCSharpFunctionValueReceiverConflict(
+                GetFirstQualifiedSegment(shape.SimpleQualifiedName),
+                lineNumber,
+                column,
+                csharpFunctionValueReceiverNames))
+        {
+            return false;
         }
 
         if (shape.HasTypeOnlySyntax)
@@ -3509,6 +3530,21 @@ public static class ReferenceExtractor
     {
         return csharpKnownTypeNames.Contains(NormalizeCSharpIdentifier(candidate))
             || (!string.IsNullOrWhiteSpace(resolvedCandidate) && csharpKnownTypeNames.Contains(NormalizeCSharpIdentifier(resolvedCandidate)));
+    }
+
+    private static bool HasCSharpFunctionValueReceiverConflict(
+        string candidate,
+        int lineNumber,
+        int column,
+        IReadOnlyList<CSharpFunctionValueReceiverNameRecord> csharpFunctionValueReceiverNames)
+    {
+        if (string.IsNullOrWhiteSpace(candidate) || csharpFunctionValueReceiverNames.Count == 0)
+            return false;
+
+        var normalizedCandidate = NormalizeCSharpIdentifier(candidate);
+        return csharpFunctionValueReceiverNames.Any(record =>
+            IsWithinCSharpScope(record, lineNumber, column)
+            && string.Equals(record.Name, normalizedCandidate, StringComparison.Ordinal));
     }
 
     private static bool IsLikelyCSharpTypeIdentifier(string token)
@@ -3999,7 +4035,8 @@ public static class ReferenceExtractor
         int startLineIndex,
         int startColumn,
         IReadOnlySet<string> csharpKnownTypeNames,
-        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpFunctionValueReceiverNameRecord> csharpFunctionValueReceiverNames)
     {
         var foundContent = false;
         var parenDepth = 0;
@@ -4042,7 +4079,8 @@ public static class ReferenceExtractor
                             lastTopLevelSignificantLineIndex,
                             lastTopLevelSignificantColumn,
                             csharpKnownTypeNames,
-                            csharpUsingAliases))
+                            csharpUsingAliases,
+                            csharpFunctionValueReceiverNames))
                     {
                         if ((string.Equals(keyword, "by", StringComparison.Ordinal)
                                 || string.Equals(keyword, "ascending", StringComparison.Ordinal)
