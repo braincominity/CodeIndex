@@ -6789,6 +6789,40 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpIsLogicalConstantMemberPatterns_DoNotEmitTypeReferences()
+    {
+        // issue #666: `is Color.Red or Color.Blue` is a logical constant-member pattern,
+        // not a type-test site, so it must not add compile-time `type_reference` rows.
+        // issue #666: `is Color.Red or Color.Blue` は logical な定数 member パターンであり、
+        // 型テスト位置ではないため compile-time な `type_reference` を増やしてはならない。
+        const string content = """
+            namespace Probe;
+
+            enum Color { Red, Blue }
+
+            class Demo
+            {
+                bool Run(Color value)
+                {
+                    return value is Color.Red or Color.Blue;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Equal(1, references.Count(r => r.SymbolName == "Color" && r.ReferenceKind == "type_reference"));
+        Assert.Equal(
+            0,
+            references.Count(r => r.SymbolName == "Color" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Red" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_CsharpCaseDeclarationPatterns_SkipEnumMemberLabels()
     {
         // issue #647: `case Type name:` is a declaration pattern, but `case Color.Red:`
@@ -6840,6 +6874,44 @@ public class ReferenceExtractorTests
         Assert.Equal(
             0,
             references.Count(r => r.SymbolName == "Color" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run"));
+    }
+
+    [Fact]
+    public void Extract_CsharpCaseLogicalConstantMemberPatterns_DoNotEmitTypeReferences()
+    {
+        // issue #666: logical constant-member labels such as
+        // `case ErrorCodes.NotFound or ErrorCodes.Forbidden:` are not type patterns.
+        // issue #666: `case ErrorCodes.NotFound or ErrorCodes.Forbidden:` のような
+        // logical な定数 member label は型パターンではない。
+        const string content = """
+            namespace Probe;
+
+            static class ErrorCodes
+            {
+                public const int NotFound = 404;
+                public const int Forbidden = 403;
+            }
+
+            class Demo
+            {
+                void Run(int value)
+                {
+                    switch (value)
+                    {
+                        case ErrorCodes.NotFound or ErrorCodes.Forbidden:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "ErrorCodes" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "NotFound" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Forbidden" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.ContainerName == "Run");
     }
 
     [Fact]

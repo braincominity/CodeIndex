@@ -582,6 +582,7 @@ public static class ReferenceExtractor
         // 宣言ヘッダー全体を合成コンテナで上書きする。`{` / `;` 以降の本体行は通常の container に戻す。
         var recordPrimaryCtorRanges = BuildCSharpPrimaryCtorContainers(language, symbols, structuralLines);
         var csharpQualifiedEnumMemberLookup = BuildCSharpQualifiedEnumMemberLookup(language, symbols);
+        var csharpQualifiedConstantPatternMemberLookup = BuildCSharpQualifiedConstantPatternMemberLookup(language, symbols);
         var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols);
         var csharpKnownTypeNames = BuildCSharpKnownTypeNames(language, symbols);
         var csharpValueReceiverNames = BuildCSharpValueReceiverNamesByContainingType(language, symbols);
@@ -753,7 +754,7 @@ public static class ReferenceExtractor
                 EmitCSharpTypePositionReferences(
                     preparedLine,
                     originalLine,
-                    csharpQualifiedEnumMemberLookup,
+                    csharpQualifiedConstantPatternMemberLookup,
                     csharpUsingAliases,
                     references,
                     seen,
@@ -1330,7 +1331,7 @@ public static class ReferenceExtractor
     private static void EmitCSharpTypePositionReferences(
         string preparedLine,
         string originalLine,
-        IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> csharpQualifiedEnumMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
         List<ReferenceRecord> references,
         HashSet<string> seen,
@@ -1347,8 +1348,15 @@ public static class ReferenceExtractor
         foreach (Match match in CSharpIsAsTypeTestRegex.Matches(preparedLine))
         {
             var typeGroup = match.Groups["type"];
-            if (IsCSharpNonTypePatternExpression(typeGroup.Value))
+            if (IsCSharpNonTypePatternExpression(typeGroup.Value)
+                || IsCSharpQualifiedConstantPatternMemberHead(
+                    typeGroup.Value,
+                    lineNumber,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpUsingAliases))
+            {
                 continue;
+            }
 
             AddTypeExpressionSegments(
                 references,
@@ -1364,7 +1372,7 @@ public static class ReferenceExtractor
 
         EmitCSharpCaseTypePatternReferences(
             preparedLine,
-            csharpQualifiedEnumMemberLookup,
+            csharpQualifiedConstantPatternMemberLookup,
             csharpUsingAliases,
             references,
             seen,
@@ -1376,7 +1384,7 @@ public static class ReferenceExtractor
 
     private static void EmitCSharpCaseTypePatternReferences(
         string preparedLine,
-        IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> csharpQualifiedEnumMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
         List<ReferenceRecord> references,
         HashSet<string> seen,
@@ -1403,7 +1411,7 @@ public static class ReferenceExtractor
                     typeGroup.Value,
                     continuationIndex,
                     hadLeadingNot,
-                    csharpQualifiedEnumMemberLookup,
+                    csharpQualifiedConstantPatternMemberLookup,
                     csharpUsingAliases,
                     lineNumber))
                 continue;
@@ -2762,6 +2770,78 @@ public static class ReferenceExtractor
         return lookup;
     }
 
+    private static Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> BuildCSharpQualifiedConstantPatternMemberLookup(
+        string language,
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        var lookup = new Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
+        if (language != "csharp")
+            return lookup;
+
+        var conflictingNonEnumTypeNames = new HashSet<string>(
+            symbols
+                .Where(symbol => symbol.Kind is "class" or "struct" or "interface" or "delegate")
+                .Select(symbol => symbol.Name)
+                .Where(name => !string.IsNullOrWhiteSpace(name))!,
+            StringComparer.Ordinal);
+
+        foreach (var symbol in symbols)
+        {
+            if (string.IsNullOrWhiteSpace(symbol.Name) || string.IsNullOrWhiteSpace(symbol.ContainerName))
+                continue;
+
+            var target = symbol switch
+            {
+                { Kind: "enum", ContainerKind: "enum" } => (
+                    Included: true,
+                    AllowShortNameFallback: !conflictingNonEnumTypeNames.Contains(symbol.ContainerName!)),
+                _ when IsCSharpConstMemberSymbol(symbol) => (
+                    Included: true,
+                    AllowShortNameFallback: true),
+                _ => (Included: false, AllowShortNameFallback: false)
+            };
+
+            if (!target.Included)
+                continue;
+
+            if (!lookup.TryGetValue(symbol.Name, out var targets))
+            {
+                targets = [];
+                lookup[symbol.Name] = targets;
+            }
+
+            bool exists = false;
+            foreach (var existing in targets)
+            {
+                if (string.Equals(existing.ContainerName, symbol.ContainerName, StringComparison.Ordinal)
+                    && string.Equals(existing.QualifiedContainerName, symbol.ContainerQualifiedName, StringComparison.Ordinal))
+                {
+                    exists = true;
+                    break;
+                }
+            }
+
+            if (!exists)
+                targets.Add((
+                    symbol.ContainerName!,
+                    symbol.ContainerQualifiedName,
+                    target.AllowShortNameFallback));
+        }
+
+        return lookup;
+    }
+
+    private static bool IsCSharpConstMemberSymbol(SymbolRecord symbol)
+    {
+        if (symbol.ContainerKind is not ("class" or "struct"))
+            return false;
+        if (string.IsNullOrWhiteSpace(symbol.Signature))
+            return false;
+
+        return symbol.Signature!.Contains(" const ", StringComparison.Ordinal)
+            || symbol.Signature.StartsWith("const ", StringComparison.Ordinal);
+    }
+
     private static void EmitCSharpQualifiedEnumMemberReferences(
         string preparedLine,
         IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> enumMemberLookup,
@@ -2802,7 +2882,7 @@ public static class ReferenceExtractor
             if (!parsed.HasLeadingGlobalQualifier
                 && HasCSharpValueReceiverConflict(qualifier, resolvedQualifier, lineNumber, member.Start, callContainer, valueReceiverNamesByContainingType, valueReceiverNamesByFunctionStartLine))
                 continue;
-            if (!MatchesQualifiedEnumType(
+            if (!MatchesQualifiedConstantContainer(
                     resolvedQualifier,
                     targets,
                     allowShortNameFallback: !parsed.HasLeadingGlobalQualifier,
@@ -2921,14 +3001,14 @@ public static class ReferenceExtractor
         string typeExpression,
         int cursor,
         bool hadLeadingNot,
-        IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> csharpQualifiedEnumMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
         int lineNumber)
     {
         if (!CanCSharpCaseHeadContinueAsTypePattern(
                 typeExpression,
                 lineNumber,
-                csharpQualifiedEnumMemberLookup,
+                csharpQualifiedConstantPatternMemberLookup,
                 csharpUsingAliases))
             return false;
 
@@ -2944,7 +3024,7 @@ public static class ReferenceExtractor
                 typeExpression,
                 cursor,
                 hadLeadingNot,
-                csharpQualifiedEnumMemberLookup,
+                csharpQualifiedConstantPatternMemberLookup,
                 csharpUsingAliases,
                 lineNumber)
         };
@@ -2955,7 +3035,7 @@ public static class ReferenceExtractor
         string typeExpression,
         int cursor,
         bool hadLeadingNot,
-        IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> csharpQualifiedEnumMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
         int lineNumber)
     {
@@ -2973,7 +3053,7 @@ public static class ReferenceExtractor
             "or" or "and" => CanCSharpCaseHeadContinueAsTypePattern(
                 typeExpression,
                 lineNumber,
-                csharpQualifiedEnumMemberLookup,
+                csharpQualifiedConstantPatternMemberLookup,
                 csharpUsingAliases),
             _ => true,
         };
@@ -2982,23 +3062,23 @@ public static class ReferenceExtractor
     private static bool CanCSharpCaseHeadContinueAsTypePattern(
         string typeExpression,
         int lineNumber,
-        IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> csharpQualifiedEnumMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
     {
         if (IsCSharpNonTypePatternExpression(typeExpression))
             return false;
 
-        return !IsCSharpQualifiedCaseEnumConstantHead(
+        return !IsCSharpQualifiedConstantPatternMemberHead(
             typeExpression,
             lineNumber,
-            csharpQualifiedEnumMemberLookup,
+            csharpQualifiedConstantPatternMemberLookup,
             csharpUsingAliases);
     }
 
-    private static bool IsCSharpQualifiedCaseEnumConstantHead(
+    private static bool IsCSharpQualifiedConstantPatternMemberHead(
         string typeExpression,
         int lineNumber,
-        IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> csharpQualifiedEnumMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
     {
         if (!TryReadCSharpQualifiedAccess(typeExpression, 0, out var parsed)
@@ -3010,14 +3090,14 @@ public static class ReferenceExtractor
 
         var member = parsed.Segments[^1];
         var memberName = typeExpression.Substring(member.Start, member.End - member.Start);
-        if (!csharpQualifiedEnumMemberLookup.TryGetValue(memberName, out var targets))
+        if (!csharpQualifiedConstantPatternMemberLookup.TryGetValue(memberName, out var targets))
             return false;
 
         var qualifier = TrimLeadingCSharpGlobalQualifier(NormalizeCSharpQualifiedSegments(typeExpression, parsed.Segments, parsed.Segments.Count - 1));
         var resolvedQualifier = parsed.HasLeadingGlobalQualifier
             ? qualifier
             : ResolveCSharpQualifiedAliasTarget(qualifier, lineNumber, csharpUsingAliases);
-        return MatchesQualifiedEnumType(
+        return MatchesQualifiedConstantContainer(
             resolvedQualifier,
             targets,
             allowShortNameFallback: !parsed.HasLeadingGlobalQualifier,
@@ -5925,27 +6005,27 @@ public static class ReferenceExtractor
         return firstDot < 0 ? qualifiedName : qualifiedName[..firstDot];
     }
 
-    private static bool MatchesQualifiedEnumType(
+    private static bool MatchesQualifiedConstantContainer(
         string qualifier,
-        IReadOnlyList<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)> targets,
+        IReadOnlyList<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)> targets,
         bool allowShortNameFallback = true,
         bool allowSingleSegmentQualifiedMatch = false)
     {
         var hasMultipleQualifierSegments = qualifier.Contains('.') || qualifier.Contains("::", StringComparison.Ordinal);
-        foreach (var (enumName, qualifiedEnumName, targetAllowsShortNameFallback) in targets)
+        foreach (var (containerName, qualifiedContainerName, targetAllowsShortNameFallback) in targets)
         {
-            if (!string.IsNullOrWhiteSpace(qualifiedEnumName)
-                && ((hasMultipleQualifierSegments && QualifiedNameHasSuffix(qualifiedEnumName!, qualifier))
+            if (!string.IsNullOrWhiteSpace(qualifiedContainerName)
+                && ((hasMultipleQualifierSegments && QualifiedNameHasSuffix(qualifiedContainerName!, qualifier))
                     || (!hasMultipleQualifierSegments
                         && allowSingleSegmentQualifiedMatch
-                        && string.Equals(qualifiedEnumName, qualifier, StringComparison.Ordinal))))
+                        && string.Equals(qualifiedContainerName, qualifier, StringComparison.Ordinal))))
             {
                 return true;
             }
 
             if (allowShortNameFallback
                 && targetAllowsShortNameFallback
-                && string.Equals(GetLastQualifiedSegment(qualifier), enumName, StringComparison.Ordinal))
+                && string.Equals(GetLastQualifiedSegment(qualifier), containerName, StringComparison.Ordinal))
                 return true;
         }
 
