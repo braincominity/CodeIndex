@@ -606,6 +606,15 @@ public static class SymbolExtractor
             // ベースの partial member 拡張) なので、ここでも受け付けないと `partial event` 宣言が
             // symbols / definition / outline から無言で欠落する。Closes #350.
             new("event",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern|virtual|override|abstract|sealed|new|partial)\s+)*event\s+(?<returnType>{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*(?:[;=]|\{{)", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            // Explicit interface event implementation (e.g. event EventHandler IFoo.Changed)
+            // must capture the trailing member name rather than dropping the declaration or
+            // inventing the qualifier as the event name. BodyStyle.Brace lets accessor blocks
+            // on the same line or following lines share the normal brace-range path.
+            // 明示的インターフェース event 実装 (例: event EventHandler IFoo.Changed) は、
+            // qualifier 側ではなく末尾のメンバー名を event 名として捕捉しなければならない。
+            // BodyStyle.Brace を使い、同一行/次行どちらの accessor block も通常の brace-range
+            // 経路で扱う。
+            new("event",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern|virtual|override|abstract|sealed|new|partial)\s+)*event\s+(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\s*\.\s*(?<name>{CSharpIdentifierPattern})\b", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Explicit interface implementation (e.g. void IDisposable.Dispose())
             // Requires a valid return type (not a statement keyword) and interface name before the dot.
             // Reject named-argument labels only when they are followed by a qualified call site,

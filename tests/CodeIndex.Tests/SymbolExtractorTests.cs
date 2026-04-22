@@ -6263,6 +6263,54 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsExplicitInterfaceEventImpl()
+    {
+        // Issue #351: explicit-interface events must emit the trailing event name (`Evt`)
+        // instead of dropping the implementation or inventing the qualifier (`IFoo`) as a
+        // phantom event. Cover same-line and next-line accessor blocks plus generic/global
+        // qualifiers to keep the dedicated event row aligned with the other explicit-member rows.
+        // Issue #351: 明示的インターフェース event は、実装を落としたり qualifier (`IFoo`) を
+        // 幻の event 名として emit したりせず、末尾の event 名 (`Evt`) を記録しなければならない。
+        // 専用 event 行が他の explicit-member 行と揃うよう、同一行/次行 accessor block と
+        // generic/global qualifier をまとめて守る。
+        var content = """
+            namespace Demo;
+
+            public interface IFoo
+            {
+                event System.EventHandler Evt;
+                event System.EventHandler Evt2;
+                event System.EventHandler Evt3;
+                event System.EventHandler Evt4;
+            }
+
+            public class Svc : IFoo
+            {
+                event System.EventHandler IFoo.Evt
+                {
+                    add { }
+                    remove { }
+                }
+
+                event System.EventHandler IFoo.Evt2 { add { } remove { } }
+                event System.EventHandler IMap<string, int>.Evt3 { add { } remove { } }
+                event System.EventHandler global::Demo.IFoo.Evt4 { add { } remove { } }
+                public event System.EventHandler OnBaseline;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Equal(5, symbols.Count(s => s.Kind == "event" && s.ContainerName == "Svc"));
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "Evt" && s.ContainerName == "Svc");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "Evt2" && s.ContainerName == "Svc");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "Evt3" && s.ContainerName == "Svc");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "Evt4" && s.ContainerName == "Svc");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "OnBaseline" && s.ContainerName == "Svc");
+        Assert.DoesNotContain(symbols, s => s.Kind == "event" && s.Name == "IFoo" && s.ContainerName == "Svc");
+        Assert.DoesNotContain(symbols, s => s.Kind == "event" && s.Name == "IMap" && s.ContainerName == "Svc");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsIndexer()
     {
         var content = "public class Collection\n{\n    public string this[int index]\n    {\n        get => _items[index];\n        set => _items[index] = value;\n    }\n}";
