@@ -6998,10 +6998,10 @@ public class ReferenceExtractorTests
     [Fact]
     public void Extract_CsharpLogicalNestedTypePatterns_CaptureTypeReferences()
     {
-        // issue #673: qualified nested-type logical patterns such as
-        // `Outer.Red or Outer.Blue` are still type tests, not constant-member labels.
-        // issue #673: `Outer.Red or Outer.Blue` のような qualified nested-type の logical
-        // pattern は、定数 member label ではなく本物の型テストとして残さなければならない。
+        // issue #673/#675: qualified nested-type logical patterns such as
+        // `Outer.Red or Outer.Blue` are still type tests, and every genuine head must survive.
+        // issue #673/#675: `Outer.Red or Outer.Blue` のような qualified nested-type の logical
+        // pattern は定数 member label ではなく、本物の型 head を両側とも残さなければならない。
         const string content = """
             namespace Probe;
 
@@ -7032,11 +7032,13 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.Equal(2, references.Count(r => r.SymbolName == "Outer" && r.ReferenceKind == "type_reference"));
+        Assert.Equal(4, references.Count(r => r.SymbolName == "Outer" && r.ReferenceKind == "type_reference"));
         Assert.Equal(2, references.Count(r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference"));
-        Assert.DoesNotContain(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference");
+        Assert.Equal(2, references.Count(r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference"));
         Assert.Contains(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
         Assert.Contains(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run");
+        Assert.Contains(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run");
     }
 
     [Fact]
@@ -7085,6 +7087,45 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match2");
         Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run1");
         Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run2");
+    }
+
+    [Fact]
+    public void Extract_CsharpLogicalTypePatterns_EmitEveryGenuineTypeHead()
+    {
+        // issue #675: when every logical-pattern head is a real type, all of them must produce
+        // compile-time dependencies instead of only the leftmost head surviving.
+        // issue #675: logical pattern の全 head が本物の型なら、左端だけでなく
+        // すべての head が compile-time 依存として残らなければならない。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+            class Shape {}
+
+            class Demo
+            {
+                bool Match(object value) => value is Point or Shape;
+
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case Point or Shape:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference"));
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run");
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run");
     }
 
     [Fact]

@@ -14324,6 +14324,55 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpLogicalPatternsKeepLaterTypeHeads()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_logical_type_pattern_all_heads");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Probe;
+
+                class Outer
+                {
+                    public class Red {}
+                    public class Blue {}
+                }
+
+                class Demo
+                {
+                    bool Match(object value) => value is Outer.Red or Outer.Blue;
+
+                    void Run(object value)
+                    {
+                        switch (value)
+                        {
+                            case Outer.Red or Outer.Blue:
+                                break;
+                        }
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Blue", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            var rows = ParseJsonLines(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, rows.Count);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpGlobalQualifiedUsingAliasNameDoesNotCreateReference()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_global_alias_name_invalid");

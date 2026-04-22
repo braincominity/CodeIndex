@@ -1352,7 +1352,7 @@ public static class ReferenceExtractor
         {
             var typeGroup = match.Groups["type"];
             int continuationIndex = SkipWhitespace(preparedLine, typeGroup.Index + typeGroup.Length);
-            if (TryFindFirstCSharpLogicalTypePatternHead(
+            if (TryEmitCSharpLogicalTypePatternHeads(
                     preparedLine,
                     typeGroup.Value,
                     typeGroup.Index,
@@ -1361,19 +1361,17 @@ public static class ReferenceExtractor
                     csharpQualifiedConstantPatternMemberLookup,
                     csharpQualifiedTypePatternLookup,
                     csharpUsingAliases,
-                    out var logicalTypeExpression,
-                    out var logicalTypeIndex))
+                    (logicalTypeExpression, logicalTypeIndex) => AddTypeExpressionSegments(
+                        references,
+                        seen,
+                        fileId,
+                        logicalTypeExpression,
+                        logicalTypeIndex,
+                        context,
+                        lineNumber,
+                        resolveContainerForColumn(logicalTypeIndex),
+                        "csharp")))
             {
-                AddTypeExpressionSegments(
-                    references,
-                    seen,
-                    fileId,
-                    logicalTypeExpression,
-                    logicalTypeIndex,
-                    context,
-                    lineNumber,
-                    resolveContainerForColumn(logicalTypeIndex),
-                    "csharp");
                 continue;
             }
 
@@ -1445,7 +1443,7 @@ public static class ReferenceExtractor
 
             var typeGroup = typeMatch.Groups["type"];
             int continuationIndex = SkipWhitespace(preparedLine, typeGroup.Index + typeGroup.Length);
-            if (TryFindFirstCSharpLogicalTypePatternHead(
+            if (TryEmitCSharpLogicalTypePatternHeads(
                     preparedLine,
                     typeGroup.Value,
                     typeGroup.Index,
@@ -1454,19 +1452,17 @@ public static class ReferenceExtractor
                     csharpQualifiedConstantPatternMemberLookup,
                     csharpQualifiedTypePatternLookup,
                     csharpUsingAliases,
-                    out var logicalTypeExpression,
-                    out var logicalTypeIndex))
+                    (logicalTypeExpression, logicalTypeIndex) => AddTypeExpressionSegments(
+                        references,
+                        seen,
+                        fileId,
+                        logicalTypeExpression,
+                        logicalTypeIndex,
+                        context,
+                        lineNumber,
+                        resolveContainerForColumn(logicalTypeIndex),
+                        "csharp")))
             {
-                AddTypeExpressionSegments(
-                    references,
-                    seen,
-                    fileId,
-                    logicalTypeExpression,
-                    logicalTypeIndex,
-                    context,
-                    lineNumber,
-                    resolveContainerForColumn(logicalTypeIndex),
-                    "csharp");
                 continue;
             }
 
@@ -3171,7 +3167,7 @@ public static class ReferenceExtractor
         };
     }
 
-    private static bool TryFindFirstCSharpLogicalTypePatternHead(
+    private static bool TryEmitCSharpLogicalTypePatternHeads(
         string preparedLine,
         string initialTypeExpression,
         int initialTypeIndex,
@@ -3180,16 +3176,13 @@ public static class ReferenceExtractor
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
-        out string typeExpression,
-        out int typeIndex)
+        Action<string, int> emitTypeExpression)
     {
-        typeExpression = initialTypeExpression;
-        typeIndex = initialTypeIndex;
-
         var currentTypeExpression = initialTypeExpression;
         var currentTypeIndex = initialTypeIndex;
         var currentContinuationIndex = continuationIndex;
         var sawLogicalKeyword = false;
+        var emittedAny = false;
         while (TryConsumeCSharpLogicalPatternKeyword(preparedLine, currentContinuationIndex, out var nextHeadCursor))
         {
             sawLogicalKeyword = true;
@@ -3202,9 +3195,8 @@ public static class ReferenceExtractor
                     csharpQualifiedTypePatternLookup,
                     csharpUsingAliases))
             {
-                typeExpression = currentTypeExpression;
-                typeIndex = currentTypeIndex;
-                return true;
+                emitTypeExpression(currentTypeExpression, currentTypeIndex);
+                emittedAny = true;
             }
 
             int nextTypeCursor = nextHeadCursor;
@@ -3229,12 +3221,11 @@ public static class ReferenceExtractor
                 csharpQualifiedConstantPatternMemberLookup,
                 csharpUsingAliases))
         {
-            typeExpression = currentTypeExpression;
-            typeIndex = currentTypeIndex;
-            return true;
+            emitTypeExpression(currentTypeExpression, currentTypeIndex);
+            emittedAny = true;
         }
 
-        return false;
+        return emittedAny;
     }
 
     private static bool IsCSharpLogicalConstantPatternAtCursor(
