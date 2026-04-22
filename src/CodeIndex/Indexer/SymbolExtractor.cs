@@ -66,7 +66,9 @@ public static class SymbolExtractor
     // 深さ 0 で見えた comma だけを tuple 判定に使う。
     private const string CSharpTupleGroupPattern =
         @"\((?>(?:[^(),]+|\((?<TupleDepth>)|\)(?<-TupleDepth>)|(?(TupleDepth),|(?<TupleComma>,))))*(?(TupleDepth)(?!))(?(TupleComma)|(?!))\)";
-    private const string CSharpTypeTokenCharsPattern = @"[\w?.<>\[\],:*]";
+    private const string CSharpIdentifierPattern = @"@?[_\p{L}]\w*";
+    private const string CSharpNamespacePattern = CSharpIdentifierPattern + @"(?:\." + CSharpIdentifierPattern + @")*";
+    private const string CSharpTypeTokenCharsPattern = @"[\w@?.<>\[\],:*]";
     private const string CSharpTypeSegmentPattern =
         @"(?:" + CSharpTypeTokenCharsPattern + @"+(?:" + CSharpTupleGroupPattern + CSharpTypeTokenCharsPattern + @"*)*|" + CSharpTupleGroupPattern + CSharpTypeTokenCharsPattern + @"*)";
     private const string CSharpTypePattern =
@@ -238,20 +240,20 @@ public static class SymbolExtractor
         "public", "private", "protected", "static", "readonly", "abstract", "override", "async", "get", "set"
     ];
 
-    private static readonly Regex CSharpEnumDeclarationRegex = new(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+|(?:file)\s+)*enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpEnumDeclarationRegex = new($@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+|(?:file)\s+)*enum\s+(?<name>{CSharpIdentifierPattern})", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpEnumMemberRegex = new(@"^\s*(?<name>@?[_\p{L}]\w*)\s*(?:=\s*(?:-?\d|0x|@?[_\p{L}]\w*(?:\s*\|\s*@?[_\p{L}]\w*)*)[^""']*)?,?\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpEnumMemberNameRegex = new(@"^\s*(?<name>@?[_\p{L}]\w*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpSameLinePropertyStatementStartRegex = new(
-        $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?:ref(?:\s+readonly)?)\s+)?(?:{CSharpTypePattern})\s+(?:{CSharpExplicitInterfaceQualifierPattern}\.)?\w+\s*(?:\{{|=>\s*)",
+        $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?:ref(?:\s+readonly)?)\s+)?(?:{CSharpTypePattern})\s+(?:{CSharpExplicitInterfaceQualifierPattern}\.)?{CSharpIdentifierPattern}\s*(?:\{{|=>\s*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpSameLineEventStatementStartRegex = new(
-        $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern|virtual|override|abstract|sealed|new|partial|file)\s+)*event\s+(?:{CSharpTypePattern})\s+\w+\s*(?:[;=]|\{{)",
+        $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern|virtual|override|abstract|sealed|new|partial|file)\s+)*event\s+(?:{CSharpTypePattern})\s+{CSharpIdentifierPattern}\s*(?:[;=]|\{{)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpSameLineDelegateStatementStartRegex = new(
-        $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|unsafe|file|new)\s+)*delegate\s+(?:{CSharpTypePattern})\s+\w+\s*[\(<]",
+        $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|unsafe|file|new)\s+)*delegate\s+(?:{CSharpTypePattern})\s+{CSharpIdentifierPattern}\s*[\(<]",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpSameLineEventOrDelegateStatementStartRegex = new(
-        $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern|virtual|override|abstract|sealed|new|partial|file)\s+)*(?:event\s+(?:{CSharpTypePattern})\s+\w+\s*(?:[;=]|\{{)|delegate\s+(?:{CSharpTypePattern})\s+\w+\s*[\(<])",
+        $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern|virtual|override|abstract|sealed|new|partial|file)\s+)*(?:event\s+(?:{CSharpTypePattern})\s+{CSharpIdentifierPattern}\s*(?:[;=]|\{{)|delegate\s+(?:{CSharpTypePattern})\s+{CSharpIdentifierPattern}\s*[\(<])",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly HashSet<string> JavaScriptTypeScriptControlFlowHeaderKeywords =
@@ -360,14 +362,14 @@ public static class SymbolExtractor
         ],
         ["csharp"] =
         [
-            new("namespace", new Regex(@"^\s*namespace\s+(?<name>[\w.]+)\s*;", RegexOptions.Compiled), BodyStyle.None),  // file-scoped namespace (C# 10+)
-            new("namespace", new Regex(@"^\s*namespace\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.Brace),  // block-scoped namespace
+            new("namespace", new Regex($@"^\s*namespace\s+(?<name>{CSharpNamespacePattern})\s*;", RegexOptions.Compiled), BodyStyle.None),  // file-scoped namespace (C# 10+)
+            new("namespace", new Regex($@"^\s*namespace\s+(?<name>{CSharpNamespacePattern})", RegexOptions.Compiled), BodyStyle.Brace),  // block-scoped namespace
             // extern alias (must precede using directives per C# spec) — captures assembly-alias reconciliation
             // extern alias — C# 仕様上 using より前に置かれるファイル先頭宣言。アセンブリエイリアス用
-            new("import",    new Regex(@"^\s*extern\s+alias\s+(?<name>\w+)\s*;", RegexOptions.Compiled), BodyStyle.None),
+            new("import",    new Regex($@"^\s*extern\s+alias\s+(?<name>{CSharpIdentifierPattern})\s*;", RegexOptions.Compiled), BodyStyle.None),
             // using alias (using X = Y;) — must come before general using to capture alias name
             // using エイリアス — 一般 using より前に配置しエイリアス名を取得
-            new("import",    new Regex(@"^\s*(?:global\s+)?using\s+(?<name>\w+)\s*=\s*[^;]+;", RegexOptions.Compiled), BodyStyle.None),
+            new("import",    new Regex($@"^\s*(?:global\s+)?using\s+(?<name>{CSharpIdentifierPattern})\s*=\s*[^;]+;", RegexOptions.Compiled), BodyStyle.None),
             new("import",    new Regex(@"^\s*(?:global\s+)?using\s+(?:static\s+)?(?<name>[^;=]+);", RegexOptions.Compiled), BodyStyle.None),
             // Const field — must come before class/method patterns to avoid misclassification.
             // Modifier order is free: visibility may appear anywhere in the modifier sequence,
@@ -375,7 +377,7 @@ public static class SymbolExtractor
             // const フィールド — クラス/メソッドパターンより前に配置し誤分類を防ぐ。
             // 修飾子順序は自由で、visibility は修飾子列の任意位置に現れてよい（例: `new public const` /
             // `public new const`）。Closes #355.
-            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:new|static)\s+)*const\s+(?<returnType>[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:new|static)\s+)*const\s+(?<returnType>[\w@?.<>\[\],:]+)\s+(?<name>{CSharpIdentifierPattern})\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             // Static readonly field / static readonly フィールド
             // Modifier order is free: `static` and `readonly` may appear in any order, and `new`
             // (member hiding) may appear anywhere in the modifier sequence. Visibility is also
@@ -391,7 +393,7 @@ public static class SymbolExtractor
               + $@"(?=(?:(?:{CSharpVisibilityPattern}|new|static|readonly)\s+)*static\s+)"
               + $@"(?=(?:(?:{CSharpVisibilityPattern}|new|static|readonly)\s+)*readonly\s+)"
               + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:new|static|readonly)\s+)+"
-              + @"(?<returnType>[\w?.<>\[\],:\s]+?)\s+(?<name>\w+)\s*[=;]",
+              + @"(?<returnType>[\w@?.<>\[\],:\s]+?)\s+(?<name>" + CSharpIdentifierPattern + @")\s*[=;]",
                 RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             // Plain field (instance, readonly, volatile, plain static, etc.) — kind `property`.
             // Must come AFTER the `const` and `static readonly` patterns (which take priority
@@ -418,7 +420,7 @@ public static class SymbolExtractor
                 $@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|readonly|volatile|new|unsafe|extern|required)\s+)*"
               + @"(?!(?:public|private|protected|internal|static|readonly|volatile|new|unsafe|extern|required|abstract|virtual|override|sealed|async|partial|file|ref|var|class|struct|interface|enum|record|namespace|delegate\b(?!\*)|event|const|using|return|throw|yield|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await|try|do|typeof|sizeof|nameof|default|operator|this|base)\b)"
               + $@"(?<returnType>{CSharpTypePattern})\s+"
-              + @"(?<name>[A-Za-z_]\w*)\s*(?:=(?![=>])|;)",
+              + @"(?<name>" + CSharpIdentifierPattern + @")\s*(?:=(?![=>])|;)",
                 RegexOptions.Compiled),
                 BodyStyle.None, "visibility", "returnType"),
             // Interface — visibility optional; modifier order is free, so visibility may appear
@@ -426,7 +428,7 @@ public static class SymbolExtractor
             // `new public interface` for nested types). Closes #355.
             // インターフェース — visibility 省略可。修飾子順序は自由
             // （例: `partial public interface`、`file interface`、ネスト型向けの `new public interface`）。Closes #355.
-            new("interface", new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:partial|unsafe|file|new)\s+)*interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("interface", new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:partial|unsafe|file|new)\s+)*interface\s+(?<name>{CSharpIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Enum — visibility optional / enum — visibility 省略可
             new("enum",      CSharpEnumDeclarationRegex, BodyStyle.Brace, "visibility"),
             // Struct (including record struct, ref struct, readonly struct) — visibility optional;
@@ -435,14 +437,14 @@ public static class SymbolExtractor
             // 構造体（record struct, ref struct, readonly struct を含む）— visibility 省略可。
             // 修飾子順序は自由で、visibility は任意位置に置いてよい（例: `readonly public struct`、
             // `ref public struct`）。Closes #355.
-            new("struct",    new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|partial|readonly|file|new|ref|unsafe)\s+)*(?:record\s+)?struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("struct",    new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|partial|readonly|file|new|ref|unsafe)\s+)*(?:record\s+)?struct\s+(?<name>{CSharpIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Class (including record, record class) — visibility optional (defaults to internal
             // for top-level); modifier order is free, so visibility may appear anywhere in the
             // modifier sequence (e.g. `abstract public class`, `sealed public class`). Closes #355.
             // クラス（record, record class を含む）— visibility は省略可能（トップレベルでは internal がデフォルト）。
             // 修飾子順序は自由で、visibility は任意位置に置いてよい（例: `abstract public class`、
             // `sealed public class`）。Closes #355.
-            new("class",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*(?:record\s+class\s+|record\s+|class\s+)(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("class",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*(?:record\s+class\s+|record\s+|class\s+)(?<name>{CSharpIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Implicit/explicit conversion operator — must come before general operator pattern.
             // Visibility may appear before or after `static` / `unsafe` / `extern`. Closes #355.
             // Modifier slot also accepts `abstract|virtual|sealed|override|new` so C# 11
@@ -501,7 +503,7 @@ public static class SymbolExtractor
             // コンストラクタ初期化子 (`: base(...)` / `: this(...)`) が phantom `function base` / `function this`
             // として漏れないよう二重化する。Closes #331.
             // 注意: `new` は除外しない。`new void Hidden()` は C# のメンバー隠蔽宣言として有効。
-            new("function",  new Regex($@"^\s*(?!\[\s*(?:assembly|module|type|return|param|field|property|event|method)\s*:)(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\s*(?:(?:{CSharpVisibilityPattern}|static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*delegate\b(?!\s*\*))(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*(?!{CSharpNonTypeKeywordPattern})(?<returnType>{CSharpTypePattern})\s+(?!(?:base|this)\b)(?<name>\w+)\s*(?:<[^>]+>\s*)?\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("function",  new Regex($@"^\s*(?!\[\s*(?:assembly|module|type|return|param|field|property|event|method)\s*:)(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\s*(?:(?:{CSharpVisibilityPattern}|static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*delegate\b(?!\s*\*))(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*(?!{CSharpNonTypeKeywordPattern})(?<returnType>{CSharpTypePattern})\s+(?!(?:base|this)\b)(?<name>{CSharpIdentifierPattern})\s*(?:<[^>]+>\s*)?\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Constructor (no return type, name followed by parenthesis) — needs visibility.
             // `unsafe` / `extern` can appear before or after visibility so declarations like
             // `unsafe public S(int* p) {}` and `extern public S(int x);` are still captured
@@ -551,7 +553,7 @@ public static class SymbolExtractor
             // 現在行に `)` が出ないため lookahead が発動せずそのままマッチする。
             // CSharpTupleSuffixPattern を CSharpTypePattern と共有することで、ctor 否定先読みと上流の
             // property / method / plain-field 行が tuple サフィックス戻り値の受理形について常に一致する。Closes #349.
-            new("function",  new Regex($@"^\s*(?:(?:unsafe|extern)\s+)*(?<visibility>{CSharpVisibilityPattern})\s+(?:(?:unsafe|extern)\s+)*(?<name>\w+)\s*\((?!.*\){CSharpTupleSuffixPattern}\s*\w+\s*(?:[{{(;]|=>|=(?![=>])))", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function",  new Regex($@"^\s*(?:(?:unsafe|extern)\s+)*(?<visibility>{CSharpVisibilityPattern})\s+(?:(?:unsafe|extern)\s+)*(?<name>{CSharpIdentifierPattern})\s*\((?!.*\){CSharpTupleSuffixPattern}\s*{CSharpIdentifierPattern}\s*(?:[{{(;]|=>|=(?![=>])))", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Static constructor / 静的コンストラクタ
             // Keep this ahead of the property rows so same-line compact bodies such as
             // `class C { static C() { } public int P { get; set; } }` emit the static ctor
@@ -563,7 +565,7 @@ public static class SymbolExtractor
             // pattern scan を打ち切る前に static ctor を先に拾う必要があるため、property 行より前に置く。
             // この形は「戻り値型なし・引数なし・`static` 前後の任意 `unsafe`」に限定されるため、
             // 通常メソッドとは重ならない。Closes #478.
-            new("function",  new Regex(@"^\s*(?:unsafe\s+)?static\s+(?:unsafe\s+)?(?<name>\w+)\s*\(\s*\)\s*\{?", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function",  new Regex($@"^\s*(?:unsafe\s+)?static\s+(?:unsafe\s+)?(?<name>{CSharpIdentifierPattern})\s*\(\s*\)\s*\{{?", RegexOptions.Compiled), BodyStyle.Brace),
             // Property with get/set/init — visibility optional
             // Reject statement keywords (return/throw/switch/...) as the return type so that
             // multi-line statement fragments merged by BuildCSharpPropertyMatchLine — e.g.
@@ -573,7 +575,7 @@ public static class SymbolExtractor
             // `return o switch` のような複数行にまたがる文断片が `BuildCSharpPropertyMatchLine`
             // で結合された結果、property として誤判定されるのを防ぐため、戻り値型として
             // ステートメントキーワードを拒否する。Closes #233.
-            new("property",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*\{{", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("property",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?<returnType>{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*\{{", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Expression-bodied property (public int X => ...) — must come before delegate.
             // Uses BodyStyle.Brace so FindCSharpBraceRange detects '=>' and assigns a body
             // range covering the declaration line through the terminating ';', which
@@ -586,12 +588,12 @@ public static class SymbolExtractor
             // ReferenceExtractor.FindInnermostContainer が accessor 内呼び出しを外側
             // クラスではなく property に帰属させるために必要。
             // Closes #233.
-            new("property",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*=>\s*", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("property",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?<returnType>{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*=>\s*", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Delegate — visibility optional; modifier order is free. Accepts `static` / `unsafe` /
             // `file` (file-scoped delegate) / `new` (nested delegate hiding). Closes #355.
             // デリゲート — visibility 省略可。修飾子順序は自由。`static` / `unsafe` /
             // `file`（file スコープ delegate）/ `new`（ネスト delegate の隠蔽）を受け付ける。Closes #355.
-            new("delegate",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|file|new)\s+)*delegate\s+(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            new("delegate",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|file|new)\s+)*delegate\s+(?<returnType>{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*[\(<]", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             // Event — visibility optional; modifier order is free. Accepts `static` / `unsafe` /
             // `extern` plus inheritance modifiers (`virtual` / `override` / `abstract` / `sealed` / `new`)
             // which are all legal on event declarations per the C# spec. `partial` is also legal on
@@ -603,7 +605,7 @@ public static class SymbolExtractor
             // も受け付ける。event には `partial` も合法 (C# 14 field-like partial event、およびアクセサ
             // ベースの partial member 拡張) なので、ここでも受け付けないと `partial event` 宣言が
             // symbols / definition / outline から無言で欠落する。Closes #350.
-            new("event",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern|virtual|override|abstract|sealed|new|partial)\s+)*event\s+(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*(?:[;=]|\{{)", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            new("event",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern|virtual|override|abstract|sealed|new|partial)\s+)*event\s+(?<returnType>{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*(?:[;=]|\{{)", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             // Explicit interface implementation (e.g. void IDisposable.Dispose())
             // Requires a valid return type (not a statement keyword) and interface name before the dot.
             // Reject named-argument labels only when they are followed by a qualified call site,
@@ -615,7 +617,7 @@ public static class SymbolExtractor
             // 有効な戻り値型（ステートメントキーワードではない）とドット前のインターフェース名を要求。
             // qualified call site を伴う named-argument label のみ除外し、
             // `global::System.String` や `Alias::Type` のような alias-qualified 型は許可する。
-            new("function",  new Regex($@"^\s*(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|new|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\w+\s*:\s*(?:global::)?[\w.<>:]+\.\w+\s*(?:<[^>]+>\s*)?[\(\[])(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>\w+)\s*(?:<[^>]+>\s*)?[\(\[]", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("function",  new Regex($@"^\s*(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|new|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\w+\s*:\s*(?:global::)?[\w@.<>:]+\.\w+\s*(?:<[^>]+>\s*)?[\(\[])(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>{CSharpIdentifierPattern})\s*(?:<[^>]+>\s*)?[\(\[]", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             // Explicit interface property implementation (brace body), e.g. int IThing.Value { get; set; }
             // Mirrors the explicit-interface method row above: the qualifier is non-capturing so the
             // short property name (Value) is recorded as name, consistent with how the method row
@@ -624,10 +626,10 @@ public static class SymbolExtractor
             // 上の明示的インターフェースメソッド行と同じ構造で、修飾子は非キャプチャにしてショート名
             // (Value) のみを name として記録する。メソッド側が Dispose / CompareTo を返すのと揃える。
             // Closes #333.
-            new("property",  new Regex($@"^\s*(?![?:])(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>\w+)\s*\{{", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("property",  new Regex($@"^\s*(?![?:])(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>{CSharpIdentifierPattern})\s*\{{", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             // Explicit interface property implementation (expression body), e.g. string IThing.Name => "x";
             // 明示的インターフェースプロパティ実装（式本体）。例: string IThing.Name => "x";
-            new("property",  new Regex($@"^\s*(?![?:])(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>\w+)\s*=>\s*", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("property",  new Regex($@"^\s*(?![?:])(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>{CSharpIdentifierPattern})\s*=>\s*", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             // Indexer (this[...]) — `partial` is legal on indexers since C# 13 (extended partial
             // member support), so accept it alongside the other modifiers. Otherwise every
             // `partial` indexer declaration would be silently dropped from symbols / definition /
@@ -637,7 +639,7 @@ public static class SymbolExtractor
             // が symbols / definition / outline から無言で欠落する。Closes #350.
             new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|readonly|unsafe|extern|partial|ref(?:\s+readonly)?)\s+)*(?<returnType>{CSharpTypePattern})\s+(?<name>this)\s*\[", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Finalizer (destructor) / ファイナライザ（デストラクタ）
-            new("function",  new Regex(@"^\s*~(?<name>\w+)\s*\(\s*\)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function",  new Regex($@"^\s*~(?<name>{CSharpIdentifierPattern})\s*\(\s*\)", RegexOptions.Compiled), BodyStyle.Brace),
             // Enum member (e.g. Red, Green = 1,) — requires 4+ spaces indent, name only,
             // and optional = with numeric/hex/identifier value. Does NOT match string/object assignments.
             // enum メンバー（例: Red, Green = 1,）— 4+スペースインデント必須、名前のみ、
@@ -1098,7 +1100,7 @@ public static class SymbolExtractor
     // を通せるように CSharpTypePattern と同じトークン集合へ揃え、generic 引数リスト内の
     // `,` + 空白の組み合わせを落とさないようにする。
     private const string CSharpExplicitInterfaceQualifierPattern =
-        @"(?:global::)?(?:[A-Z_]\w*|[A-Za-z_]\w*::\w+)[\w?.<>\[\],:*]*(?:\s+[\w?.<>\[\],:*]+)*";
+        @"(?:global::)?(?:" + CSharpIdentifierPattern + @"|" + CSharpIdentifierPattern + @"::" + CSharpIdentifierPattern + @")[\w@?.<>\[\],:*]*(?:\s+[\w@?.<>\[\],:*]+)*";
     private static readonly Regex CssFontFaceDeclarationRegex = new(@"(?:^|[;{])\s*font-family\s*:", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CssInlineCustomPropertyRegex = new(@"(?<name>--[\w-]+)\s*:", RegexOptions.Compiled);
     // Accepts `Type Name`, `Type`, and `Type Name {` (bare brace at end of declaration
@@ -1121,7 +1123,7 @@ public static class SymbolExtractor
     // + 次行 `Map = new();` や `new public const int` + 次行 `C = 1;` のような
     // 複数行宣言も 1 つのマッチ行に結合できるようにする。複数行 const フィールド向けに
     // `const` も他の field 対応修飾子と一緒に列挙する。Closes #355.
-    private static readonly Regex CSharpPropertyHeaderPrefixRegex = new($@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|volatile|unsafe|extern|const|ref(?:\s+readonly)?)\s+)*(?:{CSharpTypePattern})\s*(?:\w+)?\s*\{{?\s*$", RegexOptions.Compiled);
+    private static readonly Regex CSharpPropertyHeaderPrefixRegex = new($@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|volatile|unsafe|extern|const|ref(?:\s+readonly)?)\s+)*(?:{CSharpTypePattern})\s*(?:{CSharpIdentifierPattern})?\s*\{{?\s*$", RegexOptions.Compiled);
     // Limit only the lightweight confirmation phase. Once a candidate looks like a real
     // declaration (`name =`, or a named member header before `{`), BuildCSharpPropertyMatchLine
     // switches to a linear terminator/accessor scan so long raw strings / initializers are not
@@ -1135,7 +1137,7 @@ public static class SymbolExtractor
     private const int CSharpPropertyMatchLookaheadLineLimit = 16;
     private const int CSharpPropertyMatchLookaheadCharLimit = 4096;
     private static readonly Regex CSharpConfirmedMemberPrefixRegex = new(
-        $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|volatile|unsafe|extern|const|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate\b(?!\*)|event|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await|try|do|operator|this|base)\b)(?:{CSharpTypePattern})\s+(?:{CSharpExplicitInterfaceQualifierPattern}\s*\.\s*)?(?:@?[A-Za-z_]\w*)\s*\{{?\s*$",
+        $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|volatile|unsafe|extern|const|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate\b(?!\*)|event|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await|try|do|operator|this|base)\b)(?:{CSharpTypePattern})\s+(?:{CSharpExplicitInterfaceQualifierPattern}\s*\.\s*)?(?:{CSharpIdentifierPattern})\s*\{{?\s*$",
         RegexOptions.Compiled);
     private static readonly Regex CSharpStandaloneAccessorRegex = new(
         @"^\s*(?:(?:protected\s+internal|private\s+protected|protected|internal|private|public)\s+)*(?:readonly\s+)*(?:get|set|init)\b",
@@ -14258,7 +14260,7 @@ public static class SymbolExtractor
         if (name == "this" && match.Value.Contains("this", StringComparison.Ordinal) && match.Value.Contains('[', StringComparison.Ordinal))
             return "Item";
 
-        return name;
+        return NormalizeCSharpVerbatimIdentifiers(name);
     }
 
     private static string NormalizeKotlinSymbolName(string name, string matchLine)
@@ -14394,8 +14396,50 @@ public static class SymbolExtractor
         var normalized = CSharpTypeWhitespaceRegex.Replace(typeName.Trim(), " ");
         normalized = CSharpTypeDoubleColonWhitespaceRegex.Replace(normalized, "::");
         normalized = CSharpTypeDotWhitespaceRegex.Replace(normalized, ".");
-        return NormalizeCSharpTypeTokenSpacing(normalized);
+        normalized = NormalizeCSharpTypeTokenSpacing(normalized);
+        return NormalizeCSharpVerbatimIdentifiers(normalized);
     }
+
+    private static string NormalizeCSharpVerbatimIdentifiers(string value)
+    {
+        if (string.IsNullOrEmpty(value) || value.IndexOf('@', StringComparison.Ordinal) < 0)
+            return value;
+
+        StringBuilder? builder = null;
+        var segmentStart = 0;
+
+        for (var index = 0; index < value.Length; index++)
+        {
+            if (!IsCSharpVerbatimIdentifierPrefix(value, index))
+                continue;
+
+            builder ??= new StringBuilder(value.Length);
+            if (index > segmentStart)
+                builder.Append(value, segmentStart, index - segmentStart);
+            segmentStart = index + 1;
+        }
+
+        if (builder is null)
+            return value;
+
+        if (segmentStart < value.Length)
+            builder.Append(value, segmentStart, value.Length - segmentStart);
+        return builder.ToString();
+    }
+
+    private static bool IsCSharpVerbatimIdentifierPrefix(string value, int index)
+    {
+        if (value[index] != '@' || index + 1 >= value.Length || !IsCSharpIdentifierStart(value[index + 1]))
+            return false;
+
+        return index == 0 || !IsCSharpIdentifierChar(value[index - 1]);
+    }
+
+    private static bool IsCSharpIdentifierStart(char ch) =>
+        ch == '_' || char.IsLetter(ch);
+
+    private static bool IsCSharpIdentifierChar(char ch) =>
+        ch == '_' || char.IsLetterOrDigit(ch);
 
     private static string NormalizeCSharpTypeTokenSpacing(string typeName)
     {

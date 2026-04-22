@@ -158,6 +158,7 @@ public static class ReferenceExtractor
         "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'",
         RegexOptions.Compiled);
     private static readonly Regex InlineBlockCommentRegex = new(@"/\*.*?\*/", RegexOptions.Compiled);
+    private const string CSharpIdentifierPattern = @"@?[_\p{L}]\w*";
     // The `(?:\?\.)?` segment captures JavaScript / TypeScript optional chaining calls such as
     // `callback?.()` and `callback?.<T>()`. Without it the `?.` stops the regex from reaching the
     // trailing `(`, and the call reference to `callback` is silently dropped. Other supported
@@ -173,7 +174,7 @@ public static class ReferenceExtractor
     // `Foo<Bar<int>>()` や `new Dict<K, List<V>>()` のようなネスト generic 呼び出しは、
     // 平坦な `<[^>\n]+>` では末尾 `>>` を釣り合わせられないため、depth-aware な fallback scanner
     // で補完する。issue #263 参照。
-    private static readonly Regex CallRegex = new(@"(?<![\w$])(?<name>[A-Za-z_]\w*)(?:\?\.)?(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
+    private static readonly Regex CallRegex = new($@"(?<![\w$])(?<name>{CSharpIdentifierPattern})(?:\?\.)?(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
     // SQL stored-procedure call without parentheses: T-SQL `EXEC` / `EXECUTE` and MySQL / MariaDB `CALL`.
     // The shared CallRegex requires a trailing `(`, which misses the dominant real-world form such as
     // `EXEC dbo.sp_Target;`, `EXEC dbo.sp_Target @x = 1, @y = 2;`, `CALL sp_Helper;`, and the bracketed
@@ -231,7 +232,7 @@ public static class ReferenceExtractor
     // collection expression `new[] { ... }` は対象を持たないため意図的にマッチさせない。
     // 1 段を超えるネストした generic（`Dictionary<string, List<int>>` 等）は既存 CallRegex と同様の制限。issue #286 参照。
     private static readonly Regex CSharpJavaInitializerRegex = new(
-        @"\bnew\s+(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*))*(?<name>[A-Za-z_]\w*)(?:\s*<[^>\n]+>)?(?:\s*\[[^\[\]\n]*\])*\s*\{",
+        $@"\bnew\s+(?:global::)?(?:{CSharpIdentifierPattern}(?:\s*::\s*|\s*\.\s*))*(?<name>{CSharpIdentifierPattern})(?:\s*<[^>\n]+>)?(?:\s*\[[^\[\]\n]*\])*\s*\{{",
         RegexOptions.Compiled);
     // Allman-style C# / Java parenless initializer where `{` sits on the next non-empty
     // line. The trailing regex captures `new <Type>` ending the current line (with optional
@@ -240,7 +241,7 @@ public static class ReferenceExtractor
     // Allman スタイルの多行 parenless initializer。`new <Type>` が行末で終わり、次の非空 prepared line が
     // `{` から始まる場合にだけ `instantiate` を発行する。issue #286 参照。
     private static readonly Regex CSharpJavaInitializerTrailingRegex = new(
-        @"\bnew\s+(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*))*(?<name>[A-Za-z_]\w*)(?:\s*<[^>\n]+>)?(?:\s*\[[^\[\]\n]*\])*\s*$",
+        $@"\bnew\s+(?:global::)?(?:{CSharpIdentifierPattern}(?:\s*::\s*|\s*\.\s*))*(?<name>{CSharpIdentifierPattern})(?:\s*<[^>\n]+>)?(?:\s*\[[^\[\]\n]*\])*\s*$",
         RegexOptions.Compiled);
     private static readonly Regex CSharpUsingAliasRegex = new(
         @"^\s*(?:global\s+)?using\s+(?!static\b)(?<alias>@?[A-Za-z_]\w*)\s*=\s*(?<target>[^;]+)",
@@ -295,7 +296,7 @@ public static class ReferenceExtractor
     // C# record のプライマリーコンストラクタ宣言を検出し、base primary-ctor 呼び出しの
     // 参照を record の合成コンストラクタに紐付けるために使う。
     private static readonly Regex CSharpRecordPrimaryCtorSignatureRegex = new(
-        @"\brecord\s+(?:class\s+|struct\s+)?\w+(?:<[^>]+>)?\s*\(",
+        $@"\brecord\s+(?:class\s+|struct\s+)?{CSharpIdentifierPattern}(?:<[^>]+>)?\s*\(",
         RegexOptions.Compiled);
     // Same intent as CSharpRecordPrimaryCtorSignatureRegex but applied to the joined multi-line
     // header produced by CollectCSharpRecordHeader, so split-line forms like
@@ -308,7 +309,7 @@ public static class ReferenceExtractor
     // `struct` と `(` が別行に分かれる書式でも primary-ctor 宣言と判定できるようにする。
     // C# 12 以降の class / struct primary constructor にも同じ合成コンテナ経路を適用する。
     private static readonly Regex CSharpPrimaryCtorHeaderRegex = new(
-        @"\b(?:record\s+(?:class\s+|struct\s+)?|class\s+|struct\s+)\w+(?:\s*<[^>]+>)?\s*\(",
+        $@"\b(?:record\s+(?:class\s+|struct\s+)?|class\s+|struct\s+){CSharpIdentifierPattern}(?:\s*<[^>]+>)?\s*\(",
         RegexOptions.Compiled);
     // C# compile-time type/member references: `nameof(X.Y)`, `typeof(T)`, `sizeof(T)`, `default(T)`.
     // Keywords are in SharedIgnoredCallNames so CallRegex skips them, but their arguments have no
@@ -373,7 +374,7 @@ public static class ReferenceExtractor
     // （CallRegex 経路）や `.` / `::`（qualifier 継続）なら名前を確定させず、行末（`$`）・`]`・`,`
     // のいずれかで初めて採用する。
     private static readonly Regex CSharpNoArgAttributeRegex = new(
-        @"(?<!\w)(?:[A-Za-z_]\w*\s*:\s*)?(?:[A-Za-z_]\w*\s*(?:\.|::)\s*)*(?<name>[A-Za-z_]\w*)(?:\s*<[^\n]+?>)?\s*(?=[\],]|$)",
+        $@"(?<!\w)(?:{CSharpIdentifierPattern}\s*:\s*)?(?:{CSharpIdentifierPattern}\s*(?:\.|::)\s*)*(?<name>{CSharpIdentifierPattern})(?:\s*<[^\n]+?>)?\s*(?=[\],]|$)",
         RegexOptions.Compiled);
 
     // No-arg Java-family annotation (`@Deprecated`, `@Override`, `@org.junit.Test`, `@field:Deprecated`).
@@ -760,10 +761,10 @@ public static class ReferenceExtractor
                 var matchedInitializerIndices = new HashSet<int>();
                 foreach (Match match in CSharpJavaInitializerRegex.Matches(preparedLine))
                 {
-                    var name = match.Groups["name"].Value;
+                    var rawName = match.Groups["name"].Value;
                     var nameIndex = match.Groups["name"].Index;
                     matchedInitializerIndices.Add(nameIndex);
-                    if (ShouldSkipInitializerName(language, name))
+                    if (ShouldSkipInitializerName(language, rawName))
                         continue;
                     // Do NOT skip when the type is defined in the same file — the CallRegex
                     // `IsConstructorCallName` path emits `instantiate` without a definitionNames
@@ -771,7 +772,8 @@ public static class ReferenceExtractor
                     // 同一ファイル内定義でもスキップしない。`IsConstructorCallName` 経路の
                     // `instantiate` が同様の扱いをしているため、括弧あり/なしで挙動を揃える。
                     var initContainer = ResolveContainerForCall(nameIndex);
-                    AddReference(references, seen, fileId, match, "instantiate", context, lineNumber, initContainer);
+                    var name = language == "csharp" ? NormalizeCSharpIdentifier(rawName) : rawName;
+                    AddReference(references, seen, fileId, name, nameIndex, "instantiate", context, lineNumber, initContainer);
                 }
 
                 // The initializer regex has the same one-level generic ceiling as CallRegex,
@@ -823,13 +825,14 @@ public static class ReferenceExtractor
                     {
                         if (trailingMatch.Success)
                         {
-                            var name = trailingMatch.Groups["name"].Value;
+                            var rawName = trailingMatch.Groups["name"].Value;
                             var nameIndex = trailingMatch.Groups["name"].Index;
                             matchedInitializerIndices.Add(nameIndex);
-                            if (!ShouldSkipInitializerName(language, name))
+                            if (!ShouldSkipInitializerName(language, rawName))
                             {
                                 var initContainer = ResolveContainerForCall(nameIndex);
-                                AddReference(references, seen, fileId, trailingMatch, "instantiate", context, lineNumber, initContainer);
+                                var name = language == "csharp" ? NormalizeCSharpIdentifier(rawName) : rawName;
+                                AddReference(references, seen, fileId, name, nameIndex, "instantiate", context, lineNumber, initContainer);
                             }
 
                         }
@@ -845,11 +848,12 @@ public static class ReferenceExtractor
                                     continue;
 
                                 var initContainer = ResolveContainerForCall(candidate.NameIndex);
+                                var name = language == "csharp" ? NormalizeCSharpIdentifier(candidate.Name) : candidate.Name;
                                 AddReference(
                                     references,
                                     seen,
                                     fileId,
-                                    candidate.Name,
+                                    name,
                                     candidate.NameIndex,
                                     "instantiate",
                                     context,
@@ -863,6 +867,8 @@ public static class ReferenceExtractor
 
             void AddCallLikeReference(string name, int callIndex)
             {
+                var normalizedName = NormalizeAtPrefixedIdentifier(name);
+
                 // Suppress the same-line Java ctor declarator's self-call. CallRegex matches
                 // `CtorName(` at the declarator once per same-line ctor, but it is a declaration
                 // site — not a call — so attributing it to `class:CtorName` produces a phantom
@@ -871,7 +877,7 @@ public static class ReferenceExtractor
                 // 同一行 ctor の宣言子 `CtorName(` は呼び出しではないため CallRegex の対象から除外する。
                 if (javaSameLineCtor != null
                     && callIndex == javaSameLineCtor.Value.NameIndex
-                    && string.Equals(name, javaSameLineCtor.Value.Synthetic.Name, StringComparison.Ordinal))
+                    && string.Equals(normalizedName, javaSameLineCtor.Value.Synthetic.Name, StringComparison.Ordinal))
                 {
                     return;
                 }
@@ -879,12 +885,12 @@ public static class ReferenceExtractor
                 var callContainer = ResolveContainerForCall(callIndex);
                 if (IsConstructorCallName(language, preparedLine, callIndex))
                 {
-                    AddReference(references, seen, fileId, name, callIndex, "instantiate", context, lineNumber, callContainer);
+                    AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer);
                     return;
                 }
                 if (IsIgnoredCallName(language, name))
                     return;
-                if (definitionNames != null && definitionNames.Contains(name))
+                if (definitionNames != null && definitionNames.Contains(normalizedName))
                     return;
 
                 // issue #293: reclassify C# attribute / Java/Kotlin/Scala/TypeScript annotation
@@ -894,7 +900,7 @@ public static class ReferenceExtractor
                 var insideCSharpAttributeRange = csharpAttrRangesOnLine != null
                     && IsInsideCSharpAttributeRange(csharpAttrRangesOnLine, callIndex);
                 var metadataKind = TryClassifyMetadataReference(language, preparedLine, callIndex, insideCSharpAttributeRange);
-                AddReference(references, seen, fileId, name, callIndex, metadataKind ?? "call", context, lineNumber, callContainer);
+                AddReference(references, seen, fileId, normalizedName, callIndex, metadataKind ?? "call", context, lineNumber, callContainer);
             }
 
             var matchedCallIndices = new HashSet<int>();
@@ -951,7 +957,8 @@ public static class ReferenceExtractor
             {
                 foreach (Match match in CSharpNoArgAttributeRegex.Matches(preparedLine))
                 {
-                    var name = match.Groups["name"].Value;
+                    var rawName = match.Groups["name"].Value;
+                    var name = NormalizeCSharpIdentifier(rawName);
                     var nameIndex = match.Groups["name"].Index;
                     // Gate on the attribute-section top-level (paren-depth 0) zones only, so
                     // identifiers that sit inside an attribute's argument list (e.g.
@@ -962,11 +969,11 @@ public static class ReferenceExtractor
                     // の `AllowNumbers` など）を no-arg 属性として誤分類しないため。
                     if (!IsInsideCSharpAttributeRange(csharpAttrTopLevelOnLine, nameIndex))
                         continue;
-                    if (IsIgnoredCallName(language, name))
+                    if (IsIgnoredCallName(language, rawName))
                         continue;
                     if (definitionNames != null && definitionNames.Contains(name))
                         continue;
-                    AddReference(references, seen, fileId, match, "attribute", context, lineNumber, container);
+                    AddReference(references, seen, fileId, name, nameIndex, "attribute", context, lineNumber, container);
                 }
             }
             else if (AnnotationLanguages.Contains(language))
@@ -1692,6 +1699,11 @@ public static class ReferenceExtractor
     }
 
     private static string NormalizeCSharpIdentifier(string identifier) =>
+        !string.IsNullOrEmpty(identifier) && identifier[0] == '@'
+            ? identifier[1..]
+            : identifier;
+
+    private static string NormalizeAtPrefixedIdentifier(string identifier) =>
         !string.IsNullOrEmpty(identifier) && identifier[0] == '@'
             ? identifier[1..]
             : identifier;
@@ -6426,15 +6438,13 @@ public static class ReferenceExtractor
     {
         for (var i = 0; i < preparedLine.Length; i++)
         {
-            if (!IsAsciiIdentifierStartChar(preparedLine[i]))
+            if (!IsAtAwareAsciiIdentifierStart(preparedLine, i))
                 continue;
-            if (i > 0 && (IsIdentifierChar(preparedLine[i - 1]) || preparedLine[i - 1] == '$'))
+            if (i > 0 && (IsIdentifierChar(preparedLine[i - 1]) || preparedLine[i - 1] == '$' || preparedLine[i - 1] == '@'))
                 continue;
 
             var nameStart = i;
-            i++;
-            while (i < preparedLine.Length && IsIdentifierChar(preparedLine[i]))
-                i++;
+            i = ConsumeAtAwareAsciiIdentifier(preparedLine, i);
 
             if (matchedCallIndices.Contains(nameStart))
             {
@@ -6538,13 +6548,11 @@ public static class ReferenceExtractor
             while (scan < preparedLine.Length && char.IsWhiteSpace(preparedLine[scan]))
                 scan++;
 
-            if (scan >= preparedLine.Length || !IsAsciiIdentifierStartChar(preparedLine[scan]))
+            if (scan >= preparedLine.Length || !IsAtAwareAsciiIdentifierStart(preparedLine, scan))
                 return false;
 
             var segmentStart = scan;
-            scan++;
-            while (scan < preparedLine.Length && IsIdentifierChar(preparedLine[scan]))
-                scan++;
+            scan = ConsumeAtAwareAsciiIdentifier(preparedLine, scan);
 
             name = preparedLine[segmentStart..scan];
             nameIndex = segmentStart;
@@ -6647,6 +6655,33 @@ public static class ReferenceExtractor
     private static bool IsAsciiIdentifierStartChar(char ch) =>
         ch == '_' || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
 
+    private static bool IsAtAwareAsciiIdentifierStart(string text, int index)
+    {
+        if (index < 0 || index >= text.Length)
+            return false;
+
+        if (text[index] == '@')
+            return index + 1 < text.Length && IsAsciiIdentifierStartChar(text[index + 1]);
+
+        return IsAsciiIdentifierStartChar(text[index]);
+    }
+
+    private static int ConsumeAtAwareAsciiIdentifier(string text, int startIndex)
+    {
+        var index = startIndex;
+        if (index < text.Length && text[index] == '@')
+            index++;
+
+        if (index >= text.Length || !IsAsciiIdentifierStartChar(text[index]))
+            return startIndex;
+
+        index++;
+        while (index < text.Length && IsIdentifierChar(text[index]))
+            index++;
+
+        return index;
+    }
+
     private static bool IsIdentifierChar(char ch) =>
         char.IsLetterOrDigit(ch) || ch == '_';
 
@@ -6665,6 +6700,14 @@ public static class ReferenceExtractor
     {
         if (language == "csharp")
             return insideCSharpAttributeRange ? "attribute" : null;
+
+        if (nameIndex >= 0
+            && nameIndex < preparedLine.Length
+            && preparedLine[nameIndex] == '@'
+            && AnnotationLanguages.Contains(language))
+        {
+            return "annotation";
+        }
 
         var probe = nameIndex - 1;
         while (probe >= 0 && char.IsWhiteSpace(preparedLine[probe]))

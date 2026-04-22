@@ -162,6 +162,36 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_VerboseVerbatimIdentifiers_NormalizeCallsAndInstantiation()
+    {
+        const string content = """
+            public class @class
+            {
+                public void @if() { }
+
+                public void Run()
+                {
+                    @if();
+                    var direct = new @class();
+                    var initializer = new @class { };
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "if"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "Run");
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "class"
+            && reference.ReferenceKind == "instantiate"));
+        Assert.DoesNotContain(references, reference => reference.SymbolName.StartsWith("@", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Extract_CsharpAllmanBlockBodiedProperty_WithBlockComment_AttributesToProperty()
     {
         // issue #233 fourth review follow-up: a multi-line /* ... */ block comment
