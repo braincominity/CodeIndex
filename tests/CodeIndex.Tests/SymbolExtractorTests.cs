@@ -10358,6 +10358,154 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_CarriedVerbatimStringContinuationStillFindsLaterSameLineNestedAndOuterTypes()
+    {
+        // When a physical line begins inside a carried verbatim string, the closing `";`
+        // leaves a top-level semicolon before the real declaration stream. The same-line
+        // C# restart must skip that empty statement and still reach the later real types.
+        // Closes #630 / #633.
+        // 継続中の verbatim string から始まる物理行では、閉じ `";` の直後に top-level の
+        // 空文 `;` が残る。same-line の C# 再開はその空文を飛ばし、後続の実型宣言まで
+        // 到達しなければならない。Closes #630 / #633.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        private string _s = @\"",
+            "        public partial class Fake { }\"; public partial class Child { } } public partial class OuterChild { }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Fake");
+        var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
+        Assert.Equal("class", child.ContainerKind);
+        Assert.Equal("Wrapped", child.ContainerName);
+        Assert.Equal("public partial class Child { }", child.Signature);
+
+        var outerChild = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "OuterChild"));
+        Assert.Equal("class", outerChild.ContainerKind);
+        Assert.Equal("Host", outerChild.ContainerName);
+        Assert.Equal("public partial class OuterChild { }", outerChild.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_CarriedRawStringContinuationStillFindsLaterSameLineNestedAndOuterTypes()
+    {
+        // Raw-string continuation lines have the same top-level `;` restart hazard as
+        // verbatim strings. The fake declaration inside the string must stay suppressed
+        // while the later real nested and outer siblings still extract. Closes #630 / #633.
+        // raw string の継続行も、verbatim string と同じく top-level の `;` 再開ハザードを持つ。
+        // 文字列内の fake 宣言は抑止したまま、後続の実 nested / outer sibling を抽出する必要がある。
+        // Closes #630 / #633.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        private string _s = \"\"\"",
+            "        public partial class Fake { }\"\"\"; public partial class Child { } } public partial class OuterChild { }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Fake");
+        var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
+        Assert.Equal("class", child.ContainerKind);
+        Assert.Equal("Wrapped", child.ContainerName);
+        Assert.Equal("public partial class Child { }", child.Signature);
+
+        var outerChild = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "OuterChild"));
+        Assert.Equal("class", outerChild.ContainerKind);
+        Assert.Equal("Host", outerChild.ContainerName);
+        Assert.Equal("public partial class OuterChild { }", outerChild.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_CarriedVerbatimStringContinuationWithSameLineAccessorEventStillFindsLaterTypes()
+    {
+        // Carried verbatim close-lines can now restart across the top-level `";`, but
+        // same-line accessor-event sibling recovery must also use the carried lexical
+        // state or the later nested/outer class declarations still disappear.
+        // Closes #630 / #633 follow-up.
+        // 継続 verbatim string の close-line では top-level の `";` を跨いで再開できても、
+        // same-line accessor event の sibling 回復も carried lexical state を使わないと
+        // 後続の nested / outer class 宣言がまだ消えてしまう。Closes #630 / #633 follow-up.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        private string _s = @\"",
+            "        public partial class Fake { }\"; public event System.Action E { add { } remove { } } public partial class Child { } } public partial class OuterChild { }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Fake");
+
+        var evt = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E"));
+        Assert.Equal("Wrapped", evt.ContainerName);
+        Assert.Equal("public event System.Action E { add { } remove { } }", evt.Signature);
+
+        var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
+        Assert.Equal("Wrapped", child.ContainerName);
+        Assert.Equal("public partial class Child { }", child.Signature);
+
+        var outerChild = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "OuterChild"));
+        Assert.Equal("Host", outerChild.ContainerName);
+        Assert.Equal("public partial class OuterChild { }", outerChild.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_CarriedRawStringContinuationWithSameLineAccessorEventStillFindsLaterTypes()
+    {
+        // Raw-string close-lines should keep the same event-sibling restart contract as the
+        // verbatim path: same-line accessor events must not block later nested/outer types.
+        // Closes #630 / #633 follow-up.
+        // raw string の close-line でも verbatim と同じ event-sibling 再開契約を保ち、
+        // same-line accessor event が後続の nested / outer type を塞がないことを確認する。
+        // Closes #630 / #633 follow-up.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        private string _s = \"\"\"",
+            "        public partial class Fake { }\"\"\"; public event System.Action E { add { } remove { } } public partial class Child { } } public partial class OuterChild { }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Fake");
+
+        var evt = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E"));
+        Assert.Equal("Wrapped", evt.ContainerName);
+        Assert.Equal("public event System.Action E { add { } remove { } }", evt.Signature);
+
+        var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
+        Assert.Equal("Wrapped", child.ContainerName);
+        Assert.Equal("public partial class Child { }", child.Signature);
+
+        var outerChild = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "OuterChild"));
+        Assert.Equal("Host", outerChild.ContainerName);
+        Assert.Equal("public partial class OuterChild { }", outerChild.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_InlineBlockCommentBeforeSameLineClassDoesNotPolluteSignature()
     {
         // Inline block comments that end immediately before a real same-line declaration must
