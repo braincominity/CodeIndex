@@ -583,6 +583,7 @@ public static class ReferenceExtractor
         var recordPrimaryCtorRanges = BuildCSharpPrimaryCtorContainers(language, symbols, structuralLines);
         var csharpQualifiedEnumMemberLookup = BuildCSharpQualifiedEnumMemberLookup(language, symbols);
         var csharpQualifiedConstantPatternMemberLookup = BuildCSharpQualifiedConstantPatternMemberLookup(language, symbols);
+        var csharpQualifiedTypePatternLookup = BuildCSharpQualifiedTypePatternLookup(language, symbols);
         var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols);
         var csharpKnownTypeNames = BuildCSharpKnownTypeNames(language, symbols);
         var csharpValueReceiverNames = BuildCSharpValueReceiverNamesByContainingType(language, symbols);
@@ -755,6 +756,7 @@ public static class ReferenceExtractor
                     preparedLine,
                     originalLine,
                     csharpQualifiedConstantPatternMemberLookup,
+                    csharpQualifiedTypePatternLookup,
                     csharpUsingAliases,
                     references,
                     seen,
@@ -1332,6 +1334,7 @@ public static class ReferenceExtractor
         string preparedLine,
         string originalLine,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
         List<ReferenceRecord> references,
         HashSet<string> seen,
@@ -1361,6 +1364,7 @@ public static class ReferenceExtractor
                     continuationIndex,
                     lineNumber,
                     csharpQualifiedConstantPatternMemberLookup,
+                    csharpQualifiedTypePatternLookup,
                     csharpUsingAliases))
             {
                 continue;
@@ -1381,6 +1385,7 @@ public static class ReferenceExtractor
         EmitCSharpCaseTypePatternReferences(
             preparedLine,
             csharpQualifiedConstantPatternMemberLookup,
+            csharpQualifiedTypePatternLookup,
             csharpUsingAliases,
             references,
             seen,
@@ -1393,6 +1398,7 @@ public static class ReferenceExtractor
     private static void EmitCSharpCaseTypePatternReferences(
         string preparedLine,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
         List<ReferenceRecord> references,
         HashSet<string> seen,
@@ -1418,8 +1424,8 @@ public static class ReferenceExtractor
                     preparedLine,
                     typeGroup.Value,
                     continuationIndex,
-                    hadLeadingNot,
                     csharpQualifiedConstantPatternMemberLookup,
+                    csharpQualifiedTypePatternLookup,
                     csharpUsingAliases,
                     lineNumber))
                 continue;
@@ -2839,6 +2845,47 @@ public static class ReferenceExtractor
         return lookup;
     }
 
+    private static Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> BuildCSharpQualifiedTypePatternLookup(
+        string language,
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        var lookup = new Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
+        if (language != "csharp")
+            return lookup;
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is not ("class" or "struct" or "interface" or "enum" or "delegate")
+                || string.IsNullOrWhiteSpace(symbol.Name)
+                || string.IsNullOrWhiteSpace(symbol.ContainerName))
+            {
+                continue;
+            }
+
+            if (!lookup.TryGetValue(symbol.Name, out var targets))
+            {
+                targets = [];
+                lookup[symbol.Name] = targets;
+            }
+
+            bool exists = false;
+            foreach (var existing in targets)
+            {
+                if (string.Equals(existing.ContainerName, symbol.ContainerName, StringComparison.Ordinal)
+                    && string.Equals(existing.QualifiedContainerName, symbol.ContainerQualifiedName, StringComparison.Ordinal))
+                {
+                    exists = true;
+                    break;
+                }
+            }
+
+            if (!exists)
+                targets.Add((symbol.ContainerName!, symbol.ContainerQualifiedName, AllowShortNameFallback: true));
+        }
+
+        return lookup;
+    }
+
     private static bool IsCSharpConstMemberSymbol(SymbolRecord symbol)
     {
         if (symbol.ContainerKind is not ("class" or "struct"))
@@ -3008,8 +3055,8 @@ public static class ReferenceExtractor
         string preparedLine,
         string typeExpression,
         int cursor,
-        bool hadLeadingNot,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
         int lineNumber)
     {
@@ -3021,8 +3068,7 @@ public static class ReferenceExtractor
 
         return preparedLine[cursor] switch
         {
-            ':' => hadLeadingNot
-                && !IsCSharpQualifiedConstantPatternMemberHead(
+            ':' => !IsCSharpQualifiedConstantPatternMemberHead(
                     typeExpression,
                     lineNumber,
                     csharpQualifiedConstantPatternMemberLookup,
@@ -3032,8 +3078,8 @@ public static class ReferenceExtractor
                 preparedLine,
                 typeExpression,
                 cursor,
-                hadLeadingNot,
                 csharpQualifiedConstantPatternMemberLookup,
+                csharpQualifiedTypePatternLookup,
                 csharpUsingAliases,
                 lineNumber)
         };
@@ -3043,8 +3089,8 @@ public static class ReferenceExtractor
         string preparedLine,
         string typeExpression,
         int cursor,
-        bool hadLeadingNot,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
         int lineNumber)
     {
@@ -3058,8 +3104,7 @@ public static class ReferenceExtractor
 
         return rawToken switch
         {
-            "when" => hadLeadingNot
-                && !IsCSharpQualifiedConstantPatternMemberHead(
+            "when" => !IsCSharpQualifiedConstantPatternMemberHead(
                     typeExpression,
                     lineNumber,
                     csharpQualifiedConstantPatternMemberLookup,
@@ -3070,6 +3115,7 @@ public static class ReferenceExtractor
                 tokenCursor,
                 lineNumber,
                 csharpQualifiedConstantPatternMemberLookup,
+                csharpQualifiedTypePatternLookup,
                 csharpUsingAliases),
             _ => true,
         };
@@ -3081,6 +3127,7 @@ public static class ReferenceExtractor
         int cursor,
         int lineNumber,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
     {
         int tokenCursor = cursor;
@@ -3097,6 +3144,7 @@ public static class ReferenceExtractor
             tokenCursor,
             lineNumber,
             csharpQualifiedConstantPatternMemberLookup,
+            csharpQualifiedTypePatternLookup,
             csharpUsingAliases);
     }
 
@@ -3106,6 +3154,7 @@ public static class ReferenceExtractor
         int cursor,
         int lineNumber,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
     {
         if (IsCSharpQualifiedConstantPatternMemberHead(
@@ -3115,6 +3164,15 @@ public static class ReferenceExtractor
                 csharpUsingAliases))
         {
             return true;
+        }
+
+        if (IsCSharpQualifiedTypePatternHead(
+                typeExpression,
+                lineNumber,
+                csharpQualifiedTypePatternLookup,
+                csharpUsingAliases))
+        {
+            return false;
         }
 
         if (!TryReadCSharpQualifiedAccess(typeExpression, 0, out var currentParsed)
@@ -3137,6 +3195,15 @@ public static class ReferenceExtractor
             return false;
 
         var nextTypeExpression = nextMatch.Groups["type"].Value;
+        if (IsCSharpQualifiedTypePatternHead(
+                nextTypeExpression,
+                lineNumber,
+                csharpQualifiedTypePatternLookup,
+                csharpUsingAliases))
+        {
+            return false;
+        }
+
         if (!TryReadCSharpQualifiedAccess(nextTypeExpression, 0, out var nextParsed)
             || !nextParsed.LastSeparatorWasDot
             || nextParsed.Segments.Count < 2)
@@ -3146,6 +3213,33 @@ public static class ReferenceExtractor
 
         var nextQualifier = ResolveCSharpQualifiedConstantPatternQualifier(nextTypeExpression, nextParsed, lineNumber, csharpUsingAliases);
         return string.Equals(currentQualifier, nextQualifier, StringComparison.Ordinal);
+    }
+
+    private static bool IsCSharpQualifiedTypePatternHead(
+        string typeExpression,
+        int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
+    {
+        if (!TryReadCSharpQualifiedAccess(typeExpression, 0, out var parsed)
+            || !parsed.LastSeparatorWasDot
+            || parsed.Segments.Count < 2)
+        {
+            return false;
+        }
+
+        var member = parsed.Segments[^1];
+        var memberName = typeExpression.Substring(member.Start, member.End - member.Start);
+        if (!csharpQualifiedTypePatternLookup.TryGetValue(memberName, out var targets))
+            return false;
+
+        var resolvedQualifier = ResolveCSharpQualifiedConstantPatternQualifier(typeExpression, parsed, lineNumber, csharpUsingAliases);
+        bool qualifierHasMultipleSegments = resolvedQualifier.Contains('.') || resolvedQualifier.Contains("::", StringComparison.Ordinal);
+        return MatchesQualifiedConstantContainer(
+            resolvedQualifier,
+            targets,
+            allowShortNameFallback: !parsed.HasLeadingGlobalQualifier && !qualifierHasMultipleSegments,
+            allowSingleSegmentQualifiedMatch: parsed.HasLeadingGlobalQualifier);
     }
 
     private static string ResolveCSharpQualifiedConstantPatternQualifier(

@@ -6960,6 +6960,86 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpCaseTerminalAndGuardedTypePatterns_CaptureTypeReferences()
+    {
+        // issue #672: plain `case Type:` and `case Type when ...:` remain valid type patterns
+        // and must not disappear just because the case scanner now filters constant labels.
+        // issue #672: 素の `case Type:` と `case Type when ...:` は有効な型パターンであり、
+        // 定数ラベル除去の都合で消えてはならない。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+
+            class Demo
+            {
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case Point:
+                            break;
+                        case Point when value != null:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(2, pointRefs.Count);
+        Assert.All(pointRefs, r => Assert.Equal("Run", r.ContainerName));
+        Assert.DoesNotContain(references, r => r.SymbolName == "null" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpLogicalNestedTypePatterns_CaptureTypeReferences()
+    {
+        // issue #673: qualified nested-type logical patterns such as
+        // `Outer.Red or Outer.Blue` are still type tests, not constant-member labels.
+        // issue #673: `Outer.Red or Outer.Blue` のような qualified nested-type の logical
+        // pattern は、定数 member label ではなく本物の型テストとして残さなければならない。
+        const string content = """
+            namespace Probe;
+
+            class Outer
+            {
+                public class Red {}
+                public class Blue {}
+            }
+
+            class Demo
+            {
+                bool Match(object value)
+                {
+                    return value is Outer.Red or Outer.Blue;
+                }
+
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case Outer.Red or Outer.Blue:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "Outer" && r.ReferenceKind == "type_reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run");
+    }
+
+    [Fact]
     public void Extract_CsharpCaseRecursiveAndPositionalPatterns_CaptureTypeReferences()
     {
         // issue #661: recursive/property and positional `case Type ...` patterns without
