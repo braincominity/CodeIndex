@@ -2896,6 +2896,88 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_NormalizesVerbatimIdentifiers()
+    {
+        var content = """
+            namespace CsVerbatimIdent;
+
+            public class @class
+            {
+                public int @int { get; set; }
+                public string @return => string.Empty;
+                public static @class Make() => new @class();
+                public void @if() { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "class");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "int");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "return");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Make");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "if");
+        Assert.DoesNotContain(symbols, s => s.Name.StartsWith("@", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Extract_CSharp_NormalizesVerbatimQualifiedNamespaceAndImportNames()
+    {
+        var content = """
+            using Outer.@class;
+
+            namespace Outer.@class
+            {
+                public class Container
+                {
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var namespaceSymbol = Assert.Single(symbols.Where(s => s.Kind == "namespace"));
+        var importSymbol = Assert.Single(symbols.Where(s => s.Kind == "import"));
+        var containerSymbol = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Container"));
+
+        Assert.Equal("Outer.class", namespaceSymbol.Name);
+        Assert.Equal("Outer.class", importSymbol.Name);
+        Assert.Equal("namespace", containerSymbol.ContainerKind);
+        Assert.Equal("Outer.class", containerSymbol.ContainerName);
+        Assert.DoesNotContain(symbols, s => s.Name.Contains("@", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Extract_CSharp_NormalizesVerbatimConversionOperatorTargetTypes()
+    {
+        var content = """
+            using System.Collections.Generic;
+
+            namespace Outer.@class
+            {
+                public class Target
+                {
+                }
+            }
+
+            public class @class
+            {
+            }
+
+            public class Source
+            {
+                public static implicit operator @class(Source value) => new @class();
+                public static explicit operator Outer.@class.Target(Source value) => new Outer.@class.Target();
+                public static explicit operator List<@class>(Source value) => new();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "implicit operator class");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator Outer.class.Target");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "explicit operator List<class>");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name.Contains("@", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Extract_CSharp_RawStringFixturesDoNotLeakPhantomSymbols()
     {
         var content = """""
@@ -6181,6 +6263,54 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsExplicitInterfaceEventImpl()
+    {
+        // Issue #351: explicit-interface events must emit the trailing event name (`Evt`)
+        // instead of dropping the implementation or inventing the qualifier (`IFoo`) as a
+        // phantom event. Cover same-line and next-line accessor blocks plus generic/global
+        // qualifiers to keep the dedicated event row aligned with the other explicit-member rows.
+        // Issue #351: 明示的インターフェース event は、実装を落としたり qualifier (`IFoo`) を
+        // 幻の event 名として emit したりせず、末尾の event 名 (`Evt`) を記録しなければならない。
+        // 専用 event 行が他の explicit-member 行と揃うよう、同一行/次行 accessor block と
+        // generic/global qualifier をまとめて守る。
+        var content = """
+            namespace Demo;
+
+            public interface IFoo
+            {
+                event System.EventHandler Evt;
+                event System.EventHandler Evt2;
+                event System.EventHandler Evt3;
+                event System.EventHandler Evt4;
+            }
+
+            public class Svc : IFoo
+            {
+                event System.EventHandler IFoo.Evt
+                {
+                    add { }
+                    remove { }
+                }
+
+                event System.EventHandler IFoo.Evt2 { add { } remove { } }
+                event System.EventHandler IMap<string, int>.Evt3 { add { } remove { } }
+                event System.EventHandler global::Demo.IFoo.Evt4 { add { } remove { } }
+                public event System.EventHandler OnBaseline;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Equal(5, symbols.Count(s => s.Kind == "event" && s.ContainerName == "Svc"));
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "Evt" && s.ContainerName == "Svc");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "Evt2" && s.ContainerName == "Svc");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "Evt3" && s.ContainerName == "Svc");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "Evt4" && s.ContainerName == "Svc");
+        Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "OnBaseline" && s.ContainerName == "Svc");
+        Assert.DoesNotContain(symbols, s => s.Kind == "event" && s.Name == "IFoo" && s.ContainerName == "Svc");
+        Assert.DoesNotContain(symbols, s => s.Kind == "event" && s.Name == "IMap" && s.ContainerName == "Svc");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsIndexer()
     {
         var content = "public class Collection\n{\n    public string this[int index]\n    {\n        get => _items[index];\n        set => _items[index] = value;\n    }\n}";
@@ -7036,6 +7166,38 @@ public class SymbolExtractorTests
             var symbol = Assert.Single(symbols.Where(s => s.Name == name));
             Assert.Equal("enum", symbol.Kind);
             Assert.Equal("Permissions", symbol.ContainerName);
+            Assert.Equal("enum", symbol.ContainerKind);
+        }
+    }
+
+    [Fact]
+    public void Extract_CSharp_Issue339_SameLineAttributedEnumMembersStayIndexed()
+    {
+        // Same-line C# attributes on enum members must not hide the member name.
+        // C# enum member の同行 attribute は member 名を隠してはならない。
+        var content = """
+            namespace EnumAttr;
+
+            public enum Status
+            {
+                [System.Obsolete] Legacy = 0,
+                [System.ComponentModel.DefaultValue(1)] B = 1,
+                [System.Obsolete][System.ComponentModel.Browsable(false)] D = 3,
+
+                [System.Obsolete]
+                E = 4,
+
+                F = 5,
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Status");
+        foreach (var name in new[] { "Legacy", "B", "D", "E", "F" })
+        {
+            var symbol = Assert.Single(symbols.Where(s => s.Name == name));
+            Assert.Equal("enum", symbol.Kind);
+            Assert.Equal("Status", symbol.ContainerName);
             Assert.Equal("enum", symbol.ContainerKind);
         }
     }
@@ -8356,12 +8518,57 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Email");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Handler");
         // Companion object (unnamed) / コンパニオンオブジェクト（無名）
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Signature != null && s.Signature.Contains("companion object"));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Companion" && s.Signature != null && s.Signature.Contains("companion object"));
         // Extension function / 拡張関数
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "truncate");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fetchData");
         // const val / 定数プロパティ
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "MAX");
+    }
+
+    [Fact]
+    public void Extract_Kotlin_AnonymousCompanionDefaultsToCompanionName()
+    {
+        var content = """
+            class Widget {
+                companion object {
+                    const val MAX = 100
+                    fun create(): Widget = Widget()
+                }
+            }
+
+            class Named {
+                companion object Factory {
+                    fun build(): Named = Named()
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+
+        Assert.DoesNotContain(symbols, s => string.IsNullOrWhiteSpace(s.Name));
+
+        var anonymousCompanion = Assert.Single(symbols.Where(s =>
+            s.Kind == "class"
+            && s.Name == "Companion"
+            && s.ContainerKind == "class"
+            && s.ContainerName == "Widget"));
+        Assert.Equal("companion object {", anonymousCompanion.Signature);
+
+        Assert.Contains(symbols, s =>
+            s.Kind == "property"
+            && s.Name == "MAX"
+            && s.ContainerKind == "class"
+            && s.ContainerName == "Companion");
+        Assert.Contains(symbols, s =>
+            s.Kind == "function"
+            && s.Name == "create"
+            && s.ContainerKind == "class"
+            && s.ContainerName == "Companion");
+        Assert.Contains(symbols, s =>
+            s.Kind == "class"
+            && s.Name == "Factory"
+            && s.ContainerKind == "class"
+            && s.ContainerName == "Named");
     }
 
     [Fact]
@@ -8916,33 +9123,60 @@ public class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_CSharp_SameLineDeclaratorListWithInitializer_KeepsTrailingField()
+    public void Extract_CSharp_SameLineDeclaratorListsStillExpandAfterEarlierSiblings()
     {
-        // Same-line type bodies can hand the field matcher a tail like ` = 1, B;` even
-        // when the regex itself stops at the first declarator name. That tail still
-        // belongs to the current field declaration, so the post-match declarator scan
-        // must skip the initializer and recover `B` instead of treating the statement as
-        // complete at `A`. Closes #572/#567 follow-up.
-        // 同一行の型本体では、regex 自体は先頭 declarator 名で止まっていても、
-        // field matcher が ` = 1, B;` の tail を受け取ることがある。この tail は
-        // 現在の field 宣言の一部なので、post-match の declarator 走査は初期化式を
-        // 読み飛ばして `B` を復元し、`A` で宣言完結扱いにしてはならない。
-        var content = string.Join(
-            "\n",
-            "namespace Demo;",
-            "public class C { public void M() { } public int A = 1, B; }");
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        // Same-line field declarator lists must still expand trailing declarators even
+        // when the field statement is only reached after an earlier sibling on the same
+        // physical line restarts matching. The current branch already handles the #582
+        // repro shapes; this test locks that behavior so a future column-domain mismatch
+        // does not silently drop `B`. Closes #582.
+        // 同一物理行で先行 sibling の後ろから field 文に再入した場合でも、same-line の
+        // declarator list は末尾 declarator を展開し続けなければならない。現行ブランチは
+        // #582 の再現形を既に正しく処理できるため、このテストで将来の列座標ずれ回帰から
+        // `B` が無言で欠落するのを防ぐ。Closes #582.
+        var cases = new[]
+        {
+            new
+            {
+                Content = "public class C { public void M() { } public int A = 1, B; }",
+                SiblingKind = "function",
+                SiblingName = "M",
+                Signature = "public int A = 1, B;"
+            },
+            new
+            {
+                Content = "public class C { public int P { get; set; } public int A, B; }",
+                SiblingKind = "property",
+                SiblingName = "P",
+                Signature = "public int A, B;"
+            },
+            new
+            {
+                Content = "public class C { public class N { } public int A = 1, B; }",
+                SiblingKind = "class",
+                SiblingName = "N",
+                Signature = "public int A = 1, B;"
+            }
+        };
 
-        Assert.Contains(symbols, s => s.Kind == "property"
-            && s.Name == "A"
-            && s.ReturnType == "int"
-            && s.ContainerName == "C"
-            && s.Visibility == "public");
-        Assert.Contains(symbols, s => s.Kind == "property"
-            && s.Name == "B"
-            && s.ReturnType == "int"
-            && s.ContainerName == "C"
-            && s.Visibility == "public");
+        foreach (var @case in cases)
+        {
+            var symbols = SymbolExtractor.Extract(1, "csharp", @case.Content);
+
+            Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "C");
+            Assert.Contains(symbols, s => s.Kind == @case.SiblingKind && s.Name == @case.SiblingName
+                && s.ContainerKind == "class" && s.ContainerName == "C");
+
+            var a = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "A"));
+            Assert.Equal("class", a.ContainerKind);
+            Assert.Equal("C", a.ContainerName);
+            Assert.Equal(@case.Signature, a.Signature);
+
+            var b = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "B"));
+            Assert.Equal("class", b.ContainerKind);
+            Assert.Equal("C", b.ContainerName);
+            Assert.Equal(@case.Signature, b.Signature);
+        }
     }
 
     [Fact]
@@ -8951,7 +9185,7 @@ public class SymbolExtractorTests
         // Stepping into a same-line nested type body must only happen when there is an
         // actual member after the opening `{`. For an empty nested interface body, the
         // next statement start is the closing `}`, and restarting there would skip the
-        // later same-line sibling type entirely. Closes #572/#567 review follow-up.
+        // later same-line sibling type entirely. Closes #585.
         // same-line の nested type 本体へ潜る再開は、開き `{` の後に実際の member がある
         // ときだけ行う必要がある。空の nested interface 本体では次の文頭が closing `}`
         // になり、そこへ再開すると後続の same-line sibling type が丸ごと落ちる。
@@ -9122,6 +9356,50 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_HeaderLineAutoPropertyInsideMultilineTypeBodyIsCaptured()
+    {
+        // A C# type can open its body on the header line while still closing on a later
+        // line (`public class C { public int P { get; }` + next-line `}`). Before #580,
+        // the outer class/struct/interface match stopped the same-line scan because the
+        // type body was not fully compact on one line, so the first member that shared
+        // the header line silently disappeared. Closes #580.
+        // C# の型は、本体開始 `{` をヘッダ行に置いたまま閉じ `}` を後続行へ送れる
+        // (`public class C { public int P { get; }` + 次行 `}`)。#580 前は outer
+        // class/struct/interface のマッチ時点で same-line scan が止まり、ヘッダ行を
+        // 共有する最初の member が無言で脱落していた。Closes #580.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public class Outer { public int P { get; }",
+            "}",
+            "public struct Holder { public int Q { get; }",
+            "}",
+            "public interface IOuter { int R { get; }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var p = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("class", p.ContainerKind);
+        Assert.Equal("Outer", p.ContainerName);
+        Assert.Equal("public int P { get; }", p.Signature);
+
+        var q = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Q"));
+        Assert.Equal("struct", q.ContainerKind);
+        Assert.Equal("Holder", q.ContainerName);
+        Assert.Equal("public int Q { get; }", q.Signature);
+
+        var r = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "R"));
+        Assert.Equal("interface", r.ContainerKind);
+        Assert.Equal("IOuter", r.ContainerName);
+        Assert.Equal("int R { get; }", r.Signature);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Outer");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Holder");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "IOuter");
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineAutoPropertyAfterExpressionBodiedPropertyIsCaptured()
     {
         // Same-line C# type bodies must not skip the first real member just because an
@@ -9264,6 +9542,129 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_SameLineAccessorEventBeforePropertyIsCaptured()
+    {
+        // Accessor-bodied events must stop at their own closing `}` even when the next same-line
+        // sibling is a property. Otherwise the semicolon fallback keeps scanning until the later
+        // property terminator, the event signature absorbs `public int P`, and the property never
+        // gets a restart chance. Closes #519.
+        // accessor body を持つ event は、次の same-line sibling が property の場合でも
+        // 自身の閉じ `}` で終端しなければならない。そうしないと semicolon fallback が
+        // 後続 property の終端まで進み、event signature に `public int P` が混入し、
+        // property 側の再開機会も失われる。Closes #519.
+        var content = "public class C { public event System.Action E { add { } remove { } } public int P { get; set; } }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "C"));
+
+        var eventSymbol = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E"));
+        Assert.Equal("class", eventSymbol.ContainerKind);
+        Assert.Equal("C", eventSymbol.ContainerName);
+        Assert.Equal("public event System.Action E { add { } remove { } }", eventSymbol.Signature);
+
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("class", property.ContainerKind);
+        Assert.Equal("C", property.ContainerName);
+        Assert.Equal("public int P { get; set; }", property.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineEventBeforeDelegateIsCaptured()
+    {
+        // Delegate rows sit ahead of event rows in the C# pattern list, so a failed delegate
+        // match at `event E;` must not keep scanning forward and claim the later delegate.
+        // Otherwise the earlier event never reaches its own regex family and silently drops.
+        // Closes #522.
+        // C# の pattern 順では delegate 行が event 行より前にあるため、`event E;` で失敗した
+        // delegate row が後続 delegate まで進んではならない。進んでしまうと手前の event が
+        // 自分の regex family に到達できず、無言で欠落する。Closes #522.
+        var content = "public class C { public event System.Action E; public delegate void D(); }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "C"));
+
+        var eventSymbol = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E"));
+        Assert.Equal("class", eventSymbol.ContainerKind);
+        Assert.Equal("C", eventSymbol.ContainerName);
+        Assert.Equal("public event System.Action E;", eventSymbol.Signature);
+
+        var delegateSymbol = Assert.Single(symbols.Where(s => s.Kind == "delegate" && s.Name == "D"));
+        Assert.Equal("class", delegateSymbol.ContainerKind);
+        Assert.Equal("C", delegateSymbol.ContainerName);
+        Assert.Equal("public delegate void D();", delegateSymbol.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineAccessorEventBeforeDelegateIsCaptured()
+    {
+        // The same cross-family starvation also applies when the earlier declaration is an
+        // accessor-bodied event: the event must clamp at its own accessor block, and the later
+        // delegate must only be reached via the explicit restart path rather than by skipping
+        // past the event statement. Closes #519 / #522.
+        // 同じ cross-family の starvation は、手前が accessor-bodied event の場合にも起こる。
+        // event 自身は accessor block で正しく切れ、後続 delegate には event 文を飛び越える
+        // のではなく明示的な restart 経路で到達しなければならない。Closes #519 / #522.
+        var content = "public class C { public event System.Action E { add { } remove { } } public delegate void D(); }";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "C"));
+
+        var eventSymbol = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E"));
+        Assert.Equal("class", eventSymbol.ContainerKind);
+        Assert.Equal("C", eventSymbol.ContainerName);
+        Assert.Equal("public event System.Action E { add { } remove { } }", eventSymbol.Signature);
+
+        var delegateSymbol = Assert.Single(symbols.Where(s => s.Kind == "delegate" && s.Name == "D"));
+        Assert.Equal("class", delegateSymbol.ContainerKind);
+        Assert.Equal("C", delegateSymbol.ContainerName);
+        Assert.Equal("public delegate void D();", delegateSymbol.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineDelegateBeforeAccessorEventWithLaterSiblingIsCaptured()
+    {
+        // After a leading delegate restarts the same-line scan at a later accessor-bodied event,
+        // the defer checks for function/property/event/delegate rows must still see the raw event
+        // statement start. If they inspect the property/function merged candidate instead, they
+        // can skip directly to the trailing sibling and silently drop the middle custom event.
+        // Lock the issue #603 repro plus the sibling-family matrix (`property` / `method` /
+        // `delegate` / `event`) in one fixture. Closes #603.
+        // 先頭 delegate から later accessor-bodied event へ same-line restart した後でも、
+        // function/property/event/delegate 各 row の defer 判定は raw の event 文開始位置を
+        // 見続けなければならない。property/function 用の merged candidate を見てしまうと、
+        // 後続 sibling へ直接飛んで中間 custom event が無言で欠落する。#603 の最小再現と、
+        // 後続 sibling family (`property` / `method` / `delegate` / `event`) を 1 fixture で
+        // 固定する。Closes #603.
+        var content = string.Join(
+            "\n",
+            "public class PropertyCase { public delegate void D(); public event System.Action E { add { } remove { } } public int P { get; set; } }",
+            "public class MethodCase { public delegate void D(); public event System.Action E { add { } remove { } } public void M() { } }",
+            "public class DelegateCase { public delegate void D1(); public event System.Action E { add { } remove { } } public delegate void D2(); }",
+            "public class EventCase { public delegate void D1(); public event System.Action E { add { } remove { } } public event System.Action E2; }");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var propertyEvent = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E" && s.ContainerName == "PropertyCase"));
+        Assert.Equal("public event System.Action E { add { } remove { } }", propertyEvent.Signature);
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P" && s.ContainerName == "PropertyCase"));
+        Assert.Equal("public int P { get; set; }", property.Signature);
+
+        var methodEvent = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E" && s.ContainerName == "MethodCase"));
+        Assert.Equal("public event System.Action E { add { } remove { } }", methodEvent.Signature);
+        var method = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "M" && s.ContainerName == "MethodCase"));
+        Assert.Equal("public void M() { }", method.Signature);
+
+        var delegateEvent = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E" && s.ContainerName == "DelegateCase"));
+        Assert.Equal("public event System.Action E { add { } remove { } }", delegateEvent.Signature);
+        var delegateTail = Assert.Single(symbols.Where(s => s.Kind == "delegate" && s.Name == "D2" && s.ContainerName == "DelegateCase"));
+        Assert.Equal("public delegate void D2();", delegateTail.Signature);
+
+        var eventEvent = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E" && s.ContainerName == "EventCase"));
+        Assert.Equal("public event System.Action E { add { } remove { } }", eventEvent.Signature);
+        var trailingEvent = Assert.Single(symbols.Where(s => s.Kind == "event" && s.Name == "E2" && s.ContainerName == "EventCase"));
+        Assert.Equal("public event System.Action E2;", trailingEvent.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineAutoPropertyAfterConstructorsIsCaptured()
     {
         // Same-line C# constructors must not stop later sibling declarations from
@@ -9401,105 +9802,6 @@ public class SymbolExtractorTests
         Assert.Equal("struct", f.ContainerKind);
         Assert.Equal("S", f.ContainerName);
         Assert.Equal("public event System.Action<int, string> F { add {} remove {} }", f.Signature);
-    }
-
-    [Fact]
-    public void Extract_CSharp_CarriedBlockCommentLookalike_DoesNotEmitFakeNestedClass()
-    {
-        // When a C# line starts inside a carried `/* ... */` block comment, declaration-shaped
-        // comment text on that line must stay masked all the way through same-line brace-body
-        // extraction. Otherwise the later real `Child` can inherit the comment body's `Fake`
-        // signature or produce an extra phantom sibling.
-        // C# の行頭が前行から継続した `/* ... */` ブロックコメント内にある場合、その行にある
-        // 宣言風コメント文字列は same-line brace-body 抽出の最後までマスクされ続けなければならない。
-        // そうでないと、後続の本物 `Child` がコメント内 `Fake` の signature を引き継いだり、
-        // 余計な phantom sibling を出してしまう。Closes #567 / #572.
-        var content = """
-            namespace Demo;
-
-            public partial class Host
-            {
-                public partial class Wrapped<T>
-                    where T : class
-                {
-                    /*
-                    public partial class Fake { } */ public partial class Child { } }
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-
-        var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
-        Assert.Equal("Wrapped", child.ContainerName);
-        Assert.Equal("class", child.ContainerKind);
-        Assert.Equal("public partial class Child { }", child.Signature);
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Fake");
-    }
-
-    [Fact]
-    public void Extract_CSharp_CarriedBlockCommentSameNameLookalike_EmitsOneRealNestedClass()
-    {
-        // The same carried-comment path must not emit a phantom nested `Child` when the comment
-        // body uses the same short name as the real declaration on that line. Pin the single-real-
-        // declaration case so `AssignContainers` never sees a bogus self-nested `Child`.
-        // 同じ継続コメント経路では、コメント本文が実宣言と同じ短名 `Child` を使っていても
-        // phantom な nested `Child` を出してはならない。実宣言が 1 つだけのケースを固定し、
-        // `AssignContainers` が自分自身を親にする偽 `Child` を見ることがないようにする。
-        // Closes #567 / #572.
-        var content = """
-            namespace Demo;
-
-            public partial class Host
-            {
-                public partial class Wrapped<T>
-                    where T : class
-                {
-                    /*
-                    public partial class Child { } */ public partial class Child { } }
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-
-        var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
-        Assert.Equal("Wrapped", child.ContainerName);
-        Assert.Equal("class", child.ContainerKind);
-        Assert.Equal("public partial class Child { }", child.Signature);
-        Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Child" && s.ContainerName == "Child");
-    }
-
-    [Fact]
-    public void Extract_CSharp_CarriedBlockCommentSameNameLookalike_KeepsOnlyRealSiblings()
-    {
-        // If the real nested `Child` is followed by an outer same-line sibling, the carried block
-        // comment must not consume an occurrence slot or expose a third phantom `Child`. Only the
-        // nested real symbol and the outer real sibling should remain.
-        // 実際の nested `Child` の後ろに outer same-line sibling が続く場合でも、継続 block
-        // comment が occurrence slot を食ったり 3 個目の phantom `Child` を出してはならない。
-        // 残るのは nested 側の実シンボルと outer 側の実 sibling だけであるべき。Closes #567 / #572.
-        var content = """
-            namespace Demo;
-
-            public partial class Host
-            {
-                public partial class Wrapped<T>
-                    where T : class
-                {
-                    /*
-                    public partial class Child { } */ public partial class Child { } } public partial class Child { }
-            }
-            """;
-        var symbols = SymbolExtractor.Extract(1, "csharp", content);
-
-        var children = symbols.Where(s => s.Kind == "class" && s.Name == "Child").ToList();
-        Assert.Equal(2, children.Count);
-        Assert.Contains(children, child =>
-            child.ContainerKind == "class"
-            && child.ContainerName == "Wrapped"
-            && child.Signature == "public partial class Child { }");
-        Assert.Contains(children, child =>
-            child.ContainerKind == "class"
-            && child.ContainerName == "Host"
-            && child.Signature == "public partial class Child { }");
-        Assert.DoesNotContain(children, child => child.ContainerName == "Child");
     }
 
     [Fact]
@@ -9671,6 +9973,537 @@ public class SymbolExtractorTests
         Assert.Equal("event System.Action<int,           string> E;", evt.Signature);
         Assert.Equal("interface", evt.ContainerKind);
         Assert.Equal("I", evt.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedNestedClassMembersStayAttachedToNestedContainer()
+    {
+        // The #525 wrapped-header signature fix must not evict a same-line nested type
+        // from later container assignment. In the regression from #535, `Wrapped` kept
+        // its corrected multi-line header signature, but the later property `P` attached
+        // to the outer `Host` class after same-line siblings popped `Wrapped` out of the
+        // active container stack too early. Pin the exact issue fixture so both the
+        // signature fix and the nested-container attachment stay true together. Closes #535.
+        // #525 の wrapped-header signature fix は、同一行にいる nested type を後続 member の
+        // container 判定から追い出してはならない。#535 の回帰では `Wrapped` の multi-line
+        // header 自体は正しくなった一方で、同一行 sibling を処理した時点で active container
+        // stack から `Wrapped` が早く落ち、後続 property `P` が outer `Host` に付いていた。
+        // issue の fixture そのものを固定し、signature 修正と nested-container 付与が同時に
+        // 崩れないようにする。Closes #535.
+        var content = string.Join(
+            "\n",
+            "namespace ReviewFixtures;",
+            "",
+            "public class Host",
+            "{",
+            "    public void M<T1, T2>() { } public event System.Action<int, string>? E; public class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        public int P { get; }",
+            "    }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrapped = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Wrapped"));
+        Assert.Equal("public class Wrapped<T> where T : class", wrapped.Signature);
+        Assert.Equal("class", wrapped.ContainerKind);
+        Assert.Equal("Host", wrapped.ContainerName);
+
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("public int P { get; }", property.Signature);
+        Assert.Equal("class", property.ContainerKind);
+        Assert.Equal("Wrapped", property.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedNestedPartialTypesKeepRootToLeafFamilyKeys()
+    {
+        // The #535 container-path fix changes `BuildSelfFamilyKey` to receive a root-to-leaf
+        // effective container path. If the old `Reverse()` is left in place, nested partial
+        // types flip their family key order (`Host.ReviewFixtures.Wrapped`) and no longer
+        // match the container-qualified-name contract used by hotspot-family grouping.
+        // Pin a wrapped nested partial-type fixture so both the container path and family key
+        // stay in canonical root-to-leaf order. Closes #541.
+        // #535 の container-path fix 以降、`BuildSelfFamilyKey` は root-to-leaf 順の
+        // effective container path を受け取る。ここで旧 `Reverse()` が残ると、nested partial
+        // type の family key が `Host.ReviewFixtures.Wrapped` のように逆順化し、
+        // hotspot-family grouping が依存する container-qualified-name 契約と食い違う。
+        // wrapped な nested partial-type の fixture を固定し、container path と family key の
+        // 両方が canonical な root-to-leaf 順を保つことを検証する。Closes #541.
+        var content = string.Join(
+            "\n",
+            "namespace ReviewFixtures;",
+            "",
+            "public class Host",
+            "{",
+            "    public void M<T1, T2>() { } public event System.Action<int, string>? E; public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        public partial class Child",
+            "        {",
+            "        }",
+            "    }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrapped = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Wrapped"));
+        Assert.Equal("ReviewFixtures.Host", wrapped.ContainerQualifiedName);
+        Assert.Equal("ReviewFixtures.Host.Wrapped", wrapped.FamilyKey);
+
+        var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
+        Assert.Equal("ReviewFixtures.Host.Wrapped", child.ContainerQualifiedName);
+        Assert.Equal("ReviewFixtures.Host.Wrapped", child.FamilyKey);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedNestedTypeClosingBraceLineStillFindsOuterSibling()
+    {
+        // Wrapped multi-line nested types can end on a line that also starts a later outer
+        // sibling (`} public int Q { get; }`). The line-level C# scan must restart from the
+        // post-brace statement boundary instead of treating the leading `}` as a dead line,
+        // or the outer sibling silently disappears from symbols/definition/outline. Closes #545.
+        // 折り返された multi-line nested type は、閉じ brace 行に outer sibling が続く
+        // (`} public int Q { get; }`) 形を取りうる。C# の行単位 scan は先頭 `}` の後ろにある
+        // statement 境界から再開しなければならず、そうしないと outer sibling が
+        // symbols/definition/outline から無言で脱落する。Closes #545.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        public int P { get; }",
+            "    } public int Q { get; }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrapped = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Wrapped"));
+        Assert.Equal("class", wrapped.ContainerKind);
+        Assert.Equal("Host", wrapped.ContainerName);
+
+        var innerProperty = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("class", innerProperty.ContainerKind);
+        Assert.Equal("Wrapped", innerProperty.ContainerName);
+
+        var outerProperty = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Q"));
+        Assert.Equal("public int Q { get; }", outerProperty.Signature);
+        Assert.Equal("class", outerProperty.ContainerKind);
+        Assert.Equal("Host", outerProperty.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedNestedTypeClosingBraceLineKeepsLastInnerMemberAndOuterSibling()
+    {
+        // A wrapped nested type can end on the same line as both its last inner member and
+        // a later outer sibling (`public int P { get; } } public int Q { get; }`). The
+        // closing-line body clamp from #545 must still keep `P` inside `Wrapped`, while the
+        // same-line restart skips the intervening `}` and still reaches outer sibling `Q`.
+        // Closes #549.
+        // wrapped な nested type は、最後の inner member と後続 outer sibling が同じ閉じ
+        // brace 行 (`public int P { get; } } public int Q { get; }`) に載ることがある。
+        // #545 の closing-line body clamp は `P` を `Wrapped` の内側に残しつつ、same-line
+        // restart は間の `}` を飛ばして outer sibling `Q` に到達しなければならない。
+        // Closes #549.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        public int P { get; } } public int Q { get; }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var innerProperty = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("class", innerProperty.ContainerKind);
+        Assert.Equal("Wrapped", innerProperty.ContainerName);
+
+        var outerProperty = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Q"));
+        Assert.Equal("public int Q { get; }", outerProperty.Signature);
+        Assert.Equal("class", outerProperty.ContainerKind);
+        Assert.Equal("Host", outerProperty.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedNestedTypeBraceBodiedLastInnerMemberKeepsOuterPropertySibling()
+    {
+        // A compact brace-bodied inner type can sit on the wrapped type's closing-brace line
+        // before an outer property sibling (`Child { } } public int Q { get; }`). The
+        // type-header false-positive recovery must skip the intermediate `}` and still
+        // reach `Q`, while keeping `Child` attached to `Wrapped`. Closes #554.
+        // compact な brace-bodied inner type は、wrapped type の closing-brace 行で outer
+        // property sibling (`Child { } } public int Q { get; }`) の直前に現れうる。type
+        // header 偽陽性からの same-line 再開は中間の `}` を飛ばして `Q` まで届きつつ、
+        // `Child` を `Wrapped` 配下に残さなければならない。Closes #554.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        public partial class Child { } } public int Q { get; }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
+        Assert.Equal("class", child.ContainerKind);
+        Assert.Equal("Wrapped", child.ContainerName);
+
+        var outerProperty = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Q"));
+        Assert.Equal("public int Q { get; }", outerProperty.Signature);
+        Assert.Equal("class", outerProperty.ContainerKind);
+        Assert.Equal("Host", outerProperty.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedNestedTypeBraceBodiedLastInnerMemberKeepsOuterTypeSibling()
+    {
+        // The same compact `Child { } }` shape must also keep a later outer class sibling
+        // visible. Otherwise the type-header recovery restarts on the closing `}` and drops
+        // `Sibling` from symbol-oriented queries. Closes #554.
+        // 同じ compact な `Child { } }` 形では、後続の outer class sibling も見え続けなければ
+        // ならない。そうでないと type-header 回復が closing `}` から再開して `Sibling` を
+        // symbol 系クエリから落としてしまう。Closes #554.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        public partial class Child { } } public partial class Sibling",
+            "        {",
+            "        }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
+        Assert.Equal("class", child.ContainerKind);
+        Assert.Equal("Wrapped", child.ContainerName);
+
+        var sibling = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Sibling"));
+        Assert.Equal("class", sibling.ContainerKind);
+        Assert.Equal("Host", sibling.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_EmptySameLineNestedInterfaceBodyKeepsLaterOuterClassSibling()
+    {
+        // An empty same-line nested interface body must not consume a later outer class
+        // sibling of a different kind. The #585 repro previously emitted `Outer` + `I`
+        // but dropped `Sibling` after the interface's compact `{ }` body. Closes #585.
+        // 空の same-line nested interface body は、kind が異なる後続 outer class sibling を
+        // 飲み込んではならない。#585 の repro では、以前は interface の compact な `{ }`
+        // 本体の後で `Outer` と `I` だけが出力され、`Sibling` が落ちていた。Closes #585.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "[A]",
+            "public class Outer { public interface I<T1,           T2> { } public class Sibling { } }");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var outer = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Outer"));
+        Assert.Equal("namespace", outer.ContainerKind);
+        Assert.Equal("Demo", outer.ContainerName);
+
+        var nestedInterface = Assert.Single(symbols.Where(s => s.Kind == "interface" && s.Name == "I"));
+        Assert.Equal("class", nestedInterface.ContainerKind);
+        Assert.Equal("Outer", nestedInterface.ContainerName);
+
+        var sibling = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Sibling"));
+        Assert.Equal("class", sibling.ContainerKind);
+        Assert.Equal("Outer", sibling.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedEmptySameLineNestedTypeBodyKeepsLaterOuterPropertySibling()
+    {
+        // A wrapped nested type whose last inner member is `Child { } }` must still leave a
+        // later outer property visible on that same closing-brace line. The #585 repro
+        // previously kept `Child` but dropped `P` from the outer `Host`. Closes #585.
+        // wrapped nested type の最後の inner member が `Child { } }` でも、同じ closing-brace
+        // 行に続く outer property は見え続けなければならない。#585 の repro では、以前は
+        // `Child` は残る一方で outer `Host` の `P` が落ちていた。Closes #585.
+        var content = string.Join(
+            "\n",
+            "public class Host",
+            "{",
+            "    public class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        public class Child { } } public int P { get; set; }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
+        Assert.Equal("class", child.ContainerKind);
+        Assert.Equal("Wrapped", child.ContainerName);
+
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("class", property.ContainerKind);
+        Assert.Equal("Host", property.ContainerName);
+        Assert.Equal("public int P { get; set; }", property.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedNestedTypeKeepsSameLineDuplicateSignatureSiblings()
+    {
+        // Duplicate suppression must not collapse distinct same-line siblings just because
+        // they share the same short signature before container assignment runs. In the
+        // compact wrapped case below, both `Child` declarations are real: one inside
+        // `Wrapped`, one later under `Host`. Closes #552.
+        // duplicate suppression は、container 判定前に短い signature が一致するだけで
+        // 別物の same-line sibling を潰してはならない。下の compact な wrapped case では
+        // `Child` 宣言が 2 つとも実在し、片方は `Wrapped` 配下、もう片方は後続の `Host`
+        // 配下である。Closes #552.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        public partial class Child { } } public partial class Child { }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var children = symbols
+            .Where(s => s.Kind == "class" && s.Name == "Child")
+            .OrderBy(s => s.ContainerName)
+            .ToList();
+        Assert.Equal(2, children.Count);
+
+        Assert.Contains(children, child => child.ContainerKind == "class" && child.ContainerName == "Wrapped");
+        Assert.Contains(children, child => child.ContainerKind == "class" && child.ContainerName == "Host");
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedNestedTypeIgnoresStringLiteralLookalikesWhenTrackingSameLineOccurrences()
+    {
+        // Same-line occurrence tracking must ignore string-literal lookalikes of the same
+        // declaration signature. Otherwise the later real declaration is mapped onto the
+        // quoted copy and the outer sibling misattaches under the inner `Child`. Closes #558.
+        // same-line occurrence tracking は、同じ宣言 signature を含む文字列リテラルを
+        // 数えてはいけない。数えてしまうと後続の本物の宣言が quoted copy に対応付けられ、
+        // outer sibling が inner `Child` 配下へ誤帰属する。Closes #558.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        public const string Marker = \"public partial class Child { }\"; public partial class Child { } } public partial class Child { }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var children = symbols
+            .Where(s => s.Kind == "class" && s.Name == "Child")
+            .OrderBy(s => s.ContainerName)
+            .ToList();
+        Assert.Equal(2, children.Count);
+
+        Assert.Contains(children, child => child.ContainerKind == "class" && child.ContainerName == "Wrapped");
+        Assert.Contains(children, child => child.ContainerKind == "class" && child.ContainerName == "Host");
+    }
+
+    [Fact]
+    public void Extract_CSharp_WrappedNestedTypeIgnoresMultilineCommentLookalikesWhenTrackingSameLineOccurrences()
+    {
+        // Same-line occurrence recovery must also respect block-comment state carried from
+        // earlier lines. Otherwise a declaration-shaped lookalike inside a multiline comment
+        // consumes the first occurrence slot and the later outer sibling is misattached under
+        // the inner wrapped type. Closes #567.
+        // same-line occurrence 復元は、前行から継続する block comment state も尊重しなければ
+        // ならない。そうしないと複数行コメント中の宣言風 lookalike が最初の occurrence slot を
+        // 奪い、後続 outer sibling が inner wrapped type 配下へ誤帰属する。Closes #567.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        /*",
+            "        public partial class Child { } */ public partial class Child { } } public partial class Child { }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var children = symbols
+            .Where(s => s.Kind == "class" && s.Name == "Child")
+            .OrderBy(s => s.ContainerName)
+            .ToList();
+        Assert.Equal(2, children.Count);
+
+        Assert.Contains(children, child => child.ContainerKind == "class" && child.ContainerName == "Wrapped");
+        Assert.Contains(children, child => child.ContainerKind == "class" && child.ContainerName == "Host");
+    }
+
+    [Fact]
+    public void Extract_CSharp_InlineBlockCommentBeforeSameLineClassDoesNotPolluteSignature()
+    {
+        // Inline block comments that end immediately before a real same-line declaration must
+        // not leak into the emitted signature text. The real symbol should keep only the
+        // canonical declaration slice. Closes #578.
+        // same-line の実宣言直前で閉じる inline block comment は、出力 signature に
+        // 混入してはならない。実在 symbol には正規の宣言部分だけを残す。Closes #578.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        /* public partial class Child { } */ public partial class Child { }",
+            "    }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
+        Assert.Equal("Wrapped", child.ContainerName);
+        Assert.Equal("public partial class Child { }", child.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_InlineBlockCommentBeforeSameLinePropertyDoesNotPolluteSignature()
+    {
+        // Property signatures must also clamp from the declaration token after an inline
+        // block comment, not from the comment prefix. Closes #578.
+        // property の signature も inline block comment の先頭ではなく、その後ろの
+        // 実宣言トークンから切り出さなければならない。Closes #578.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public class C",
+            "{",
+            "    /* public int P { get; } */ public int P { get; }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var property = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("C", property.ContainerName);
+        Assert.Equal("public int P { get; }", property.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_InlineBlockCommentBeforeSameLineMethodDoesNotPolluteSignature()
+    {
+        // Method signatures must ignore inline block-comment lookalikes that appear on the
+        // same physical line before the real declaration. Closes #578.
+        // method の signature も、同一物理行で実宣言より前にある inline block comment
+        // 由来の見かけ上の宣言を無視しなければならない。Closes #578.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public class C",
+            "{",
+            "    /* public void M() { } */ public void M() { }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var method = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "M"));
+        Assert.Equal("C", method.ContainerName);
+        Assert.Equal("public void M() { }", method.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultilineCommentCloseLineDoesNotEmitPhantomSameLineClass()
+    {
+        // A multiline block comment that closes immediately before a real same-line class
+        // declaration must not leak comment-body lookalikes or `*/`-prefixed phantom rows
+        // into symbol extraction. The current branch regression around wrapped same-line
+        // occurrence recovery started emitting an extra `Child` row here. Closes #571.
+        // 複数行 block comment の閉じ `*/` 直後に実在する same-line class 宣言が続く場合でも、
+        // コメント本文の lookalike や `*/` 付き phantom 行を symbol 抽出へ漏らしてはならない。
+        // wrapped same-line occurrence 修正の枝では、この fixture で余計な `Child` 行が
+        // 追加で出る回帰が入っていた。Closes #571.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        /*",
+            "        public partial class Fake { } */ public partial class Child { } }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var children = symbols
+            .Where(s => s.Kind == "class" && s.Name == "Child")
+            .ToList();
+        var child = Assert.Single(children);
+        Assert.Equal("public partial class Child { }", child.Signature);
+        Assert.Equal("class", child.ContainerKind);
+        Assert.Equal("Wrapped", child.ContainerName);
+
+        Assert.DoesNotContain(symbols, s =>
+            s.Kind == "class"
+            && s.Signature != null
+            && s.Signature.Contains("Fake", StringComparison.Ordinal));
+        Assert.DoesNotContain(symbols, s =>
+            s.Kind == "class"
+            && s.Signature != null
+            && s.Signature.StartsWith("*/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Extract_CSharp_ClosingBraceLineKeepsInnerMemberAfterInnerMethodClosesSameLine()
+    {
+        // Wrapped closing-brace-line recovery must carry forward the unmatched brace depth
+        // that is already open at the start of the end line. Otherwise the first `}` on the
+        // line is mistaken for the wrapped type's close and later inner members fall out to
+        // the outer type. Closes #575.
+        // wrapped closing-brace-line の復元では、end line 開始時点ですでに開いている
+        // unmatched brace depth を引き継がなければならない。そうしないと行頭側の
+        // 最初の `}` を wrapped type 自身の閉じ括弧と誤認し、後続 inner member が
+        // outer type 側へこぼれる。Closes #575.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public partial class Host",
+            "{",
+            "    public partial class Wrapped<T>",
+            "        where T : class",
+            "    {",
+            "        public void M()",
+            "        {",
+            "        } public int P { get; } } public int Q { get; }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var wrappedProperty = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("class", wrappedProperty.ContainerKind);
+        Assert.Equal("Wrapped", wrappedProperty.ContainerName);
+
+        var hostProperty = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Q"));
+        Assert.Equal("class", hostProperty.ContainerKind);
+        Assert.Equal("Host", hostProperty.ContainerName);
     }
 
     [Fact]
