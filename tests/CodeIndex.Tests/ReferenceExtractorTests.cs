@@ -6882,6 +6882,77 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpCaseLogicalAndNegatedTypePatterns_CaptureTypeReferences()
+    {
+        // issue #668: logical/negated type patterns must keep the left-hand type dependency.
+        // issue #668: logical/negated な型パターンでも左端の型依存を落としてはならない。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+
+            class Demo
+            {
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case Point or null:
+                            break;
+                        case not Point:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(2, pointRefs.Count);
+        Assert.All(pointRefs, r => Assert.Equal("Run", r.ContainerName));
+        Assert.DoesNotContain(references, r => r.SymbolName == "null" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpCaseVerbatimKeywordLikeDesignations_KeepTypeReferences()
+    {
+        // issue #669: verbatim designators such as `@or` / `@when` / `@and` are identifiers,
+        // not control keywords, so the enclosing type pattern must remain visible.
+        // issue #669: `@or` / `@when` / `@and` のような verbatim designator は識別子であり、
+        // control keyword ではないため enclosing type pattern を落としてはならない。
+        const string content = """
+            namespace Probe;
+
+            class Foo {}
+
+            class Demo
+            {
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case Foo @or:
+                            break;
+                        case Foo @when:
+                            break;
+                        case Foo @and:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var fooRefs = references.Where(r => r.SymbolName == "Foo" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(3, fooRefs.Count);
+        Assert.All(fooRefs, r => Assert.Equal("Run", r.ContainerName));
+    }
+
+    [Fact]
     public void Extract_JavaTypePositions_CaptureTypeReferences()
     {
         // issue #256 Java side: extends/implements, declaration types, throws, and

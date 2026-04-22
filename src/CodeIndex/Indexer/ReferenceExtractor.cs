@@ -348,11 +348,12 @@ public static class ReferenceExtractor
         $@"(?<![\w$])(?:is\s+(?:not\s+)?|as\s+)(?<type>{CSharpTypeExpressionPattern})",
         RegexOptions.Compiled);
     // C# `case` labels use a small structural follow-token check so declaration / recursive /
-    // positional patterns stay visible while constant member labels like `case Color.Red:`
-    // and `case Color.Red or Color.Blue:` do not leak `type_reference` edges.
+    // positional/logical patterns stay visible while constant member labels like
+    // `case Color.Red:` and `case Color.Red or Color.Blue:` do not leak
+    // `type_reference` edges.
     // C# の `case` ラベルは後続 token を小さく構文判定し、declaration / recursive /
-    // positional pattern を残しつつ `case Color.Red:` や `case Color.Red or Color.Blue:`
-    // のような定数ラベルは `type_reference` にしない。
+    // positional / logical pattern を残しつつ `case Color.Red:` や
+    // `case Color.Red or Color.Blue:` のような定数ラベルは `type_reference` にしない。
     private static readonly Regex CSharpCaseLabelRegex = new(
         @"(?<![\w$])case\s+",
         RegexOptions.Compiled);
@@ -1379,7 +1380,8 @@ public static class ReferenceExtractor
         foreach (Match caseMatch in CSharpCaseLabelRegex.Matches(preparedLine))
         {
             int cursor = SkipWhitespace(preparedLine, caseMatch.Index + caseMatch.Length);
-            if (TryConsumeCSharpPatternKeyword(preparedLine, ref cursor, "not"))
+            bool hadLeadingNot = TryConsumeCSharpPatternKeyword(preparedLine, ref cursor, "not");
+            if (hadLeadingNot)
                 cursor = SkipWhitespace(preparedLine, cursor);
 
             var typeMatch = CSharpTypeExpressionAtCursorRegex.Match(preparedLine, cursor);
@@ -1388,7 +1390,7 @@ public static class ReferenceExtractor
 
             var typeGroup = typeMatch.Groups["type"];
             int continuationIndex = SkipWhitespace(preparedLine, typeGroup.Index + typeGroup.Length);
-            if (!IsCSharpCaseTypePatternContinuation(preparedLine, continuationIndex))
+            if (!IsCSharpCaseTypePatternContinuation(preparedLine, typeGroup.Value, continuationIndex, hadLeadingNot))
                 continue;
 
             AddTypeExpressionSegments(
@@ -2899,28 +2901,46 @@ public static class ReferenceExtractor
         return true;
     }
 
-    private static bool IsCSharpCaseTypePatternContinuation(string preparedLine, int cursor)
+    private static bool IsCSharpCaseTypePatternContinuation(
+        string preparedLine,
+        string typeExpression,
+        int cursor,
+        bool hadLeadingNot)
     {
+        if (IsCSharpNonTypePatternExpression(typeExpression))
+            return false;
+
         if (cursor >= preparedLine.Length)
             return false;
 
         return preparedLine[cursor] switch
         {
+            ':' => hadLeadingNot && IsCSharpSimpleCaseTypeHead(typeExpression),
             '{' or '(' or '[' => true,
-            _ => IsCSharpCaseTypePatternIdentifier(preparedLine, cursor)
+            _ => IsCSharpCaseTypePatternIdentifier(preparedLine, typeExpression, cursor, hadLeadingNot)
         };
     }
 
-    private static bool IsCSharpCaseTypePatternIdentifier(string preparedLine, int cursor)
+    private static bool IsCSharpCaseTypePatternIdentifier(
+        string preparedLine,
+        string typeExpression,
+        int cursor,
+        bool hadLeadingNot)
     {
         int tokenCursor = cursor;
         if (!TryConsumeCSharpIdentifier(preparedLine, ref tokenCursor, out var start, out var end))
             return false;
 
-        var token = NormalizeCSharpIdentifier(preparedLine[start..end]);
-        return !string.Equals(token, "when", StringComparison.Ordinal)
-            && !string.Equals(token, "or", StringComparison.Ordinal)
-            && !string.Equals(token, "and", StringComparison.Ordinal);
+        var rawToken = preparedLine[start..end];
+        if (rawToken.Length > 0 && rawToken[0] == '@')
+            return true;
+
+        return rawToken switch
+        {
+            "when" => hadLeadingNot && IsCSharpSimpleCaseTypeHead(typeExpression),
+            "or" or "and" => IsCSharpSimpleCaseTypeHead(typeExpression),
+            _ => true,
+        };
     }
 
     private static bool IsCSharpNonTypePatternExpression(string typeExpression)
@@ -2933,6 +2953,12 @@ public static class ReferenceExtractor
             && candidate.IndexOf('?') < 0
             && candidate.IndexOf(' ') < 0
             && CSharpNonTypePatternTokens.Contains(candidate);
+    }
+
+    private static bool IsCSharpSimpleCaseTypeHead(string typeExpression)
+    {
+        var trimmed = typeExpression.Trim();
+        return trimmed.IndexOf('.') < 0 && !trimmed.Contains("::", StringComparison.Ordinal);
     }
 
     private static int SkipWhitespace(string text, int index)
