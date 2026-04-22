@@ -3018,6 +3018,10 @@ public static class ReferenceExtractor
         return previousPunctuationToken switch
         {
             '(' or '[' or '{' or ',' or ';' or ':' or '*' or '/' or '%' or '&' or '|' or '^' or '=' or '~' or '<' => false,
+            ')' => !LooksLikeCSharpCastCloseParen(
+                structuralLines,
+                previousTokenLineIndex,
+                previousTokenStartColumn),
             '?' => LooksLikeCSharpNullableTypeSuffixInCastOrTypeTest(
                 structuralLines,
                 previousTokenLineIndex,
@@ -3041,6 +3045,107 @@ public static class ReferenceExtractor
                 previousTokenStartColumn),
             _ => true
         };
+    }
+
+    private static bool LooksLikeCSharpCastCloseParen(
+        IReadOnlyList<string> structuralLines,
+        int closeParenLineIndex,
+        int closeParenColumn)
+    {
+        if (!TryFindMatchingCSharpOpenParenBackwards(
+                structuralLines,
+                closeParenLineIndex,
+                closeParenColumn,
+                out var openParenLineIndex,
+                out var openParenColumn))
+        {
+            return false;
+        }
+
+        var castTargetText = GetCSharpTextBetween(
+            structuralLines,
+            openParenLineIndex,
+            openParenColumn + 1,
+            closeParenLineIndex,
+            closeParenColumn);
+        if (!LooksLikeCSharpCastTypeText(castTargetText))
+            return false;
+
+        if (!TryGetPreviousTopLevelToken(
+                structuralLines,
+                openParenLineIndex,
+                openParenColumn - 1,
+                out var previousTokenLineIndex,
+                out var previousTokenStartColumn,
+                out _,
+                out var previousIdentifierToken,
+                out var previousPunctuationToken))
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrEmpty(previousIdentifierToken))
+            return IsCSharpCastPrefixIdentifier(structuralLines[previousTokenLineIndex], previousTokenStartColumn, previousIdentifierToken);
+
+        return previousPunctuationToken is not (')' or ']' or '}' or '"' or '\'' or '>');
+    }
+
+    private static bool IsCSharpCastPrefixIdentifier(string line, int tokenStartColumn, string token)
+    {
+        if (tokenStartColumn > 0 && line[tokenStartColumn - 1] == '@')
+            return false;
+
+        return string.Equals(token, "return", StringComparison.Ordinal)
+            || string.Equals(token, "await", StringComparison.Ordinal)
+            || string.Equals(token, "throw", StringComparison.Ordinal)
+            || IsCSharpQueryClauseKeyword(token);
+    }
+
+    private static bool LooksLikeCSharpCastTypeText(string text)
+    {
+        var trimmed = text.Trim();
+        if (trimmed.Length == 0)
+            return false;
+
+        foreach (var current in trimmed)
+        {
+            if (char.IsLetterOrDigit(current) || current == '_' || char.IsWhiteSpace(current))
+                continue;
+
+            if (current is '.' or ':' or '<' or '>' or '[' or ']' or '?' or ',')
+                continue;
+
+            return false;
+        }
+
+        return trimmed.IndexOf('.') >= 0
+            || trimmed.IndexOf(':') >= 0
+            || trimmed.IndexOf('<') >= 0
+            || trimmed.IndexOf('[') >= 0
+            || trimmed.IndexOf('?') >= 0
+            || IsCSharpBuiltInTypeKeyword(trimmed);
+    }
+
+    private static bool IsCSharpBuiltInTypeKeyword(string text)
+    {
+        return string.Equals(text, "bool", StringComparison.Ordinal)
+            || string.Equals(text, "byte", StringComparison.Ordinal)
+            || string.Equals(text, "sbyte", StringComparison.Ordinal)
+            || string.Equals(text, "short", StringComparison.Ordinal)
+            || string.Equals(text, "ushort", StringComparison.Ordinal)
+            || string.Equals(text, "int", StringComparison.Ordinal)
+            || string.Equals(text, "uint", StringComparison.Ordinal)
+            || string.Equals(text, "long", StringComparison.Ordinal)
+            || string.Equals(text, "ulong", StringComparison.Ordinal)
+            || string.Equals(text, "nint", StringComparison.Ordinal)
+            || string.Equals(text, "nuint", StringComparison.Ordinal)
+            || string.Equals(text, "char", StringComparison.Ordinal)
+            || string.Equals(text, "float", StringComparison.Ordinal)
+            || string.Equals(text, "double", StringComparison.Ordinal)
+            || string.Equals(text, "decimal", StringComparison.Ordinal)
+            || string.Equals(text, "string", StringComparison.Ordinal)
+            || string.Equals(text, "object", StringComparison.Ordinal)
+            || string.Equals(text, "dynamic", StringComparison.Ordinal);
     }
 
     private static bool CanStartCSharpParenthesizedQueryClauseAfterPlusOrMinus(
@@ -3350,6 +3455,67 @@ public static class ReferenceExtractor
         }
 
         return false;
+    }
+
+    private static bool TryFindMatchingCSharpOpenParenBackwards(
+        IReadOnlyList<string> structuralLines,
+        int closeParenLineIndex,
+        int closeParenColumn,
+        out int openParenLineIndex,
+        out int openParenColumn)
+    {
+        openParenLineIndex = -1;
+        openParenColumn = -1;
+
+        var depth = 1;
+        for (var lineIndex = closeParenLineIndex; lineIndex >= 0; lineIndex--)
+        {
+            var line = structuralLines[lineIndex];
+            var columnStart = lineIndex == closeParenLineIndex ? Math.Min(closeParenColumn - 1, line.Length - 1) : line.Length - 1;
+            for (var column = columnStart; column >= 0; column--)
+            {
+                switch (line[column])
+                {
+                    case ')':
+                        depth++;
+                        break;
+                    case '(':
+                        depth--;
+                        if (depth == 0)
+                        {
+                            openParenLineIndex = lineIndex;
+                            openParenColumn = column;
+                            return true;
+                        }
+
+                        break;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static string GetCSharpTextBetween(
+        IReadOnlyList<string> structuralLines,
+        int startLineIndex,
+        int startColumn,
+        int endLineIndex,
+        int endColumn)
+    {
+        var builder = new System.Text.StringBuilder();
+        for (var lineIndex = startLineIndex; lineIndex <= endLineIndex; lineIndex++)
+        {
+            var line = structuralLines[lineIndex];
+            var segmentStart = lineIndex == startLineIndex ? Math.Max(0, startColumn) : 0;
+            var segmentEnd = lineIndex == endLineIndex ? Math.Min(endColumn, line.Length) : line.Length;
+            if (segmentStart < segmentEnd)
+                builder.Append(line, segmentStart, segmentEnd - segmentStart);
+            if (lineIndex < endLineIndex)
+                builder.Append('\n');
+        }
+
+        return builder.ToString();
     }
 
     private static bool LooksLikeCSharpQueryGenericTypeArgumentClose(
