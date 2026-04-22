@@ -348,11 +348,11 @@ public static class ReferenceExtractor
         $@"(?<![\w$])(?:is\s+(?:not\s+)?|as\s+)(?<type>{CSharpTypeExpressionPattern})",
         RegexOptions.Compiled);
     // C# `case` labels use a small structural follow-token check so declaration / recursive /
-    // positional / list patterns stay visible while constant member labels like `case Color.Red:`
-    // do not leak `type_reference` edges.
+    // positional patterns stay visible while constant member labels like `case Color.Red:`
+    // and `case Color.Red or Color.Blue:` do not leak `type_reference` edges.
     // C# の `case` ラベルは後続 token を小さく構文判定し、declaration / recursive /
-    // positional / list pattern を残しつつ `case Color.Red:` のような定数ラベルは
-    // `type_reference` にしない。
+    // positional pattern を残しつつ `case Color.Red:` や `case Color.Red or Color.Blue:`
+    // のような定数ラベルは `type_reference` にしない。
     private static readonly Regex CSharpCaseLabelRegex = new(
         @"(?<![\w$])case\s+",
         RegexOptions.Compiled);
@@ -388,6 +388,16 @@ public static class ReferenceExtractor
         "bool", "byte", "sbyte", "short", "ushort", "int", "uint", "long", "ulong",
         "nint", "nuint", "char", "float", "double", "decimal",
         "string", "object", "void", "dynamic", "var",
+    };
+    // C# pattern-only keywords / literals that can appear after `is` / `case not` but are never
+    // real user-defined types. Filter them before AddTypeExpressionSegments so `is not null`,
+    // `is default`, and similar constant patterns do not surface phantom `type_reference` rows.
+    // `is` / `case not` の後ろに現れうるが、実在型ではない C# のパターン専用キーワード / リテラル。
+    // AddTypeExpressionSegments 前に落とし、`is not null` や `is default` などの定数パターンから
+    // phantom な `type_reference` 行が出ないようにする。
+    private static readonly HashSet<string> CSharpNonTypePatternTokens = new(StringComparer.Ordinal)
+    {
+        "default", "false", "not", "null", "true",
     };
 
     // No-arg C# attribute name (`[Serializable]`, `[assembly: CLSCompliant]`, `[System.Obsolete]`,
@@ -1332,6 +1342,9 @@ public static class ReferenceExtractor
         foreach (Match match in CSharpIsAsTypeTestRegex.Matches(preparedLine))
         {
             var typeGroup = match.Groups["type"];
+            if (IsCSharpNonTypePatternExpression(typeGroup.Value))
+                continue;
+
             AddTypeExpressionSegments(
                 references,
                 seen,
@@ -2905,7 +2918,21 @@ public static class ReferenceExtractor
             return false;
 
         var token = NormalizeCSharpIdentifier(preparedLine[start..end]);
-        return !string.Equals(token, "when", StringComparison.Ordinal);
+        return !string.Equals(token, "when", StringComparison.Ordinal)
+            && !string.Equals(token, "or", StringComparison.Ordinal)
+            && !string.Equals(token, "and", StringComparison.Ordinal);
+    }
+
+    private static bool IsCSharpNonTypePatternExpression(string typeExpression)
+    {
+        var candidate = NormalizeCSharpIdentifier(typeExpression.Trim());
+        return candidate.IndexOf('.') < 0
+            && candidate.IndexOf(':') < 0
+            && candidate.IndexOf('<') < 0
+            && candidate.IndexOf('[') < 0
+            && candidate.IndexOf('?') < 0
+            && candidate.IndexOf(' ') < 0
+            && CSharpNonTypePatternTokens.Contains(candidate);
     }
 
     private static int SkipWhitespace(string text, int index)

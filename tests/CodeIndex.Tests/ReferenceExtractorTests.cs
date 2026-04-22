@@ -6768,6 +6768,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpNullPatterns_DoNotEmitTypeReferences()
+    {
+        // issue #645 follow-up: `is not null` / `is null` are constant patterns, not types.
+        // issue #645 follow-up: `is not null` / `is null` は定数パターンであり型ではない。
+        const string content = """
+            class Demo
+            {
+                bool Run(object x)
+                {
+                    return x is not null && x is null;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "null" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpCaseDeclarationPatterns_SkipEnumMemberLabels()
     {
         // issue #647: `case Type name:` is a declaration pattern, but `case Color.Red:`
@@ -6796,6 +6817,8 @@ public class ReferenceExtractorTests
                             break;
                         case Probe.Color.Blue:
                             break;
+                        case Color.Red or Probe.Color.Blue:
+                            break;
                     }
                 }
             }
@@ -6813,6 +6836,10 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference");
+
+        Assert.Equal(
+            0,
+            references.Count(r => r.SymbolName == "Color" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run"));
     }
 
     [Fact]
