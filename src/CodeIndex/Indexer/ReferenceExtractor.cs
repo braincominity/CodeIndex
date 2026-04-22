@@ -538,8 +538,14 @@ public static class ReferenceExtractor
         var recordPrimaryCtorRanges = BuildCSharpPrimaryCtorContainers(language, symbols, structuralLines);
         var csharpQualifiedEnumMemberLookup = BuildCSharpQualifiedEnumMemberLookup(language, symbols);
         var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols);
+        var csharpKnownTypeNames = BuildCSharpKnownTypeNames(language, symbols);
         var csharpValueReceiverNames = BuildCSharpValueReceiverNamesByContainingType(language, symbols);
-        var csharpFunctionValueReceiverNames = BuildCSharpValueReceiverNamesByFunctionStartLine(language, symbols, structuralLines);
+        var csharpFunctionValueReceiverNames = BuildCSharpValueReceiverNamesByFunctionStartLine(
+            language,
+            symbols,
+            structuralLines,
+            csharpKnownTypeNames,
+            csharpUsingAliases);
 
         var references = new List<ReferenceRecord>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -1232,6 +1238,7 @@ public static class ReferenceExtractor
     private readonly record struct CSharpLineColumn(int Line, int Column);
     private readonly record struct CSharpRecursivePatternValueNameRecord(string Name, int Offset, bool IsCasePattern, int ArrowIndex = -1);
     private sealed record CSharpUsingAliasRecord(string AliasName, string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
+    private sealed record CSharpCastTypeShape(IReadOnlyList<string> IdentifierSegments, string? SimpleQualifiedName, bool HasTypeOnlySyntax, bool AllIdentifiersTypeLike);
     private sealed record CSharpContainingTypeValueReceiverNames(HashSet<string> InstanceNames, HashSet<string> StaticNames);
     private sealed record CSharpFunctionValueReceiverNameRecord(string Name, int ScopeStartLine, int ScopeStartColumn, int ScopeEndLine, int ScopeEndColumn);
 
@@ -1287,6 +1294,33 @@ public static class ReferenceExtractor
         return aliases;
     }
 
+    private static HashSet<string> BuildCSharpKnownTypeNames(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        if (language != "csharp")
+            return names;
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is not ("class" or "struct" or "interface" or "enum" or "delegate"))
+                continue;
+
+            var normalizedName = NormalizeCSharpIdentifier(symbol.Name);
+            if (!string.IsNullOrWhiteSpace(normalizedName))
+                names.Add(normalizedName);
+
+            var qualifiedContainer = !string.IsNullOrWhiteSpace(symbol.ContainerQualifiedName)
+                ? symbol.ContainerQualifiedName
+                : symbol.ContainerKind == "namespace" && !string.IsNullOrWhiteSpace(symbol.ContainerName)
+                    ? symbol.ContainerName
+                    : null;
+            if (!string.IsNullOrWhiteSpace(qualifiedContainer) && !string.IsNullOrWhiteSpace(normalizedName))
+                names.Add(qualifiedContainer + "." + normalizedName);
+        }
+
+        return names;
+    }
+
     private static Dictionary<string, CSharpContainingTypeValueReceiverNames> BuildCSharpValueReceiverNamesByContainingType(string language, IReadOnlyList<SymbolRecord> symbols)
     {
         var lookup = new Dictionary<string, CSharpContainingTypeValueReceiverNames>(StringComparer.Ordinal);
@@ -1322,7 +1356,9 @@ public static class ReferenceExtractor
     private static Dictionary<int, List<CSharpFunctionValueReceiverNameRecord>> BuildCSharpValueReceiverNamesByFunctionStartLine(
         string language,
         IReadOnlyList<SymbolRecord> symbols,
-        IReadOnlyList<string> structuralLines)
+        IReadOnlyList<string> structuralLines,
+        IReadOnlySet<string> csharpKnownTypeNames,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
     {
         var lookup = new Dictionary<int, List<CSharpFunctionValueReceiverNameRecord>>();
         if (language != "csharp")
@@ -1364,7 +1400,14 @@ public static class ReferenceExtractor
                     }
                     foreach (Match match in CSharpQueryRangeValueNameRegex.Matches(structuralLines[i]))
                     {
-                        var scopeEnd = FindCSharpQueryExpressionEndPosition(structuralLines, end, i, match.Index);
+                        var scopeEnd = FindCSharpQueryExpressionEndPosition(
+                            structuralLines,
+                            end,
+                            i,
+                            match.Index,
+                            csharpKnownTypeNames,
+                            csharpUsingAliases,
+                            names);
                         AddCSharpFunctionValueReceiverName(
                             names,
                             NormalizeCSharpIdentifier(match.Groups["name"].Value),
@@ -2941,8 +2984,39 @@ public static class ReferenceExtractor
             || string.Equals(keyword, "descending", StringComparison.Ordinal);
     }
 
-    private static bool IsCSharpQueryClauseKeywordSuffix(string line, int nextColumn, string keyword)
+    private static bool IsCSharpQueryClauseKeywordSuffix(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int lineIndex,
+        string line,
+        int nextColumn,
+        string keyword,
+        int previousTopLevelSignificantLineIndex,
+        int previousTopLevelSignificantColumn,
+        IReadOnlySet<string> csharpKnownTypeNames,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpFunctionValueReceiverNameRecord> csharpFunctionValueReceiverNames)
     {
+        if (IsCSharpParenthesizedQueryClauseKeyword(keyword)
+            && TryGetNextTopLevelSignificantChar(
+                structuralLines,
+                lineIndex,
+                nextColumn,
+                out _,
+                out _,
+                out var nextTopLevelSignificantChar)
+            && nextTopLevelSignificantChar == '(')
+        {
+            return CanStartCSharpParenthesizedQueryClause(
+                structuralLines,
+                bodyEndIndex,
+                previousTopLevelSignificantLineIndex,
+                previousTopLevelSignificantColumn,
+                csharpKnownTypeNames,
+                csharpUsingAliases,
+                csharpFunctionValueReceiverNames);
+        }
+
         if (nextColumn >= line.Length)
             return true;
 
@@ -2953,6 +3027,969 @@ public static class ReferenceExtractor
         return (string.Equals(keyword, "ascending", StringComparison.Ordinal)
                 || string.Equals(keyword, "descending", StringComparison.Ordinal))
             && (next == ',' || next == ')' || next == ']' || next == '}' || next == ';');
+    }
+
+    private static bool IsCSharpParenthesizedQueryClauseKeyword(string keyword)
+    {
+        return string.Equals(keyword, "select", StringComparison.Ordinal)
+            || string.Equals(keyword, "group", StringComparison.Ordinal)
+            || string.Equals(keyword, "orderby", StringComparison.Ordinal);
+    }
+
+    private static bool CanStartCSharpParenthesizedQueryClause(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int previousTopLevelSignificantLineIndex,
+        int previousTopLevelSignificantColumn,
+        IReadOnlySet<string> csharpKnownTypeNames,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpFunctionValueReceiverNameRecord> csharpFunctionValueReceiverNames)
+    {
+        if (previousTopLevelSignificantLineIndex < 0 || previousTopLevelSignificantColumn < 0)
+            return true;
+
+        if (!TryGetPreviousTopLevelToken(
+                structuralLines,
+                previousTopLevelSignificantLineIndex,
+                previousTopLevelSignificantColumn,
+                out var previousTokenLineIndex,
+                out var previousTokenStartColumn,
+                out var previousTokenEndColumn,
+                out var previousIdentifierToken,
+                out var previousPunctuationToken))
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrEmpty(previousIdentifierToken))
+            return !IsCSharpParenthesizedQueryClausePrefixIdentifier(
+                structuralLines[previousTokenLineIndex],
+                previousTokenStartColumn,
+                previousIdentifierToken);
+
+        return previousPunctuationToken switch
+        {
+            '(' or '[' or '{' or ',' or ';' or ':' or '*' or '/' or '%' or '&' or '|' or '^' or '=' or '~' or '<' => false,
+            ')' => !LooksLikeCSharpCastCloseParen(
+                structuralLines,
+                previousTokenLineIndex,
+                previousTokenStartColumn,
+                csharpKnownTypeNames,
+                csharpUsingAliases,
+                csharpFunctionValueReceiverNames),
+            '?' => LooksLikeCSharpNullableTypeSuffixInCastOrTypeTest(
+                structuralLines,
+                previousTokenLineIndex,
+                previousTokenStartColumn),
+            '+' or '-' => CanStartCSharpParenthesizedQueryClauseAfterPlusOrMinus(
+                structuralLines,
+                bodyEndIndex,
+                previousTokenLineIndex,
+                previousTokenStartColumn,
+                previousTokenEndColumn,
+                previousPunctuationToken),
+            '!' => CanStartCSharpParenthesizedQueryClauseAfterBang(
+                structuralLines,
+                bodyEndIndex,
+                previousTokenLineIndex,
+                previousTokenStartColumn),
+            '>' => LooksLikeCSharpQueryGenericTypeArgumentClose(
+                structuralLines,
+                bodyEndIndex,
+                previousTokenLineIndex,
+                previousTokenStartColumn),
+            _ => true
+        };
+    }
+
+    private static bool LooksLikeCSharpCastCloseParen(
+        IReadOnlyList<string> structuralLines,
+        int closeParenLineIndex,
+        int closeParenColumn,
+        IReadOnlySet<string> csharpKnownTypeNames,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpFunctionValueReceiverNameRecord> csharpFunctionValueReceiverNames)
+    {
+        if (!TryFindMatchingCSharpOpenParenBackwards(
+                structuralLines,
+                closeParenLineIndex,
+                closeParenColumn,
+                out var openParenLineIndex,
+                out var openParenColumn))
+        {
+            return false;
+        }
+
+        var castTargetText = GetCSharpTextBetween(
+            structuralLines,
+            openParenLineIndex,
+            openParenColumn + 1,
+            closeParenLineIndex,
+            closeParenColumn);
+        if (!LooksLikeCSharpCastTypeText(
+                castTargetText,
+                closeParenLineIndex + 1,
+                closeParenColumn,
+                csharpKnownTypeNames,
+                csharpUsingAliases,
+                csharpFunctionValueReceiverNames))
+            return false;
+
+        if (!TryGetPreviousTopLevelToken(
+                structuralLines,
+                openParenLineIndex,
+                openParenColumn - 1,
+                out var previousTokenLineIndex,
+                out var previousTokenStartColumn,
+                out _,
+                out var previousIdentifierToken,
+                out var previousPunctuationToken))
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrEmpty(previousIdentifierToken))
+            return IsCSharpCastPrefixIdentifier(structuralLines[previousTokenLineIndex], previousTokenStartColumn, previousIdentifierToken);
+
+        return previousPunctuationToken is not (')' or ']' or '}' or '"' or '\'' or '>');
+    }
+
+    private static bool IsCSharpCastPrefixIdentifier(string line, int tokenStartColumn, string token)
+    {
+        if (tokenStartColumn > 0 && line[tokenStartColumn - 1] == '@')
+            return false;
+
+        return string.Equals(token, "return", StringComparison.Ordinal)
+            || string.Equals(token, "await", StringComparison.Ordinal)
+            || string.Equals(token, "throw", StringComparison.Ordinal)
+            || IsCSharpQueryClauseKeyword(token);
+    }
+
+    private static bool LooksLikeCSharpCastTypeText(
+        string text,
+        int lineNumber,
+        int column,
+        IReadOnlySet<string> csharpKnownTypeNames,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpFunctionValueReceiverNameRecord> csharpFunctionValueReceiverNames)
+    {
+        var trimmed = text.Trim();
+        if (trimmed.Length == 0)
+            return false;
+
+        var index = 0;
+        if (!TryConsumeCSharpCastType(trimmed, ref index))
+            return false;
+
+        SkipCSharpCastTypeWhitespace(trimmed, ref index);
+        if (index != trimmed.Length)
+            return false;
+
+        var shape = AnalyzeCSharpCastTypeShape(trimmed);
+        if (shape.IdentifierSegments.Count == 0)
+            return shape.HasTypeOnlySyntax;
+
+        var resolvedQualifiedName = shape.SimpleQualifiedName == null
+            ? null
+            : ResolveCSharpQualifiedAliasTarget(shape.SimpleQualifiedName, lineNumber, csharpUsingAliases);
+        var resolvedBareName = resolvedQualifiedName == null
+            ? null
+            : ExtractBareTypeName(resolvedQualifiedName);
+
+        var lastSegment = shape.IdentifierSegments[^1];
+        if (HasKnownNonTerminalTypeSegment(shape.IdentifierSegments, csharpKnownTypeNames)
+            && !IsKnownCSharpCastTypeName(lastSegment, resolvedBareName, csharpKnownTypeNames))
+        {
+            return false;
+        }
+
+        if (IsKnownCSharpCastTypeName(lastSegment, resolvedBareName, csharpKnownTypeNames)
+            || (!string.IsNullOrWhiteSpace(resolvedQualifiedName) && csharpKnownTypeNames.Contains(resolvedQualifiedName)))
+        {
+            return true;
+        }
+
+        if (shape.SimpleQualifiedName != null
+            && string.Equals(shape.SimpleQualifiedName, resolvedQualifiedName, StringComparison.Ordinal)
+            && HasCSharpFunctionValueReceiverConflict(
+                GetFirstQualifiedSegment(shape.SimpleQualifiedName),
+                lineNumber,
+                column,
+                csharpFunctionValueReceiverNames))
+        {
+            return false;
+        }
+
+        if (shape.HasTypeOnlySyntax)
+            return true;
+
+        return shape.AllIdentifiersTypeLike && shape.IdentifierSegments.Count <= 2;
+    }
+
+    private static bool TryConsumeCSharpCastType(string text, ref int index)
+    {
+        if (!TryConsumeCSharpCastTypeCore(text, ref index))
+            return false;
+
+        while (true)
+        {
+            var checkpoint = index;
+            SkipCSharpCastTypeWhitespace(text, ref index);
+            if (TryConsumeCSharpCastArraySuffix(text, ref index)
+                || TryConsumeCSharpCastNullableSuffix(text, ref index))
+            {
+                continue;
+            }
+
+            index = checkpoint;
+            return true;
+        }
+    }
+
+    private static bool TryConsumeCSharpCastTypeCore(string text, ref int index)
+    {
+        SkipCSharpCastTypeWhitespace(text, ref index);
+        if (index < text.Length && text[index] == '(')
+            return TryConsumeCSharpCastTupleType(text, ref index);
+
+        return TryConsumeCSharpCastQualifiedType(text, ref index);
+    }
+
+    private static bool TryConsumeCSharpCastQualifiedType(string text, ref int index)
+    {
+        if (!TryConsumeCSharpCastIdentifier(text, ref index, out var token))
+            return false;
+
+        if (!TryConsumeCSharpCastGenericArgumentList(text, ref index))
+            return false;
+
+        while (true)
+        {
+            var checkpoint = index;
+            SkipCSharpCastTypeWhitespace(text, ref index);
+            if (!TryConsumeCSharpCastQualifiedTypeSeparator(text, ref index))
+            {
+                index = checkpoint;
+                return true;
+            }
+
+            if (!TryConsumeCSharpCastIdentifier(text, ref index, out token))
+                return false;
+
+            if (!TryConsumeCSharpCastGenericArgumentList(text, ref index))
+                return false;
+        }
+    }
+
+    private static bool TryConsumeCSharpCastTupleType(string text, ref int index)
+    {
+        if (index >= text.Length || text[index] != '(')
+            return false;
+
+        index++;
+        while (true)
+        {
+            if (!TryConsumeCSharpCastType(text, ref index))
+                return false;
+
+            var checkpoint = index;
+            if (TryConsumeCSharpCastIdentifier(text, ref index, out _))
+            {
+                // Tuple element names are optional and do not affect type-likeness.
+            }
+            else
+            {
+                index = checkpoint;
+            }
+
+            SkipCSharpCastTypeWhitespace(text, ref index);
+            if (index >= text.Length)
+                return false;
+
+            if (text[index] == ')')
+            {
+                index++;
+                return true;
+            }
+
+            if (text[index] != ',')
+                return false;
+
+            index++;
+        }
+    }
+
+    private static bool TryConsumeCSharpCastGenericArgumentList(string text, ref int index)
+    {
+        var checkpoint = index;
+        SkipCSharpCastTypeWhitespace(text, ref index);
+        if (index >= text.Length || text[index] != '<')
+        {
+            index = checkpoint;
+            return true;
+        }
+
+        index++;
+        while (true)
+        {
+            if (!TryConsumeCSharpCastType(text, ref index))
+                return false;
+
+            SkipCSharpCastTypeWhitespace(text, ref index);
+            if (index >= text.Length)
+                return false;
+
+            if (text[index] == '>')
+            {
+                index++;
+                return true;
+            }
+
+            if (text[index] != ',')
+                return false;
+
+            index++;
+        }
+    }
+
+    private static bool TryConsumeCSharpCastArraySuffix(string text, ref int index)
+    {
+        if (index >= text.Length || text[index] != '[')
+            return false;
+
+        index++;
+        SkipCSharpCastTypeWhitespace(text, ref index);
+        while (index < text.Length && text[index] == ',')
+        {
+            index++;
+            SkipCSharpCastTypeWhitespace(text, ref index);
+        }
+
+        if (index >= text.Length || text[index] != ']')
+            return false;
+
+        index++;
+        return true;
+    }
+
+    private static bool TryConsumeCSharpCastNullableSuffix(string text, ref int index)
+    {
+        if (index >= text.Length || text[index] != '?')
+            return false;
+
+        index++;
+        return true;
+    }
+
+    private static bool TryConsumeCSharpCastQualifiedTypeSeparator(string text, ref int index)
+    {
+        if (index >= text.Length)
+            return false;
+
+        if (text[index] == '.')
+        {
+            index++;
+            return true;
+        }
+
+        if (index + 1 < text.Length && text[index] == ':' && text[index + 1] == ':')
+        {
+            index += 2;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryConsumeCSharpCastIdentifier(string text, ref int index, out string token)
+    {
+        SkipCSharpCastTypeWhitespace(text, ref index);
+        token = string.Empty;
+        if (index >= text.Length)
+            return false;
+
+        var start = index;
+        if (text[index] == '@')
+        {
+            index++;
+            if (index >= text.Length || !IsCSharpIdentifierStart(text[index]))
+            {
+                index = start;
+                return false;
+            }
+        }
+        else if (!IsCSharpIdentifierStart(text[index]))
+        {
+            return false;
+        }
+
+        index++;
+        while (index < text.Length && IsCSharpIdentifierPart(text[index]))
+            index++;
+
+        token = text.Substring(start, index - start);
+        return true;
+    }
+
+    private static CSharpCastTypeShape AnalyzeCSharpCastTypeShape(string text)
+    {
+        var segments = new List<string>();
+        var simpleQualifiedName = new System.Text.StringBuilder();
+        var hasTypeOnlySyntax = false;
+        var allIdentifiersTypeLike = true;
+        var simpleQualifiedCandidate = true;
+
+        for (var index = 0; index < text.Length;)
+        {
+            var current = text[index];
+            if (char.IsWhiteSpace(current))
+            {
+                index++;
+                continue;
+            }
+
+            if (current == '@' || IsCSharpIdentifierStart(current))
+            {
+                var start = index;
+                if (current == '@')
+                    index++;
+                if (index < text.Length)
+                    index++;
+                while (index < text.Length && IsCSharpIdentifierPart(text[index]))
+                    index++;
+
+                var token = text.Substring(start, index - start);
+                segments.Add(token);
+                allIdentifiersTypeLike &= IsLikelyCSharpTypeIdentifier(token);
+                if (simpleQualifiedCandidate)
+                    simpleQualifiedName.Append(token);
+                continue;
+            }
+
+            switch (current)
+            {
+                case '.':
+                    if (simpleQualifiedCandidate)
+                        simpleQualifiedName.Append(current);
+                    index++;
+                    continue;
+                case ':':
+                    if (index + 1 < text.Length && text[index + 1] == ':')
+                    {
+                        hasTypeOnlySyntax = true;
+                        if (simpleQualifiedCandidate)
+                            simpleQualifiedName.Append("::");
+                        index += 2;
+                        continue;
+                    }
+
+                    simpleQualifiedCandidate = false;
+                    index++;
+                    continue;
+                case '<':
+                case '[':
+                case '?':
+                case '(':
+                    hasTypeOnlySyntax = true;
+                    simpleQualifiedCandidate = false;
+                    index++;
+                    continue;
+                case '>':
+                case ']':
+                case ')':
+                case ',':
+                    simpleQualifiedCandidate = false;
+                    index++;
+                    continue;
+                default:
+                    simpleQualifiedCandidate = false;
+                    index++;
+                    continue;
+            }
+        }
+
+        return new CSharpCastTypeShape(
+            segments,
+            simpleQualifiedCandidate && simpleQualifiedName.Length > 0 ? simpleQualifiedName.ToString() : null,
+            hasTypeOnlySyntax,
+            allIdentifiersTypeLike);
+    }
+
+    private static bool HasKnownNonTerminalTypeSegment(IReadOnlyList<string> segments, IReadOnlySet<string> csharpKnownTypeNames)
+    {
+        for (var index = 0; index < segments.Count - 1; index++)
+        {
+            if (csharpKnownTypeNames.Contains(NormalizeCSharpIdentifier(segments[index])))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsKnownCSharpCastTypeName(string candidate, string? resolvedCandidate, IReadOnlySet<string> csharpKnownTypeNames)
+    {
+        return csharpKnownTypeNames.Contains(NormalizeCSharpIdentifier(candidate))
+            || (!string.IsNullOrWhiteSpace(resolvedCandidate) && csharpKnownTypeNames.Contains(NormalizeCSharpIdentifier(resolvedCandidate)));
+    }
+
+    private static bool HasCSharpFunctionValueReceiverConflict(
+        string candidate,
+        int lineNumber,
+        int column,
+        IReadOnlyList<CSharpFunctionValueReceiverNameRecord> csharpFunctionValueReceiverNames)
+    {
+        if (string.IsNullOrWhiteSpace(candidate) || csharpFunctionValueReceiverNames.Count == 0)
+            return false;
+
+        var normalizedCandidate = NormalizeCSharpIdentifier(candidate);
+        return csharpFunctionValueReceiverNames.Any(record =>
+            IsWithinCSharpScope(record, lineNumber, column)
+            && string.Equals(record.Name, normalizedCandidate, StringComparison.Ordinal));
+    }
+
+    private static bool IsLikelyCSharpTypeIdentifier(string token)
+    {
+        if (string.IsNullOrEmpty(token))
+            return false;
+
+        var normalized = token[0] == '@' ? token.Substring(1) : token;
+        if (normalized.Length == 0)
+            return false;
+
+        return IsCSharpBuiltInTypeKeyword(normalized)
+            || char.IsUpper(normalized[0]);
+    }
+
+    private static void SkipCSharpCastTypeWhitespace(string text, ref int index)
+    {
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+            index++;
+    }
+
+    private static bool IsCSharpBuiltInTypeKeyword(string text)
+    {
+        return string.Equals(text, "bool", StringComparison.Ordinal)
+            || string.Equals(text, "byte", StringComparison.Ordinal)
+            || string.Equals(text, "sbyte", StringComparison.Ordinal)
+            || string.Equals(text, "short", StringComparison.Ordinal)
+            || string.Equals(text, "ushort", StringComparison.Ordinal)
+            || string.Equals(text, "int", StringComparison.Ordinal)
+            || string.Equals(text, "uint", StringComparison.Ordinal)
+            || string.Equals(text, "long", StringComparison.Ordinal)
+            || string.Equals(text, "ulong", StringComparison.Ordinal)
+            || string.Equals(text, "nint", StringComparison.Ordinal)
+            || string.Equals(text, "nuint", StringComparison.Ordinal)
+            || string.Equals(text, "char", StringComparison.Ordinal)
+            || string.Equals(text, "float", StringComparison.Ordinal)
+            || string.Equals(text, "double", StringComparison.Ordinal)
+            || string.Equals(text, "decimal", StringComparison.Ordinal)
+            || string.Equals(text, "string", StringComparison.Ordinal)
+            || string.Equals(text, "object", StringComparison.Ordinal)
+            || string.Equals(text, "dynamic", StringComparison.Ordinal);
+    }
+
+    private static bool CanStartCSharpParenthesizedQueryClauseAfterPlusOrMinus(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int operatorLineIndex,
+        int operatorColumn,
+        int operatorEndColumn,
+        char operatorToken)
+    {
+        if (operatorLineIndex < 0 || operatorColumn < 0)
+            return false;
+
+        if (!TryGetPreviousTopLevelToken(
+                structuralLines,
+                operatorLineIndex,
+                operatorColumn - 1,
+                out var previousTokenLineIndex,
+                out var previousTokenStartColumn,
+                out var previousTokenEndColumn,
+                out var previousIdentifierToken,
+                out var previousPunctuationToken))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrEmpty(previousIdentifierToken)
+            || previousPunctuationToken != operatorToken
+            || previousTokenLineIndex != operatorLineIndex
+            || previousTokenEndColumn != operatorEndColumn - 1)
+        {
+            return false;
+        }
+
+        if (!TryGetPreviousTopLevelToken(
+                structuralLines,
+                previousTokenLineIndex,
+                previousTokenStartColumn - 1,
+                out var operandTokenLineIndex,
+                out var operandTokenStartColumn,
+                out _,
+                out var operandIdentifierToken,
+                out var operandPunctuationToken))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrEmpty(operandIdentifierToken))
+            return true;
+
+        return operandPunctuationToken switch
+        {
+            ')' or ']' or '}' or '"' or '\'' => true,
+            '>' => LooksLikeCSharpQueryGenericTypeArgumentClose(
+                structuralLines,
+                bodyEndIndex,
+                operandTokenLineIndex,
+                operandTokenStartColumn),
+            _ => false
+        };
+    }
+
+    private static bool CanStartCSharpParenthesizedQueryClauseAfterBang(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int bangLineIndex,
+        int bangColumn)
+    {
+        if (!TryGetPreviousTopLevelToken(
+                structuralLines,
+                bangLineIndex,
+                bangColumn - 1,
+                out var previousTokenLineIndex,
+                out var previousTokenStartColumn,
+                out _,
+                out var previousIdentifierToken,
+                out var previousPunctuationToken))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrEmpty(previousIdentifierToken))
+            return !IsCSharpParenthesizedQueryClausePrefixIdentifier(
+                structuralLines[previousTokenLineIndex],
+                previousTokenStartColumn,
+                previousIdentifierToken);
+
+        return previousPunctuationToken switch
+        {
+            ')' or ']' or '}' or '"' or '\'' => true,
+            '>' => LooksLikeCSharpQueryGenericTypeArgumentClose(
+                structuralLines,
+                bodyEndIndex,
+                previousTokenLineIndex,
+                previousTokenStartColumn),
+            _ => false
+        };
+    }
+
+    private static bool IsCSharpParenthesizedQueryClausePrefixIdentifier(string line, int tokenStartColumn, string token)
+    {
+        if (tokenStartColumn > 0 && line[tokenStartColumn - 1] == '@')
+            return false;
+
+        return string.Equals(token, "await", StringComparison.Ordinal)
+            || string.Equals(token, "throw", StringComparison.Ordinal)
+            || IsCSharpQueryClauseKeyword(token);
+    }
+
+    private static bool LooksLikeCSharpNullableTypeSuffixInCastOrTypeTest(
+        IReadOnlyList<string> structuralLines,
+        int questionLineIndex,
+        int questionColumn)
+    {
+        var angleDepth = 0;
+        var bracketDepth = 0;
+        var currentLineIndex = questionLineIndex;
+        var currentColumn = questionColumn - 1;
+        while (TryGetPreviousTopLevelToken(
+                   structuralLines,
+                   currentLineIndex,
+                   currentColumn,
+                   out var tokenLineIndex,
+                   out var tokenStartColumn,
+                   out _,
+                   out var identifierToken,
+                   out var punctuationToken))
+        {
+            if (!string.IsNullOrEmpty(identifierToken))
+            {
+                if (angleDepth == 0
+                    && bracketDepth == 0
+                    && (string.Equals(identifierToken, "as", StringComparison.Ordinal)
+                        || string.Equals(identifierToken, "is", StringComparison.Ordinal)))
+                {
+                    return true;
+                }
+
+                currentLineIndex = tokenLineIndex;
+                currentColumn = tokenStartColumn - 1;
+                continue;
+            }
+
+            switch (punctuationToken)
+            {
+                case '.':
+                case '?':
+                    currentLineIndex = tokenLineIndex;
+                    currentColumn = tokenStartColumn - 1;
+                    continue;
+                case ',':
+                    if (angleDepth > 0 || bracketDepth > 0)
+                    {
+                        currentLineIndex = tokenLineIndex;
+                        currentColumn = tokenStartColumn - 1;
+                        continue;
+                    }
+
+                    return false;
+                case '>':
+                    angleDepth++;
+                    currentLineIndex = tokenLineIndex;
+                    currentColumn = tokenStartColumn - 1;
+                    continue;
+                case '<':
+                    if (angleDepth == 0)
+                        return false;
+
+                    angleDepth--;
+                    currentLineIndex = tokenLineIndex;
+                    currentColumn = tokenStartColumn - 1;
+                    continue;
+                case ']':
+                    bracketDepth++;
+                    currentLineIndex = tokenLineIndex;
+                    currentColumn = tokenStartColumn - 1;
+                    continue;
+                case '[':
+                    if (bracketDepth == 0)
+                        return false;
+
+                    bracketDepth--;
+                    currentLineIndex = tokenLineIndex;
+                    currentColumn = tokenStartColumn - 1;
+                    continue;
+                default:
+                    return false;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryGetPreviousTopLevelToken(
+        IReadOnlyList<string> structuralLines,
+        int startLineIndex,
+        int startColumn,
+        out int tokenLineIndex,
+        out int tokenStartColumn,
+        out int tokenEndColumn,
+        out string identifierToken,
+        out char punctuationToken)
+    {
+        tokenLineIndex = -1;
+        tokenStartColumn = -1;
+        tokenEndColumn = -1;
+        identifierToken = string.Empty;
+        punctuationToken = '\0';
+
+        if (!TryGetPreviousTopLevelSignificantChar(
+                structuralLines,
+                startLineIndex,
+                startColumn,
+                out tokenLineIndex,
+                out tokenEndColumn,
+                out var tokenChar))
+        {
+            return false;
+        }
+
+        tokenStartColumn = tokenEndColumn;
+        if (IsCSharpIdentifierPart(tokenChar))
+        {
+            var line = structuralLines[tokenLineIndex];
+            while (tokenStartColumn > 0 && IsCSharpIdentifierPart(line[tokenStartColumn - 1]))
+                tokenStartColumn--;
+
+            identifierToken = line.Substring(tokenStartColumn, tokenEndColumn - tokenStartColumn + 1);
+        }
+        else
+        {
+            punctuationToken = tokenChar;
+        }
+
+        return true;
+    }
+
+    private static bool TryGetPreviousTopLevelSignificantChar(
+        IReadOnlyList<string> structuralLines,
+        int startLineIndex,
+        int startColumn,
+        out int lineIndex,
+        out int column,
+        out char value)
+    {
+        lineIndex = -1;
+        column = -1;
+        value = '\0';
+
+        if (structuralLines.Count == 0)
+            return false;
+
+        var clampedLineIndex = Math.Min(startLineIndex, structuralLines.Count - 1);
+        for (var currentLineIndex = clampedLineIndex; currentLineIndex >= 0; currentLineIndex--)
+        {
+            var line = structuralLines[currentLineIndex];
+            var currentColumn = currentLineIndex == clampedLineIndex
+                ? Math.Min(startColumn, line.Length - 1)
+                : line.Length - 1;
+            for (var probe = currentColumn; probe >= 0; probe--)
+            {
+                if (char.IsWhiteSpace(line[probe]))
+                    continue;
+
+                lineIndex = currentLineIndex;
+                column = probe;
+                value = line[probe];
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryGetNextTopLevelSignificantChar(
+        IReadOnlyList<string> structuralLines,
+        int startLineIndex,
+        int startColumn,
+        out int lineIndex,
+        out int column,
+        out char value)
+    {
+        lineIndex = -1;
+        column = -1;
+        value = '\0';
+
+        if (structuralLines.Count == 0)
+            return false;
+
+        var clampedLineIndex = Math.Max(0, Math.Min(startLineIndex, structuralLines.Count - 1));
+        for (var currentLineIndex = clampedLineIndex; currentLineIndex < structuralLines.Count; currentLineIndex++)
+        {
+            var line = structuralLines[currentLineIndex];
+            var currentColumn = currentLineIndex == clampedLineIndex
+                ? Math.Max(0, startColumn)
+                : 0;
+            for (var probe = currentColumn; probe < line.Length; probe++)
+            {
+                if (char.IsWhiteSpace(line[probe]))
+                    continue;
+
+                lineIndex = currentLineIndex;
+                column = probe;
+                value = line[probe];
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryFindMatchingCSharpOpenParenBackwards(
+        IReadOnlyList<string> structuralLines,
+        int closeParenLineIndex,
+        int closeParenColumn,
+        out int openParenLineIndex,
+        out int openParenColumn)
+    {
+        openParenLineIndex = -1;
+        openParenColumn = -1;
+
+        var depth = 1;
+        for (var lineIndex = closeParenLineIndex; lineIndex >= 0; lineIndex--)
+        {
+            var line = structuralLines[lineIndex];
+            var columnStart = lineIndex == closeParenLineIndex ? Math.Min(closeParenColumn - 1, line.Length - 1) : line.Length - 1;
+            for (var column = columnStart; column >= 0; column--)
+            {
+                switch (line[column])
+                {
+                    case ')':
+                        depth++;
+                        break;
+                    case '(':
+                        depth--;
+                        if (depth == 0)
+                        {
+                            openParenLineIndex = lineIndex;
+                            openParenColumn = column;
+                            return true;
+                        }
+
+                        break;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static string GetCSharpTextBetween(
+        IReadOnlyList<string> structuralLines,
+        int startLineIndex,
+        int startColumn,
+        int endLineIndex,
+        int endColumn)
+    {
+        var builder = new System.Text.StringBuilder();
+        for (var lineIndex = startLineIndex; lineIndex <= endLineIndex; lineIndex++)
+        {
+            var line = structuralLines[lineIndex];
+            var segmentStart = lineIndex == startLineIndex ? Math.Max(0, startColumn) : 0;
+            var segmentEnd = lineIndex == endLineIndex ? Math.Min(endColumn, line.Length) : line.Length;
+            if (segmentStart < segmentEnd)
+                builder.Append(line, segmentStart, segmentEnd - segmentStart);
+            if (lineIndex < endLineIndex)
+                builder.Append('\n');
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool LooksLikeCSharpQueryGenericTypeArgumentClose(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int closeLineIndex,
+        int closeColumn)
+    {
+        if (closeLineIndex < 0 || closeLineIndex >= structuralLines.Count)
+            return false;
+
+        var angleDepth = 1;
+        for (var lineIndex = closeLineIndex; lineIndex >= 0; lineIndex--)
+        {
+            var line = structuralLines[lineIndex];
+            var columnStart = lineIndex == closeLineIndex ? Math.Min(closeColumn - 1, line.Length - 1) : line.Length - 1;
+            for (var column = columnStart; column >= 0; column--)
+            {
+                var current = line[column];
+                switch (current)
+                {
+                    case '>':
+                        angleDepth++;
+                        break;
+                    case '<':
+                        angleDepth--;
+                        if (angleDepth == 0)
+                            return LooksLikeCSharpQueryGenericTypeArgumentStart(structuralLines, bodyEndIndex, lineIndex, column);
+                        break;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static bool TryFindMatchingCSharpDelimiter(
@@ -2996,7 +4033,10 @@ public static class ReferenceExtractor
         IReadOnlyList<string> structuralLines,
         int bodyEndIndex,
         int startLineIndex,
-        int startColumn)
+        int startColumn,
+        IReadOnlySet<string> csharpKnownTypeNames,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpFunctionValueReceiverNameRecord> csharpFunctionValueReceiverNames)
     {
         var foundContent = false;
         var parenDepth = 0;
@@ -3004,6 +4044,10 @@ public static class ReferenceExtractor
         var braceDepth = 0;
         var angleDepth = 0;
         var terminalClauseSeen = false;
+        var queryClauseSeen = false;
+        var clauseHasTopLevelExpressionContent = false;
+        var lastTopLevelSignificantLineIndex = -1;
+        var lastTopLevelSignificantColumn = -1;
 
         for (var lineIndex = startLineIndex; lineIndex <= bodyEndIndex; lineIndex++)
         {
@@ -3023,8 +4067,20 @@ public static class ReferenceExtractor
                 if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0
                     && TryConsumeCSharpQueryClauseKeyword(line, column, out var keyword, out var nextColumn))
                 {
-                    if (IsCSharpQueryClauseKeyword(keyword)
-                        && IsCSharpQueryClauseKeywordSuffix(line, nextColumn, keyword))
+                    if ((!queryClauseSeen || clauseHasTopLevelExpressionContent)
+                        && IsCSharpQueryClauseKeyword(keyword)
+                        && IsCSharpQueryClauseKeywordSuffix(
+                            structuralLines,
+                            bodyEndIndex,
+                            lineIndex,
+                            line,
+                            nextColumn,
+                            keyword,
+                            lastTopLevelSignificantLineIndex,
+                            lastTopLevelSignificantColumn,
+                            csharpKnownTypeNames,
+                            csharpUsingAliases,
+                            csharpFunctionValueReceiverNames))
                     {
                         if ((string.Equals(keyword, "by", StringComparison.Ordinal)
                                 || string.Equals(keyword, "ascending", StringComparison.Ordinal)
@@ -3037,10 +4093,14 @@ public static class ReferenceExtractor
                         {
                             terminalClauseSeen = IsCSharpTerminalQueryClauseKeyword(keyword);
                         }
-                    }
 
-                    column = nextColumn - 1;
-                    continue;
+                        queryClauseSeen = true;
+                        clauseHasTopLevelExpressionContent = false;
+                        lastTopLevelSignificantLineIndex = lineIndex;
+                        lastTopLevelSignificantColumn = nextColumn - 1;
+                        column = nextColumn - 1;
+                        continue;
+                    }
                 }
 
                 switch (current)
@@ -3092,7 +4152,26 @@ public static class ReferenceExtractor
                     case ',':
                         if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0 && terminalClauseSeen)
                             return new CSharpLineColumn(lineIndex + 1, column);
+                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0)
+                        {
+                            clauseHasTopLevelExpressionContent = false;
+                            lastTopLevelSignificantLineIndex = lineIndex;
+                            lastTopLevelSignificantColumn = column;
+                        }
                         break;
+                }
+
+                if (!char.IsWhiteSpace(current)
+                    && parenDepth == 0
+                    && bracketDepth == 0
+                    && braceDepth == 0
+                    && angleDepth == 0
+                    && current != ','
+                    && current != ';')
+                {
+                    clauseHasTopLevelExpressionContent = true;
+                    lastTopLevelSignificantLineIndex = lineIndex;
+                    lastTopLevelSignificantColumn = column;
                 }
             }
         }

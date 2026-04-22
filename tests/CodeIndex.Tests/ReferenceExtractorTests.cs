@@ -2048,6 +2048,88 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedTerminalSelectInArgument_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<Holder> items)
+                {
+                    return Sink.Pick(from Status in items select(Status.Ready), Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedGroupByQueryInArgument_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<Holder> items)
+                {
+                    return Sink.Pick(from Status in items group(Status.Ready) by items.Count(), Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryRangeVariableMemberNamedSelect_DoesNotLeakReference()
     {
         const string content = """
@@ -2195,6 +2277,924 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryKeywordNamedLocalFunctionInParenthesizedOrderByExpression_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    static int select(IEnumerable<Holder> xs) => xs.Count();
+                    return from Status in items
+                           orderby select(items), items.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryKeywordNamedLocalFunctionAfterGreaterThanInOrderByTernary_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    static int select(IEnumerable<Holder> xs) => xs.Count();
+                    return from Status in items
+                           orderby items.Count() > select(items) ? 1 : 0, items.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryKeywordNamedLocalFunctionAfterLessThanInOrderByTernary_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    static int select(IEnumerable<Holder> xs) => xs.Count();
+                    return from Status in items
+                           orderby items.Count() < select(items) ? 1 : 0, items.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryKeywordNamedLocalFunctionAfterBangInOrderByTernary_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    static bool select(IEnumerable<Holder> xs) => xs.Any();
+                    return from Status in items
+                           orderby ! select(items) ? 1 : 0, items.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithAwaitBeforeQueryKeywordNamedLocalFunctionInOrderBy_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+            using System.Threading.Tasks;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public async Task<IEnumerable<int>> Read(IEnumerable<Holder> items)
+                {
+                    static async Task<int> select(IEnumerable<Holder> xs) => await Task.FromResult(xs.Count());
+                    return from Status in items
+                           orderby await select(items), items.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithPostfixNullForgivingBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Status Pick(object left, Status right) => right;
+                public static Holder? Maybe(Holder value) => value;
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Status Read(IEnumerable<Holder> items)
+                {
+                    return Sink.Pick(from Status in items
+                                     let alias = Sink.Maybe(Status)!
+                                     select(Status.Ready),
+                                     Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithThrowBeforeQueryKeywordNamedLocalFunctionInOrderBy_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    static System.Exception select(IEnumerable<Holder> xs) => new System.Exception(xs.Count().ToString());
+                    return from Status in items
+                           orderby items.Count() > 0 ? throw select(items) : 0, items.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithThrowBeforeGroupNamedLocalFunctionInOrderBy_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    static System.Exception group(IEnumerable<Holder> xs) => new System.Exception(xs.Count().ToString());
+                    return from Status in items
+                           orderby items.Count() > 0 ? throw group(items) : 0, items.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithMultilineSelectAfterGreaterThan_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    static int select(IEnumerable<Holder> xs) => xs.Count();
+                    return from Status in items
+                           orderby items.Count() >
+                                   select
+                                   (items) ? 1 : 0, items.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithMultilineThrowBeforeGroup_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    static System.Exception group(IEnumerable<Holder> xs) => new System.Exception(xs.Count().ToString());
+                    return from Status in items
+                           orderby items.Count() > 0 ? throw
+                                   group
+                                   (items) : null, items.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithNullableTypeSuffixBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<object> items, object value)
+                {
+                    return Sink.Pick(from Status in items
+                                     let cast = value as Status?
+                                     select(Status.Ready),
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithPostfixIncrementBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<object> items, int counter)
+                {
+                    return Sink.Pick(from Status in items
+                                     let n = counter++
+                                     select(Status.Ready),
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithNullableArrayRankSuffixBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<object> items, object value)
+                {
+                    return Sink.Pick(from Status in items
+                                     let cast = value as Status[,]?
+                                     select(Status.Ready),
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithCastedLocalSelectCallInOrderBy_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    static object select(IEnumerable<Holder> xs) => xs.Count();
+                    return from Status in items
+                           orderby (object)select(items), items.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithSimpleIdentifierCastedLocalSelectCallInOrderBy_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class CustomType
+            {
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<Holder> items)
+                {
+                    static CustomType select(IEnumerable<Holder> xs) => new();
+                    return Sink.Pick(from Status in items
+                                     orderby (CustomType)select(items), items.Count()
+                                     select Status.Ready,
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithMultilineSimpleIdentifierCastedLocalSelectCallInOrderBy_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class CustomType
+            {
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<Holder> items)
+                {
+                    static CustomType select(IEnumerable<Holder> xs) => new();
+                    return Sink.Pick(from Status in items
+                                     orderby (CustomType)
+                                             select(items), items.Count()
+                                     select Status.Ready,
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedTernaryOrderByBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<object> items, bool flag, int left, int right)
+                {
+                    return Sink.Pick(from Status in items
+                                     orderby (flag ? left : right)
+                                     select(Status.Ready),
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedCoalesceOrderByBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<object> items, int? left, int right)
+                {
+                    return Sink.Pick(from Status in items
+                                     orderby (left ?? right)
+                                     select(Status.Ready),
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedQualifiedMemberAccessBeforeParenthesizedTerminalSelect_PreservesOnlyRealReferences()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<object> items)
+                {
+                    return Sink.Pick(from Status in items
+                                     orderby (Demo.Status.Ready)
+                                     select(Status.Ready),
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Equal(2, readyRefs.Count);
+        Assert.All(readyRefs, readyRef => Assert.Equal("Read", readyRef.ContainerName));
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithLowercaseAliasCastedLocalSelectCallInOrderBy_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+            using customType = Demo.CustomType;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class CustomType
+            {
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<object> items)
+                {
+                    static customType select(IEnumerable<object> xs) => new();
+                    return Sink.Pick(from Status in items
+                                     orderby (customType)select(items)
+                                     select Status.Ready,
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedKeywordNamedParameterBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<object> items, int Select)
+                {
+                    return Sink.Pick(from Status in items
+                                     orderby (Select)
+                                     select(Status.Ready),
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedKeywordNamedLocalBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<object> items)
+                {
+                    const int Select = 1;
+                    return Sink.Pick(from Status in items
+                                     orderby (Select)
+                                     select(Status.Ready),
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedTerminalSelectAfterGenericClose_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<object> items)
+                {
+                    return Sink.Pick(from Status in items where Status is List<int> select(Status.Ready), Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryRangeVariableOrderByObjectInitializerComma_DoesNotLeakReference()
     {
         const string content = """
@@ -2271,6 +3271,51 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithNestedQueryBeforeParenthesizedOrderByComma_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<Holder> items, IEnumerable<int> others)
+                {
+                    return Sink.Pick(from Status in items
+                                     let nested = from x in others select x
+                                     orderby(items.Count()), nested.Count()
+                                     select Status.Ready,
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
     }
 
     [Fact]
