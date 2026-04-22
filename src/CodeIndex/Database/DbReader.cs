@@ -391,7 +391,7 @@ public partial class DbReader
             ExactIndexAvailable: false,
             HasMissingIndex: false,
             HasMissingTable: false,
-            DegradedReason: "csharp_symbol_name_ready=false (canonical C# operator / conversion operator / indexer names are stale in this DB)");
+            DegradedReason: "csharp_symbol_name_ready=false (canonical C# operator / conversion operator / indexer / verbatim identifier names are stale in this DB)");
     }
 
     private bool ScopeMayIncludeCSharpFiles(
