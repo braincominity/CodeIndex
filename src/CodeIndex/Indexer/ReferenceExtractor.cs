@@ -3003,7 +3003,10 @@ public static class ReferenceExtractor
         }
 
         if (!string.IsNullOrEmpty(previousIdentifierToken))
-            return !IsCSharpParenthesizedQueryClausePrefixIdentifier(previousIdentifierToken);
+            return !IsCSharpParenthesizedQueryClausePrefixIdentifier(
+                structuralLines[previousTokenLineIndex],
+                previousTokenStartColumn,
+                previousIdentifierToken);
 
         return previousPunctuationToken switch
         {
@@ -3042,7 +3045,10 @@ public static class ReferenceExtractor
         }
 
         if (!string.IsNullOrEmpty(previousIdentifierToken))
-            return !IsCSharpParenthesizedQueryClausePrefixIdentifier(previousIdentifierToken);
+            return !IsCSharpParenthesizedQueryClausePrefixIdentifier(
+                structuralLines[previousTokenLineIndex],
+                previousTokenStartColumn,
+                previousIdentifierToken);
 
         return previousPunctuationToken switch
         {
@@ -3056,9 +3062,13 @@ public static class ReferenceExtractor
         };
     }
 
-    private static bool IsCSharpParenthesizedQueryClausePrefixIdentifier(string token)
+    private static bool IsCSharpParenthesizedQueryClausePrefixIdentifier(string line, int tokenStartColumn, string token)
     {
+        if (tokenStartColumn > 0 && line[tokenStartColumn - 1] == '@')
+            return false;
+
         return string.Equals(token, "await", StringComparison.Ordinal)
+            || string.Equals(token, "throw", StringComparison.Ordinal)
             || IsCSharpQueryClauseKeyword(token);
     }
 
