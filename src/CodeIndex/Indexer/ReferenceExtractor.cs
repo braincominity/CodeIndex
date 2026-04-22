@@ -204,6 +204,7 @@ public static class ReferenceExtractor
     // MySQL / MariaDB の `` `proc-name` `` 形にも対応する。
     private const string SqlQuotedIdentifierPattern = @"(?:\[[^\[\]\r\n]+\]|`[^`\r\n]+`)";
     private const string SqlBareIdentifierPattern = @"(?:##?\w+|\w+)";
+    private const string SqlTempIdentifierPattern = @"(?:\[(?:##?\w+)\]|`(?:##?\w+)`|##?\w+)";
     private const string SqlQualifiedIdentifierPattern =
         @"(?:(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")\s*\.\s*)*(?<name>" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")";
     private static readonly Regex SqlProcCallRegex = new(
@@ -225,6 +226,13 @@ public static class ReferenceExtractor
     // 同じ識別子の generic CallRegex を抑止する。
     private static readonly Regex SqlTargetReferenceRegex = new(
         $@"(?<![\w$])(?:INSERT\s+INTO|UPDATE|TRUNCATE\s+TABLE|MERGE\s+INTO)\b\s+{SqlQualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // SQL Server temp-table materialization: `SELECT ... INTO #tmp` / `SELECT ... INTO ##tmp`.
+    // Procedural `SELECT ... INTO variable` remains intentionally excluded. issue #649.
+    // SQL Server の temp table 作成: `SELECT ... INTO #tmp` / `SELECT ... INTO ##tmp`。
+    // 手続き系の `SELECT ... INTO variable` は意図的に除外したままにする。issue #649。
+    private static readonly Regex SqlSelectIntoTempTargetRegex = new(
+        $@"(?<![\w$])SELECT\b.*?\bINTO\s+(?<name>{SqlTempIdentifierPattern})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // C# event subscription/unsubscription: Click += OnClick — both LHS and RHS must be PascalCase identifiers
     // C# イベント購読・解除: Click += OnClick — LHS と RHS の両方が PascalCase 識別子のみ
@@ -754,6 +762,17 @@ public static class ReferenceExtractor
                         var nameGroup = match.Groups["name"];
                         if (IsFollowedByOpenParen(sqlScanLine, nameGroup.Index + nameGroup.Length))
                             continue;
+                        NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                        if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                            continue;
+
+                        var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
+                        AddReference(references, seen, fileId, resolvedName, nameIndex, "reference", context, lineNumber, sqlReferenceContainer);
+                    }
+
+                    foreach (Match match in SqlSelectIntoTempTargetRegex.Matches(sqlScanLine))
+                    {
+                        var nameGroup = match.Groups["name"];
                         NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
                         if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
                             continue;
@@ -6402,6 +6421,15 @@ public static class ReferenceExtractor
             return false;
 
         int next = hashIndex + 1;
+        if (hashIndex > 0
+            && line[hashIndex - 1] == '#'
+            && next < line.Length
+            && (char.IsLetterOrDigit(line[next]) || line[next] == '_'))
+            return false;
+        if (next + 1 < line.Length
+            && line[next] == '#'
+            && (char.IsLetterOrDigit(line[next + 1]) || line[next + 1] == '_'))
+            return false;
         if (next >= line.Length || !(char.IsLetterOrDigit(line[next]) || line[next] == '_'))
             return true;
 

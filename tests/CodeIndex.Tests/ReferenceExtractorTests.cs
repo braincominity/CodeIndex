@@ -5338,16 +5338,25 @@ public class ReferenceExtractorTests
     [Fact]
     public void Extract_SQL_HandlesTempTablesAndDoesNotTreatSelectIntoVariablesAsReferences()
     {
-        // issue #638 / #639: T-SQL temp tables should behave like table references, while
-        // PL/pgSQL-style `SELECT ... INTO variable` must not leak a variable into the object graph.
-        // issue #638 / #639: T-SQL の temp table はテーブル参照として扱い、PL/pgSQL の
+        // issue #638 / #639 / #648 / #649: temp tables should stay on the SQL reference path,
+        // including `##global` names and `SELECT ... INTO #temp`, while procedural
+        // `SELECT ... INTO variable` still must not leak into the object graph.
+        // issue #638 / #639 / #648 / #649: temp table は SQL reference 経路に残し、
+        // `##global` 名と `SELECT ... INTO #temp` も拾いつつ、手続き系の
         // `SELECT ... INTO variable` は object graph に混ぜない。
         const string content = """
             INSERT INTO #audit_log (action) VALUES ('login');
             UPDATE #audit_log SET action = 'logout';
             SELECT * FROM #audit_log;
 
+            INSERT INTO ##session_log (action) VALUES ('login');
+            UPDATE ##session_log SET action = 'logout';
+            SELECT * FROM ##session_log;
+
+            SELECT id INTO #selected_users FROM users;
+            SELECT id INTO ##selected_global_users FROM users;
             SELECT id INTO target_var FROM users;
+            SELECT * FROM users # comment with ##ignored_temp;
 
             MERGE INTO audit_log AS t
             USING staging_log AS s
@@ -5360,11 +5369,16 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
 
         Assert.Equal(3, references.Count(r => r.SymbolName == "#audit_log" && r.ReferenceKind == "reference"));
+        Assert.Equal(3, references.Count(r => r.SymbolName == "##session_log" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "#selected_users" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "##selected_global_users" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "session_log" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "target_var");
+        Assert.DoesNotContain(references, r => r.SymbolName == "##ignored_temp");
     }
 
     [Fact]
