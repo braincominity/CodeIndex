@@ -10728,6 +10728,122 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_CarriedVerbatimStringContinuationPreservesSameLinePropertySiblings()
+    {
+        // A carried verbatim-string close line must clamp the first same-line brace-bodied
+        // property at its real `}` so later property siblings on the same physical line
+        // still restart and extract independently. Closes #636.
+        // 継続中の verbatim string の close line では、同一物理行上の最初の brace-body
+        // property を本物の `}` で切り、後続 property sibling が再開して独立抽出される
+        // 必要がある。Closes #636.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public class C",
+            "{",
+            "    private string _s = @\"",
+            "    fake\"; public int P { get; } public int Q { get; }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var propertyP = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("public int P { get; }", propertyP.Signature);
+        Assert.Equal("C", propertyP.ContainerName);
+
+        var propertyQ = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Q"));
+        Assert.Equal("public int Q { get; }", propertyQ.Signature);
+        Assert.Equal("C", propertyQ.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_CarriedRawStringContinuationPreservesSameLinePropertySiblings()
+    {
+        // Raw-string continuation lines share the same brace-end clamp requirement as
+        // verbatim strings: the first same-line property must stop at its own accessor
+        // block so later property siblings remain visible. Closes #636.
+        // raw string の継続行も、verbatim string と同じ brace-end clamp を必要とする。
+        // 先頭 property は自分の accessor block で止まり、後続 property sibling が
+        // 見えるままでなければならない。Closes #636.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public class C",
+            "{",
+            "    private string _s = \"\"\"",
+            "    fake\"\"\"; public int P { get; } public int Q { get; }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var propertyP = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("public int P { get; }", propertyP.Signature);
+        Assert.Equal("C", propertyP.ContainerName);
+
+        var propertyQ = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Q"));
+        Assert.Equal("public int Q { get; }", propertyQ.Signature);
+        Assert.Equal("C", propertyQ.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_CarriedVerbatimStringContinuationPreservesSameLineMethodSiblings()
+    {
+        // Carried verbatim-string close lines must also clamp same-line brace-bodied
+        // methods. Otherwise the first method absorbs the rest of the line and later
+        // siblings disappear. Closes #636.
+        // 継続中の verbatim string の close line では、同一行 brace-body method も
+        // 正しく切り出す必要がある。そうしないと先頭 method が残り全体を飲み込み、
+        // 後続 sibling が消える。Closes #636.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public class C",
+            "{",
+            "    private string _s = @\"",
+            "    fake\"; public void M() { } public void N() { }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var methodM = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "M"));
+        Assert.Equal("public void M() { }", methodM.Signature);
+        Assert.Equal("C", methodM.ContainerName);
+
+        var methodN = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "N"));
+        Assert.Equal("public void N() { }", methodN.Signature);
+        Assert.Equal("C", methodN.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_CarriedRawStringContinuationPreservesSameLineMethodSiblings()
+    {
+        // Raw-string continuation lines need the same method-body clamp: both methods on
+        // the close line must survive with their own signatures instead of collapsing into
+        // one oversized match. Closes #636.
+        // raw string の継続行でも method-body clamp は同じく必要であり、close line 上の
+        // 2 つの method は 1 つの過大 signature に潰れず、それぞれ独立して残る
+        // 必要がある。Closes #636.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public class C",
+            "{",
+            "    private string _s = \"\"\"",
+            "    fake\"\"\"; public void M() { } public void N() { }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var methodM = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "M"));
+        Assert.Equal("public void M() { }", methodM.Signature);
+        Assert.Equal("C", methodM.ContainerName);
+
+        var methodN = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "N"));
+        Assert.Equal("public void N() { }", methodN.Signature);
+        Assert.Equal("C", methodN.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CSharp_CarriedVerbatimStringContinuationWithSameLineAccessorEventStillFindsLaterTypes()
     {
         // Carried verbatim close-lines can now restart across the top-level `";`, but
