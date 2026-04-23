@@ -9815,6 +9815,13 @@ public static class SymbolExtractor
             tokenStart--;
         }
 
+        if (tokenStart > 0
+            && trimmed[tokenStart - 1] == '@'
+            && IsCSharpVerbatimIdentifierPrefix(trimmed, tokenStart - 1))
+        {
+            return false;
+        }
+
         var lastToken = trimmed[tokenStart..];
         return lastToken is "as" or "is" or "await" or "return" or "throw" or "yield" or "new";
     }

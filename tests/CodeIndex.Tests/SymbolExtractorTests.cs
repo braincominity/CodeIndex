@@ -8969,6 +8969,27 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_VerbatimReturnTypeIdentifiers_AreNotRejectedBySuffixGuard()
+    {
+        var content = """
+            namespace Demo;
+
+            public class @new {}
+
+            public class UsesVerbatim
+            {
+                public @new Make() => new @new();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "new");
+
+        var method = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Make"));
+        Assert.Equal("@new", method.ReturnType);
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsMultiLineFieldDeclaration()
     {
         // Plain field whose type occupies one line and whose name / initializer spill
