@@ -44,7 +44,7 @@ public partial class DbReader
     private readonly Dictionary<string, CSharpContainingTypeScope?> _csharpContainingTypeScopeByQualifiedName = new(StringComparer.Ordinal);
     private HashSet<string>? _csharpGlobalUsingStaticTargets;
     private HashSet<string>? _csharpGlobalUsingNamespaces;
-    private HashSet<string>? _csharpGlobalUsingAliases;
+    private Dictionary<string, CSharpUsingAliasScope>? _csharpGlobalUsingAliasesByName;
     internal readonly bool _hasReferencesTable;
     internal readonly bool _hasIssuesTable;
     internal readonly bool _hasChunksTable;
@@ -101,7 +101,7 @@ public partial class DbReader
     private sealed record CSharpContainingTypeScope(string Path, string Kind, string QualifiedName, string? Visibility, string? Signature, int DeclarationLine, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpUsingStaticScope(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpUsingNamespaceScope(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
-    private sealed record CSharpUsingAliasScope(string AliasName, int Line, int ScopeStartLine, int ScopeEndLine, bool TargetsType);
+    private sealed record CSharpUsingAliasScope(string AliasName, string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine, bool TargetsType);
     private sealed record CSharpTypeNamespaceCandidate(string QualifiedName, string Path, bool IsFileLocal);
     private sealed record CSharpContainingTypeCandidate(string QualifiedName, bool AccessibleFromDerivedType);
     private sealed record SearchReferenceRawRow(string Path, string? Lang, string SymbolName, string ReferenceKind, int Line, int Column, string Context, string? ContainerKind, string? ContainerName);
@@ -902,7 +902,10 @@ public partial class DbReader
             return false;
         }
 
-        if (!IsCSharpUsingStaticConstantPatternContext(contextForFilter, symbolName, columnNumber))
+        var patternContext = contextForFilter;
+        var patternColumn = columnNumber;
+        TryBuildCSharpUsingStaticPatternContextWindow(path, lineNumber, contextForFilter, columnNumber, out patternContext, out patternColumn);
+        if (!IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn))
             return false;
 
         var activeTargets = GetActiveCSharpUsingStaticTargets(path, lineNumber);
@@ -1167,32 +1170,7 @@ public partial class DbReader
 
     private bool HasActiveCSharpUsingAlias(string path, int lineNumber, string symbolName)
     {
-        if (_csharpGlobalUsingAliases == null)
-            _csharpGlobalUsingAliases = GetGlobalCSharpUsingAliases();
-
-        if (_csharpGlobalUsingAliases.Contains(symbolName))
-            return true;
-
-        if (!_csharpUsingAliasScopesByPath.TryGetValue(path, out var scopes))
-        {
-            scopes = LoadCSharpUsingAliasScopes(path);
-            _csharpUsingAliasScopesByPath[path] = scopes;
-        }
-
-        foreach (var scope in scopes)
-        {
-            if (!scope.TargetsType)
-                continue;
-            if (!string.Equals(scope.AliasName, symbolName, StringComparison.Ordinal))
-                continue;
-            if (scope.Line > lineNumber)
-                continue;
-            if (lineNumber < scope.ScopeStartLine || lineNumber > scope.ScopeEndLine)
-                continue;
-            return true;
-        }
-
-        return false;
+        return TryResolveActiveCSharpUsingAliasScope(path, lineNumber, symbolName, requireTypeAlias: true, out _);
     }
 
     private HashSet<string> GetActiveCSharpUsingStaticTargets(string path, int lineNumber)
@@ -1430,6 +1408,10 @@ public partial class DbReader
     private string? ResolveScopedCSharpContainingTypeQualifiedName(string path, int lineNumber, string typeReference)
     {
         var normalizedReference = NormalizeCSharpBaseTypeReference(typeReference);
+        if (string.IsNullOrWhiteSpace(normalizedReference))
+            return null;
+
+        normalizedReference = ResolveActiveCSharpUsingAliasReference(path, lineNumber, normalizedReference);
         if (string.IsNullOrWhiteSpace(normalizedReference))
             return null;
 
@@ -1798,6 +1780,7 @@ public partial class DbReader
 
             scopes.Add(new CSharpUsingAliasScope(
                 aliasName!,
+                targetQualifiedName!,
                 import.Line,
                 scopeStartLine,
                 scopeEndLine,
@@ -1837,8 +1820,11 @@ public partial class DbReader
         return _csharpGlobalUsingStaticTargets;
     }
 
-    private HashSet<string> GetGlobalCSharpUsingAliases()
+    private Dictionary<string, CSharpUsingAliasScope> GetGlobalCSharpUsingAliasesByName()
     {
+        if (_csharpGlobalUsingAliasesByName != null)
+            return _csharpGlobalUsingAliasesByName;
+
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = @"
             SELECT s.signature
@@ -1847,21 +1833,27 @@ public partial class DbReader
             WHERE f.lang = 'csharp'
               AND s.kind = 'import'";
 
-        var aliases = new HashSet<string>(StringComparer.Ordinal);
+        var aliases = new Dictionary<string, CSharpUsingAliasScope>(StringComparer.Ordinal);
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
             if (reader.IsDBNull(0))
                 continue;
             if (TryParseCSharpUsingAliasImport(reader.GetString(0), out var aliasName, out var targetQualifiedName, out var isGlobal)
-                && IsKnownCSharpTypeQualifiedName(targetQualifiedName!)
                 && isGlobal)
             {
-                aliases.Add(aliasName!);
+                aliases[aliasName!] = new CSharpUsingAliasScope(
+                    aliasName!,
+                    targetQualifiedName!,
+                    0,
+                    1,
+                    int.MaxValue,
+                    IsKnownCSharpTypeQualifiedName(targetQualifiedName!));
             }
         }
 
-        return aliases;
+        _csharpGlobalUsingAliasesByName = aliases;
+        return _csharpGlobalUsingAliasesByName;
     }
 
     private HashSet<string> GetGlobalCSharpUsingNamespaces()
@@ -1932,6 +1924,88 @@ public partial class DbReader
 
         isGlobal = signature.TrimStart().StartsWith("global using ", StringComparison.Ordinal);
         return true;
+    }
+
+    private bool TryResolveActiveCSharpUsingAliasScope(string path, int lineNumber, string aliasReference, bool requireTypeAlias, out CSharpUsingAliasScope? resolvedScope)
+    {
+        resolvedScope = null;
+        if (string.IsNullOrWhiteSpace(aliasReference))
+            return false;
+
+        var normalizedReference = NormalizeDbCSharpQualifiedName(aliasReference);
+        if (string.IsNullOrWhiteSpace(normalizedReference))
+            return false;
+
+        var firstDot = normalizedReference.IndexOf('.');
+        var aliasName = firstDot >= 0
+            ? normalizedReference[..firstDot]
+            : normalizedReference;
+        if (string.IsNullOrWhiteSpace(aliasName))
+            return false;
+
+        if (!_csharpUsingAliasScopesByPath.TryGetValue(path, out var scopes))
+        {
+            scopes = LoadCSharpUsingAliasScopes(path);
+            _csharpUsingAliasScopesByPath[path] = scopes;
+        }
+
+        for (var i = scopes.Count - 1; i >= 0; i--)
+        {
+            var scope = scopes[i];
+            if (!string.Equals(scope.AliasName, aliasName, StringComparison.Ordinal))
+                continue;
+            if (scope.Line > lineNumber)
+                continue;
+            if (lineNumber < scope.ScopeStartLine || lineNumber > scope.ScopeEndLine)
+                continue;
+            if (requireTypeAlias && !scope.TargetsType)
+                return false;
+            resolvedScope = scope;
+            return true;
+        }
+
+        var globalAliases = GetGlobalCSharpUsingAliasesByName();
+        if (!globalAliases.TryGetValue(aliasName, out var globalScope))
+            return false;
+        if (requireTypeAlias && !globalScope.TargetsType)
+            return false;
+
+        resolvedScope = globalScope;
+        return true;
+    }
+
+    private string ResolveActiveCSharpUsingAliasReference(string path, int lineNumber, string typeReference)
+    {
+        var resolvedReference = typeReference;
+        if (string.IsNullOrWhiteSpace(resolvedReference))
+            return string.Empty;
+
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        while (visited.Add(resolvedReference)
+               && TryResolveActiveCSharpUsingAliasScope(path, lineNumber, resolvedReference, requireTypeAlias: false, out var resolvedScope)
+               && resolvedScope != null)
+        {
+            var normalizedReference = NormalizeDbCSharpQualifiedName(resolvedReference);
+            if (string.IsNullOrWhiteSpace(normalizedReference))
+                break;
+
+            var firstDot = normalizedReference.IndexOf('.');
+            var suffix = firstDot >= 0
+                ? NormalizeDbCSharpQualifiedName(normalizedReference[(firstDot + 1)..])
+                : string.Empty;
+            var nextReference = string.IsNullOrWhiteSpace(suffix)
+                ? resolvedScope.TargetQualifiedName
+                : CombineDbQualifiedName(resolvedScope.TargetQualifiedName, suffix);
+            if (string.IsNullOrWhiteSpace(nextReference)
+                || string.Equals(nextReference, resolvedReference, StringComparison.Ordinal))
+            {
+                break;
+            }
+
+            resolvedReference = nextReference;
+        }
+
+        return resolvedReference;
     }
 
     private static bool TryParseCSharpUsingNamespaceImport(string signature, out string? target, out bool isGlobal)
@@ -2010,6 +2084,48 @@ public partial class DbReader
         return TryConsumeTrailingCSharpToken(text, ref cursor, "typeof")
             || TryConsumeTrailingCSharpToken(text, ref cursor, "sizeof")
             || TryConsumeTrailingCSharpToken(text, ref cursor, "default");
+    }
+
+    private void TryBuildCSharpUsingStaticPatternContextWindow(string path, int lineNumber, string contextForFilter, int columnNumber, out string patternContext, out int patternColumn)
+    {
+        patternContext = contextForFilter;
+        patternColumn = columnNumber;
+        if (!_hasChunksTable
+            || string.IsNullOrWhiteSpace(path)
+            || string.IsNullOrWhiteSpace(contextForFilter)
+            || lineNumber <= 1
+            || columnNumber <= 0)
+        {
+            return;
+        }
+
+        var startLine = Math.Max(1, lineNumber - 2);
+        if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap, startLine, lineNumber)
+            || !lineMap.TryGetValue(lineNumber, out var currentLine))
+        {
+            return;
+        }
+
+        var lines = new List<string>();
+        var prefixLength = 0;
+        for (var absoluteLine = startLine; absoluteLine <= lineNumber; absoluteLine++)
+        {
+            if (!lineMap.TryGetValue(absoluteLine, out var lineText))
+                continue;
+
+            if (absoluteLine < lineNumber)
+                prefixLength += lineText.Length + 1;
+            lines.Add(lineText);
+        }
+
+        if (lines.Count <= 1)
+        {
+            patternContext = currentLine;
+            return;
+        }
+
+        patternContext = string.Join('\n', lines);
+        patternColumn = prefixLength + columnNumber;
     }
 
     private static int SkipCSharpTriviaBackward(string text, int cursor)
