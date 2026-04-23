@@ -2821,6 +2821,37 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_AlignDepsEdges()
+    {
+        InsertIndexedFile("src/sql_deps_target.sql", "sql",
+            """
+            CREATE FUNCTION dbo.fn_GetOrderItems(@orderId INT)
+            RETURNS TABLE
+            AS
+            RETURN (SELECT * FROM dbo.OrderItems WHERE OrderId = @orderId);
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_deps_caller.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.usp_GetOrders
+            AS
+            BEGIN
+                SELECT *
+                FROM dbo.Orders o
+                CROSS APPLY dbo.fn_GetOrderItems(o.OrderId) fi;
+            END
+            GO
+            """);
+
+        var dependency = Assert.Single(
+            _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_deps_caller.sql"], excludePathPatterns: null, excludeTests: false));
+        Assert.Equal("src/sql_deps_caller.sql", dependency.SourcePath);
+        Assert.Equal("src/sql_deps_target.sql", dependency.TargetPath);
+        Assert.Equal(1, dependency.ReferenceCount);
+    }
+
+    [Fact]
     public void GetFileDependencies_DoesNotJoinSameNameTargetsAcrossLanguages()
     {
         InsertIndexedFile("src/Foo.cs", "csharp",

@@ -2694,6 +2694,15 @@ public partial class DbReader
         return $"({csharpClause} OR {jsClause} OR {otherClause})";
     }
 
+    // `deps` keeps persisted SQL symbol names qualified (`dbo.fn_X`) but must
+    // still join bare SQL reference rows (`fn_X`) back to that definition.
+    // Normalize only the read-time dependency key instead of rewriting storage.
+    // `deps` は保存済み SQL symbol 名を qualified (`dbo.fn_X`) のまま維持しつつ、
+    // bare な SQL reference 行 (`fn_X`) も同じ定義へ結び付ける必要があるため、
+    // 依存関係の read-time key だけ leaf 名へ正規化する。
+    private static string BuildLogicalDependencySymbolNameExpr(string fileAlias, string symbolNameExpr)
+        => $"CASE WHEN {fileAlias}.lang = 'sql' THEN sql_leaf_name({symbolNameExpr}) ELSE {symbolNameExpr} END";
+
     /// <summary>
     /// Compute file-level dependency edges: which files reference symbols defined in which other files.
     /// ファイル間の依存関係エッジを算出: どのファイルがどのファイルで定義されたシンボルを参照しているか。
@@ -2710,6 +2719,7 @@ public partial class DbReader
         // per-reference × per-symbol の膨張を防ぐ。
         var sourceFilterAlias = "src";
         var targetFilterAlias = "dst";
+        var targetLogicalSymbolNameExpr = BuildLogicalDependencySymbolNameExpr("dst", "s.name");
         var sql = @"
             WITH logical_references_primary AS (
                 SELECT src.id AS source_file_id,
@@ -2828,7 +2838,7 @@ public partial class DbReader
                 -- legacy DB では filter を無効化し class-like 全体に戻る。
                 SELECT dst.path AS target_path,
                        dst.lang AS target_lang,
-                       s.name AS symbol_name,
+                       " + targetLogicalSymbolNameExpr + @" AS symbol_name,
                        MAX(CASE WHEN s.kind IN ('class','struct','interface') THEN 1 ELSE 0 END) AS has_class_like_kind,
                        MAX(CASE WHEN " + BuildMetadataTargetKindExpr("dst") + @"
                                 THEN 1 ELSE 0 END) AS has_metadata_target_kind
@@ -2853,7 +2863,7 @@ public partial class DbReader
         if (reverse && excludeTests)
             sql += $" AND NOT {TestPathCondition.Replace("f.path", $"{targetFilterAlias}.path")}";
         sql += @"
-                GROUP BY dst.path, dst.lang, s.name
+                GROUP BY dst.path, dst.lang, " + targetLogicalSymbolNameExpr + @"
             ),
             metadata_raw_suppression AS (
                 -- When a raw C# attribute reference '[Foo]' (stored as symbol_name='Foo',
@@ -2903,7 +2913,7 @@ public partial class DbReader
                  AND dst.lang = tf.target_lang
                 JOIN symbols s
                   ON s.file_id = dst.id
-                 AND s.name = tf.symbol_name
+                 AND " + targetLogicalSymbolNameExpr + @" = tf.symbol_name
                  -- Same language-aware metadata-eligibility filter as
                  -- target_files: C# restricts to `class` with inheritance
                  -- clause (interface/struct cannot be attribute targets);
