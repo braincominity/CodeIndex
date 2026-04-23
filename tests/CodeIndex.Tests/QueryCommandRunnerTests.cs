@@ -11492,7 +11492,8 @@ public class QueryCommandRunnerTests
                 SELECT * FROM #delete_temp;
 
                 TRUNCATE TABLE -- trailing comment
-                    archived_log;
+                    #truncate_temp;
+                SELECT * FROM #truncate_temp;
 
                 CREATE TABLE -- trailing comment
                     #create_temp (id int);
@@ -11503,7 +11504,7 @@ public class QueryCommandRunnerTests
             var (auditExitCode, auditStdout, auditStderr) = RunBuiltCli(["references", "audit_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (updateExitCode, updateStdout, updateStderr) = RunBuiltCli(["references", "#update_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (deleteExitCode, deleteStdout, deleteStderr) = RunBuiltCli(["references", "#delete_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
-            var (truncateExitCode, truncateStdout, truncateStderr) = RunBuiltCli(["references", "archived_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (truncateExitCode, truncateStdout, truncateStderr) = RunBuiltCli(["references", "#truncate_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (createExitCode, createStdout, createStderr) = RunBuiltCli(["references", "#create_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
 
             var auditRows = ParseJsonLines(auditStdout);
@@ -11533,14 +11534,56 @@ public class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, truncateExitCode);
             Assert.Equal(string.Empty, truncateStderr);
-            var truncateRow = Assert.Single(truncateRows);
-            Assert.Equal("archived_log", truncateRow.RootElement.GetProperty("symbol_name").GetString());
-            Assert.Equal("reference", truncateRow.RootElement.GetProperty("reference_kind").GetString());
+            Assert.Equal(2, truncateRows.Count);
+            Assert.All(truncateRows, row => Assert.Equal("#truncate_temp", row.RootElement.GetProperty("symbol_name").GetString()));
 
             Assert.Equal(CommandExitCodes.Success, createExitCode);
             Assert.Equal(string.Empty, createStderr);
             Assert.Single(createRows);
             Assert.All(createRows, row => Assert.Equal("#create_temp", row.RootElement.GetProperty("symbol_name").GetString()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_SqlTruncateTempTargetsEstablishLaterReads()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_truncate_temp_target");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "sql", "repro.sql"),
+                """
+                TRUNCATE TABLE #truncate_temp;
+                SELECT * FROM #truncate_temp;
+                SELECT * FROM #future_temp;
+                TRUNCATE TABLE #future_temp;
+                """);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (truncateExitCode, truncateStdout, truncateStderr) = RunBuiltCli(["references", "#truncate_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (futureExitCode, futureStdout, futureStderr) = RunBuiltCli(["references", "#future_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+
+            var truncateRows = ParseJsonLines(truncateStdout);
+            var futureRows = ParseJsonLines(futureStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            Assert.Equal(CommandExitCodes.Success, truncateExitCode);
+            Assert.Equal(string.Empty, truncateStderr);
+            Assert.Equal(2, truncateRows.Count);
+            Assert.All(truncateRows, row => Assert.Equal("#truncate_temp", row.RootElement.GetProperty("symbol_name").GetString()));
+
+            Assert.Equal(CommandExitCodes.Success, futureExitCode);
+            Assert.Equal(string.Empty, futureStderr);
+            var futureRow = Assert.Single(futureRows);
+            Assert.Equal("#future_temp", futureRow.RootElement.GetProperty("symbol_name").GetString());
+            Assert.Equal(4, futureRow.RootElement.GetProperty("line").GetInt32());
         }
         finally
         {

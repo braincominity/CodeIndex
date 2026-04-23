@@ -1515,6 +1515,7 @@ public static class ReferenceExtractor
             return false;
 
         return SqlTargetReferenceRegex.IsMatch(statement)
+            || SqlTruncateTargetRegex.IsMatch(statement)
             || SqlSelectIntoTempTargetStatementRegex.IsMatch(statement)
             || SqlCreateTempTableRegex.IsMatch(statement);
     }
@@ -1718,6 +1719,7 @@ public static class ReferenceExtractor
         HashSet<string> names)
     {
         CollectSqlTempObjectNamesFromMatches(SqlTargetReferenceRegex.Matches(statement), statement, names);
+        CollectSqlTempObjectNamesFromMatches(SqlTruncateTargetRegex.Matches(statement), statement, names);
         CollectSqlTempObjectNamesFromMatches(SqlSelectIntoTempTargetStatementRegex.Matches(statement), statement, names);
         CollectSqlTempObjectNamesFromMatches(SqlCreateTempTableRegex.Matches(statement), statement, names);
     }

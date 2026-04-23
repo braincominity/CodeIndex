@@ -5838,7 +5838,8 @@ public class ReferenceExtractorTests
             SELECT * FROM #delete_temp;
 
             TRUNCATE TABLE -- trailing comment
-                archived_log;
+                #truncate_temp;
+            SELECT * FROM #truncate_temp;
 
             CREATE TABLE -- trailing comment
                 #create_temp (id int);
@@ -5852,8 +5853,30 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "call");
         Assert.Equal(2, references.Count(r => r.SymbolName == "#update_temp" && r.ReferenceKind == "reference"));
         Assert.Equal(2, references.Count(r => r.SymbolName == "#delete_temp" && r.ReferenceKind == "reference"));
-        Assert.Equal(1, references.Count(r => r.SymbolName == "archived_log" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#truncate_temp" && r.ReferenceKind == "reference"));
         Assert.Equal(1, references.Count(r => r.SymbolName == "#create_temp" && r.ReferenceKind == "reference"));
+    }
+
+    [Fact]
+    public void Extract_SQL_TruncateTempTargetsEstablishLaterReads()
+    {
+        // issue #768: `TRUNCATE TABLE #temp` must establish the temp object for later reads the same
+        // way other temp-targeting SQL mutations already do.
+        // issue #768: `TRUNCATE TABLE #temp` も、他の temp-targeting SQL mutation と同様に
+        // 後続 read 向けの temp object を確立しなければならない。
+        const string content = """
+            TRUNCATE TABLE #truncate_temp;
+            SELECT * FROM #truncate_temp;
+            SELECT * FROM #future_temp;
+            TRUNCATE TABLE #future_temp;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#truncate_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(1, references.Count(r => r.SymbolName == "#future_temp" && r.ReferenceKind == "reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "#future_temp" && r.ReferenceKind == "reference" && r.Line == 3);
     }
 
     [Fact]
