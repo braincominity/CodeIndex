@@ -8620,6 +8620,7 @@ public class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "java", content);
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "A" && s.ContainerName == "WithBody" && s.BodyStartLine != null);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "f" && s.ContainerKind == "function" && s.ContainerName == "A");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B" && s.ContainerName == "WithBody" && s.BodyStartLine == null);
     }
 
@@ -13189,6 +13190,200 @@ public class SymbolExtractorTests
         Assert.True(
             stopwatch.Elapsed < TimeSpan.FromSeconds(10),
             $"InstallScriptTests.cs extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < 10s.");
+    }
+
+    [Fact]
+    public void Extract_Java_SameLineAnnotationsCompactConstructorsAndEnumOverrides_StayIndexed()
+    {
+        const string content = """
+            package com.example;
+
+            public class Same {
+                @Override public String toString() { return "x"; }
+                @Deprecated public int legacy() { return 0; }
+            }
+
+            public enum Op {
+                ADD {
+                    @Override public int apply(int a, int b) { return a + b; }
+                },
+                SUB {
+                    @Override public int apply(int a, int b) { return a - b; }
+                };
+                public abstract int apply(int a, int b);
+            }
+
+            public record Range(int low, int high) {
+                public Range {
+                    if (low > high) throw new IllegalArgumentException();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var toString = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "toString"));
+        Assert.Equal("class", toString.ContainerKind);
+        Assert.Equal("Same", toString.ContainerName);
+
+        var legacy = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "legacy"));
+        Assert.Equal("class", legacy.ContainerKind);
+        Assert.Equal("Same", legacy.ContainerName);
+
+        var addApply = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "apply" && s.ContainerName == "ADD"));
+        Assert.Equal("function", addApply.ContainerKind);
+
+        var subApply = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "apply" && s.ContainerName == "SUB"));
+        Assert.Equal("function", subApply.ContainerKind);
+
+        var abstractApply = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "apply" && s.ContainerName == "Op"));
+        Assert.Equal("enum", abstractApply.ContainerKind);
+
+        var compactCtor = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Range"));
+        Assert.Equal("class", compactCtor.ContainerKind);
+        Assert.Equal("Range", compactCtor.ContainerName);
+        Assert.NotNull(compactCtor.BodyStartLine);
+        Assert.NotNull(compactCtor.BodyEndLine);
+    }
+
+    [Fact]
+    public void Extract_Java_SameLineCompactConstructors_StayIndexedWithoutRecordHeaderLeak()
+    {
+        const string content = """
+            public record R(int x) {
+                @Deprecated public R { if (x < 0) throw new IllegalArgumentException(); }
+            }
+
+            public record Inline(int x) { public Inline { if (x < 0) throw new IllegalArgumentException(); } }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var annotatedCtor = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "R"));
+        Assert.Equal("class", annotatedCtor.ContainerKind);
+        Assert.Equal("R", annotatedCtor.ContainerName);
+        Assert.Equal("public R { if (x < 0) throw new IllegalArgumentException(); }", annotatedCtor.Signature);
+        Assert.True(string.IsNullOrEmpty(annotatedCtor.ReturnType));
+        Assert.NotNull(annotatedCtor.BodyStartLine);
+        Assert.NotNull(annotatedCtor.BodyEndLine);
+
+        var inlineCtor = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Inline"));
+        Assert.Equal("class", inlineCtor.ContainerKind);
+        Assert.Equal("Inline", inlineCtor.ContainerName);
+        Assert.Equal("public Inline { if (x < 0) throw new IllegalArgumentException(); }", inlineCtor.Signature);
+        Assert.True(string.IsNullOrEmpty(inlineCtor.ReturnType));
+        Assert.NotNull(inlineCtor.BodyStartLine);
+        Assert.NotNull(inlineCtor.BodyEndLine);
+    }
+
+    [Fact]
+    public void Extract_Java_AllmanCompactConstructors_StayIndexed()
+    {
+        const string content = """
+            public record Sample(int value)
+            {
+                public Sample
+                {
+                    if (value < 0) throw new IllegalArgumentException();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var compactCtor = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Sample"));
+        Assert.Equal("class", compactCtor.ContainerKind);
+        Assert.Equal("Sample", compactCtor.ContainerName);
+        Assert.Equal("public Sample", compactCtor.Signature);
+        Assert.Null(compactCtor.ReturnType);
+        Assert.NotNull(compactCtor.BodyStartLine);
+        Assert.NotNull(compactCtor.BodyEndLine);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "value" && s.ContainerName == "Sample");
+    }
+
+    [Fact]
+    public void Extract_Java_EnumAnonymousMemberBodyMethods_StayNestedUnderMemberBodies()
+    {
+        const string content = """
+            public enum Mix {
+                A { @Override public int f() { return 1; } int g() { return 2; } },
+                B { @Override public int f() { return 3; } int h() { return 4; } };
+                public abstract int f();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "A" && s.ContainerKind == "enum" && s.ContainerName == "Mix" && s.BodyStartLine != null);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B" && s.ContainerKind == "enum" && s.ContainerName == "Mix" && s.BodyStartLine != null);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "f" && s.ContainerKind == "function" && s.ContainerName == "A");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "g" && s.ContainerKind == "function" && s.ContainerName == "A");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "f" && s.ContainerKind == "function" && s.ContainerName == "B");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "h" && s.ContainerKind == "function" && s.ContainerName == "B");
+    }
+
+    [Fact]
+    public void Extract_Java_SameLineAnnotationInterfaceMembers_DoNotLeakIntoNextDeclaration()
+    {
+        const string content = """
+            @interface Tags { String[] value(); }
+            class C {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var valueMember = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "value"));
+        Assert.Equal("class", valueMember.ContainerKind);
+        Assert.Equal("Tags", valueMember.ContainerName);
+        Assert.Equal(1, valueMember.EndLine);
+        Assert.Null(valueMember.BodyStartLine);
+        Assert.Null(valueMember.BodyEndLine);
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "C" && s.StartLine == 2 && s.EndLine == 2);
+    }
+
+    [Fact]
+    public void Extract_Java_SameLineAnnotationInterfaceMembers_KeepLaterMembers()
+    {
+        const string content = """
+            @interface Tags { String[] value(); int age(); } class C {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var valueMember = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "value"));
+        var ageMember = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "age"));
+        Assert.Equal("Tags", valueMember.ContainerName);
+        Assert.Equal("Tags", ageMember.ContainerName);
+        Assert.Equal(1, valueMember.EndLine);
+        Assert.Equal(1, ageMember.EndLine);
+        Assert.Null(valueMember.BodyStartLine);
+        Assert.Null(ageMember.BodyStartLine);
+        Assert.Equal("String[] value();", valueMember.Signature);
+        Assert.Equal("int age();", ageMember.Signature);
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "C" && s.StartLine == 1 && s.EndLine == 1);
+    }
+
+    [Fact]
+    public void Extract_Java_RecordHeaderAnnotationArray_KeepsCompactConstructor()
+    {
+        const string content = """
+            @interface Tags { String[] value(); }
+
+            public record Sample(@Tags({"a", "b"}) int value) {
+                public Sample {
+                    if (value < 0) throw new IllegalArgumentException();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var compactCtor = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Sample"));
+        Assert.Equal("class", compactCtor.ContainerKind);
+        Assert.Equal("Sample", compactCtor.ContainerName);
+        Assert.NotNull(compactCtor.BodyStartLine);
+        Assert.NotNull(compactCtor.BodyEndLine);
+        Assert.Contains("public Sample {", compactCtor.Signature);
     }
 
     private static string GetRepositoryRoot()

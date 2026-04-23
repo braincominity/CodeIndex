@@ -5331,6 +5331,880 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_CapturesNamedSourceReferences()
+    {
+        // issue #284 / #665: SQL source/target identifiers such as FROM/JOIN/INTO/view/CTE usages
+        // should surface as `reference` edges, while table-valued functions keep their `call` edge,
+        // including bracketed/backtick/double-quoted identifier forms.
+        // issue #284 / #665: SQL の FROM/JOIN/INTO/view/CTE 使用は `reference` として出し、TVF は
+        // `call` のまま維持する。角括弧 / バッククォート / 二重引用符の識別子形も含む。
+        const string content = """
+            WITH ActiveUsers AS (
+                SELECT user_id, name
+                FROM users
+                WHERE status = 'active'
+            ),
+            RecentOrders AS (
+                SELECT order_id, user_id, total
+                FROM orders
+                WHERE created_at > '2024-01-01'
+            )
+            SELECT au.name, ro.total
+            FROM ActiveUsers au
+            JOIN RecentOrders ro ON ro.user_id = au.user_id;
+
+            SELECT * FROM user_summary_view WHERE region = 'EU';
+            EXEC usp_ProcessOrders @BatchSize = 100;
+            SELECT * FROM dbo.fn_GetUserStats(42);
+            SELECT * FROM [dbo].[fn_GetOrderStats](7);
+            SELECT * FROM `fn_get_backtick_stats`(9);
+            SELECT * FROM "quoted_users";
+            SELECT * FROM "reporting"."quoted_orders";
+            SELECT * FROM "fn_quoted_stats"(11);
+            INSERT INTO audit_log (action, user_id)
+            SELECT 'login', user_id FROM ActiveUsers;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "ActiveUsers" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "RecentOrders" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "orders" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "user_summary_view" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "usp_ProcessOrders" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "fn_GetUserStats" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "fn_GetOrderStats" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "fn_get_backtick_stats" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "quoted_users" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "quoted_orders" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "fn_quoted_stats" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fn_GetUserStats" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fn_GetOrderStats" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fn_get_backtick_stats" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fn_quoted_stats" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fn_GetUserStat");
+    }
+
+    [Fact]
+    public void Extract_SQL_SkipsModifierKeywordsBeforeSourcesAndTargets()
+    {
+        // issue #684: SQL source/target modifiers such as TOP / ONLY / LATERAL must not become
+        // phantom object names, and the real source/target should still be indexed.
+        // issue #684: TOP / ONLY / LATERAL のような SQL 修飾子は phantom object 名にしてはならず、
+        // 実際の source/target を引き続き索引できるべき。
+        const string content = """
+            SELECT TOP (10) * FROM top_users;
+            UPDATE TOP (10) audit_log SET action = 'done';
+            DELETE TOP (5) FROM audit_log;
+            SELECT * FROM ONLY public.users;
+            UPDATE ONLY public.users SET active = true;
+            SELECT * FROM LATERAL fn_users(42);
+            MERGE TOP (5) audit_log AS t
+            USING staging_log AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action;
+            INSERT TOP (10) INTO inserted_log (action) VALUES ('done');
+            MERGE TOP (5) #batch_log AS u
+            USING staging_batch AS v
+            ON u.id = v.id
+            WHEN MATCHED THEN
+                UPDATE SET action = v.action;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "top_users" && r.ReferenceKind == "reference");
+        Assert.Equal(3, references.Count(r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "users" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "fn_users" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "inserted_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "#batch_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "staging_batch" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "TOP");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ONLY");
+        Assert.DoesNotContain(references, r => r.SymbolName == "LATERAL");
+    }
+
+    [Fact]
+    public void Extract_SQL_TruncateTargetsHandleOnlyAndMultipleTargets()
+    {
+        // issues #684 / #711: `TRUNCATE TABLE` should skip `ONLY` and keep all comma-separated
+        // targets instead of emitting phantom `ONLY` or dropping later targets.
+        // issues #684 / #711: `TRUNCATE TABLE` は `ONLY` を飛ばし、comma-separated target を
+        // すべて保持するべきであり、phantom `ONLY` や後続 target の欠落を出してはいけない。
+        const string content = """
+            TRUNCATE TABLE ONLY public.users;
+            TRUNCATE TABLE audit_log, archived_log;
+            TRUNCATE TABLE [dbo].[users], `analytics`.`logs`, "public"."accounts";
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "users" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "archived_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "logs" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "accounts" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ONLY");
+        Assert.DoesNotContain(references, r => r.SymbolName == "public.users");
+        Assert.DoesNotContain(references, r => r.SymbolName == "dbo].[users");
+        Assert.DoesNotContain(references, r => r.SymbolName == "analytics`.`logs");
+        Assert.DoesNotContain(references, r => r.SymbolName == "public\".\"accounts");
+    }
+
+    [Fact]
+    public void Extract_SQL_DeleteUsingCapturesSourceReferences()
+    {
+        // issue #712: PostgreSQL `DELETE ... USING` keeps the target on `DELETE FROM`, but the
+        // joined source list after `USING` must also stay visible as SQL `reference` edges.
+        // issue #712: PostgreSQL の `DELETE ... USING` は `DELETE FROM` 側 target だけでなく、
+        // `USING` 後の source list も SQL `reference` edge として保持するべき。
+        const string content = """
+            DELETE FROM audit_log USING staging_log, archived_log
+            WHERE audit_log.id = staging_log.id;
+            DELETE FROM public.audit_log USING staging.stage_log, [archive].[archived_log], "public"."source"
+            WHERE audit_log.id = stage_log.id;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "archived_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "stage_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "source" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "public.audit_log");
+        Assert.DoesNotContain(references, r => r.SymbolName == "staging.stage_log");
+        Assert.DoesNotContain(references, r => r.SymbolName == "stage].[stage_log");
+        Assert.DoesNotContain(references, r => r.SymbolName == "archive].[archived_log");
+        Assert.DoesNotContain(references, r => r.SymbolName == "public\".\"source");
+    }
+
+    [Fact]
+    public void Extract_SQL_DeleteUsingTempSourcesAfterComma_AreNotTreatedAsComments()
+    {
+        // issue #789: `#temp` after a comma in `DELETE ... USING #a, #b` must stay on the temp-table
+        // path, not fall into MySQL `# comment` stripping and disappear from the graph.
+        // issue #789: `DELETE ... USING #a, #b` の comma 後にある `#temp` は、MySQL の `# comment`
+        // 扱いへ落ちず temp-table 経路に残り、graph から消えてはいけない。
+        const string content = """
+            CREATE TABLE #staging_a (id int);
+            CREATE TABLE #staging_b (id int);
+            DELETE FROM audit_log USING #staging_a, #staging_b
+            WHERE audit_log.id = #staging_a.id;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(1, references.Count(r => r.SymbolName == "#staging_a" && r.ReferenceKind == "reference"));
+        Assert.Equal(1, references.Count(r => r.SymbolName == "#staging_b" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_MergeUsingDoesNotTreatOtherUsingClausesAsSources()
+    {
+        // issue #695: `USING` should stay on the SQL source path only for `MERGE ... USING <source>`,
+        // not for PostgreSQL DDL/operator clauses such as `CREATE INDEX ... USING btree (...)`.
+        // issue #695: `USING` は `MERGE ... USING <source>` にだけ source 経路を与えるべきであり、
+        // `CREATE INDEX ... USING btree (...)` のような PostgreSQL DDL/演算子節まで拾ってはいけない。
+        const string content = """
+            CREATE INDEX idx_users_name ON users USING btree (name);
+            ALTER TABLE users ALTER COLUMN name TYPE text USING lower(name);
+            MERGE INTO audit_log AS t
+            USING staging_log AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action;
+            MERGE audit_log_archive AS t
+            USING staging_archive AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "audit_log_archive" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "staging_archive" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "lower" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "btree");
+        Assert.DoesNotContain(references, r => r.SymbolName == "btree" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SQL_MergeUsingWithTargetHintStillCapturesSourceReference()
+    {
+        // issue #698: SQL Server `MERGE INTO target WITH (...) AS t USING source` should still keep
+        // the source-side `reference`, even when target hints include nested parens such as INDEX(...).
+        // issue #698: SQL Server の `MERGE INTO target WITH (...) AS t USING source` は、target hint
+        // に nested parens を含んでも source 側の `reference` を維持するべき。
+        const string content = """
+            MERGE INTO audit_log WITH (INDEX(ix_audit_log), HOLDLOCK) AS t
+            USING staging_log AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "INDEX");
+        Assert.DoesNotContain(references, r => r.SymbolName == "HOLDLOCK");
+    }
+
+    [Fact]
+    public void Extract_SQL_MergeTempUsingWithMultilineTargetHintStillCapturesSourceReference()
+    {
+        // issue #741: multiline SQL Server target hints for `MERGE [INTO] #temp` must not flush the
+        // carried temp-establishing prefix before the later `USING <source>` line is parsed.
+        // issue #741: `MERGE [INTO] #temp` の複数行 target hint は、後続の `USING <source>` 行を
+        // 解析する前に temp-establishing prefix を flush してはいけない。
+        const string content = """
+            MERGE INTO #audit_log
+            WITH (INDEX(ix_audit_log), HOLDLOCK) AS t
+            USING staging_log AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action;
+            MERGE #archive_log
+            WITH (HOLDLOCK) AS u
+            USING staging_archive AS v
+            ON u.id = v.id
+            WHEN MATCHED THEN
+                UPDATE SET action = v.action;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "#audit_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "#archive_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "staging_archive" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "INDEX");
+        Assert.DoesNotContain(references, r => r.SymbolName == "HOLDLOCK");
+    }
+
+    [Fact]
+    public void Extract_SQL_DoubleQuotedDynamicSqlDoesNotLeakPhantomReferences()
+    {
+        // issue #689: preserving ANSI double-quoted identifiers must not let dynamic SQL strings
+        // leak phantom source references into the graph.
+        // issue #689: ANSI 二重引用符識別子を保持しても、dynamic SQL 文字列から phantom source
+        // reference が漏れてはいけない。
+        const string content = """
+            SET @sql = "SELECT * FROM users";
+            EXECUTE IMMEDIATE @sql;
+            SELECT * FROM "users";
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var usersReferences = references
+            .Where(r => r.SymbolName == "users" && r.ReferenceKind == "reference")
+            .ToList();
+
+        var usersReference = Assert.Single(usersReferences);
+        Assert.Equal(3, usersReference.Line);
+    }
+
+    [Fact]
+    public void Extract_SQL_DoubleQuotedDynamicSqlDoesNotEstablishTempTables()
+    {
+        // issue #707: dynamic SQL text inside double quotes must not establish temp tables for
+        // later statement-order reads.
+        // issue #707: 二重引用符内の dynamic SQL テキストは、後続 statement-order read 向けの
+        // temp table を確立した扱いになってはいけない。
+        const string content = """
+            SET @sql = "SELECT id INTO #temp_users FROM users";
+            SELECT * FROM #temp_users;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "#temp_users" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_SameLineDollarQuotedBodiesDoNotSwallowFollowingStatements()
+    {
+        // issue #697: when one dollar-quoted body ends and later same-line SQL continues, the
+        // sanitizer must close at the first real delimiter instead of blanking the later statement.
+        // issue #697: 1 つの dollar-quoted body が閉じた後に同一行の SQL が続く場合、sanitize は
+        // 後続 statement ごと空白化せず、最初の実 close delimiter で閉じなければならない。
+        const string content = """
+            DO $$BEGIN END$$; SELECT * FROM users; DO $$BEGIN END$$;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_SingleQuotedStringsWithEscapedQuotesDoNotLeakPhantomReferences()
+    {
+        // issue #696: the SQL single-quote scanner must preserve both MySQL `\'` escapes and
+        // doubled SQL quotes so string contents never leak phantom source references.
+        // issue #696: SQL の single-quote scanner は MySQL の `\'` escape と doubled quote の
+        // 両方を維持し、文字列内容から phantom source reference を漏らしてはいけない。
+        const string content = """
+            SELECT 'abc\' FROM phantom';
+            SELECT 'abc'' FROM still_phantom';
+            SELECT * FROM users # comment with comment_phantom;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "phantom" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "still_phantom" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "comment_phantom" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_MultilineSingleQuotedStringsDoNotLeakSourcesOrEstablishTempTables()
+    {
+        // issue #708: multiline single-quoted SQL bodies must stay opaque across lines so source
+        // references and temp-table establishment do not leak out of the string body.
+        // issue #708: 複数行 single-quoted SQL 本体は行をまたいでも opaque のまま維持し、
+        // source 参照や temp-table establishment を文字列内から漏らしてはいけない。
+        const string content = """
+            SELECT 'abc''
+            still escaped \'
+            FROM phantom
+            INTO #temp_users
+            ';
+            SELECT * FROM users;
+            SELECT * FROM #temp_users;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "phantom" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "#temp_users" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 6);
+    }
+
+    [Fact]
+    public void Extract_SQL_NonCodeRegionsDoNotLeakPhantomSourceOrTargetReferences()
+    {
+        // issue #694: SQL source/target extraction must ignore multiline block comments and
+        // PostgreSQL dollar-quoted bodies so non-code text does not leak authoritative references.
+        // issue #694: SQL source/target 抽出は複数行 block comment と PostgreSQL dollar quote 本体を
+        // 無視し、非コード領域から authoritative な reference が漏れないようにするべき。
+        const string content = """
+            SELECT * FROM users /* comment
+            FROM phantom */;
+            UPDATE audit_log SET action = 'done';
+            DO $$
+            BEGIN
+              EXECUTE $$SELECT * FROM phantom$$;
+            END
+            $$;
+            DO $body$
+            BEGIN
+              UPDATE phantom SET action = 'nope';
+            END
+            $body$;
+            SELECT * FROM accounts;
+            DELETE FROM archived_accounts;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "phantom" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "accounts" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "archived_accounts" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_HandlesTempTablesAndDoesNotTreatSelectIntoVariablesAsReferences()
+    {
+        // issue #638 / #639 / #648 / #649: temp tables should stay on the SQL reference path,
+        // including `##global` names and `SELECT ... INTO #temp`, while procedural
+        // `SELECT ... INTO variable` still must not leak into the object graph.
+        // issue #638 / #639 / #648 / #649: temp table は SQL reference 経路に残し、
+        // `##global` 名と `SELECT ... INTO #temp` も拾いつつ、手続き系の
+        // `SELECT ... INTO variable` は object graph に混ぜない。
+        const string content = """
+            INSERT INTO #audit_log (action) VALUES ('login');
+            UPDATE #audit_log SET action = 'logout';
+            SELECT * FROM #audit_log;
+
+            INSERT INTO ##session_log (action) VALUES ('login');
+            UPDATE ##session_log SET action = 'logout';
+            SELECT * FROM ##session_log;
+
+            SELECT id INTO #selected_users FROM users;
+            SELECT id INTO ##selected_global_users FROM users;
+            SELECT id INTO target_var FROM users;
+            SELECT * FROM users # comment with ##ignored_temp;
+
+            INSERT TOP (10) INTO #audit_log (action) VALUES ('merge-ready');
+            MERGE #audit_log AS t
+            USING staging_log AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(5, references.Count(r => r.SymbolName == "#audit_log" && r.ReferenceKind == "reference"));
+        Assert.Equal(3, references.Count(r => r.SymbolName == "##session_log" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "#selected_users" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "##selected_global_users" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "#audit_log" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "session_log" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "TOP");
+        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "target_var");
+        Assert.DoesNotContain(references, r => r.SymbolName == "##ignored_temp");
+    }
+
+    [Fact]
+    public void Extract_SQL_TempStatementPrefixStillFlushesBeforeTopLevelWithCte()
+    {
+        // issue #741 control: `WITH cte AS (...)` must still start a new top-level statement even
+        // after a temp-establishing prefix on the previous line.
+        // issue #741 の control: 前行が temp-establishing prefix でも、`WITH cte AS (...)` は
+        // 引き続き新しい top-level statement として始まらなければならない。
+        const string content = """
+            SELECT id INTO #selected_users FROM users
+            WITH recent_users AS (
+                SELECT * FROM accounts
+            )
+            SELECT * FROM recent_users;
+            SELECT * FROM #selected_users;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "#selected_users" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "accounts" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "recent_users" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_LineEndCommentsDoNotBreakDeleteUsingOrMergeUsingContinuations()
+    {
+        // issue #750: a trailing `-- comment` must not drop an unfinished multiline `DELETE ... USING`
+        // or `MERGE ... USING` prefix before the later source line is parsed.
+        // issue #750: 行末 `-- comment` があっても、未完了の複数行 `DELETE ... USING` / `MERGE ... USING`
+        // prefix を後続 source 行の解析前に捨ててはいけない。
+        const string content = """
+            DELETE FROM audit_log -- trailing comment
+            USING staging_log
+            WHERE audit_log.id = staging_log.id;
+
+            MERGE INTO audit_log -- trailing comment
+            USING staging_merge AS s
+            ON audit_log.id = s.id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action;
+
+            SELECT id INTO #comment_temp -- trailing comment
+            FROM users;
+            SELECT * FROM #comment_temp;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "staging_merge" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "#comment_temp" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_LineEndCommentsKeepUnfinishedSourceTargetAndHintContinuations()
+    {
+        // issue #752: line-end comments must not drop unfinished SQL prefixes before the decisive
+        // temp/source/hint token appears on a later line.
+        // issue #752: 行末コメントがあっても、決定的な temp/source/hint token が後続行に現れる前に
+        // 未完了の SQL prefix を捨ててはいけない。
+        const string content = """
+            SELECT id INTO -- trailing comment
+                #comment_temp
+            FROM users;
+            SELECT * FROM #comment_temp;
+
+            DELETE FROM audit_log USING staging_log, -- trailing comment
+                archived_log
+            WHERE audit_log.id = staging_log.id;
+
+            MERGE INTO audit_log WITH (INDEX(ix_audit_log), -- trailing comment
+                HOLDLOCK) AS t
+            USING staging_merge AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#comment_temp" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "archived_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "staging_merge" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_LineEndCommentsKeepUnfinishedTargetPrefixes()
+    {
+        // issue #759: unfinished SQL target prefixes before a line-end comment must still carry to
+        // the next line so target references survive and `INSERT INTO ... (` does not regress into
+        // a phantom call on the target identifier.
+        // issue #759: 行末コメントより前で終わる未完了の SQL target prefix も次行へ継続し、
+        // target reference を落とさず、`INSERT INTO ... (` が target 識別子への phantom call に
+        // 戻らないようにする必要がある。
+        const string content = """
+            INSERT INTO -- trailing comment
+                audit_log (action) VALUES ('x');
+
+            UPDATE -- trailing comment
+                #update_temp SET action = 'x';
+            SELECT * FROM #update_temp;
+
+            DELETE FROM -- trailing comment
+                #delete_temp;
+            SELECT * FROM #delete_temp;
+
+            TRUNCATE TABLE -- trailing comment
+                #truncate_temp;
+            SELECT * FROM #truncate_temp;
+
+            CREATE TABLE -- trailing comment
+                #create_temp (id int);
+            SELECT * FROM #create_temp;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(1, references.Count(r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "call");
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#update_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#delete_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#truncate_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(1, references.Count(r => r.SymbolName == "#create_temp" && r.ReferenceKind == "reference"));
+    }
+
+    [Fact]
+    public void Extract_SQL_TruncateTempTargetsEstablishLaterReads()
+    {
+        // issue #768: `TRUNCATE TABLE #temp` must establish the temp object for later reads the same
+        // way other temp-targeting SQL mutations already do.
+        // issue #768: `TRUNCATE TABLE #temp` も、他の temp-targeting SQL mutation と同様に
+        // 後続 read 向けの temp object を確立しなければならない。
+        const string content = """
+            TRUNCATE TABLE #truncate_temp;
+            SELECT * FROM #truncate_temp;
+            SELECT * FROM #future_temp;
+            TRUNCATE TABLE #future_temp;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#truncate_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(1, references.Count(r => r.SymbolName == "#future_temp" && r.ReferenceKind == "reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "#future_temp" && r.ReferenceKind == "reference" && r.Line == 3);
+    }
+
+    [Fact]
+    public void Extract_SQL_TruncateMultipleTempTargetsEstablishLaterReads()
+    {
+        // issues #768 / #789: comma-separated `TRUNCATE TABLE #a, #b` should establish every temp
+        // target so later reads of both names remain visible.
+        // issues #768 / #789: `TRUNCATE TABLE #a, #b` の comma-separated target は全て temp object
+        // として確立され、後続 read の両方が可視のまま残るべき。
+        const string content = """
+            TRUNCATE TABLE #truncate_a, #truncate_b;
+            SELECT * FROM #truncate_a;
+            SELECT * FROM #truncate_b;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#truncate_a" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#truncate_b" && r.ReferenceKind == "reference"));
+    }
+
+    [Fact]
+    public void Extract_SQL_TempTablesRespectSemicolonlessSetAndDeclareBoundaries()
+    {
+        // issue #753: temp establishment must flush across semicolon-less top-level `SET` /
+        // `DECLARE` boundaries, while forward reads before a later establish still stay excluded.
+        // issue #753: temp 確立は semicolon-less な top-level `SET` / `DECLARE` 境界でも flush
+        // されるべきで、後続の establish より前にある forward read は引き続き除外されるべき。
+        const string content = """
+            SELECT * FROM #future_temp;
+            SELECT id INTO #set_temp FROM users
+            SET @count = (SELECT COUNT(*) FROM #set_temp);
+            SELECT id INTO #declare_temp FROM users
+            DECLARE @first_id INT = (SELECT TOP (1) id FROM #declare_temp);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Empty(references.Where(r => r.SymbolName == "#future_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#set_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#declare_temp" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 4);
+    }
+
+    [Fact]
+    public void Extract_SQL_TempTablesRespectSemicolonlessIfAndWhileBoundaries()
+    {
+        // issue #757: temp establishment must also flush across semicolon-less top-level `IF` /
+        // `WHILE` boundaries so later control-flow reads keep the established temp object.
+        // issue #757: temp 確立は semicolon-less な top-level `IF` / `WHILE` 境界でも flush
+        // されるべきで、後続の制御構文内 read でも確立済み temp object を維持するべき。
+        const string content = """
+            SELECT id INTO #if_temp FROM users
+            IF EXISTS (SELECT 1) SELECT * FROM #if_temp;
+            SELECT id INTO #while_temp FROM users
+            WHILE 1 = 0 SELECT * FROM #while_temp;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#if_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#while_temp" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "#if_temp" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "#while_temp" && r.ReferenceKind == "reference" && r.Line == 4);
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 3);
+    }
+
+    [Fact]
+    public void Extract_SQL_BareDollarIdentifiersStayWholeOnSourceAndTargetPaths()
+    {
+        // issue #726: PostgreSQL bare identifiers may contain `$`, and source/target exact-name
+        // queries must keep the whole identifier instead of truncating to the prefix before `$`.
+        // issue #726: PostgreSQL の bare identifier は `$` を含められるため、source/target の
+        // exact-name は `$` より前で切らずに識別子全体を保持する必要がある。
+        const string content = """
+            SELECT * FROM my$table;
+            INSERT INTO my$table (id) VALUES (1);
+            UPDATE my$table SET id = 2;
+            DELETE FROM my$table;
+            TRUNCATE TABLE my$table;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(5, references.Count(r => r.SymbolName == "my$table" && r.ReferenceKind == "reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "my" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_NonAsciiBareIdentifiersStayWholeOnSourceTargetAndProcPaths()
+    {
+        // issue #764: widening SQL bare identifiers for `$` must not drop the existing non-ASCII
+        // unquoted identifier support on source/target/proc-call paths.
+        // issue #764: SQL bare identifier の `$` 対応を広げても、既存の非 ASCII な unquoted
+        // identifier 対応を source/target/proc-call 経路で落としてはいけない。
+        const string content = """
+            SELECT * FROM ユーザー;
+            INSERT INTO ユーザー (id) VALUES (1);
+            UPDATE ユーザー SET id = 2;
+            DELETE FROM ユーザー;
+            TRUNCATE TABLE ユーザー;
+            CALL ユーザー;
+            EXEC ユーザー;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(5, references.Count(r => r.SymbolName == "ユーザー" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "ユーザー" && r.ReferenceKind == "call"));
+    }
+
+    [Fact]
+    public void Extract_SQL_TempTablesRequirePriorEstablishmentAndSupportMultilineDefinitions()
+    {
+        // issue #664: temp reads should only succeed after an earlier statement established the temp
+        // object, and multiline `SELECT ... INTO #temp` / `CREATE TABLE #temp` forms should still
+        // establish later reads.
+        // issue #664: temp read は先行 statement で temp object が確立された後だけ成功し、
+        // 複数行の `SELECT ... INTO #temp` / `CREATE TABLE #temp` でも後続 read を確立できるべき。
+        const string content = """
+            SELECT * FROM #later_temp;
+            SELECT id
+            INTO #later_temp
+            FROM users;
+            SELECT * FROM #later_temp;
+            CREATE TABLE #created_temp (id int);
+            SELECT * FROM #created_temp;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "#later_temp" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "#later_temp" && r.ReferenceKind == "reference" && r.Line == 3);
+        Assert.Contains(references, r => r.SymbolName == "#later_temp" && r.ReferenceKind == "reference" && r.Line == 5);
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#later_temp" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "#created_temp" && r.ReferenceKind == "reference" && r.Line == 7);
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 4);
+    }
+
+    [Fact]
+    public void Extract_SQL_TempTablesRespectSameLineStatementOrder()
+    {
+        // issue #679: statement-order temp gating must also work when multiple SQL statements share
+        // one physical line.
+        // issue #679: 複数 statement が同一行に並ぶ場合でも、temp gating は statement 順で評価されるべき。
+        const string content = """
+            SELECT id INTO #inline_temp FROM users; SELECT * FROM #inline_temp;
+            SELECT * FROM #forward_temp; SELECT id INTO #forward_temp FROM users;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#inline_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(1, references.Count(r => r.SymbolName == "#forward_temp" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_TempTablesRespectSemicolonlessStatementBoundaries()
+    {
+        // issue #681: temp establishment must also survive semicolon-less statement boundaries and
+        // line-end comments, while forward reads before a later establish still stay excluded.
+        // issue #681: temp 確立は semicolon-less な statement 境界や行末コメント越しでも効き、
+        // 後続の establish より前にある forward read は引き続き除外されるべき。
+        const string content = """
+            CREATE TABLE #created_temp (id int)
+            SELECT * FROM #created_temp;
+            SELECT id INTO #selected_temp FROM users
+            SELECT * FROM #selected_temp;
+            INSERT INTO #inserted_temp (action) VALUES ('login')
+            SELECT * FROM #inserted_temp;
+            UPDATE #updated_temp SET action = 'done'
+            SELECT * FROM #updated_temp;
+            SELECT id INTO #comment_temp -- trailing comment
+            FROM users;
+            SELECT * FROM #comment_temp;
+            DELETE FROM #deleted_temp;
+            SELECT * FROM #deleted_temp;
+            SELECT * FROM #future_temp;
+            CREATE TABLE #future_temp (id int)
+            SELECT * FROM #future_deleted_temp;
+            DELETE FROM #future_deleted_temp;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(1, references.Count(r => r.SymbolName == "#created_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#selected_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#inserted_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#updated_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#comment_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#deleted_temp" && r.ReferenceKind == "reference"));
+        Assert.Empty(references.Where(r => r.SymbolName == "#future_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(1, references.Count(r => r.SymbolName == "#future_deleted_temp" && r.ReferenceKind == "reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "#future_temp" && r.ReferenceKind == "reference" && r.Line == 12);
+        Assert.DoesNotContain(references, r => r.SymbolName == "#future_deleted_temp" && r.ReferenceKind == "reference" && r.Line == 15);
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 3);
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 10);
+    }
+
+    [Fact]
+    public void Extract_SQL_MergeUpdateSetDoesNotEmitSetAsTargetReference()
+    {
+        // issue #660: `MERGE ... WHEN MATCHED THEN UPDATE SET ...` must not emit `SET` as a table
+        // reference, while ordinary `UPDATE target SET ...` and quoted `[SET]` targets still work.
+        // issue #660: `MERGE ... WHEN MATCHED THEN UPDATE SET ...` から `SET` をテーブル参照として
+        // 出してはならない。通常の `UPDATE target SET ...` と quoted `[SET]` target は維持する。
+        const string content = """
+            MERGE INTO audit_log AS t
+            USING staging_log AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action;
+
+            UPDATE audit_log SET action = 'done';
+            UPDATE [SET] SET action = 'quoted';
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "SET" && r.ReferenceKind == "reference" && r.Line == 5);
+        Assert.Equal(2, references.Count(r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "SET" && r.ReferenceKind == "reference" && r.Line == 8);
+    }
+
+    [Fact]
+    public void Extract_SQL_HashCommentsDoNotLeakAsTempObjects()
+    {
+        // issue #653: after restoring temp-table support, MySQL-style `# comment` tails that begin
+        // with identifier-looking text must not be mistaken for temp tables or procedures.
+        // issue #653: temp-table 対応を戻した後でも、識別子風テキストで始まる MySQL 形式の
+        // `# comment` は temp table / procedure と誤認しない。
+        const string content = """
+            CALL #commented_out;
+            EXEC #tempProc;
+            SELECT * FROM #commented_source;
+            INSERT INTO #audit_log (action) VALUES ('login');
+            SELECT * FROM #audit_log;
+            SELECT * FROM users #trailing_comment;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "#commented_out");
+        Assert.Contains(references, r => r.SymbolName == "#tempProc" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "#commented_source");
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#audit_log" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "#trailing_comment");
+    }
+
+    [Fact]
     public void Extract_FSharp_DetectsParenthesizedCalls()
     {
         const string content = """
