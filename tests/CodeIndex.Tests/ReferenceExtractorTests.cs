@@ -5929,6 +5929,30 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_NonAsciiBareIdentifiersStayWholeOnSourceTargetAndProcPaths()
+    {
+        // issue #764: widening SQL bare identifiers for `$` must not drop the existing non-ASCII
+        // unquoted identifier support on source/target/proc-call paths.
+        // issue #764: SQL bare identifier の `$` 対応を広げても、既存の非 ASCII な unquoted
+        // identifier 対応を source/target/proc-call 経路で落としてはいけない。
+        const string content = """
+            SELECT * FROM ユーザー;
+            INSERT INTO ユーザー (id) VALUES (1);
+            UPDATE ユーザー SET id = 2;
+            DELETE FROM ユーザー;
+            TRUNCATE TABLE ユーザー;
+            CALL ユーザー;
+            EXEC ユーザー;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(5, references.Count(r => r.SymbolName == "ユーザー" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "ユーザー" && r.ReferenceKind == "call"));
+    }
+
+    [Fact]
     public void Extract_SQL_TempTablesRequirePriorEstablishmentAndSupportMultilineDefinitions()
     {
         // issue #664: temp reads should only succeed after an earlier statement established the temp

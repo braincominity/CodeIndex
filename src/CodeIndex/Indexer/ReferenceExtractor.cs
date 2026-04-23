@@ -200,7 +200,7 @@ public static class ReferenceExtractor
     private const string SqlDoubleQuotedIdentifierPattern = "\"(?:\"\"|[^\"\\r\\n])+\"";
     private const string SqlQuotedIdentifierPattern =
         @"(?:\[[^\[\]\r\n]+\]|`[^`\r\n]+`|" + SqlDoubleQuotedIdentifierPattern + @")";
-    private const string SqlBareIdentifierPattern = @"(?:##?\w+|[A-Za-z_][A-Za-z0-9_$]*)";
+    private const string SqlBareIdentifierPattern = @"(?:##?\w+|[_\p{L}][\p{L}\p{Mn}\p{Mc}\p{Nd}\p{Pc}$]*)";
     private const string SqlTempIdentifierPattern =
         @"(?:\[(?:##?\w+)\]|`(?:##?\w+)`|" + "\"(?:##?\\w+)\"" + @"|##?\w+)";
     private const string SqlQualifiedIdentifierNoCapturePattern =

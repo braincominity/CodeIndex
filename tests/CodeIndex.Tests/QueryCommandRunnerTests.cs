@@ -11591,6 +11591,46 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_SqlNonAsciiBareIdentifiersStayWhole()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_non_ascii_bare_identifier");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "sql", "repro.sql"),
+                """
+                SELECT * FROM ユーザー;
+                INSERT INTO ユーザー (id) VALUES (1);
+                UPDATE ユーザー SET id = 2;
+                DELETE FROM ユーザー;
+                TRUNCATE TABLE ユーザー;
+                CALL ユーザー;
+                EXEC ユーザー;
+                """);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (symbolExitCode, symbolStdout, symbolStderr) = RunBuiltCli(["references", "ユーザー", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+
+            var rows = ParseJsonLines(symbolStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            Assert.Equal(CommandExitCodes.Success, symbolExitCode);
+            Assert.Equal(string.Empty, symbolStderr);
+            Assert.Equal(7, rows.Count);
+            Assert.Equal(5, rows.Count(row => row.RootElement.GetProperty("reference_kind").GetString() == "reference"));
+            Assert.Equal(2, rows.Count(row => row.RootElement.GetProperty("reference_kind").GetString() == "call"));
+            Assert.All(rows, row => Assert.Equal("ユーザー", row.RootElement.GetProperty("symbol_name").GetString()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_SqlSemicolonlessSetAndDeclareKeepTempReads()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_semicolonless_set_declare_temp");
