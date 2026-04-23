@@ -144,18 +144,13 @@ public static class ReferenceExtractor
     private static readonly Regex StringLiteralRegex = new(
         "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`",
         RegexOptions.Compiled);
-    // SQL-specific string-literal stripper: preserve backticks because MySQL / MariaDB use them
-    // for identifier quoting (`` CALL `proc-name`; ``) rather than string literals. Strip only
-    // ANSI single-quoted and double-quoted literals plus comments. ANSI / SQL-PSM delimited
-    // identifiers (`"..."`) are intentionally treated as string literals here because the dominant
-    // real-world SQL codebase uses `"..."` for string content when double-quoted identifiers are
-    // not in effect, and #232 focuses on T-SQL brackets + MySQL backticks — not ANSI delimited
-    // identifiers.
-    // SQL 専用の文字列リテラル除去: MySQL / MariaDB はバッククォートを識別子引用に使うため保持し、
-    // `'...'` / `"..."` のみを除去する。ANSI / SQL-PSM の `"..."` delimited identifier は
-    // 実運用で文字列として使われる頻度が高く、今回の #232 の対象から外れるため意図的に文字列扱いとする。
-    private static readonly Regex SqlStringLiteralRegex = new(
-        "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'",
+    // SQL-specific single-quoted string stripper: preserve identifier quoting (`[...]`, `` `...` ``,
+    // and ANSI `"..."`) so the SQL graph path can still see real object names while literal payloads
+    // stay masked.
+    // SQL 専用の単引用符文字列リテラル除去。識別子引用（`[...]` / `` `...` `` / ANSI `"..."`）は
+    // 残しつつ、文字列リテラルだけを隠して SQL graph 抽出が実オブジェクト名を見失わないようにする。
+    private static readonly Regex SqlSingleQuotedStringLiteralRegex = new(
+        "'(?:''|\\\\.|[^'\\\\])*'",
         RegexOptions.Compiled);
     private static readonly Regex InlineBlockCommentRegex = new(@"/\*.*?\*/", RegexOptions.Compiled);
     private const string CSharpIdentifierPattern = @"@?[_\p{L}]\w*";
@@ -208,9 +203,97 @@ public static class ReferenceExtractor
     // 修飾子の各セグメントを optional にすることで、`EXEC AdventureWorks..sp_GetCustomer;` のように
     // SQL Server が許す省略形（`..`）でも末尾の proc 名まで到達できる。識別子候補にはバッククォート引用も含め、
     // MySQL / MariaDB の `` `proc-name` `` 形にも対応する。
+    private const string SqlDoubleQuotedIdentifierPattern = "\"(?:\"\"|[^\"\\r\\n])+\"";
+    private const string SqlQuotedIdentifierPattern =
+        @"(?:\[[^\[\]\r\n]+\]|`[^`\r\n]+`|" + SqlDoubleQuotedIdentifierPattern + @")";
+    private const string SqlBareIdentifierPattern = @"(?:##?\w+|[_\p{L}][\p{L}\p{Mn}\p{Mc}\p{Nd}\p{Pc}$]*)";
+    private const string SqlTempIdentifierPattern =
+        @"(?:\[(?:##?\w+)\]|`(?:##?\w+)`|" + "\"(?:##?\\w+)\"" + @"|##?\w+)";
+    private const string SqlQualifiedIdentifierNoCapturePattern =
+        @"(?:(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")\s*\.\s*)*(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")";
+    private const string SqlQualifiedIdentifierPattern =
+        @"(?:(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")\s*\.\s*)*(?<name>" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")";
+    private const string SqlTopTargetModifierPattern =
+        @"TOP\s*\([^)\r\n]*\)(?:\s+PERCENT)?(?:\s+WITH\s+TIES)?";
+    private const string SqlMergeTargetHintPattern =
+        @"WITH\s*\((?:[^()]|\([^()]*\))*\)";
     private static readonly Regex SqlProcCallRegex = new(
-        @"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?(?:(?:\[[^\[\]\r\n]+\]|`[^`\r\n]+`|\w+)?\.)*(?<name>\[[^\[\]\r\n]+\]|`[^`\r\n]+`|\w+)",
+        $@"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?(?:(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern})?\.)*(?<name>{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // SQL named source references that should become `reference` edges rather than `call` edges.
+    // Bare `USING` is intentionally excluded because SQL dialects also reuse it for non-source
+    // syntax such as `CREATE INDEX ... USING btree (...)` and `ALTER TABLE ... USING expr`.
+    // `FROM dbo.fn_TableValued(...)` intentionally stays out because the trailing `(` means the
+    // shared CallRegex already captures it as a function call. issues #284 / #695.
+    // SQL のソース参照で、`call` ではなく `reference` として扱うべき形。
+    // bare な `USING` は `CREATE INDEX ... USING btree (...)` や
+    // `ALTER TABLE ... USING expr` のような非 source 構文にも使われるため意図的に除外する。
+    // `FROM dbo.fn_TableValued(...)` は末尾 `(` により既存 CallRegex が `call` を出すため除外する。
+    private static readonly Regex SqlSourceReferenceRegex = new(
+        $@"(?<![\w$])(?:FROM|JOIN|(?:CROSS|OUTER)\s+APPLY)\b\s+(?:(?:ONLY|LATERAL)\b\s+)*{SqlQualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlMergeUsingSourceRegex = new(
+        $@"(?<![\w$])MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?\s+{SqlQualifiedIdentifierNoCapturePattern}(?:\s+{SqlMergeTargetHintPattern})?(?:\s+(?:AS\s+)?(?!USING\b|WITH\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s+USING\b\s+(?:(?:ONLY|LATERAL)\b\s+)*{SqlQualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlMergeUsingPrefixRegex = new(
+        $@"(?<![\w$])MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?\s+{SqlQualifiedIdentifierNoCapturePattern}(?:\s+{SqlMergeTargetHintPattern})?(?:\s+(?:AS\s+)?(?!USING\b|WITH\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlDeleteUsingSourceRegex = new(
+        $@"(?<![\w$])DELETE\b(?:\s+{SqlTopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?\s+{SqlQualifiedIdentifierNoCapturePattern}(?:\s+(?:AS\s+)?(?!USING\b|WHERE\b|RETURNING\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s+USING\b\s+(?:(?:ONLY|LATERAL)\b\s+)?{SqlQualifiedIdentifierPattern}(?:\s+(?:AS\s+)?(?!WHERE\b|RETURNING\b|ON\b|USING\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?(?:\s*,\s*(?:(?:ONLY|LATERAL)\b\s+)?{SqlQualifiedIdentifierPattern}(?:\s+(?:AS\s+)?(?!WHERE\b|RETURNING\b|ON\b|USING\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?)*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlDeleteUsingPrefixRegex = new(
+        $@"(?<![\w$])DELETE\b(?:\s+{SqlTopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?\s+{SqlQualifiedIdentifierNoCapturePattern}(?:\s+(?:AS\s+)?(?!USING\b|WHERE\b|RETURNING\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlDeleteUsingListContinuationPrefixRegex = new(
+        @"(?<![\w$])DELETE\b[\s\S]*\bUSING\b[\s\S]*,\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlTargetReferencePrefixRegex = new(
+        $@"(?<![\w$])(?:INSERT(?:\s+{SqlTopTargetModifierPattern})?\s+INTO|UPDATE\b(?:\s+(?:{SqlTopTargetModifierPattern}|ONLY\b))*|DELETE\b(?:\s+{SqlTopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?|TRUNCATE\s+TABLE(?:\s+ONLY\b)?|CREATE(?:\s+(?:TEMP|TEMPORARY))?\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?)\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // SQL mutation targets such as `INSERT INTO tbl (...)` / `UPDATE tbl`.
+    // `INSERT INTO tbl (` is a table reference, not a function call; we later suppress the generic
+    // CallRegex match at the same identifier when an opening `(` immediately follows the target.
+    // `INSERT INTO tbl (...)` / `UPDATE tbl` などの更新対象。
+    // `INSERT INTO tbl (` は関数呼び出しではなくテーブル参照なので、直後に `(` がある場合は後段で
+    // 同じ識別子の generic CallRegex を抑止する。
+    private static readonly Regex SqlTargetReferenceRegex = new(
+        $@"(?<![\w$])(?:INSERT(?:\s+{SqlTopTargetModifierPattern})?\s+INTO|UPDATE\b(?:\s+(?:{SqlTopTargetModifierPattern}|ONLY\b))*|MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?|DELETE\b(?:\s+{SqlTopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?)\s+{SqlQualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlTruncateTargetRegex = new(
+        $@"(?<![\w$])TRUNCATE\s+TABLE\s+(?:(?:ONLY)\b\s+)?{SqlQualifiedIdentifierPattern}(?:\s*,\s*(?:(?:ONLY)\b\s+)?{SqlQualifiedIdentifierPattern})*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlTopCallSuppressionRegex = new(
+        @"(?<![\w$])(?:SELECT|INSERT|UPDATE|MERGE|DELETE)\b\s+(?<name>TOP)\s*\(",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlAccessMethodCallSuppressionRegex = new(
+        $@"(?<![\w$])CREATE\b(?:\s+UNIQUE\b)?\s+INDEX\b[\s\S]*?\bUSING\b\s+(?<name>{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern})(?=\s*\()",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // SQL Server temp-table materialization: `SELECT ... INTO #tmp` / `SELECT ... INTO ##tmp`.
+    // Procedural `SELECT ... INTO variable` remains intentionally excluded. issue #649.
+    // SQL Server の temp table 作成: `SELECT ... INTO #tmp` / `SELECT ... INTO ##tmp`。
+    // 手続き系の `SELECT ... INTO variable` は意図的に除外したままにする。issue #649。
+    private static readonly Regex SqlSelectIntoTempTargetRegex = new(
+        $@"(?<![\w$])SELECT\b.*?\bINTO\s+(?<name>{SqlTempIdentifierPattern})",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlSelectIntoTempTargetStatementRegex = new(
+        $@"(?<![\w$])SELECT\b.*?\bINTO\s+(?<name>{SqlTempIdentifierPattern})",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
+    private static readonly Regex SqlSelectIntoTempPrefixRegex = new(
+        @"(?<![\w$])SELECT\b.*?\bINTO\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlCreateTempTableRegex = new(
+        $@"(?<![\w$])CREATE(?:\s+(?:TEMP|TEMPORARY))?\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+(?<name>{SqlTempIdentifierPattern})",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlTrailingOnlyQualifiedIdentifierRegex = new(
+        $@"(?:(?:ONLY)\b\s+)?{SqlQualifiedIdentifierNoCapturePattern}\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlMergeTargetHintContinuationPrefixRegex = new(
+        $@"(?<![\w$])MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?\s+{SqlQualifiedIdentifierNoCapturePattern}\s+WITH\s*\((?:[^()]|\([^()]*\))*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private readonly record struct SqlIdentifierScanState(
+        bool InBlockComment,
+        string? DollarQuoteDelimiter,
+        bool InSingleQuotedString);
     // C# event subscription/unsubscription: Click += OnClick — both LHS and RHS must be PascalCase identifiers
     // C# イベント購読・解除: Click += OnClick — LHS と RHS の両方が PascalCase 識別子のみ
     private static readonly Regex EventSubscriptionRegex = new(@"(?<name>[A-Z]\w*)\s*[+-]=\s*(?:new\s+)?[A-Z]\w*", RegexOptions.Compiled);
@@ -610,6 +693,14 @@ public static class ReferenceExtractor
 
         var references = new List<ReferenceRecord>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string>? sqlEstablishedTempObjectNames = null;
+        string? sqlStatementPrefix = null;
+        var sqlIdentifierScanState = default(SqlIdentifierScanState);
+        if (language == "sql")
+        {
+            sqlEstablishedTempObjectNames = new HashSet<string>(StringComparer.Ordinal);
+            sqlStatementPrefix = string.Empty;
+        }
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -797,6 +888,8 @@ public static class ReferenceExtractor
                     container);
             }
 
+            var sqlSuppressedCallIndices = language is "sql" ? new HashSet<int>() : null;
+
             // SQL stored-procedure calls without parentheses: `EXEC`, `EXECUTE`, and `CALL` forms that
             // the shared CallRegex cannot see because there is no trailing `(`. Emits the same
             // reference kind ("call") so the edge merges with the rare parenthesized form via dedupe.
@@ -807,57 +900,287 @@ public static class ReferenceExtractor
             {
                 // The shared PrepareLine strips backtick-quoted content because several other
                 // languages use backticks for string literals (shell command substitution,
-                // JavaScript template literals, Go raw strings). In SQL, backticks quote
-                // identifiers (MySQL / MariaDB), so we re-prepare the raw line with
-                // a SQL-aware stripper that only drops `'...'` / `"..."` literals and comments.
+                // JavaScript template literals, Go raw strings). In SQL, backticks and double
+                // quotes can both quote identifiers, so we re-prepare the raw line with a
+                // SQL-aware stripper that only drops single-quoted literals and comments.
                 // 共有 PrepareLine はバッククォート内容を文字列として除去する（他言語のテンプレート
-                // リテラル等に対応するため）。SQL ではバッククォートは識別子引用なので、SQL 向けに
-                // `'...'` / `"..."` とコメントだけを除去する sanitization を別途適用する。
-                var sqlScanLine = PrepareSqlLineForIdentifierScan(structuralLines[i]);
-                if (!string.IsNullOrWhiteSpace(sqlScanLine))
+                // リテラル等に対応するため）。SQL ではバッククォートと二重引用符が識別子引用になり得る
+                // ため、単引用符リテラル、複数行 block comment、PostgreSQL dollar quote、行コメント
+                // だけを除去する stateful sanitization を別途適用する。
+                var sqlLineFragment = PrepareSqlLineForIdentifierScan(
+                    structuralLines[i],
+                    sqlIdentifierScanState,
+                    sqlStatementPrefix,
+                    out var sqlLineEndedByLineComment,
+                    out sqlIdentifierScanState);
+                if (!string.IsNullOrWhiteSpace(sqlLineFragment))
                 {
-                    foreach (Match match in SqlProcCallRegex.Matches(sqlScanLine))
+                    if (ShouldFlushSqlTempObjectPrefixAtLineBoundary(sqlStatementPrefix!, sqlLineFragment))
                     {
-                        var nameGroup = match.Groups["name"];
-                        var rawName = nameGroup.Value;
-                        int nameIndex = nameGroup.Index;
-                        string resolvedName;
-                        bool wasQuoted;
-                        if (rawName.Length >= 2
-                            && ((rawName[0] == '[' && rawName[^1] == ']')
-                                || (rawName[0] == '`' && rawName[^1] == '`')))
-                        {
-                            // Normalize `[sp_Target]` / `` `sp_Target` `` to `sp_Target` so it matches the
-                            // indexed symbol name, and point the column at the inner identifier instead
-                            // of the opening quote.
-                            // `[sp_Target]` / `` `sp_Target` `` は識別子名と一致させるため引用を除去し、
-                            // 列位置は中身の先頭に寄せる。
-                            resolvedName = rawName.Substring(1, rawName.Length - 2);
-                            nameIndex += 1;
-                            wasQuoted = true;
-                        }
-                        else
-                        {
-                            resolvedName = rawName;
-                            wasQuoted = false;
-                        }
-
-                        // Bracketed / backtick-quoted identifiers are explicitly quoted to allow reserved
-                        // words (`[ORDER]`, `[USER]`, `[AS]`, `[IMMEDIATE]`, `` `order` ``) as real object
-                        // names. Skip the keyword ignore list so a legitimate `EXEC [ORDER]` or
-                        // `` CALL `order` `` is not silently dropped.
-                        // 角括弧 / バッククォート付き識別子は予約語を識別子として使うための引用形。
-                        // `[ORDER]` / `` `order` `` のような正当な名前を落とさないため keyword ignore list をスキップする。
-                        if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
-                            continue;
-                        if (definitionNames != null && definitionNames.Contains(resolvedName))
-                            continue;
-
-                        var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
-                        AddChainReference(
-                            references, seen, fileId, resolvedName, nameIndex + 1,
-                            "call", context, lineNumber, sqlCallContainer);
+                        CollectSqlTempObjectNamesFromStatement(sqlStatementPrefix!, sqlEstablishedTempObjectNames!);
+                        sqlStatementPrefix = string.Empty;
                     }
+
+                    var sqlCombinedLine = CombineSqlStatementPrefix(sqlStatementPrefix!, sqlLineFragment, out var sqlLineOffset);
+                    int sqlStatementStart = 0;
+
+                    while (true)
+                    {
+                        int terminatorIndex = FindSqlStatementTerminator(sqlCombinedLine, sqlStatementStart);
+                        int statementEnd = terminatorIndex >= 0 ? terminatorIndex + 1 : sqlCombinedLine.Length;
+                        var sqlStatement = sqlCombinedLine[sqlStatementStart..statementEnd];
+                        int sqlStatementLineOffset = Math.Max(0, sqlLineOffset - sqlStatementStart);
+
+                        if (!string.IsNullOrWhiteSpace(sqlStatement))
+                        {
+                            HashSet<int>? sqlUsingSourceIndices = null;
+                            foreach (Match match in SqlMergeUsingSourceRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+
+                                (sqlUsingSourceIndices ??= []).Add(nameGroup.Index);
+                            }
+
+                            foreach (Match match in SqlDeleteUsingSourceRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+
+                                foreach (Capture capture in match.Groups["name"].Captures)
+                                {
+                                    if (capture.Index < sqlStatementLineOffset)
+                                        continue;
+
+                                    (sqlUsingSourceIndices ??= []).Add(capture.Index);
+                                }
+                            }
+
+                            foreach (Match match in SqlTopCallSuppressionRegex.Matches(sqlStatement))
+                            {
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+
+                                sqlSuppressedCallIndices?.Add(nameGroup.Index + sqlStatementStart - sqlLineOffset);
+                            }
+
+                            foreach (Match match in SqlAccessMethodCallSuppressionRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+                                if (sqlUsingSourceIndices != null && sqlUsingSourceIndices.Contains(nameGroup.Index))
+                                    continue;
+
+                                sqlSuppressedCallIndices?.Add(nameGroup.Index + sqlStatementStart - sqlLineOffset);
+                            }
+
+                            foreach (Match match in SqlProcCallRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+                                NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+
+                                // Bracketed / backtick-quoted identifiers are explicitly quoted to allow reserved
+                                // words (`[ORDER]`, `[USER]`, `[AS]`, `[IMMEDIATE]`, `` `order` ``) as real object
+                                // names. Skip the keyword ignore list so a legitimate `EXEC [ORDER]` or
+                                // `` CALL `order` `` is not silently dropped.
+                                // 角括弧 / バッククォート付き識別子は予約語を識別子として使うための引用形。
+                                // `[ORDER]` / `` `order` `` のような正当な名前を落とさないため keyword ignore list をスキップする。
+                                if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                    continue;
+                                if (definitionNames != null && definitionNames.Contains(resolvedName))
+                                    continue;
+
+                                var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
+                                AddChainReference(
+                                    references, seen, fileId, resolvedName, nameColumn + 1,
+                                    "call", context, lineNumber, sqlCallContainer);
+                            }
+
+                            foreach (Match match in SqlSourceReferenceRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+                                var followedByOpenParen = IsFollowedByOpenParen(sqlStatement, nameGroup.Index + nameGroup.Length);
+                                NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+                                if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                    continue;
+                                if (followedByOpenParen)
+                                {
+                                    var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
+                                    AddChainReference(
+                                        references, seen, fileId, resolvedName, nameColumn + 1,
+                                        "call", context, lineNumber, sqlCallContainer);
+                                    if (!wasQuoted)
+                                    {
+                                        sqlSuppressedCallIndices?.Add(
+                                            GetSqlCallLikeSuppressionIndex(sqlStatement, nameGroup.Index) + sqlStatementStart - sqlLineOffset);
+                                    }
+                                    continue;
+                                }
+                                if (resolvedName.StartsWith("#", StringComparison.Ordinal)
+                                    && (sqlEstablishedTempObjectNames == null || !sqlEstablishedTempObjectNames.Contains(resolvedName)))
+                                    continue;
+
+                                var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
+                                AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                            }
+
+                            foreach (Match match in SqlMergeUsingSourceRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+                                var followedByOpenParen = IsFollowedByOpenParen(sqlStatement, nameGroup.Index + nameGroup.Length);
+                                NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+                                if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                    continue;
+                                if (followedByOpenParen)
+                                {
+                                    var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
+                                    AddChainReference(
+                                        references, seen, fileId, resolvedName, nameColumn + 1,
+                                        "call", context, lineNumber, sqlCallContainer);
+                                    if (!wasQuoted)
+                                    {
+                                        sqlSuppressedCallIndices?.Add(
+                                            GetSqlCallLikeSuppressionIndex(sqlStatement, nameGroup.Index) + sqlStatementStart - sqlLineOffset);
+                                    }
+                                    continue;
+                                }
+                                if (resolvedName.StartsWith("#", StringComparison.Ordinal)
+                                    && (sqlEstablishedTempObjectNames == null || !sqlEstablishedTempObjectNames.Contains(resolvedName)))
+                                    continue;
+
+                                var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
+                                AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                            }
+
+                            foreach (Match match in SqlDeleteUsingSourceRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+
+                                foreach (Capture capture in match.Groups["name"].Captures)
+                                {
+                                    if (capture.Index < sqlStatementLineOffset)
+                                        continue;
+                                    var followedByOpenParen = IsFollowedByOpenParen(sqlStatement, capture.Index + capture.Length);
+                                    NormalizeSqlIdentifier(capture.Value, capture.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                    int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+                                    if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                        continue;
+                                    if (followedByOpenParen)
+                                    {
+                                        var sqlCallContainer = ResolveContainerForCall(capture.Index);
+                                        AddChainReference(
+                                            references, seen, fileId, resolvedName, nameColumn + 1,
+                                            "call", context, lineNumber, sqlCallContainer);
+                                        if (!wasQuoted)
+                                        {
+                                            sqlSuppressedCallIndices?.Add(
+                                                GetSqlCallLikeSuppressionIndex(sqlStatement, capture.Index) + sqlStatementStart - sqlLineOffset);
+                                        }
+                                        continue;
+                                    }
+                                    if (resolvedName.StartsWith("#", StringComparison.Ordinal)
+                                        && (sqlEstablishedTempObjectNames == null || !sqlEstablishedTempObjectNames.Contains(resolvedName)))
+                                        continue;
+
+                                    var sqlReferenceContainer = ResolveContainerForCall(capture.Index);
+                                    AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                                }
+                            }
+
+                            foreach (Match match in SqlSelectIntoTempTargetStatementRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+                                NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+                                if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                    continue;
+
+                                var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
+                                AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                            }
+
+                            foreach (Match match in SqlTargetReferenceRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+                                NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+                                if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                    continue;
+                                if (!wasQuoted
+                                    && string.Equals(resolvedName, "SET", StringComparison.OrdinalIgnoreCase)
+                                    && match.Value.StartsWith("UPDATE", StringComparison.OrdinalIgnoreCase))
+                                    continue;
+
+                                var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
+                                AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                                if (IsFollowedByOpenParen(sqlStatement, nameGroup.Index + nameGroup.Length))
+                                {
+                                    sqlSuppressedCallIndices?.Add(
+                                        GetSqlCallLikeSuppressionIndex(sqlStatement, nameGroup.Index) + sqlStatementStart - sqlLineOffset);
+                                }
+                            }
+
+                            foreach (Match match in SqlTruncateTargetRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+
+                                foreach (Capture capture in match.Groups["name"].Captures)
+                                {
+                                    if (capture.Index < sqlStatementLineOffset)
+                                        continue;
+                                    NormalizeSqlIdentifier(capture.Value, capture.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                    int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+                                    if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                        continue;
+
+                                    var sqlReferenceContainer = ResolveContainerForCall(capture.Index);
+                                    AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                                }
+                            }
+                        }
+
+                        if (terminatorIndex < 0)
+                            break;
+
+                        CollectSqlTempObjectNamesFromStatement(sqlStatement, sqlEstablishedTempObjectNames!);
+                        sqlStatementStart = terminatorIndex + 1;
+                        while (sqlStatementStart < sqlCombinedLine.Length && char.IsWhiteSpace(sqlCombinedLine[sqlStatementStart]))
+                            sqlStatementStart++;
+                    }
+
+                    sqlStatementPrefix = AdvanceSqlStatementPrefix(sqlCombinedLine, sqlStatementStart, sqlLineEndedByLineComment);
                 }
             }
 
@@ -1020,6 +1343,8 @@ public static class ReferenceExtractor
             {
                 var name = match.Groups["name"].Value;
                 var callIndex = match.Groups["name"].Index;
+                if (sqlSuppressedCallIndices != null && sqlSuppressedCallIndices.Contains(callIndex))
+                    continue;
                 matchedCallIndices.Add(callIndex);
                 AddCallLikeReference(name, callIndex);
             }
@@ -1154,6 +1479,321 @@ public static class ReferenceExtractor
             ContainerKind = container?.Kind,
             ContainerName = container?.Name,
         });
+    }
+
+    private static void NormalizeSqlIdentifier(
+        string rawName,
+        int rawIndex,
+        out string resolvedName,
+        out int resolvedIndex,
+        out bool wasQuoted)
+    {
+        if (rawName.Length >= 2
+            && ((rawName[0] == '[' && rawName[^1] == ']')
+                || (rawName[0] == '`' && rawName[^1] == '`')
+                || (rawName[0] == '"' && rawName[^1] == '"')))
+        {
+            // Normalize `[name]` / `` `name` `` / `"name"` to `name` so SQL-specific regexes and the shared
+            // CallRegex converge on the same symbol spelling and dedupe key.
+            // `[name]` / `` `name` `` / `"name"` を `name` に正規化し、SQL 専用 regex と共有 CallRegex の
+            // symbol 名と dedupe key を一致させる。
+            resolvedName = rawName.Substring(1, rawName.Length - 2);
+            if (rawName[0] == '"')
+                resolvedName = resolvedName.Replace("\"\"", "\"", StringComparison.Ordinal);
+            resolvedIndex = rawIndex + 1;
+            wasQuoted = true;
+            return;
+        }
+
+        resolvedName = rawName;
+        resolvedIndex = rawIndex;
+        wasQuoted = false;
+    }
+
+    private static bool IsFollowedByOpenParen(string line, int index)
+    {
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+
+        return index < line.Length && line[index] == '(';
+    }
+
+    private static int GetSqlCallLikeSuppressionIndex(string line, int index)
+    {
+        while (index < line.Length && line[index] == '#')
+            index++;
+
+        return index;
+    }
+
+    private static string CombineSqlStatementPrefix(string prefix, string line, out int lineOffset)
+    {
+        if (string.IsNullOrEmpty(prefix))
+        {
+            lineOffset = 0;
+            return line;
+        }
+
+        lineOffset = prefix.Length + 1;
+        return prefix + "\n" + line;
+    }
+
+    private static string AdvanceSqlStatementPrefix(
+        string combined,
+        int statementStart,
+        bool lineEndedByLineComment)
+    {
+        var remaining = statementStart == 0 ? combined : combined[statementStart..];
+        if (!lineEndedByLineComment)
+            return remaining;
+
+        return CanSqlStatementRequireLineCommentCarry(remaining) ? remaining : string.Empty;
+    }
+
+    private static bool ShouldFlushSqlTempObjectPrefixAtLineBoundary(
+        string prefix,
+        string nextLine)
+    {
+        if (string.IsNullOrWhiteSpace(prefix) || string.IsNullOrWhiteSpace(nextLine))
+            return false;
+        if (!CanSqlStatementEstablishTempObject(prefix))
+            return false;
+
+        return StartsSqlTopLevelStatement(nextLine);
+    }
+
+    private static bool CanSqlStatementEstablishTempObject(string statement)
+    {
+        if (statement.IndexOf('#') < 0)
+            return false;
+
+        return SqlTargetReferenceRegex.IsMatch(statement)
+            || SqlTruncateTargetRegex.IsMatch(statement)
+            || SqlSelectIntoTempTargetStatementRegex.IsMatch(statement)
+            || SqlCreateTempTableRegex.IsMatch(statement);
+    }
+
+    private static bool CanSqlStatementRequireLineCommentCarry(string statement)
+    {
+        if (string.IsNullOrWhiteSpace(statement))
+            return false;
+
+        return CanSqlStatementEstablishTempObject(statement)
+            || SqlTargetReferencePrefixRegex.IsMatch(statement)
+            || SqlSelectIntoTempPrefixRegex.IsMatch(statement)
+            || SqlDeleteUsingPrefixRegex.IsMatch(statement)
+            || SqlDeleteUsingListContinuationPrefixRegex.IsMatch(statement)
+            || SqlMergeUsingPrefixRegex.IsMatch(statement)
+            || SqlMergeTargetHintContinuationPrefixRegex.IsMatch(statement);
+    }
+
+    private static bool StartsSqlTopLevelStatement(string line)
+    {
+        int index = 0;
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+        if (index >= line.Length || !char.IsLetter(line[index]))
+            return false;
+
+        int start = index;
+        while (index < line.Length && char.IsLetter(line[index]))
+            index++;
+
+        var keyword = line[start..index].ToUpperInvariant();
+        if (keyword == "WITH")
+        {
+            while (index < line.Length && char.IsWhiteSpace(line[index]))
+                index++;
+
+            return index >= line.Length || line[index] != '(';
+        }
+
+        return keyword switch
+        {
+            "SELECT" => true,
+            "INSERT" => true,
+            "UPDATE" => true,
+            "DELETE" => true,
+            "MERGE" => true,
+            "CREATE" => true,
+            "ALTER" => true,
+            "DROP" => true,
+            "TRUNCATE" => true,
+            "SET" => true,
+            "DECLARE" => true,
+            "IF" => true,
+            "WHILE" => true,
+            "DO" => true,
+            "BEGIN" => true,
+            "EXEC" => true,
+            "EXECUTE" => true,
+            "CALL" => true,
+            _ => false,
+        };
+    }
+
+    private static int FindSqlStatementTerminator(string text, int startIndex)
+    {
+        for (int i = startIndex; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (c == ';')
+                return i;
+            if (c == '`')
+            {
+                int closing = text.IndexOf('`', i + 1);
+                if (closing < 0)
+                    return -1;
+                i = closing;
+                continue;
+            }
+            if (c == '[')
+            {
+                int closing = text.IndexOf(']', i + 1);
+                if (closing < 0)
+                    return -1;
+                i = closing;
+                continue;
+            }
+            if (c == '"')
+            {
+                int closing = FindClosingSqlDoubleQuote(text, i + 1);
+                if (closing < 0)
+                    return -1;
+                i = closing;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int FindClosingSqlDoubleQuote(string text, int startIndex)
+    {
+        for (int i = startIndex; i < text.Length; i++)
+        {
+            if (text[i] != '"')
+                continue;
+            if (i + 1 < text.Length && text[i + 1] == '"')
+            {
+                i++;
+                continue;
+            }
+
+            return i;
+        }
+
+        return -1;
+    }
+
+    private static int FindClosingSqlSingleQuote(string text, int startIndex)
+    {
+        for (int i = startIndex; i < text.Length; i++)
+        {
+            if (text[i] == '\\' && i + 1 < text.Length)
+            {
+                i++;
+                continue;
+            }
+            if (text[i] != '\'')
+                continue;
+            if (i + 1 < text.Length && text[i + 1] == '\'')
+            {
+                i++;
+                continue;
+            }
+
+            return i;
+        }
+
+        return -1;
+    }
+
+    private static bool IsInsideSqlDoubleQuotedRegion(string text, int index)
+    {
+        if (index <= 0)
+            return false;
+
+        bool inside = false;
+        for (int i = 0; i < index && i < text.Length; i++)
+        {
+            if (text[i] != '"')
+                continue;
+            if (inside && i + 1 < index && text[i + 1] == '"')
+            {
+                i++;
+                continue;
+            }
+
+            inside = !inside;
+        }
+
+        return inside;
+    }
+
+    private static bool TryReadSqlDollarQuoteDelimiter(
+        string line,
+        int index,
+        out string delimiter)
+    {
+        delimiter = string.Empty;
+        if (index < 0 || index >= line.Length || line[index] != '$')
+            return false;
+        if (index > 0 && (char.IsLetterOrDigit(line[index - 1]) || line[index - 1] == '_'))
+            return false;
+        if (index + 1 >= line.Length)
+            return false;
+        if (line[index + 1] == '$')
+        {
+            delimiter = "$$";
+            return true;
+        }
+        if (!(char.IsLetter(line[index + 1]) || line[index + 1] == '_'))
+            return false;
+
+        int probe = index + 2;
+        while (probe < line.Length && (char.IsLetterOrDigit(line[probe]) || line[probe] == '_'))
+            probe++;
+        if (probe >= line.Length || line[probe] != '$')
+            return false;
+
+        delimiter = line[index..(probe + 1)];
+        return true;
+    }
+
+    private static int SkipWhitespaceAhead(string text, int index)
+    {
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+            index++;
+        return index;
+    }
+
+    private static void CollectSqlTempObjectNamesFromStatement(
+        string statement,
+        HashSet<string> names)
+    {
+        CollectSqlTempObjectNamesFromMatches(SqlTargetReferenceRegex.Matches(statement), statement, names);
+        CollectSqlTempObjectNamesFromMatches(SqlTruncateTargetRegex.Matches(statement), statement, names);
+        CollectSqlTempObjectNamesFromMatches(SqlSelectIntoTempTargetStatementRegex.Matches(statement), statement, names);
+        CollectSqlTempObjectNamesFromMatches(SqlCreateTempTableRegex.Matches(statement), statement, names);
+    }
+
+    private static void CollectSqlTempObjectNamesFromMatches(MatchCollection matches, string statement, HashSet<string> names)
+    {
+        foreach (Match match in matches)
+        {
+            if (IsInsideSqlDoubleQuotedRegion(statement, match.Index))
+                continue;
+            var nameGroup = match.Groups["name"];
+            if (nameGroup.Captures.Count == 0)
+                continue;
+
+            foreach (Capture capture in nameGroup.Captures)
+            {
+                NormalizeSqlIdentifier(capture.Value, capture.Index, out var resolvedName, out _, out _);
+                if (resolvedName.StartsWith("#", StringComparison.Ordinal))
+                    names.Add(resolvedName);
+            }
+        }
     }
 
     /// <summary>
@@ -8444,57 +9084,279 @@ public static class ReferenceExtractor
         return segment.Length > 0 ? segment : null;
     }
 
-    // SQL-aware line sanitizer used only for the `EXEC` / `EXECUTE` / `CALL` no-parens scan.
-    // Preserves backtick-quoted identifiers (MySQL / MariaDB) so `` CALL `proc-name`; `` can be
-    // matched, while still stripping `'...'` / `"..."` string literals and SQL line / block
-    // comments so text inside comments does not emit a phantom reference. Line-comment tokens
-    // `--` (ANSI / T-SQL / MySQL) and `#` (MySQL / MariaDB) are scanned with awareness of
-    // backtick and bracket identifier quoting, so a legitimate name containing `#` or `-` such
-    // as `` CALL `proc#1`; `` or `EXEC [proc-name]` is not truncated mid-identifier.
-    // `EXEC` / `EXECUTE` / `CALL` の括弧なし抽出向けの SQL 特化サニタイザ。バッククォート引用
-    // （MySQL / MariaDB の識別子引用）は保持したまま、`'...'` / `"..."` と `--` / `#` / `/* ... */`
-    // の SQL コメントを除去する。`--` と `#` の走査は backtick / bracket 引用を尊重するため、
-    // `` CALL `proc#1`; `` や `EXEC [proc-name]` のような識別子が途中で切られない。
-    private static string PrepareSqlLineForIdentifierScan(string line)
+    // SQL-aware line sanitizer used only for the SQL source/target and `EXEC` / `EXECUTE` / `CALL`
+    // scans. Preserves backtick/bracket/double-quoted identifiers, blanks single-quoted strings
+    // (including multiline bodies), multiline `/* ... */` comments, PostgreSQL `$$...$$` /
+    // `$tag$...$tag$` bodies, and line comments so non-code regions cannot leak phantom references
+    // into the graph.
+    // SQL source/target と `EXEC` / `EXECUTE` / `CALL` 抽出向けの SQL 特化サニタイザ。
+    // backtick / bracket / double-quoted identifier は保持しつつ、単引用符文字列
+    // （複数行本体を含む）、複数行 `/* ... */` コメント、PostgreSQL の `$$...$$` /
+    // `$tag$...$tag$` 本体、行コメントを空白化し、非コード領域から phantom reference が
+    // 漏れないようにする。
+    private static string PrepareSqlLineForIdentifierScan(
+        string line,
+        SqlIdentifierScanState state,
+        string? statementPrefix,
+        out bool lineEndedByLineComment,
+        out SqlIdentifierScanState nextState)
     {
-        var result = SqlStringLiteralRegex.Replace(line, "\"\"");
-        result = InlineBlockCommentRegex.Replace(result, " ");
-
-        int commentStart = -1;
-        for (int i = 0; i < result.Length; i++)
+        lineEndedByLineComment = false;
+        if (string.IsNullOrEmpty(line))
         {
-            char c = result[i];
-            if (c == '`')
+            nextState = state;
+            return line;
+        }
+
+        var sanitized = line.ToCharArray();
+        bool inBlockComment = state.InBlockComment;
+        string? dollarQuoteDelimiter = state.DollarQuoteDelimiter;
+        bool inSingleQuotedString = state.InSingleQuotedString;
+
+        void BlankRange(int start, int endExclusive)
+        {
+            start = Math.Max(0, start);
+            endExclusive = Math.Min(sanitized.Length, endExclusive);
+            for (int blankIndex = start; blankIndex < endExclusive; blankIndex++)
+                sanitized[blankIndex] = ' ';
+        }
+
+        for (int i = 0; i < line.Length;)
+        {
+            if (inBlockComment)
             {
-                var closing = result.IndexOf('`', i + 1);
+                int closing = line.IndexOf("*/", i, StringComparison.Ordinal);
+                int end = closing >= 0 ? closing + 2 : line.Length;
+                BlankRange(i, end);
                 if (closing < 0)
                     break;
-                i = closing;
+                i = end;
+                inBlockComment = false;
+                continue;
+            }
+            if (!string.IsNullOrEmpty(dollarQuoteDelimiter))
+            {
+                int closing = line.IndexOf(dollarQuoteDelimiter, i, StringComparison.Ordinal);
+                if (closing < 0)
+                {
+                    BlankRange(i, line.Length);
+                    break;
+                }
+
+                int nextContent = SkipWhitespaceAhead(line, closing + dollarQuoteDelimiter.Length);
+                if (nextContent < line.Length
+                    && line[nextContent] != ';'
+                    && line[nextContent] != ','
+                    && line[nextContent] != ')'
+                    && line[nextContent] != ']')
+                {
+                    int nestedClosing = line.IndexOf(
+                        dollarQuoteDelimiter,
+                        closing + dollarQuoteDelimiter.Length,
+                        StringComparison.Ordinal);
+                    if (nestedClosing >= 0)
+                    {
+                        int end = nestedClosing + dollarQuoteDelimiter.Length;
+                        BlankRange(i, end);
+                        i = end;
+                        continue;
+                    }
+                }
+
+                int closingEnd = closing + dollarQuoteDelimiter.Length;
+                BlankRange(i, closingEnd);
+                i = closingEnd;
+                dollarQuoteDelimiter = null;
+                continue;
+            }
+            if (inSingleQuotedString)
+            {
+                int closing = FindClosingSqlSingleQuote(line, i);
+                int end = closing >= 0 ? closing + 1 : line.Length;
+                BlankRange(i, end);
+                i = end;
+                if (closing >= 0)
+                {
+                    inSingleQuotedString = false;
+                    continue;
+                }
+
+                break;
+            }
+
+            char c = line[i];
+            if (c == '"')
+            {
+                int closing = FindClosingSqlDoubleQuote(line, i + 1);
+                if (closing < 0)
+                    break;
+                i = closing + 1;
+                continue;
+            }
+            if (c == '`')
+            {
+                int closing = line.IndexOf('`', i + 1);
+                if (closing < 0)
+                    break;
+                i = closing + 1;
                 continue;
             }
             if (c == '[')
             {
-                var closing = result.IndexOf(']', i + 1);
+                int closing = line.IndexOf(']', i + 1);
                 if (closing < 0)
                     break;
-                i = closing;
+                i = closing + 1;
                 continue;
             }
-            if (c == '-' && i + 1 < result.Length && result[i + 1] == '-')
+            if (c == '\'')
             {
-                commentStart = i;
+                int closing = FindClosingSqlSingleQuote(line, i + 1);
+                int end = closing >= 0 ? closing + 1 : line.Length;
+                BlankRange(i, end);
+                i = end;
+                if (closing < 0)
+                    inSingleQuotedString = true;
+                continue;
+            }
+            if (c == '/' && i + 1 < line.Length && line[i + 1] == '*')
+            {
+                BlankRange(i, i + 2);
+                i += 2;
+                inBlockComment = true;
+                continue;
+            }
+            if (c == '-' && i + 1 < line.Length && line[i + 1] == '-')
+            {
+                lineEndedByLineComment = true;
+                BlankRange(i, line.Length);
                 break;
             }
             if (c == '#')
             {
-                commentStart = i;
-                break;
+                if (ShouldTreatHashAsSqlComment(line, i, statementPrefix))
+                {
+                    lineEndedByLineComment = true;
+                    BlankRange(i, line.Length);
+                    break;
+                }
+            }
+            if (c == '$' && TryReadSqlDollarQuoteDelimiter(line, i, out var delimiter))
+            {
+                BlankRange(i, i + delimiter.Length);
+                i += delimiter.Length;
+                dollarQuoteDelimiter = delimiter;
+                continue;
+            }
+
+            i++;
+        }
+
+        nextState = new SqlIdentifierScanState(inBlockComment, dollarQuoteDelimiter, inSingleQuotedString);
+        return new string(sanitized);
+    }
+
+    private static bool ShouldTreatHashAsSqlComment(string line, int hashIndex, string? statementPrefix)
+    {
+        if (hashIndex < 0 || hashIndex >= line.Length || line[hashIndex] != '#')
+            return false;
+
+        int probe = hashIndex - 1;
+        while (probe >= 0 && char.IsWhiteSpace(line[probe]))
+            probe--;
+        if (probe < 0 && !string.IsNullOrWhiteSpace(statementPrefix))
+        {
+            var combined = statementPrefix + "\n" + line;
+            return ShouldTreatHashAsSqlCommentCore(combined, statementPrefix.Length + 1 + hashIndex);
+        }
+
+        return ShouldTreatHashAsSqlCommentCore(line, hashIndex);
+    }
+
+    private static bool ShouldTreatHashAsSqlCommentCore(string line, int hashIndex)
+    {
+        if (hashIndex < 0 || hashIndex >= line.Length || line[hashIndex] != '#')
+            return false;
+
+        int next = hashIndex + 1;
+        if (hashIndex > 0
+            && line[hashIndex - 1] == '#'
+            && next < line.Length
+            && (char.IsLetterOrDigit(line[next]) || line[next] == '_'))
+            return false;
+        if (next + 1 < line.Length
+            && line[next] == '#'
+            && (char.IsLetterOrDigit(line[next + 1]) || line[next + 1] == '_'))
+            return false;
+        if (next >= line.Length || !(char.IsLetterOrDigit(line[next]) || line[next] == '_'))
+            return true;
+
+        int probe = hashIndex - 1;
+        while (probe >= 0 && char.IsWhiteSpace(line[probe]))
+            probe--;
+        while (probe >= 0 && line[probe] == ',')
+        {
+            var priorListItem = line[..probe];
+            var listMatch = SqlTrailingOnlyQualifiedIdentifierRegex.Match(priorListItem);
+            if (!listMatch.Success)
+                return true;
+
+            probe = listMatch.Index - 1;
+            while (probe >= 0 && char.IsWhiteSpace(line[probe]))
+                probe--;
+        }
+        if (probe < 0)
+            return true;
+        if (line[probe] == '.')
+            return false;
+        if (line[probe] == ')')
+        {
+            int depth = 1;
+            probe--;
+            while (probe >= 0 && depth > 0)
+            {
+                if (line[probe] == ')')
+                    depth++;
+                else if (line[probe] == '(')
+                    depth--;
+                probe--;
+            }
+            while (probe >= 0 && char.IsWhiteSpace(line[probe]))
+                probe--;
+            if (probe < 0)
+                return true;
+
+            int modifierEnd = probe;
+            while (probe >= 0 && char.IsLetter(line[probe]))
+                probe--;
+            int modifierStart = probe + 1;
+            if (modifierStart <= modifierEnd
+                && string.Equals(line[modifierStart..(modifierEnd + 1)], "TOP", StringComparison.OrdinalIgnoreCase))
+            {
+                while (probe >= 0 && char.IsWhiteSpace(line[probe]))
+                    probe--;
+                if (probe < 0)
+                    return true;
             }
         }
-        if (commentStart >= 0)
-            result = result[..commentStart];
 
-        return result;
+        int tokenEnd = probe;
+        while (probe >= 0 && char.IsLetter(line[probe]))
+            probe--;
+        int tokenStart = probe + 1;
+        if (tokenStart > tokenEnd)
+            return true;
+
+        var token = line[tokenStart..(tokenEnd + 1)];
+        return !string.Equals(token, "FROM", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "JOIN", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "MERGE", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "USING", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "INTO", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "UPDATE", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "TABLE", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "EXEC", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "EXECUTE", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string PrepareLine(string lang, string line)

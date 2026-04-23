@@ -696,30 +696,41 @@ public partial class DbReader
         if (!_hasReferencesTable)
             return new List<ReferenceResult>();
 
-        if (!ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind))
-            return SearchReferencesCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, maxLineWidth);
+        if (!ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind, exact))
+            return SearchReferencesCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, 0, maxLineWidth);
 
         var rawLimit = Math.Max(limit, CSharpUsingStaticReferenceFilterChunkSize);
-        List<ReferenceResult> filtered;
-        while (true)
+        var rawOffset = 0;
+        var filtered = new List<ReferenceResult>();
+        while (filtered.Count < limit)
         {
-            var rawResults = SearchReferencesCore(query, rawLimit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, maxLineWidth);
-            filtered = rawResults
-                .Where(result => !ShouldSuppressCSharpUsingStaticConstantPatternReference(result))
-                .ToList();
-
-            if (filtered.Count >= limit || rawResults.Count < rawLimit || rawLimit >= CSharpUsingStaticReferenceFilterMaxRawLimit)
+            var rawResults = SearchReferencesCore(query, rawLimit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, rawOffset, maxLineWidth);
+            if (rawResults.Count == 0)
                 break;
 
+            foreach (var result in rawResults)
+            {
+                if (ShouldSuppressCSharpUsingStaticConstantPatternReference(result))
+                    continue;
+
+                filtered.Add(result);
+                if (filtered.Count >= limit)
+                    break;
+            }
+
+            if (rawResults.Count < rawLimit)
+                break;
+
+            rawOffset += rawResults.Count;
             rawLimit = Math.Min(rawLimit * 2, CSharpUsingStaticReferenceFilterMaxRawLimit);
         }
 
         return filtered.Count <= limit ? filtered : filtered.Take(limit).ToList();
     }
 
-    private List<ReferenceResult> SearchReferencesCore(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int maxLineWidth)
+    private List<ReferenceResult> SearchReferencesCore(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int offset, int maxLineWidth)
     {
-        using var cmd = CreateSearchReferencesCommand(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact);
+        using var cmd = CreateSearchReferencesCommand(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, offset);
         var results = new List<ReferenceResult>();
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
@@ -744,7 +755,7 @@ public partial class DbReader
         return results;
     }
 
-    private SqliteCommand CreateSearchReferencesCommand(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact)
+    private SqliteCommand CreateSearchReferencesCommand(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int offset = 0)
     {
         var cmd = _conn.CreateCommand();
         var sql = referenceKind == null
@@ -803,7 +814,7 @@ public partial class DbReader
                    context, container_kind, container_name
             FROM logical_references r";
         }
-        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {(referenceKind == null ? GetPathBucketOrderSql("r.path") : PathBucketOrder)}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, CASE WHEN lower(r.symbol_name) LIKE lower(@rankingQueryPrefix) ESCAPE '\\' THEN 0 ELSE 1 END, {(referenceKind == null ? "r.path" : "f.path")}, r.line LIMIT @limit";
+        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {(referenceKind == null ? GetPathBucketOrderSql("r.path") : PathBucketOrder)}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, CASE WHEN lower(r.symbol_name) LIKE lower(@rankingQueryPrefix) ESCAPE '\\' THEN 0 ELSE 1 END, {(referenceKind == null ? "r.path" : "f.path")}, r.line, r.column_number, r.reference_kind, r.symbol_name LIMIT @limit OFFSET @offset";
 
         cmd.CommandText = sql;
         if (query != null)
@@ -839,6 +850,7 @@ public partial class DbReader
             cmd.Parameters.AddWithValue("@lang", lang);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         cmd.Parameters.AddWithValue("@limit", limit);
+        cmd.Parameters.AddWithValue("@offset", offset);
         return cmd;
     }
 
@@ -856,7 +868,9 @@ public partial class DbReader
             GetNullableString(reader, 8));
     }
 
-    private static bool ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(string? lang, string? referenceKind) =>
+    private static bool ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(string? lang, string? referenceKind, bool exact) =>
+        exact
+        &&
         (lang == null || string.Equals(lang, "csharp", StringComparison.Ordinal))
         && (referenceKind == null || string.Equals(referenceKind, "type_reference", StringComparison.Ordinal));
 
@@ -1124,9 +1138,7 @@ public partial class DbReader
 
         var containingTypes = GetCSharpTypeContainingTypesByName(shortName);
         if (containingTypes.Any(candidate => string.Equals(candidate.QualifiedName, containerQualifiedName, StringComparison.Ordinal)))
-        {
             return true;
-        }
 
         return false;
     }
@@ -2300,9 +2312,7 @@ public partial class DbReader
             }
 
             if (containerKind == null)
-            {
                 namespaces.Add(new CSharpTypeNamespaceCandidate(string.Empty, path, isFileLocal));
-            }
         }
 
         _csharpTypeNamespacesByName[symbolName] = namespaces;
@@ -2448,7 +2458,7 @@ public partial class DbReader
 
     public int CountSearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
-        if (ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind))
+        if (ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind, exact))
             return SearchReferences(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact).Count;
 
         if (!_hasReferencesTable) return 0;
@@ -2519,7 +2529,7 @@ public partial class DbReader
 
     public QueryCountResult CountSearchReferencesTotal(string? query = null, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
-        if (ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind))
+        if (ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind, exact))
             return CountSearchReferencesTotalWithUsingStaticFilter(query, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact);
 
         if (!_hasReferencesTable)
