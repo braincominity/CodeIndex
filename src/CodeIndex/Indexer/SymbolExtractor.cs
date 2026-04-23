@@ -1485,8 +1485,8 @@ public static class SymbolExtractor
                     }
 
                     if (lang == "csharp"
-                        && pattern.Kind == "property"
                         && pattern.BodyStyle == BodyStyle.None
+                        && (pattern.Kind == "property" || IsCSharpFieldLikeFunctionPattern(pattern))
                         && csharpInsideTypeBody != null
                         && !csharpInsideTypeBody.IsInsideTypeBodyAt(i, csharpGateRawStartColumn))
                     {
@@ -1500,6 +1500,14 @@ public static class SymbolExtractor
                         // 後ろにある実フィールド）を取りこぼさないよう、次の候補探索
                         // 位置へ進める。この進行が無いと最初の拒否で while ループが
                         // 行を抜けてしまい、後続候補が失われる。Closes #400.
+                        lineOffset = FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang);
+                        continue;
+                    }
+                    var rawReturnType = TryGetGroup(match, pattern.ReturnTypeGroup);
+                    if (lang == "csharp"
+                        && pattern.ReturnTypeGroup != null
+                        && HasInvalidCSharpReturnTypeSuffix(rawReturnType))
+                    {
                         lineOffset = FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang);
                         continue;
                     }
@@ -1924,7 +1932,7 @@ public static class SymbolExtractor
                                 BodyEndLine = bodyEndLine,
                                 Signature = signature,
                                 Visibility = TryGetGroup(match, pattern.VisibilityGroup),
-                                ReturnType = NormalizeMetadata(TryGetGroup(match, pattern.ReturnTypeGroup)),
+                                ReturnType = NormalizeMetadata(rawReturnType),
                             },
                             line);
                     }
@@ -9780,6 +9788,42 @@ public static class SymbolExtractor
 
         return lang is "javascript" or "typescript" or "css" or "java"
             || (lang == "csharp" && CanContinueScanningSameLineCSharpBraceBody(kind));
+    }
+
+    private static bool IsCSharpFieldLikeFunctionPattern(SymbolPattern pattern)
+        => pattern.Kind == "function"
+            && pattern.BodyStyle == BodyStyle.None
+            && pattern.ReturnTypeGroup != null;
+
+    private static bool HasInvalidCSharpReturnTypeSuffix(string? returnType)
+    {
+        if (string.IsNullOrWhiteSpace(returnType))
+            return true;
+
+        var trimmed = returnType.TrimEnd();
+        if (trimmed.Length == 0)
+            return true;
+
+        var lastChar = trimmed[^1];
+        if (lastChar is '<' or '=' or ':' or '+' or '-' or '/' or '%' or '!' or '&' or '|' or '^' or '~' or '.')
+            return true;
+
+        var tokenStart = trimmed.Length - 1;
+        while (tokenStart > 0
+            && (char.IsLetterOrDigit(trimmed[tokenStart - 1]) || trimmed[tokenStart - 1] == '_'))
+        {
+            tokenStart--;
+        }
+
+        if (tokenStart > 0
+            && trimmed[tokenStart - 1] == '@'
+            && IsCSharpVerbatimIdentifierPrefix(trimmed, tokenStart - 1))
+        {
+            return false;
+        }
+
+        var lastToken = trimmed[tokenStart..];
+        return lastToken is "as" or "is" or "return" or "throw" or "new";
     }
 
     private static int FindNextSameLineBraceStatementStart(string matchLine, int startIndex, string? lang)
