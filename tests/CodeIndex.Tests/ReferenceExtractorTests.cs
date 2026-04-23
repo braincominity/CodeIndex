@@ -5368,6 +5368,7 @@ public class ReferenceExtractorTests
             ON t.id = s.id
             WHEN MATCHED THEN
                 UPDATE SET action = s.action;
+            INSERT TOP (10) INTO inserted_log (action) VALUES ('done');
             MERGE TOP (5) #batch_log AS u
             USING staging_batch AS v
             ON u.id = v.id
@@ -5383,6 +5384,7 @@ public class ReferenceExtractorTests
         Assert.Equal(2, references.Count(r => r.SymbolName == "users" && r.ReferenceKind == "reference"));
         Assert.Contains(references, r => r.SymbolName == "fn_users" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "inserted_log" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "#batch_log" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "staging_batch" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "TOP");
@@ -5499,6 +5501,39 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
 
         Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "INDEX");
+        Assert.DoesNotContain(references, r => r.SymbolName == "HOLDLOCK");
+    }
+
+    [Fact]
+    public void Extract_SQL_MergeTempUsingWithMultilineTargetHintStillCapturesSourceReference()
+    {
+        // issue #741: multiline SQL Server target hints for `MERGE [INTO] #temp` must not flush the
+        // carried temp-establishing prefix before the later `USING <source>` line is parsed.
+        // issue #741: `MERGE [INTO] #temp` の複数行 target hint は、後続の `USING <source>` 行を
+        // 解析する前に temp-establishing prefix を flush してはいけない。
+        const string content = """
+            MERGE INTO #audit_log
+            WITH (INDEX(ix_audit_log), HOLDLOCK) AS t
+            USING staging_log AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action;
+            MERGE #archive_log
+            WITH (HOLDLOCK) AS u
+            USING staging_archive AS v
+            ON u.id = v.id
+            WHEN MATCHED THEN
+                UPDATE SET action = v.action;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "#audit_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "#archive_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "staging_archive" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "INDEX");
         Assert.DoesNotContain(references, r => r.SymbolName == "HOLDLOCK");
     }
@@ -5668,6 +5703,7 @@ public class ReferenceExtractorTests
             SELECT id INTO target_var FROM users;
             SELECT * FROM users # comment with ##ignored_temp;
 
+            INSERT TOP (10) INTO #audit_log (action) VALUES ('merge-ready');
             MERGE #audit_log AS t
             USING staging_log AS s
             ON t.id = s.id
@@ -5678,16 +5714,41 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "sql", content);
         var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
 
-        Assert.Equal(4, references.Count(r => r.SymbolName == "#audit_log" && r.ReferenceKind == "reference"));
+        Assert.Equal(5, references.Count(r => r.SymbolName == "#audit_log" && r.ReferenceKind == "reference"));
         Assert.Equal(3, references.Count(r => r.SymbolName == "##session_log" && r.ReferenceKind == "reference"));
         Assert.Contains(references, r => r.SymbolName == "#selected_users" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "##selected_global_users" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "#audit_log" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "session_log" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "TOP");
         Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "target_var");
         Assert.DoesNotContain(references, r => r.SymbolName == "##ignored_temp");
+    }
+
+    [Fact]
+    public void Extract_SQL_TempStatementPrefixStillFlushesBeforeTopLevelWithCte()
+    {
+        // issue #741 control: `WITH cte AS (...)` must still start a new top-level statement even
+        // after a temp-establishing prefix on the previous line.
+        // issue #741 の control: 前行が temp-establishing prefix でも、`WITH cte AS (...)` は
+        // 引き続き新しい top-level statement として始まらなければならない。
+        const string content = """
+            SELECT id INTO #selected_users FROM users
+            WITH recent_users AS (
+                SELECT * FROM accounts
+            )
+            SELECT * FROM recent_users;
+            SELECT * FROM #selected_users;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "#selected_users" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "accounts" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "recent_users" && r.ReferenceKind == "reference");
     }
 
     [Fact]

@@ -239,13 +239,13 @@ public static class ReferenceExtractor
     // `INSERT INTO tbl (` は関数呼び出しではなくテーブル参照なので、直後に `(` がある場合は後段で
     // 同じ識別子の generic CallRegex を抑止する。
     private static readonly Regex SqlTargetReferenceRegex = new(
-        $@"(?<![\w$])(?:INSERT\s+INTO|UPDATE\b(?:\s+(?:{SqlTopTargetModifierPattern}|ONLY\b))*|MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?|DELETE\b(?:\s+{SqlTopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?)\s+{SqlQualifiedIdentifierPattern}",
+        $@"(?<![\w$])(?:INSERT(?:\s+{SqlTopTargetModifierPattern})?\s+INTO|UPDATE\b(?:\s+(?:{SqlTopTargetModifierPattern}|ONLY\b))*|MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?|DELETE\b(?:\s+{SqlTopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?)\s+{SqlQualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SqlTruncateTargetRegex = new(
         $@"(?<![\w$])TRUNCATE\s+TABLE\s+(?:(?:ONLY)\b\s+)?{SqlQualifiedIdentifierPattern}(?:\s*,\s*(?:(?:ONLY)\b\s+)?{SqlQualifiedIdentifierPattern})*",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SqlTopCallSuppressionRegex = new(
-        @"(?<![\w$])(?:SELECT|UPDATE|MERGE|DELETE)\b\s+(?<name>TOP)\s*\(",
+        @"(?<![\w$])(?:SELECT|INSERT|UPDATE|MERGE|DELETE)\b\s+(?<name>TOP)\s*\(",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SqlAccessMethodCallSuppressionRegex = new(
         $@"(?<![\w$])CREATE\b(?:\s+UNIQUE\b)?\s+INDEX\b[\s\S]*?\bUSING\b\s+(?<name>{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern})(?=\s*\()",
@@ -1512,10 +1512,18 @@ public static class ReferenceExtractor
         while (index < line.Length && char.IsLetter(line[index]))
             index++;
 
-        return line[start..index].ToUpperInvariant() switch
+        var keyword = line[start..index].ToUpperInvariant();
+        if (keyword == "WITH")
+        {
+            while (index < line.Length && char.IsWhiteSpace(line[index]))
+                index++;
+
+            return index >= line.Length || line[index] != '(';
+        }
+
+        return keyword switch
         {
             "SELECT" => true,
-            "WITH" => true,
             "INSERT" => true,
             "UPDATE" => true,
             "DELETE" => true,
