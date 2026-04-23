@@ -782,32 +782,11 @@ public partial class DbReader
             sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
         var referencesSuffixAlias = ComputeCSharpAttributeSuffixAlias(query, lang, referenceKind);
-        // When the alias fires without an explicit `lang` / `--kind` scope we still need
-        // to keep it from bleeding into non-C# rows or non-attribute rows. The SQL guard
-        // clamps the alias disjunct to `f.lang = 'csharp' AND r.reference_kind = 'attribute'`
-        // so unscoped `references FooAttribute` only picks up real C# attribute sites.
-        // alias が `--lang` / `--kind` スコープなしで発火するときも、C# 以外の行や
-        // attribute 以外の行を拾わないように、SQL 側で `f.lang = 'csharp' AND
-        // r.reference_kind = 'attribute'` に限定する。
         var referencesAliasScope = referencesSuffixAlias != null
             ? " AND f.lang = 'csharp' AND r.reference_kind = 'attribute'"
             : string.Empty;
         if (query != null)
         {
-            // --exact: Unicode-aware equality when FoldReady (#86), else ASCII COLLATE NOCASE.
-            // Fold path: r.symbol_name_folded = @qFolded (indexed), query pre-folded in .NET.
-            // Fallback: r.symbol_name = @q COLLATE NOCASE (indexed by idx_symbol_refs_name_nocase).
-            // When the query ends with C# attribute suffix `Attribute`, also OR against the
-            // suffix-stripped alias so `references FooAttribute --exact` reaches the idiomatic
-            // `[Foo]` reference site stored with `symbol_name = "Foo"`. In substring mode we
-            // still LIKE-match `%FooAttribute%` and add only the exact stripped alias to avoid
-            // overmatching unrelated names (e.g. `FooAuditLog`) that share the stripped prefix.
-            // The alias disjunct is scoped to C# attribute rows to avoid false positives.
-            // --exact: FoldReady なら Unicode 折り畳み経路、未 ready なら ASCII NOCASE へ fallback。
-            // C# の `Attribute` suffix が付いたクエリは、suffix を外した別名とも照合する。
-            // 部分一致モードでは `%FooAttribute%` をそのまま使い、別名側は exact 照合だけを OR
-            // することで `FooAuditLog` など無関係な名前を巻き込まないようにする。
-            // 別名節は C# の attribute 行に限定し、誤一致を避ける。
             if (exact && _foldReady)
                 sql += referencesSuffixAlias != null
                     ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{referencesAliasScope}))"
@@ -850,13 +829,6 @@ public partial class DbReader
             cmd.Parameters.AddWithValue("@query", queryParam);
             if (referencesSuffixAlias != null)
             {
-                // Exact-match alias value is used both in --exact paths (folded / NOCASE)
-                // and in the substring path (COLLATE NOCASE exact OR to bypass LIKE noise).
-                // In the folded --exact branch the alias is pre-folded; the substring branch
-                // uses the raw stripped form because the OR clause is a literal `=` comparison.
-                // exact 用の別名値は --exact 経路（folded / NOCASE）と部分一致経路（LIKE ノイズを
-                // 避けるための COLLATE NOCASE の等値 OR）の両方で使う。folded 経路だけは事前に
-                // 折りたたみ、部分一致経路は生の stripped 形をそのまま使う。
                 var aliasParam = exact && _foldReady
                     ? NameFold.Fold(referencesSuffixAlias) ?? referencesSuffixAlias
                     : referencesSuffixAlias;

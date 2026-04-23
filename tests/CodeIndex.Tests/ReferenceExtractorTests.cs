@@ -3184,6 +3184,46 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedUppercaseConstantBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<object> items)
+                {
+                    const int READY = 1;
+                    return Sink.Pick(from Status in items
+                                     orderby (READY)
+                                     select(Status.Ready),
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedTerminalSelectAfterGenericClose_PreservesOnlyTrailingReference()
     {
         const string content = """
@@ -7615,6 +7655,720 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Do" && r.ReferenceKind == "type_reference");
         Assert.Contains(references, r => r.SymbolName == "Log" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpIsNotPattern_CapturesActualTypeReference()
+    {
+        // issue #645: `is not Foo` must point at `Foo`, not emit a phantom `not`.
+        // issue #645: `is not Foo` は `Foo` を指す必要があり、偽の `not` を出してはならない。
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                bool Run(object x)
+                {
+                    return x is not Foo;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var fooRef = Assert.Single(references.Where(r => r.SymbolName == "Foo" && r.ReferenceKind == "type_reference"));
+        Assert.Equal("Run", fooRef.ContainerName);
+        Assert.DoesNotContain(references, r => r.SymbolName == "not" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpNullPatterns_DoNotEmitTypeReferences()
+    {
+        // issue #645 follow-up: `is not null` / `is null` are constant patterns, not types.
+        // issue #645 follow-up: `is not null` / `is null` は定数パターンであり型ではない。
+        const string content = """
+            class Demo
+            {
+                bool Run(object x)
+                {
+                    return x is not null && x is null;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "null" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpIsLogicalConstantMemberPatterns_DoNotEmitTypeReferences()
+    {
+        // issue #666: `is Color.Red or Color.Blue` is a logical constant-member pattern,
+        // not a type-test site, so it must not add compile-time `type_reference` rows.
+        // issue #666: `is Color.Red or Color.Blue` は logical な定数 member パターンであり、
+        // 型テスト位置ではないため compile-time な `type_reference` を増やしてはならない。
+        const string content = """
+            namespace Probe;
+
+            enum Color { Red, Blue }
+
+            class Demo
+            {
+                bool Run(Color value)
+                {
+                    return value is Color.Red or Color.Blue;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Equal(1, references.Count(r => r.SymbolName == "Color" && r.ReferenceKind == "type_reference"));
+        Assert.Equal(
+            0,
+            references.Count(r => r.SymbolName == "Color" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Red" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpCaseDeclarationPatterns_SkipEnumMemberLabels()
+    {
+        // issue #647: `case Type name:` is a declaration pattern, but `case Color.Red:`
+        // must not be reclassified as a compile-time type dependency.
+        // issue #647: `case Type name:` は宣言パターンだが、`case Color.Red:` を
+        // compile-time な型依存として再分類してはならない。
+        const string content = """
+            namespace Probe;
+
+            public enum Color { Red, Blue }
+            public interface ILogger {}
+
+            public class Demo
+            {
+                public void Run(object value, Color color)
+                {
+                    switch (value)
+                    {
+                        case ILogger logger:
+                            break;
+                    }
+
+                    switch (color)
+                    {
+                        case Color.Red:
+                            break;
+                        case Probe.Color.Blue:
+                            break;
+                        case Color.Red or Probe.Color.Blue:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "ILogger" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run");
+
+        var colorRefs = references.Where(r => r.SymbolName == "Color" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Single(colorRefs);
+
+        Assert.Contains(references, r => r.SymbolName == "Red" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference");
+
+        Assert.Equal(
+            0,
+            references.Count(r => r.SymbolName == "Color" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run"));
+    }
+
+    [Fact]
+    public void Extract_CsharpCaseLogicalConstantMemberPatterns_DoNotEmitTypeReferences()
+    {
+        // issue #666: logical constant-member labels such as
+        // `case ErrorCodes.NotFound or ErrorCodes.Forbidden:` are not type patterns.
+        // issue #666: `case ErrorCodes.NotFound or ErrorCodes.Forbidden:` のような
+        // logical な定数 member label は型パターンではない。
+        const string content = """
+            namespace Probe;
+
+            static class ErrorCodes
+            {
+                public const int NotFound = 404;
+                public const int Forbidden = 403;
+            }
+
+            class Demo
+            {
+                void Run(int value)
+                {
+                    switch (value)
+                    {
+                        case ErrorCodes.NotFound or ErrorCodes.Forbidden:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "ErrorCodes" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "NotFound" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Forbidden" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.ContainerName == "Run");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedNestedTypePattern_SurvivesConflictingConstMemberShortNames()
+    {
+        // issue #671: a qualified nested type pattern must not disappear just because some
+        // other namespace/type in the same file exposes a const member with the same short name.
+        // issue #671: qualified な nested type pattern は、同じ短い名前の const member を
+        // 別 namespace/type が持っていても消えてはならない。
+        const string content = """
+            namespace N1 { class Color { public const int Red = 1; } }
+            namespace N2
+            {
+                class Color
+                {
+                    public class Red { public int Value { get; } }
+                }
+
+                class Demo
+                {
+                    void Run(object value)
+                    {
+                        switch (value)
+                        {
+                            case N2.Color.Red r:
+                                break;
+                            case N2.Color.Red { Value: 0 }:
+                                break;
+                        }
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var runTypeRefs = references
+            .Where(r => r.ContainerName == "Run" && r.ReferenceKind == "type_reference")
+            .Select(r => r.SymbolName)
+            .ToList();
+
+        Assert.Equal(2, runTypeRefs.Count(name => name == "N2"));
+        Assert.Equal(2, runTypeRefs.Count(name => name == "Color"));
+        Assert.Equal(2, runTypeRefs.Count(name => name == "Red"));
+    }
+
+    [Fact]
+    public void Extract_CsharpCaseTerminalAndGuardedTypePatterns_CaptureTypeReferences()
+    {
+        // issue #672: plain `case Type:` and `case Type when ...:` remain valid type patterns
+        // and must not disappear just because the case scanner now filters constant labels.
+        // issue #672: 素の `case Type:` と `case Type when ...:` は有効な型パターンであり、
+        // 定数ラベル除去の都合で消えてはならない。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+
+            class Demo
+            {
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case Point:
+                            break;
+                        case Point when value != null:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(2, pointRefs.Count);
+        Assert.All(pointRefs, r => Assert.Equal("Run", r.ContainerName));
+        Assert.DoesNotContain(references, r => r.SymbolName == "null" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpLogicalNestedTypePatterns_CaptureTypeReferences()
+    {
+        // issue #673/#675: qualified nested-type logical patterns such as
+        // `Outer.Red or Outer.Blue` are still type tests, and every genuine head must survive.
+        // issue #673/#675: `Outer.Red or Outer.Blue` のような qualified nested-type の logical
+        // pattern は定数 member label ではなく、本物の型 head を両側とも残さなければならない。
+        const string content = """
+            namespace Probe;
+
+            class Outer
+            {
+                public class Red {}
+                public class Blue {}
+            }
+
+            class Demo
+            {
+                bool Match(object value)
+                {
+                    return value is Outer.Red or Outer.Blue;
+                }
+
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case Outer.Red or Outer.Blue:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Equal(4, references.Count(r => r.SymbolName == "Outer" && r.ReferenceKind == "type_reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference"));
+        Assert.Contains(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run");
+        Assert.Contains(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run");
+    }
+
+    [Fact]
+    public void Extract_CsharpMixedLogicalPatterns_KeepFirstGenuineTypeHead()
+    {
+        // issue #674: when a logical pattern mixes constant/member heads with a real type head,
+        // the first genuine type head must still produce a compile-time dependency.
+        // issue #674: logical pattern で定数/member head と本物の型 head が混在しても、
+        // 最初に現れる genuine な型 head の compile-time 依存は残さなければならない。
+        const string content = """
+            namespace Probe;
+
+            enum Color { Red, Blue }
+            class Point {}
+
+            class Demo
+            {
+                bool Match1(object value) => value is Color.Red or Point;
+                bool Match2(object value) => value is Point or Color.Red;
+
+                void Run1(object value)
+                {
+                    switch (value)
+                    {
+                        case Color.Red or Point:
+                            break;
+                    }
+                }
+
+                void Run2(object value)
+                {
+                    switch (value)
+                    {
+                        case Point or Color.Red:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Equal(4, references.Count(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference"));
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match1");
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match2");
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run1");
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run2");
+    }
+
+    [Fact]
+    public void Extract_CsharpLogicalTypePatterns_EmitEveryGenuineTypeHead()
+    {
+        // issue #675: when every logical-pattern head is a real type, all of them must produce
+        // compile-time dependencies instead of only the leftmost head surviving.
+        // issue #675: logical pattern の全 head が本物の型なら、左端だけでなく
+        // すべての head が compile-time 依存として残らなければならない。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+            class Shape {}
+
+            class Demo
+            {
+                bool Match(object value) => value is Point or Shape;
+
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case Point or Shape:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference"));
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run");
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run");
+    }
+
+    [Fact]
+    public void Extract_CsharpVerbatimPatternTypeNames_DoNotCollapseIntoBarePatternTokens()
+    {
+        // issue #677: `@not` / `@default` are legal type names, so the non-type pattern
+        // filter must not erase them just because their normalized spellings match keyword-like tokens.
+        // issue #677: `@not` / `@default` は合法な型名なので、normalized 後に keyword 風 token
+        // と一致しても non-type pattern filter で消してはいけない。
+        const string content = """
+            namespace Probe;
+
+            class @not {}
+            class @default {}
+
+            class Demo
+            {
+                bool MatchNot(object value) => value is @not;
+                bool MatchDefault(object value) => value is @default;
+                bool Guard(object value) => value is not null;
+                bool TypeOfNot() => typeof(@not) == typeof(@not);
+                bool TypeOfDefault() => typeof(@default) == typeof(@default);
+
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case @not:
+                            break;
+                        case @default:
+                            break;
+                        case default:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var notRefs = references.Where(r => r.SymbolName == "not" && r.ReferenceKind == "type_reference").ToList();
+        var defaultRefs = references.Where(r => r.SymbolName == "default" && r.ReferenceKind == "type_reference").ToList();
+
+        Assert.Equal(4, notRefs.Count);
+        Assert.Equal(4, defaultRefs.Count);
+        Assert.Contains(notRefs, r => r.ContainerName == "MatchNot");
+        Assert.Contains(notRefs, r => r.ContainerName == "Run");
+        Assert.Equal(2, notRefs.Count(r => r.ContainerName == "TypeOfNot"));
+        Assert.Contains(defaultRefs, r => r.ContainerName == "MatchDefault");
+        Assert.Contains(defaultRefs, r => r.ContainerName == "Run");
+        Assert.Equal(2, defaultRefs.Count(r => r.ContainerName == "TypeOfDefault"));
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "type_reference" && r.ContainerName == "Guard");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedConstantPatterns_DoNotEmitTypeReferences()
+    {
+        const string content = """
+            namespace Probe;
+
+            enum Color { Red, Blue }
+            class Point {}
+
+            class Demo
+            {
+                bool Match(object value) => value is Color.Red or Color.Blue or Point;
+
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case Color.Red:
+                            break;
+                        case Color.Red or Color.Blue:
+                            break;
+                        case Color.Red or Point:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference");
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(2, pointRefs.Count);
+        Assert.Contains(pointRefs, r => r.ContainerName == "Match");
+        Assert.Contains(pointRefs, r => r.ContainerName == "Run");
+    }
+
+    [Fact]
+    public void Extract_CsharpUsingStaticLogicalConstantPatterns_KeepAmbiguousHeadsForReadTimeFiltering()
+    {
+        const string content = """
+            using static Probe.Color;
+
+            namespace Probe;
+
+            enum Color { Red, Blue }
+            class Point {}
+
+            class Demo
+            {
+                bool Match(object value) => value is Red or Blue or Point;
+
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case Red:
+                            break;
+                        case Red or Blue:
+                            break;
+                        case Red or Point:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var redRefs = references.Where(r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference").ToList();
+        var blueRefs = references.Where(r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference").ToList();
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+
+        Assert.Equal(4, redRefs.Count);
+        Assert.Equal(2, blueRefs.Count);
+        Assert.Equal(2, pointRefs.Count);
+        Assert.Contains(redRefs, r => r.ContainerName == "Match");
+        Assert.Equal(3, redRefs.Count(r => r.ContainerName == "Run"));
+        Assert.Contains(blueRefs, r => r.ContainerName == "Match");
+        Assert.Contains(blueRefs, r => r.ContainerName == "Run");
+        Assert.Contains(pointRefs, r => r.ContainerName == "Match");
+        Assert.Contains(pointRefs, r => r.ContainerName == "Run");
+    }
+
+    [Fact]
+    public void Extract_CsharpUsingStaticTypeAliasPattern_KeepsTypeReference()
+    {
+        const string content = """
+            using static Probe.Color;
+            using Red = Probe.Real.Red;
+
+            namespace Probe
+            {
+                enum Color { Red }
+
+                namespace Real
+                {
+                    class Red {}
+                }
+
+                class Demo
+                {
+                    bool Match(object value) => value is Red;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var redRef = Assert.Single(references.Where(r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference"));
+
+        Assert.Equal("Match", redRef.ContainerName);
+        Assert.Contains("value is Red", redRef.Context, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Extract_CsharpUsingStaticNamespaceImportPattern_KeepsTypeReference()
+    {
+        const string content = """
+            using static Probe.Color;
+            using RealTypes;
+
+            namespace Probe
+            {
+                enum Color { Red }
+
+                class Demo
+                {
+                    bool Match(object value) => value is Red;
+                }
+            }
+
+            namespace RealTypes
+            {
+                class Red {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var redRef = Assert.Single(references.Where(r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference"));
+
+        Assert.Equal("Match", redRef.ContainerName);
+        Assert.Contains("value is Red", redRef.Context, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Extract_CsharpCaseRecursiveAndPositionalPatterns_CaptureTypeReferences()
+    {
+        // issue #661: recursive/property and positional `case Type ...` patterns without
+        // a designation are still real type-pattern sites and must keep `type_reference`.
+        // issue #661: designation を持たない recursive/property / positional の
+        // `case Type ...` パターンも本物の型パターンなので `type_reference` を残す。
+        const string content = """
+            namespace Probe;
+
+            class Point
+            {
+                public int X { get; }
+                public int Y { get; }
+            }
+
+            class Demo
+            {
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case Point { X: 0, Y: 0 }:
+                            break;
+                        case Point(var x, var y):
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(2, pointRefs.Count);
+        Assert.All(pointRefs, r => Assert.Equal("Run", r.ContainerName));
+    }
+
+    [Fact]
+    public void Extract_CsharpCaseLogicalAndNegatedTypePatterns_CaptureTypeReferences()
+    {
+        // issues #668/#670: logical/negated type patterns must keep the left-hand type
+        // dependency for both unqualified and qualified heads without reclassifying enum
+        // member labels such as `Color.Red or Probe.Color.Blue` as type dependencies.
+        // issues #668/#670: logical/negated な型パターンは unqualified / qualified の両方で
+        // 左端の型依存を残しつつ、`Color.Red or Probe.Color.Blue` のような enum member label を
+        // 型依存へ再分類してはならない。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+            enum Color { Red, Blue }
+
+            class Demo
+            {
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case Point or null:
+                            break;
+                        case not Point:
+                            break;
+                        case Probe.Point or null:
+                            break;
+                        case not Probe.Point:
+                            break;
+                        case global::Probe.Point or null:
+                            break;
+                        case Color.Red or Probe.Color.Blue:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(5, pointRefs.Count);
+        Assert.All(pointRefs, r => Assert.Equal("Run", r.ContainerName));
+        Assert.DoesNotContain(references, r => r.SymbolName == "null" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Color" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpCaseVerbatimKeywordLikeDesignations_KeepTypeReferences()
+    {
+        // issue #669: verbatim designators such as `@or` / `@when` / `@and` are identifiers,
+        // not control keywords, so the enclosing type pattern must remain visible.
+        // issue #669: `@or` / `@when` / `@and` のような verbatim designator は識別子であり、
+        // control keyword ではないため enclosing type pattern を落としてはならない。
+        const string content = """
+            namespace Probe;
+
+            class Foo {}
+
+            class Demo
+            {
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case Foo @or:
+                            break;
+                        case Foo @when:
+                            break;
+                        case Foo @and:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var fooRefs = references.Where(r => r.SymbolName == "Foo" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(3, fooRefs.Count);
+        Assert.All(fooRefs, r => Assert.Equal("Run", r.ContainerName));
     }
 
     [Fact]

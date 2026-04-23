@@ -8248,6 +8248,140 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_DetectsSameLineAnnotatedMethodsCompactConstructorsAndEnumConstantOverrides()
+    {
+        var content = """
+            package com.example;
+
+            public class Same {
+                @Override public String toString() { return "x"; }
+                @Deprecated public int legacy() { return 0; }
+
+                @Override
+                public int hashCode() { return 42; }
+            }
+
+            public enum Op {
+                ADD {
+                    @Override public int apply(int a, int b) { return a + b; }
+                },
+                SUB {
+                    @Override public int apply(int a, int b) { return a - b; }
+                };
+                public abstract int apply(int a, int b);
+            }
+
+            public record Range(int low, int high) {
+                public Range {
+                    if (low > high) throw new IllegalArgumentException();
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var toString = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "toString"));
+        Assert.Equal("class", toString.ContainerKind);
+        Assert.Equal("Same", toString.ContainerName);
+
+        var legacy = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "legacy"));
+        Assert.Equal("class", legacy.ContainerKind);
+        Assert.Equal("Same", legacy.ContainerName);
+
+        var addApply = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "apply" && s.ContainerName == "ADD"));
+        Assert.Equal("function", addApply.ContainerKind);
+        Assert.Equal("Op.ADD", addApply.ContainerQualifiedName);
+
+        var subApply = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "apply" && s.ContainerName == "SUB"));
+        Assert.Equal("function", subApply.ContainerKind);
+        Assert.Equal("Op.SUB", subApply.ContainerQualifiedName);
+
+        var abstractApply = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "apply" && s.ContainerName == "Op"));
+        Assert.Equal("enum", abstractApply.ContainerKind);
+
+        var compactCtor = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Range"));
+        Assert.Equal("class", compactCtor.ContainerKind);
+        Assert.Equal("Range", compactCtor.ContainerName);
+        Assert.NotNull(compactCtor.BodyStartLine);
+        Assert.NotNull(compactCtor.BodyEndLine);
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsAllmanStyleCompactConstructors()
+    {
+        var content = """
+            public record Range(int low, int high) {
+                public Range
+                {
+                    if (low > high) throw new IllegalArgumentException();
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var compactCtor = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Range"));
+        Assert.Equal("class", compactCtor.ContainerKind);
+        Assert.Equal("Range", compactCtor.ContainerName);
+        Assert.Equal(2, compactCtor.StartLine);
+        Assert.NotNull(compactCtor.BodyStartLine);
+        Assert.NotNull(compactCtor.BodyEndLine);
+        Assert.True(compactCtor.BodyStartLine >= compactCtor.StartLine);
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsSameLineAnnotatedDeclarationsWhenAnnotationArgumentsContainParen()
+    {
+        var content = """
+            public class Demo {
+                @Label(")") public int broken() { return 1; }
+            }
+
+            @Ann(value = helper(")"))
+            public record Wrapped(int value) {}
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "broken" && s.ContainerKind == "class" && s.ContainerName == "Demo");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Wrapped");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "value" && s.ContainerKind == "class" && s.ContainerName == "Wrapped");
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsSameLineAnnotatedMethodsWhenAnnotationArgumentsContainBraceLiterals()
+    {
+        var content = """
+            public class Demo {
+                @SuppressWarnings({"unchecked"}) public int first() { return 1; } int second() { return 2; }
+            }
+
+            public class Solo {
+                @SuppressWarnings({"rawtypes"}) public int only() { return 3; }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first" && s.ContainerKind == "class" && s.ContainerName == "Demo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second" && s.ContainerKind == "class" && s.ContainerName == "Demo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "only" && s.ContainerKind == "class" && s.ContainerName == "Solo");
+    }
+
+    [Fact]
+    public void Extract_Java_HandlesSameLineSiblingMethodsInsideEnumBody()
+    {
+        var content = """
+            public enum Demo {
+                A;
+                int first() { return 1; } int second() { return 2; }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var first = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "first" && s.ContainerKind == "enum" && s.ContainerName == "Demo"));
+        var second = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "second" && s.ContainerKind == "enum" && s.ContainerName == "Demo"));
+        Assert.Equal("int first() { return 1; }", first.Signature);
+        Assert.Equal("int second() { return 2; }", second.Signature);
+    }
+
+    [Fact]
     public void Extract_Java_DetectsStaticFinalAndEnumMembers()
     {
         var content = "public class Config {\n    public static final String VERSION = \"1.0\";\n    private static final int MAX_RETRIES = 3;\n}\n\npublic enum Status {\n    ACTIVE,\n    INACTIVE,\n    PENDING;\n}";
@@ -8427,6 +8561,26 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "A" && s.ContainerName == "WithBody" && s.BodyStartLine != null);
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "f" && s.ContainerKind == "function" && s.ContainerName == "A");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B" && s.ContainerName == "WithBody" && s.BodyStartLine == null);
+    }
+
+    [Fact]
+    public void Extract_Java_HandlesSameLineAnonymousMemberBodyMethods()
+    {
+        var content = """
+            public enum Mix {
+                A { @Override public int f() { return 1; } int g() { return 2; } },
+                B { @Override public int f() { return 3; } int h() { return 4; } };
+                public abstract int f();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "A" && s.ContainerKind == "enum" && s.ContainerName == "Mix" && s.BodyStartLine != null);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B" && s.ContainerKind == "enum" && s.ContainerName == "Mix" && s.BodyStartLine != null);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "f" && s.ContainerKind == "function" && s.ContainerName == "A");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "g" && s.ContainerKind == "function" && s.ContainerName == "A");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "f" && s.ContainerKind == "function" && s.ContainerName == "B");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "h" && s.ContainerKind == "function" && s.ContainerName == "B");
     }
 
     [Fact]
@@ -8777,6 +8931,90 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Name == "inner");
         Assert.DoesNotContain(symbols, s => s.Name == "tmp");
         Assert.DoesNotContain(symbols, s => s.Name == "y");
+    }
+
+    [Fact]
+    public void Extract_CSharp_ConstLocalsAndQualifiedCallArguments_DoNotLeakPhantomFunctions()
+    {
+        var content = """
+            using System;
+
+            namespace Demo;
+
+            public class Repro
+            {
+                public void M(TimeSpan elapsed)
+                {
+                    const string content = "hello";
+                    Assert.True(
+                        elapsed < TimeSpan.FromSeconds(10),
+                        $"x {elapsed.TotalSeconds:F2}");
+                }
+            }
+
+            public static class Assert
+            {
+                public static void True(bool condition, string message) { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "Demo");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Repro");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Assert");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "True");
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "content");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "FromSeconds");
+    }
+
+    [Fact]
+    public void Extract_CSharp_VerbatimReturnTypeIdentifiers_AreNotRejectedBySuffixGuard()
+    {
+        var content = """
+            namespace Demo;
+
+            public class @new {}
+
+            public class UsesVerbatim
+            {
+                public @new Make() => new @new();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "new");
+
+        var method = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Make"));
+        Assert.Equal("@new", method.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_ContextualKeywordReturnTypeIdentifiers_AreNotRejectedBySuffixGuard()
+    {
+        var content = """
+            namespace Demo;
+
+            public class await {}
+            public class yield {}
+
+            public class Uses
+            {
+                public await MakeAwait() => new await();
+                public yield MakeYield() => new yield();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "await");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "yield");
+
+        var awaitMethod = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "MakeAwait"));
+        Assert.Equal("await", awaitMethod.ReturnType);
+
+        var yieldMethod = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "MakeYield"));
+        Assert.Equal("yield", yieldMethod.ReturnType);
     }
 
     [Fact]
