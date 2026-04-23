@@ -8522,6 +8522,26 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_HandlesSameLineAnonymousMemberBodyMethods()
+    {
+        var content = """
+            public enum Mix {
+                A { @Override public int f() { return 1; } int g() { return 2; } },
+                B { @Override public int f() { return 3; } int h() { return 4; } };
+                public abstract int f();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "A" && s.ContainerKind == "enum" && s.ContainerName == "Mix" && s.BodyStartLine != null);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B" && s.ContainerKind == "enum" && s.ContainerName == "Mix" && s.BodyStartLine != null);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "f" && s.ContainerKind == "function" && s.ContainerName == "A");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "g" && s.ContainerKind == "function" && s.ContainerName == "A");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "f" && s.ContainerKind == "function" && s.ContainerName == "B");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "h" && s.ContainerKind == "function" && s.ContainerName == "B");
+    }
+
+    [Fact]
     public void Extract_Java_RecoversMembersWhenAnnotationIsMalformed()
     {
         // An unclosed `@Ann(` would otherwise make the primary scanner swallow subsequent member lines.

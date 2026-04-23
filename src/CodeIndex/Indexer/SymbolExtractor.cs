@@ -1387,7 +1387,7 @@ public static class SymbolExtractor
                             break;
                         }
 
-                        if (lang is "javascript" or "typescript" or "css"
+                        if (lang is "javascript" or "typescript" or "css" or "java"
                             || (lang == "csharp"
                                 && pattern.Kind == "enum"
                                 && pattern.BodyStyle == BodyStyle.Brace
@@ -3854,6 +3854,7 @@ public static class SymbolExtractor
             Name = name,
             Line = start.LineIndex + 1,
             StartLine = start.LineIndex + 1,
+            StartColumn = start.Column,
             EndLine = endExclusive.LineIndex + 1,
             BodyStartLine = bodyStartLine,
             BodyEndLine = bodyEndLine,
@@ -14138,26 +14139,54 @@ public static class SymbolExtractor
 
             if (containerPath.Count > 0)
             {
+                var effectiveContainer = containerPath[^1];
                 if (symbol.ContainerKind != null && symbol.ContainerName != null)
                 {
-                    var explicitContainerAlreadyPresent = containerPath.Count > 0
-                        && containerPath[^1].Kind == symbol.ContainerKind
-                        && containerPath[^1].Name == symbol.ContainerName;
-                    var parentQualifiedName = BuildQualifiedContainerName(containerPath);
-                    symbol.ContainerQualifiedName ??= explicitContainerAlreadyPresent
-                        ? parentQualifiedName
-                        : string.IsNullOrWhiteSpace(parentQualifiedName)
-                            ? symbol.ContainerName
-                            : $"{parentQualifiedName}.{symbol.ContainerName}";
+                    var explicitContainerIndex = -1;
+                    for (var i = containerPath.Count - 1; i >= 0; i--)
+                    {
+                        var container = containerPath[i];
+                        if (container.Kind == symbol.ContainerKind
+                            && container.Name == symbol.ContainerName)
+                        {
+                            explicitContainerIndex = i;
+                            break;
+                        }
+                    }
+
+                    var shouldPromoteToMoreSpecificContainer =
+                        symbol.ContainerKind == "enum"
+                        && explicitContainerIndex >= 0
+                        && explicitContainerIndex < containerPath.Count - 1
+                        && effectiveContainer.Kind == "function"
+                        && effectiveContainer.ContainerKind == "enum";
+
+                    if (shouldPromoteToMoreSpecificContainer)
+                    {
+                        effectiveContainer = containerPath[^1];
+                        symbol.ContainerKind = effectiveContainer.Kind;
+                        symbol.ContainerName = effectiveContainer.Name;
+                        var effectiveParentPath = containerPath.Take(containerPath.Count - 1);
+                        symbol.ContainerQualifiedName = BuildQualifiedContainerName(effectiveParentPath);
+                    }
+                    else
+                    {
+                        var explicitContainerAlreadyPresent = explicitContainerIndex == containerPath.Count - 1;
+                        var parentQualifiedName = BuildQualifiedContainerName(containerPath);
+                        symbol.ContainerQualifiedName ??= explicitContainerAlreadyPresent
+                            ? parentQualifiedName
+                            : string.IsNullOrWhiteSpace(parentQualifiedName)
+                                ? symbol.ContainerName
+                                : $"{parentQualifiedName}.{symbol.ContainerName}";
+                    }
                 }
                 else
                 {
-                    var container = containerPath[^1];
-                    symbol.ContainerKind ??= container.Kind;
-                    symbol.ContainerName ??= container.Name;
+                    symbol.ContainerKind ??= effectiveContainer.Kind;
+                    symbol.ContainerName ??= effectiveContainer.Name;
                     var qualifiedContainerName = BuildQualifiedContainerName(containerPath);
                     symbol.ContainerQualifiedName = qualifiedContainerName;
-                    symbol.FamilyKey = BuildInheritedFamilyKey(container, qualifiedContainerName);
+                    symbol.FamilyKey = BuildInheritedFamilyKey(effectiveContainer, qualifiedContainerName);
                 }
             }
 
