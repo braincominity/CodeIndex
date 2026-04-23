@@ -4235,6 +4235,105 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchReferences_ExactCSharpUsingStaticFilter_PaginatesPastSuppressedRows()
+    {
+        InsertIndexedFile("src/Defs.cs", "csharp",
+            """
+            namespace Probe;
+
+            public enum Color
+            {
+                Red,
+                Blue
+            }
+            """);
+        InsertIndexedFile("src/Use.cs", "csharp",
+            """
+            using static Probe.Color;
+
+            namespace Probe;
+
+            class Demo
+            {
+                object? Match(object value)
+                {
+                    return value is Red ? value : null;
+                }
+            }
+            """);
+
+        const int suppressedReferenceCount = 65_537;
+        const int callReferenceLine = suppressedReferenceCount + 10;
+
+        using (var updateFileCmd = _db.Connection.CreateCommand())
+        {
+            updateFileCmd.CommandText = "UPDATE files SET lines = @lines WHERE path = 'src/Use.cs'";
+            updateFileCmd.Parameters.AddWithValue("@lines", callReferenceLine + 5);
+            updateFileCmd.ExecuteNonQuery();
+        }
+
+        long useFileId;
+        using (var fileIdCmd = _db.Connection.CreateCommand())
+        {
+            fileIdCmd.CommandText = "SELECT id FROM files WHERE path = 'src/Use.cs'";
+            useFileId = (long)fileIdCmd.ExecuteScalar()!;
+        }
+
+        int suppressedReferenceColumn;
+        string suppressedReferenceContext;
+        using (var templateCmd = _db.Connection.CreateCommand())
+        {
+            templateCmd.CommandText = """
+                SELECT r.column_number, r.context
+                FROM symbol_references r
+                JOIN files f ON r.file_id = f.id
+                WHERE f.path = 'src/Use.cs'
+                  AND r.symbol_name = 'Red'
+                  AND r.reference_kind = 'type_reference'
+                LIMIT 1
+                """;
+            using var templateReader = templateCmd.ExecuteReader();
+            Assert.True(templateReader.Read());
+            suppressedReferenceColumn = templateReader.GetInt32(0);
+            suppressedReferenceContext = templateReader.GetString(1);
+        }
+
+        var syntheticReferences = new List<ReferenceRecord>(suppressedReferenceCount + 1);
+        for (int line = 10; line < callReferenceLine; line++)
+        {
+            syntheticReferences.Add(new ReferenceRecord
+            {
+                FileId = useFileId,
+                SymbolName = "Red",
+                ReferenceKind = "type_reference",
+                Line = line,
+                Column = suppressedReferenceColumn,
+                Context = suppressedReferenceContext,
+                ContainerKind = "function",
+                ContainerName = "Match",
+            });
+        }
+
+        syntheticReferences.Add(new ReferenceRecord
+        {
+            FileId = useFileId,
+            SymbolName = "Red",
+            ReferenceKind = "call",
+            Line = callReferenceLine,
+            Column = 9,
+            Context = "        Red();",
+            ContainerKind = "function",
+            ContainerName = "Match",
+        });
+        _writer.InsertReferences(syntheticReferences);
+
+        var result = Assert.Single(_reader.SearchReferences("Red", limit: 1, lang: "csharp", exact: true, pathPatterns: ["src/Use.cs"]));
+        Assert.Equal("call", result.ReferenceKind);
+        Assert.Equal(callReferenceLine, result.Line);
+        Assert.Equal(1, _reader.CountSearchReferences("Red", limit: 1, lang: "csharp", exact: true, pathPatterns: ["src/Use.cs"]));
+    }
+
+    [Fact]
     public void GraphQueries_DefaultGraphQueriesKeepSubscribeRowsVisible()
     {
         InsertIndexedFile("src/event_publisher.cs", "csharp",
