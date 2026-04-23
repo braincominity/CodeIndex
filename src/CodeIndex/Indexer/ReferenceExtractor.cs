@@ -11,6 +11,8 @@ namespace CodeIndex.Indexer;
 public static class ReferenceExtractor
 {
     private readonly record struct SqlDefinitionLeafSpan(string LeafName, int StartIndex, int EndIndexExclusive);
+    private const string SqlProcCallIdentifierPattern = @"(?:\[[^\[\]\r\n]+\]|`[^`\r\n]+`|\w+)";
+    private const string SqlProcCallQualifierPattern = @"(?:(?:" + SqlProcCallIdentifierPattern + @")?\s*\.\s*)*";
 
     private static readonly HashSet<string> SupportedLanguages =
     [
@@ -205,7 +207,7 @@ public static class ReferenceExtractor
     // SQL Server が許す省略形（`..`）でも末尾の proc 名まで到達できる。識別子候補にはバッククォート引用も含め、
     // MySQL / MariaDB の `` `proc-name` `` 形にも対応する。
     private static readonly Regex SqlProcCallRegex = new(
-        @"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?(?:(?:\[[^\[\]\r\n]+\]|`[^`\r\n]+`|\w+)?\.)*(?<name>\[[^\[\]\r\n]+\]|`[^`\r\n]+`|\w+)",
+        @"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?" + SqlProcCallQualifierPattern + @"(?<name>" + SqlProcCallIdentifierPattern + @")",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // C# event subscription/unsubscription: Click += OnClick — both LHS and RHS must be PascalCase identifiers
     // C# イベント購読・解除: Click += OnClick — LHS と RHS の両方が PascalCase 識別子のみ
@@ -7503,17 +7505,108 @@ public static class ReferenceExtractor
         if (string.IsNullOrWhiteSpace(leafName))
             return false;
 
-        var qualifiedIndex = line.IndexOf(qualifiedName, StringComparison.OrdinalIgnoreCase);
-        if (qualifiedIndex < 0)
+        var rawSegments = SplitSqlQualifiedNameSourceSegments(qualifiedName);
+        if (rawSegments.Count == 0)
             return false;
 
-        var leafOffset = qualifiedName.LastIndexOf(leafName, StringComparison.OrdinalIgnoreCase);
-        if (leafOffset < 0)
+        var pattern = new StringBuilder();
+        for (var i = 0; i < rawSegments.Count; i++)
+        {
+            if (i > 0)
+                pattern.Append(@"\s*\.\s*");
+
+            var escaped = Regex.Escape(rawSegments[i]);
+            if (i == rawSegments.Count - 1)
+                pattern.Append("(?<leaf>").Append(escaped).Append(')');
+            else
+                pattern.Append(escaped);
+        }
+
+        var match = Regex.Match(line, pattern.ToString(), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success)
             return false;
 
-        var startIndex = qualifiedIndex + leafOffset;
-        span = new SqlDefinitionLeafSpan(leafName, startIndex, startIndex + leafName.Length);
+        var leafGroup = match.Groups["leaf"];
+        if (!leafGroup.Success)
+            return false;
+
+        span = new SqlDefinitionLeafSpan(leafName, leafGroup.Index, leafGroup.Index + leafGroup.Length);
         return true;
+    }
+
+    private static List<string> SplitSqlQualifiedNameSourceSegments(string qualifiedName)
+    {
+        var trimmed = qualifiedName.Trim();
+        var segments = new List<string>();
+        var current = new StringBuilder();
+        char quote = '\0';
+
+        for (var i = 0; i < trimmed.Length; i++)
+        {
+            var ch = trimmed[i];
+            if (quote != '\0')
+            {
+                current.Append(ch);
+                if (quote == '[')
+                {
+                    if (ch == ']')
+                    {
+                        if (i + 1 < trimmed.Length && trimmed[i + 1] == ']')
+                        {
+                            current.Append(trimmed[i + 1]);
+                            i++;
+                        }
+                        else
+                        {
+                            quote = '\0';
+                        }
+                    }
+
+                    continue;
+                }
+
+                if (ch == quote)
+                {
+                    if (i + 1 < trimmed.Length && trimmed[i + 1] == quote)
+                    {
+                        current.Append(trimmed[i + 1]);
+                        i++;
+                    }
+                    else
+                    {
+                        quote = '\0';
+                    }
+                }
+
+                continue;
+            }
+
+            if (ch is '[' or '"' or '`')
+            {
+                quote = ch;
+                current.Append(ch);
+                continue;
+            }
+
+            if (ch == '.')
+            {
+                AppendSqlQualifiedNameSourceSegment(segments, current);
+                continue;
+            }
+
+            current.Append(ch);
+        }
+
+        AppendSqlQualifiedNameSourceSegment(segments, current);
+        return segments;
+    }
+
+    private static void AppendSqlQualifiedNameSourceSegment(List<string> segments, StringBuilder current)
+    {
+        var value = current.ToString().Trim();
+        if (value.Length > 0)
+            segments.Add(value);
+        current.Clear();
     }
 
     // SQL-aware line sanitizer used only for the `EXEC` / `EXECUTE` / `CALL` no-parens scan.

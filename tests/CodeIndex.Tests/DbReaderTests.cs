@@ -2993,6 +2993,135 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_QualifiedSqlReadersStaySchemaScoped()
+    {
+        InsertIndexedFile("src/sql_schema_scoped_target_dbo.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.fn_Target
+            AS
+            SELECT 1;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_schema_scoped_target_sales.sql", "sql",
+            """
+            CREATE PROCEDURE sales.fn_Target
+            AS
+            SELECT 2;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_schema_scoped_caller.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.Caller
+            AS
+            EXEC dbo.fn_Target;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
+        Assert.Equal("dbo.Caller", reference.ContainerName);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountSearchReferencesTotal("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
+
+        var caller = Assert.Single(
+            _reader.GetCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
+        Assert.Equal("dbo.Caller", caller.CallerName);
+        Assert.Equal(1, _reader.CountCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCallersTotal("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
+
+        var impact = _reader.AnalyzeImpact("dbo.fn_Target", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_schema_scoped"]);
+        Assert.Equal("dbo.Caller", Assert.Single(impact.Callers).CallerName);
+
+        var dependency = Assert.Single(
+            _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_schema_scoped_caller.sql"], excludePathPatterns: null, excludeTests: false));
+        Assert.Equal("src/sql_schema_scoped_caller.sql", dependency.SourcePath);
+        Assert.Equal("src/sql_schema_scoped_target_dbo.sql", dependency.TargetPath);
+        Assert.Equal(1, dependency.ReferenceCount);
+
+        var hotspots = _reader.GetSymbolHotspots(10, "function", "sql", ["sql_schema_scoped"], null, false);
+        var hotspot = Assert.Single(hotspots, item => item.Symbol.Name == "dbo.fn_Target");
+        Assert.Equal(1, hotspot.ReferenceCount);
+        Assert.DoesNotContain(hotspots, item => item.Symbol.Name == "sales.fn_Target");
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "function", lang: "sql",
+            pathPatterns: ["sql_schema_scoped"], excludePathPatterns: null, excludeTests: false);
+        Assert.Contains(unused, symbol => symbol.Name == "sales.fn_Target");
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "dbo.fn_Target");
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_ExactCalleesStaySchemaScoped()
+    {
+        InsertIndexedFile("src/sql_callee_schema_scoped.sql", "sql",
+            """
+            CREATE FUNCTION dbo.fn_A()
+            RETURNS INT
+            AS
+            BEGIN
+                RETURN 1;
+            END
+            GO
+
+            CREATE FUNCTION sales.fn_B()
+            RETURNS INT
+            AS
+            BEGIN
+                RETURN 2;
+            END
+            GO
+
+            CREATE PROCEDURE dbo.usp_GetOrders
+            AS
+            BEGIN
+                SELECT dbo.fn_A();
+            END
+            GO
+
+            CREATE PROCEDURE sales.usp_GetOrders
+            AS
+            BEGIN
+                SELECT sales.fn_B();
+            END
+            GO
+            """);
+
+        var callee = Assert.Single(_reader.GetCallees("dbo.usp_GetOrders", lang: "sql", exact: true, pathPatterns: ["sql_callee_schema_scoped"]));
+        Assert.Equal("fn_A", callee.CalleeName);
+        Assert.Equal("dbo.usp_GetOrders", callee.CallerName);
+        Assert.Equal(1, _reader.CountCallees("dbo.usp_GetOrders", lang: "sql", exact: true, pathPatterns: ["sql_callee_schema_scoped"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCalleesTotal("dbo.usp_GetOrders", lang: "sql", exact: true, pathPatterns: ["sql_callee_schema_scoped"]));
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_WhitespaceAroundDotsStillResolvesDefinitionsAndSameLineCalls()
+    {
+        InsertIndexedFile("src/sql_spaced_qualified_names.sql", "sql",
+            """
+            CREATE PROCEDURE [dbo].[fn_Target]
+            AS
+            SELECT 1;
+            GO
+
+            CREATE PROCEDURE [sales] . [fn_Target] AS EXEC [dbo] . [fn_Target];
+            GO
+            """);
+
+        var definition = Assert.Single(
+            _reader.GetDefinitions("sales.fn_Target", limit: 10, lang: "sql", pathPatterns: ["sql_spaced_qualified_names"], exact: true));
+        Assert.Contains("fn_Target", definition.Name, StringComparison.Ordinal);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_spaced_qualified_names"]));
+        Assert.Contains("fn_Target", reference.ContainerName ?? string.Empty, StringComparison.Ordinal);
+
+        var caller = Assert.Single(
+            _reader.GetCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_spaced_qualified_names"]));
+        Assert.Contains("fn_Target", caller.CallerName ?? string.Empty, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
     {
         InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",

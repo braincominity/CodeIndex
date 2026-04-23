@@ -299,6 +299,26 @@ public class DbContext : IDisposable
         connection.CreateFunction(
             "sql_segment_count",
             (string? name) => string.IsNullOrWhiteSpace(name) ? (int?)null : SqlNameResolver.GetSegmentCount(name));
+        connection.CreateFunction(
+            "sql_context_has_name",
+            (string? context, string? query) => SqlNameResolver.ContextContainsQualifiedName(context, query) ? 1 : 0);
+        connection.CreateFunction(
+            "sql_context_has_name_folded",
+            (string? context, string? query) => SqlNameResolver.ContextContainsQualifiedNameFolded(context, query) ? 1 : 0);
+        connection.CreateFunction(
+            "sql_resolve_reference_name",
+            (string? symbolName, string? context, string? containerName) =>
+            {
+                var resolved = SqlNameResolver.ResolveReferenceName(symbolName, context, containerName);
+                return resolved.Length == 0 ? null : resolved;
+            });
+        connection.CreateFunction(
+            "sql_resolve_reference_name_folded",
+            (string? symbolName, string? context, string? containerName) =>
+            {
+                var resolved = SqlNameResolver.ResolveReferenceNameFolded(symbolName, context, containerName);
+                return resolved.Length == 0 ? null : resolved;
+            });
     }
 
     /// <summary>

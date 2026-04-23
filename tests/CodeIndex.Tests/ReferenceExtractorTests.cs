@@ -9219,6 +9219,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SqlExecQualifiedIdentifierWithWhitespaceAroundDots_CapturesTerminalIdentifier()
+    {
+        const string content = """
+            EXEC [server1] . [AdventureWorks] . [dbo] . [sp_GetCustomer];
+            CALL sales . proc_name;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "sp_GetCustomer" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "proc_name" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "server1" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "AdventureWorks" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "dbo" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "sales" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_SqlCallBacktickQuotedIdentifier_IsCapturedAndDoesNotMisattributeQualifier()
     {
         // MySQL / MariaDB use backticks to quote identifiers. The shared PrepareLine

@@ -7484,6 +7484,21 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_QualifiedNamesAllowWhitespaceAroundDots()
+    {
+        var content =
+            "CREATE PROCEDURE [sales] . [sp_Report] AS SELECT 1;\n" +
+            "CREATE VIEW dbo . v_Orders AS SELECT 1;\n" +
+            "CREATE TYPE sales . Money AS ENUM ('usd');\n";
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name.Contains("sp_Report", StringComparison.Ordinal));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name.Contains("v_Orders", StringComparison.Ordinal));
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name.Contains("Money", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Extract_SQL_ProcedureBodyRange_TSqlBeginEnd()
     {
         // Multi-line T-SQL CREATE PROCEDURE with explicit BEGIN/END body terminated by GO.

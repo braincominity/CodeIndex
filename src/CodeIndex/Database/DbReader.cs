@@ -545,6 +545,9 @@ public partial class DbReader
         return input.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
     }
 
+    private static bool AllowSqlLeafFallbackForQuery(string query, bool exact)
+        => !exact || !SqlNameResolver.HasQualifier(query);
+
     private static string BuildGraphSupportedLanguagePredicate(SqliteCommand cmd, string fileAlias, string parameterPrefix)
     {
         var supportedLanguages = ReferenceExtractor.GetSupportedLanguages()
@@ -707,6 +710,8 @@ public partial class DbReader
         const string sqlLeafReferenceScope = " AND f.lang = 'sql'";
         if (query != null)
         {
+            var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query, exact);
+            var useSqlQualifiedContextMatch = exact && SqlNameResolver.HasQualifier(query);
             // --exact: Unicode-aware equality when FoldReady (#86), else ASCII COLLATE NOCASE.
             // Fold path: r.symbol_name_folded = @qFolded (indexed), query pre-folded in .NET.
             // Fallback: r.symbol_name = @q COLLATE NOCASE (indexed by idx_symbol_refs_name_nocase).
@@ -721,14 +726,26 @@ public partial class DbReader
             // 部分一致モードでは `%FooAttribute%` をそのまま使い、別名側は exact 照合だけを OR
             // することで `FooAuditLog` など無関係な名前を巻き込まないようにする。
             // 別名節は C# の attribute 行に限定し、誤一致を避ける。
-            if (exact && _foldReady)
+            if (useSqlQualifiedContextMatch && _foldReady)
                 sql += referencesSuffixAlias != null
-                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{referencesAliasScope}) OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafReferenceScope}))"
-                    : $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafReferenceScope}))";
+                    ? $" AND (((f.lang = 'sql') AND sql_context_has_name_folded(r.context, @aliasQuery) = 1) OR ((f.lang != 'sql') AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{referencesAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_has_name_folded(r.context, @aliasQuery) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query))";
+            else if (useSqlQualifiedContextMatch)
+                sql += referencesSuffixAlias != null
+                    ? $" AND (((f.lang = 'sql') AND sql_context_has_name(r.context, @aliasQuery) = 1) OR ((f.lang != 'sql') AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_has_name(r.context, @aliasQuery) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE))";
+            else if (exact && _foldReady)
+                sql += referencesSuffixAlias != null
+                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{referencesAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafReferenceScope})" : string.Empty)})"
+                    : allowSqlLeafFallback
+                        ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafReferenceScope}))"
+                        : " AND r.symbol_name_folded = @query";
             else if (exact)
                 sql += referencesSuffixAlias != null
-                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}) OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafReferenceScope}))"
-                    : $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafReferenceScope}))";
+                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafReferenceScope})" : string.Empty)})"
+                    : allowSqlLeafFallback
+                        ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafReferenceScope}))"
+                        : " AND r.symbol_name = @query COLLATE NOCASE";
             else
                 sql += referencesSuffixAlias != null
                     ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}) OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafReferenceScope}))"
@@ -837,14 +854,28 @@ public partial class DbReader
         const string sqlLeafCountScope = " AND f.lang = 'sql'";
         if (query != null)
         {
-            if (exact && _foldReady)
+            var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query, exact);
+            var useSqlQualifiedContextMatch = exact && SqlNameResolver.HasQualifier(query);
+            if (useSqlQualifiedContextMatch && _foldReady)
                 innerSql += countSuffixAlias != null
-                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{countAliasScope}) OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafCountScope}))"
-                    : $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafCountScope}))";
+                    ? $" AND (((f.lang = 'sql') AND sql_context_has_name_folded(r.context, @aliasQuery) = 1) OR ((f.lang != 'sql') AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{countAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_has_name_folded(r.context, @aliasQuery) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query))";
+            else if (useSqlQualifiedContextMatch)
+                innerSql += countSuffixAlias != null
+                    ? $" AND (((f.lang = 'sql') AND sql_context_has_name(r.context, @aliasQuery) = 1) OR ((f.lang != 'sql') AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_has_name(r.context, @aliasQuery) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE))";
+            else if (exact && _foldReady)
+                innerSql += countSuffixAlias != null
+                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{countAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafCountScope})" : string.Empty)})"
+                    : allowSqlLeafFallback
+                        ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafCountScope}))"
+                        : " AND r.symbol_name_folded = @query";
             else if (exact)
                 innerSql += countSuffixAlias != null
-                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}) OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafCountScope}))"
-                    : $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafCountScope}))";
+                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafCountScope})" : string.Empty)})"
+                    : allowSqlLeafFallback
+                        ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafCountScope}))"
+                        : " AND r.symbol_name = @query COLLATE NOCASE";
             else
                 innerSql += countSuffixAlias != null
                     ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}) OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafCountScope}))"
@@ -912,14 +943,28 @@ public partial class DbReader
         const string sqlLeafTotalScope = " AND f.lang = 'sql'";
         if (query != null)
         {
-            if (exact && _foldReady)
+            var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query, exact);
+            var useSqlQualifiedContextMatch = exact && SqlNameResolver.HasQualifier(query);
+            if (useSqlQualifiedContextMatch && _foldReady)
                 innerSql += totalSuffixAlias != null
-                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{totalAliasScope}) OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafTotalScope}))"
-                    : $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafTotalScope}))";
+                    ? $" AND (((f.lang = 'sql') AND sql_context_has_name_folded(r.context, @aliasQuery) = 1) OR ((f.lang != 'sql') AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{totalAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_has_name_folded(r.context, @aliasQuery) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query))";
+            else if (useSqlQualifiedContextMatch)
+                innerSql += totalSuffixAlias != null
+                    ? $" AND (((f.lang = 'sql') AND sql_context_has_name(r.context, @aliasQuery) = 1) OR ((f.lang != 'sql') AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_has_name(r.context, @aliasQuery) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE))";
+            else if (exact && _foldReady)
+                innerSql += totalSuffixAlias != null
+                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{totalAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafTotalScope})" : string.Empty)})"
+                    : allowSqlLeafFallback
+                        ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafTotalScope}))"
+                        : " AND r.symbol_name_folded = @query";
             else if (exact)
                 innerSql += totalSuffixAlias != null
-                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}) OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafTotalScope}))"
-                    : $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafTotalScope}))";
+                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafTotalScope})" : string.Empty)})"
+                    : allowSqlLeafFallback
+                        ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafTotalScope}))"
+                        : " AND r.symbol_name = @query COLLATE NOCASE";
             else
                 innerSql += totalSuffixAlias != null
                     ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}) OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafTotalScope}))"
@@ -995,10 +1040,20 @@ public partial class DbReader
             sql += " AND r.reference_kind = @referenceKind";
         else
             sql += NonInvocationReferenceKindsExclusion;
-        if (exact && _foldReady)
-            sql += " AND (r.symbol_name_folded = @query OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))";
+        var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query, exact);
+        var useSqlQualifiedContextMatch = exact && SqlNameResolver.HasQualifier(query);
+        if (useSqlQualifiedContextMatch && _foldReady)
+            sql += " AND (((f.lang = 'sql') AND sql_context_has_name_folded(r.context, @aliasQuery) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query))";
+        else if (useSqlQualifiedContextMatch)
+            sql += " AND (((f.lang = 'sql') AND sql_context_has_name(r.context, @aliasQuery) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE))";
+        else if (exact && _foldReady)
+            sql += allowSqlLeafFallback
+                ? " AND (r.symbol_name_folded = @query OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))"
+                : " AND r.symbol_name_folded = @query";
         else if (exact)
-            sql += " AND (r.symbol_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
+            sql += allowSqlLeafFallback
+                ? " AND (r.symbol_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
+                : " AND r.symbol_name = @query COLLATE NOCASE";
         else
             sql += " AND (r.symbol_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
         if (lang != null)
@@ -1079,10 +1134,20 @@ public partial class DbReader
             groupedSql += " AND r.reference_kind = @referenceKind";
         else
             groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
-        if (exact && _foldReady)
-            groupedSql += " AND (r.symbol_name_folded = @query OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))";
+        var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query, exact);
+        var useSqlQualifiedContextMatch = exact && SqlNameResolver.HasQualifier(query);
+        if (useSqlQualifiedContextMatch && _foldReady)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_context_has_name_folded(r.context, @aliasQuery) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query))";
+        else if (useSqlQualifiedContextMatch)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_context_has_name(r.context, @aliasQuery) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE))";
+        else if (exact && _foldReady)
+            groupedSql += allowSqlLeafFallback
+                ? " AND (r.symbol_name_folded = @query OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))"
+                : " AND r.symbol_name_folded = @query";
         else if (exact)
-            groupedSql += " AND (r.symbol_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
+            groupedSql += allowSqlLeafFallback
+                ? " AND (r.symbol_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
+                : " AND r.symbol_name = @query COLLATE NOCASE";
         else
             groupedSql += " AND (r.symbol_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
         if (lang != null)
@@ -1132,10 +1197,20 @@ public partial class DbReader
             groupedSql += " AND r.reference_kind = @referenceKind";
         else
             groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
-        if (exact && _foldReady)
-            groupedSql += " AND (r.symbol_name_folded = @query OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))";
+        var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query, exact);
+        var useSqlQualifiedContextMatch = exact && SqlNameResolver.HasQualifier(query);
+        if (useSqlQualifiedContextMatch && _foldReady)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_context_has_name_folded(r.context, @aliasQuery) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query))";
+        else if (useSqlQualifiedContextMatch)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_context_has_name(r.context, @aliasQuery) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE))";
+        else if (exact && _foldReady)
+            groupedSql += allowSqlLeafFallback
+                ? " AND (r.symbol_name_folded = @query OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))"
+                : " AND r.symbol_name_folded = @query";
         else if (exact)
-            groupedSql += " AND (r.symbol_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
+            groupedSql += allowSqlLeafFallback
+                ? " AND (r.symbol_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
+                : " AND r.symbol_name = @query COLLATE NOCASE";
         else
             groupedSql += " AND (r.symbol_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
         if (lang != null)
@@ -1196,10 +1271,15 @@ public partial class DbReader
             sql += " AND r.reference_kind = @referenceKind";
         else
             sql += NonInvocationReferenceKindsExclusion;
+        var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query, exact);
         if (exact && _foldReady)
-            sql += " AND (r.container_name_folded = @query OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))";
+            sql += allowSqlLeafFallback
+                ? " AND (r.container_name_folded = @query OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))"
+                : " AND r.container_name_folded = @query";
         else if (exact)
-            sql += " AND (r.container_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))";
+            sql += allowSqlLeafFallback
+                ? " AND (r.container_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
+                : " AND r.container_name = @query COLLATE NOCASE";
         else
             sql += " AND (r.container_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))";
         if (lang != null)
@@ -1282,10 +1362,15 @@ public partial class DbReader
             groupedSql += " AND r.reference_kind = @referenceKind";
         else
             groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
+        var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query, exact);
         if (exact && _foldReady)
-            groupedSql += " AND (r.container_name_folded = @query OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))";
+            groupedSql += allowSqlLeafFallback
+                ? " AND (r.container_name_folded = @query OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))"
+                : " AND r.container_name_folded = @query";
         else if (exact)
-            groupedSql += " AND (r.container_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))";
+            groupedSql += allowSqlLeafFallback
+                ? " AND (r.container_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
+                : " AND r.container_name = @query COLLATE NOCASE";
         else
             groupedSql += " AND (r.container_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))";
         if (lang != null)
@@ -1338,10 +1423,15 @@ public partial class DbReader
             groupedSql += " AND r.reference_kind = @referenceKind";
         else
             groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
+        var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query, exact);
         if (exact && _foldReady)
-            groupedSql += " AND (r.container_name_folded = @query OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))";
+            groupedSql += allowSqlLeafFallback
+                ? " AND (r.container_name_folded = @query OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))"
+                : " AND r.container_name_folded = @query";
         else if (exact)
-            groupedSql += " AND (r.container_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))";
+            groupedSql += allowSqlLeafFallback
+                ? " AND (r.container_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
+                : " AND r.container_name = @query COLLATE NOCASE";
         else
             groupedSql += " AND (r.container_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))";
         if (lang != null)
@@ -1441,11 +1531,18 @@ public partial class DbReader
         // caller rows whose stored callee casing differs from the resolved definition.
         // caller 側も leaf `--exact` と同じく FoldReady なら folded equality、legacy DB では
         // `COLLATE NOCASE` fallback。definition と caller 行の casing 差もここで吸収する。
+        var allowSqlLeafFallback = !SqlNameResolver.HasQualifier(symbolName);
         var nameCondition = _foldReady
-            ? @"
+            ? allowSqlLeafFallback
+                ? @"
               AND (r.symbol_name_folded = @symbolNameFolded OR (f.lang = 'sql' AND r.symbol_name_folded = @symbolNameLeafFolded))"
-            : @"
-              AND (r.symbol_name = @symbolName COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@symbolName) COLLATE NOCASE))";
+                : @"
+              AND (((f.lang = 'sql') AND sql_context_has_name_folded(r.context, @symbolName) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @symbolNameFolded))"
+            : allowSqlLeafFallback
+                ? @"
+              AND (r.symbol_name = @symbolName COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@symbolName) COLLATE NOCASE))"
+                : @"
+              AND (((f.lang = 'sql') AND sql_context_has_name(r.context, @symbolName) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @symbolName COLLATE NOCASE))";
 
         // impact BFS must share the call-graph contract with `callers`/`callees`/`hotspots`,
         // so event subscriptions (`Click += OnClick`) also participate in the transitive
@@ -2745,12 +2842,13 @@ public partial class DbReader
 
     // `deps` keeps persisted SQL symbol names qualified (`dbo.fn_X`) but must
     // still join bare SQL reference rows (`fn_X`) back to that definition.
-    // Normalize only the read-time dependency key instead of rewriting storage.
-    // `deps` は保存済み SQL symbol 名を qualified (`dbo.fn_X`) のまま維持しつつ、
-    // bare な SQL reference 行 (`fn_X`) も同じ定義へ結び付ける必要があるため、
-    // 依存関係の read-time key だけ leaf 名へ正規化する。
+    // Normalize dependency target keys to logical qualified names for SQL while leaving
+    // other languages on the stored symbol name. SQL reference rows can still fall back to
+    // leaf-only matching at join time when the source site itself is unqualified.
+    // SQL の依存 target key は qualified 名 (`dbo.fn_X`) に正規化し、他言語は保存名のまま。
+    // SQL の source 側が unqualified (`fn_X`) の場合だけ join 時に leaf fallback を許可する。
     private static string BuildLogicalDependencySymbolNameExpr(string fileAlias, string symbolNameExpr)
-        => $"CASE WHEN {fileAlias}.lang = 'sql' THEN sql_leaf_name({symbolNameExpr}) ELSE {symbolNameExpr} END";
+        => $"CASE WHEN {fileAlias}.lang = 'sql' THEN sql_normalize_name({symbolNameExpr}) ELSE {symbolNameExpr} END";
 
     /// <summary>
     /// Compute file-level dependency edges: which files reference symbols defined in which other files.
@@ -2769,12 +2867,21 @@ public partial class DbReader
         var sourceFilterAlias = "src";
         var targetFilterAlias = "dst";
         var targetLogicalSymbolNameExpr = BuildLogicalDependencySymbolNameExpr("dst", "s.name");
+        var sqlDependencyTargetMatchExpr = @"(
+                    (tf.target_lang != 'sql' AND tf.symbol_name = snc.symbol_name)
+                 OR (tf.target_lang = 'sql' AND (
+                        tf.symbol_name = snc.symbol_name COLLATE NOCASE
+                     OR (sql_segment_count(snc.symbol_name) = 1 AND sql_leaf_name(tf.symbol_name) = snc.symbol_name COLLATE NOCASE)
+                 ))
+                )";
         var sql = @"
             WITH logical_references_primary AS (
                 SELECT src.id AS source_file_id,
                        src.path AS source_path,
                        src.lang AS source_lang,
                        r.symbol_name,
+                       r.context,
+                       r.container_name,
                        r.line,
                        r.column_number,
                        " + GetLogicalReferenceKindSql("r.reference_kind") + @" AS logical_reference_kind
@@ -2814,10 +2921,15 @@ public partial class DbReader
         if (!reverse && excludeTests)
             sql += $" AND NOT {TestPathCondition.Replace("f.path", $"{sourceFilterAlias}.path")}";
         sql += @"
-                GROUP BY src.id, src.path, src.lang, r.symbol_name, r.line, r.column_number, logical_reference_kind
+                GROUP BY src.id, src.path, src.lang, r.symbol_name, r.context, r.container_name, r.line, r.column_number, logical_reference_kind
             ),
             logical_references AS (
-                SELECT source_file_id, source_path, source_lang, symbol_name, line, column_number, logical_reference_kind,
+                SELECT source_file_id, source_path, source_lang,
+                       CASE
+                           WHEN source_lang = 'sql' THEN sql_resolve_reference_name(symbol_name, context, container_name)
+                           ELSE symbol_name
+                       END AS symbol_name,
+                       line, column_number, logical_reference_kind,
                        0 AS is_attribute_alias,
                        CASE WHEN logical_reference_kind IN ('attribute', 'annotation') THEN 1 ELSE 0 END AS is_metadata
                 FROM logical_references_primary
@@ -2983,7 +3095,7 @@ public partial class DbReader
                        snc.ref_count
                 FROM source_name_counts snc
                 JOIN target_files tf
-                  ON tf.symbol_name = snc.symbol_name
+                  ON " + sqlDependencyTargetMatchExpr + @"
                  AND tf.target_lang = snc.source_lang
                 LEFT JOIN metadata_raw_suppression mrs
                   ON mrs.source_file_id = snc.source_file_id
