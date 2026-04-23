@@ -5842,6 +5842,31 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_TempTablesRespectSemicolonlessIfAndWhileBoundaries()
+    {
+        // issue #757: temp establishment must also flush across semicolon-less top-level `IF` /
+        // `WHILE` boundaries so later control-flow reads keep the established temp object.
+        // issue #757: temp 確立は semicolon-less な top-level `IF` / `WHILE` 境界でも flush
+        // されるべきで、後続の制御構文内 read でも確立済み temp object を維持するべき。
+        const string content = """
+            SELECT id INTO #if_temp FROM users
+            IF EXISTS (SELECT 1) SELECT * FROM #if_temp;
+            SELECT id INTO #while_temp FROM users
+            WHILE 1 = 0 SELECT * FROM #while_temp;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#if_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#while_temp" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "#if_temp" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "#while_temp" && r.ReferenceKind == "reference" && r.Line == 4);
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 3);
+    }
+
+    [Fact]
     public void Extract_SQL_TempTablesRequirePriorEstablishmentAndSupportMultilineDefinitions()
     {
         // issue #664: temp reads should only succeed after an earlier statement established the temp

@@ -11520,6 +11520,48 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_SqlSemicolonlessIfAndWhileKeepTempReads()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_semicolonless_if_while_temp");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "sql", "repro.sql"),
+                """
+                SELECT id INTO #if_temp FROM users
+                IF EXISTS (SELECT 1) SELECT * FROM #if_temp;
+                SELECT id INTO #while_temp FROM users
+                WHILE 1 = 0 SELECT * FROM #while_temp;
+                """);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (ifExitCode, ifStdout, ifStderr) = RunBuiltCli(["references", "#if_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (whileExitCode, whileStdout, whileStderr) = RunBuiltCli(["references", "#while_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+
+            var ifRows = ParseJsonLines(ifStdout);
+            var whileRows = ParseJsonLines(whileStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            Assert.Equal(CommandExitCodes.Success, ifExitCode);
+            Assert.Equal(string.Empty, ifStderr);
+            Assert.Equal(2, ifRows.Count);
+            Assert.All(ifRows, row => Assert.Equal("#if_temp", row.RootElement.GetProperty("symbol_name").GetString()));
+
+            Assert.Equal(CommandExitCodes.Success, whileExitCode);
+            Assert.Equal(string.Empty, whileStderr);
+            Assert.Equal(2, whileRows.Count);
+            Assert.All(whileRows, row => Assert.Equal("#while_temp", row.RootElement.GetProperty("symbol_name").GetString()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_SqlDoubleQuotedDynamicSqlDoesNotLeakUsersReference()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_double_quoted_dynamic_sql");

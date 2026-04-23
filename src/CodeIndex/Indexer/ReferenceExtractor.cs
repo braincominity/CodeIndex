@@ -1563,6 +1563,8 @@ public static class ReferenceExtractor
             "TRUNCATE" => true,
             "SET" => true,
             "DECLARE" => true,
+            "IF" => true,
+            "WHILE" => true,
             "DO" => true,
             "BEGIN" => true,
             "EXEC" => true,
