@@ -317,6 +317,14 @@ public class DbContext : IDisposable
             (string? context, string? query, long? columnNumber) =>
                 SqlNameResolver.ContextContainsQualifiedNameFoldedAtColumn(context, query, ToNullableInt(columnNumber)) ? 1 : 0);
         connection.CreateFunction(
+            "sql_context_like_name_at",
+            (string? context, string? query, long? columnNumber) =>
+                SqlNameResolver.ContextContainsQualifiedNameLikeAtColumn(context, query, ToNullableInt(columnNumber)) ? 1 : 0);
+        connection.CreateFunction(
+            "sql_context_like_name_folded_at",
+            (string? context, string? query, long? columnNumber) =>
+                SqlNameResolver.ContextContainsQualifiedNameLikeFoldedAtColumn(context, query, ToNullableInt(columnNumber)) ? 1 : 0);
+        connection.CreateFunction(
             "sql_resolve_reference_name",
             (string? symbolName, string? context, string? containerName) =>
             {

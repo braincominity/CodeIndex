@@ -35,6 +35,16 @@ internal static class SqlNameResolver
             && string.Equals(match.NormalizedName, normalizedQuery, StringComparison.OrdinalIgnoreCase);
     }
 
+    public static bool ContextContainsQualifiedNameLikeAtColumn(string? context, string? query, int? columnNumber)
+    {
+        var normalizedQuery = NormalizeQualifiedName(query);
+        if (normalizedQuery.Length == 0 || !HasQualifier(query) || string.IsNullOrWhiteSpace(context))
+            return false;
+
+        return TryGetQualifiedNameAtColumn(context, columnNumber, out var match)
+            && match.NormalizedName.Contains(normalizedQuery, StringComparison.OrdinalIgnoreCase);
+    }
+
     public static bool ContextContainsQualifiedName(string? context, string? query)
     {
         var normalizedQuery = NormalizeQualifiedName(query);
@@ -128,6 +138,19 @@ internal static class SqlNameResolver
         var foldedCandidate = NameFold.Fold(match.NormalizedName) ?? match.NormalizedName;
         var foldedQuery = NameFold.Fold(normalizedQuery) ?? normalizedQuery;
         return string.Equals(foldedCandidate, foldedQuery, StringComparison.Ordinal);
+    }
+
+    public static bool ContextContainsQualifiedNameLikeFoldedAtColumn(string? context, string? query, int? columnNumber)
+    {
+        var normalizedQuery = NormalizeQualifiedName(query);
+        if (normalizedQuery.Length == 0 || !HasQualifier(query) || string.IsNullOrWhiteSpace(context))
+            return false;
+        if (!TryGetQualifiedNameAtColumn(context, columnNumber, out var match))
+            return false;
+
+        var foldedCandidate = NameFold.Fold(match.NormalizedName) ?? match.NormalizedName;
+        var foldedQuery = NameFold.Fold(normalizedQuery) ?? normalizedQuery;
+        return foldedCandidate.Contains(foldedQuery, StringComparison.Ordinal);
     }
 
     public static bool ContextContainsQualifiedNameFolded(string? context, string? query)

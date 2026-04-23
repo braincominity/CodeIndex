@@ -3173,6 +3173,66 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_NonExactQualifiedReadersStaySchemaScoped()
+    {
+        InsertIndexedFile("src/sql_nonexact_schema_scoped_targets.sql", "sql",
+            """
+            CREATE FUNCTION dbo.fn_Target()
+            RETURNS INT
+            AS
+            BEGIN
+                RETURN 1;
+            END
+            GO
+
+            CREATE FUNCTION sales.fn_Target()
+            RETURNS INT
+            AS
+            BEGIN
+                RETURN 2;
+            END
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_nonexact_schema_scoped_callers.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.Caller
+            AS
+            BEGIN
+                EXEC dbo.fn_Target;
+            END
+            GO
+
+            CREATE PROCEDURE sales.Caller
+            AS
+            BEGIN
+                EXEC sales.fn_Target;
+            END
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("sales.fn_Target", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+        Assert.Equal("sales.Caller", reference.ContainerName);
+        Assert.Equal(1, _reader.CountSearchReferences("sales.fn_Target", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountSearchReferencesTotal("sales.fn_Target", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+
+        var caller = Assert.Single(
+            _reader.GetCallers("sales.fn_Target", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+        Assert.Equal("sales.Caller", caller.CallerName);
+        Assert.Equal(1, caller.ReferenceCount);
+        Assert.Equal(1, _reader.CountCallers("sales.fn_Target", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCallersTotal("sales.fn_Target", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+
+        var callee = Assert.Single(
+            _reader.GetCallees("sales.Caller", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+        Assert.Equal("fn_Target", callee.CalleeName);
+        Assert.Equal("sales.Caller", callee.CallerName);
+        Assert.Equal(1, _reader.CountCallees("sales.Caller", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCalleesTotal("sales.Caller", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_WhitespaceAroundDotsStillResolvesDefinitionsAndSameLineCalls()
     {
         InsertIndexedFile("src/sql_spaced_qualified_names.sql", "sql",
