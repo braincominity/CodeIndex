@@ -6692,6 +6692,102 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunStatus_ReportsDegradedSqlGraphContractTrust()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+            DowngradeSqlGraphContractRows(dbPath);
+
+            var (jsonExitCode, jsonStdout, jsonStderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using (var jsonDocument = ParseJsonOutput(jsonStdout))
+            {
+                var json = jsonDocument.RootElement;
+                Assert.Equal(CommandExitCodes.Success, jsonExitCode);
+                Assert.Equal(string.Empty, jsonStderr);
+                Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
+                Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
+                Assert.Contains("DEGRADED", json.GetProperty("summary").GetString());
+            }
+
+            var (humanExitCode, humanStdout, humanStderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Equal(string.Empty, humanStderr);
+            Assert.Contains("SQL graph/dependency results may be stale.", humanStdout);
+            Assert.Contains(Path.GetFullPath(projectRoot), humanStdout);
+            Assert.Contains(Path.GetFullPath(dbPath), humanStdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_StaleSqlGraphContractIncludesDegradedState()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+            DowngradeSqlGraphContractRows(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["dbo.fn_Target", "--db", dbPath, "--json", "--lang", "sql", "--exact", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.False(json.GetProperty("exact_index_available").GetBoolean());
+            Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
+            Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("degraded_reason").GetString());
+            Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDeps_Json_StaleSqlGraphContractIncludesDegradedState()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+            DowngradeSqlGraphContractRows(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", dbPath, "--json", "--lang", "sql"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
+            Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunHotspots_ZeroJson_ReportsMissingMarkerFingerprintAsDegraded()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_family_missing_fingerprint_zero_json");
@@ -19169,6 +19265,57 @@ public class QueryCommandRunnerTests
         writer.MarkGraphReady();
         writer.MarkFoldReady();
         writer.MarkCSharpSymbolNameContractReady();
+    }
+
+    private static string CreateSqlGraphContractFixtureDb(string projectRoot)
+    {
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/target.sql",
+            "sql",
+            """
+            CREATE FUNCTION dbo.fn_Target()
+            RETURNS INT
+            AS
+            BEGIN
+                RETURN 1;
+            END;
+            GO
+            """);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/caller.sql",
+            "sql",
+            """
+            CREATE PROCEDURE dbo.usp_Caller
+            AS
+            BEGIN
+                SELECT dbo.fn_Target();
+            END;
+            GO
+            """);
+
+        using var db = new DbContext(dbPath);
+        var writer = new DbWriter(db.Connection);
+        writer.MarkGraphReady();
+        writer.MarkSqlGraphContractReady();
+        return dbPath;
+    }
+
+    private static void DowngradeSqlGraphContractRows(string dbPath)
+    {
+        using var db = new DbContext(dbPath);
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = """
+            UPDATE symbol_references
+            SET symbol_name = 'fn_Target',
+                symbol_name_folded = 'fn_target',
+                column_number = 1
+            WHERE symbol_name = 'dbo.fn_Target';
+            DELETE FROM codeindex_meta WHERE key = 'sql_graph_contract_version';
+            """;
+        cmd.ExecuteNonQuery();
     }
 
     private static (string ProjectRoot, string DbPath) CreateCountOnlyTotalFixtureDb()

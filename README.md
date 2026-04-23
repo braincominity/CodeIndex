@@ -252,7 +252,7 @@ cdidx ./myproject --json
 ```
 
 ```json
-{"status":"success","mode":"incremental","summary":{"files_total":42,"chunks_total":318,"symbols_total":156,"references_total":420,"files_scanned":42,"files_skipped":28,"files_purged":0,"errors":0},"graph_table_available":true,"issues_table_available":true,"fold_ready":true,"elapsed_ms":2012}
+{"status":"success","mode":"incremental","summary":{"files_total":42,"chunks_total":318,"symbols_total":156,"references_total":420,"files_scanned":42,"files_skipped":28,"files_purged":0,"errors":0},"graph_table_available":true,"issues_table_available":true,"sql_graph_contract_ready":true,"fold_ready":true,"elapsed_ms":2012}
 ```
 
 With `--verbose`, each file also shows a status tag so you can see exactly what happened:
@@ -446,7 +446,7 @@ Languages:
   javascript      4
 ```
 
-`status --json` also reports trust flags / availability fields such as `fold_ready`, `graph_table_available`, `issues_table_available`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, and `csharp_symbol_name_ready`. If `hotspot_family_ready` is `false`, `hotspots` may still run but duplicate-name families are conservatively degraded until you rerun `cdidx index .` to restamp authoritative hotspot-family metadata. If `csharp_symbol_name_ready` is `false`, run `cdidx index .` once to rewrite unchanged C# rows to the current canonical operator / conversion-operator / indexer names.
+`status --json` also reports trust flags / availability fields such as `fold_ready`, `graph_table_available`, `issues_table_available`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, and `csharp_symbol_name_ready`. If `sql_graph_contract_ready` is `false`, rerun `cdidx index .` before trusting SQL `references` / `callers` / `deps` / `unused` / `hotspots`, because unchanged SQL rows may still reflect an older graph contract. If `hotspot_family_ready` is `false`, `hotspots` may still run but duplicate-name families are conservatively degraded until you rerun `cdidx index .` to restamp authoritative hotspot-family metadata. If `csharp_symbol_name_ready` is `false`, run `cdidx index .` once to rewrite unchanged C# rows to the current canonical operator / conversion-operator / indexer names.
 
 ### Map the repo before searching
 
@@ -1372,7 +1372,7 @@ Languages:
   javascript      4
 ```
 
-`status --json` には `fold_ready`、`graph_table_available`、`issues_table_available`、`hotspot_family_ready`、`hotspot_family_degraded_reason`、`csharp_symbol_name_ready` などの trust flag / availability field も含まれます。`hotspot_family_ready` が `false` の間も `hotspots` 自体は使えますが、duplicate-name family は authoritative ではない保守的 fallback に縮退しうるため、`cdidx index .` を再実行して hotspot-family metadata を restamp してください。`csharp_symbol_name_ready` が `false` の場合は、`cdidx index .` を 1 回実行して unchanged な C# 行を現在の canonical operator / conversion operator / indexer 名へ書き換えてください。
+`status --json` には `fold_ready`、`graph_table_available`、`issues_table_available`、`sql_graph_contract_ready`、`sql_graph_contract_degraded_reason`、`hotspot_family_ready`、`hotspot_family_degraded_reason`、`csharp_symbol_name_ready` などの trust flag / availability field も含まれます。`sql_graph_contract_ready` が `false` の場合、unchanged な SQL 行が古い graph contract のまま残っている可能性があるため、SQL の `references` / `callers` / `deps` / `unused` / `hotspots` を信頼する前に `cdidx index .` を再実行してください。`hotspot_family_ready` が `false` の間も `hotspots` 自体は使えますが、duplicate-name family は authoritative ではない保守的 fallback に縮退しうるため、`cdidx index .` を再実行して hotspot-family metadata を restamp してください。`csharp_symbol_name_ready` が `false` の場合は、`cdidx index .` を 1 回実行して unchanged な C# 行を現在の canonical operator / conversion operator / indexer 名へ書き換えてください。
 
 ### 検索前にリポジトリ全体を俯瞰する
 

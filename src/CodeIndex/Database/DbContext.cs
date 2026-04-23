@@ -394,6 +394,8 @@ public class DbContext : IDisposable
     public static string GetHotspotFamilyMarkerFingerprintMetaKey(string lang) => $"hotspot_family_marker_fingerprint_{lang}";
     public const int CSharpSymbolNameContractVersion = 2;
     public const string CSharpSymbolNameContractVersionMetaKey = "csharp_symbol_name_contract_version";
+    public const int SqlGraphContractVersion = 1;
+    public const string SqlGraphContractVersionMetaKey = "sql_graph_contract_version";
     public const string IndexedProjectRootMetaKey = "indexed_project_root";
 
     public int GetUserVersion()

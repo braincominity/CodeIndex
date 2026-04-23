@@ -2714,6 +2714,77 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_Status_ReportsDegradedSqlGraphContractTrust()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_status_sql_graph_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+            }
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/target.sql",
+                "sql",
+                """
+                CREATE FUNCTION dbo.fn_Target()
+                RETURNS INT
+                AS
+                BEGIN
+                    RETURN 1;
+                END;
+                GO
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/caller.sql",
+                "sql",
+                """
+                CREATE PROCEDURE dbo.usp_Caller
+                AS
+                BEGIN
+                    SELECT dbo.fn_Target();
+                END;
+                GO
+                """);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+                writer.MarkSqlGraphContractReady();
+
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbol_references
+                    SET symbol_name = 'fn_Target',
+                        symbol_name_folded = 'fn_target',
+                        column_number = 1
+                    WHERE symbol_name = 'dbo.fn_Target';
+                    DELETE FROM codeindex_meta WHERE key = 'sql_graph_contract_version';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+            var response = server.HandleMessage(request)!;
+
+            Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
+            Assert.False(structured["sqlGraphContractReady"]!.GetValue<bool>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sqlGraphContractDegradedReason"]!.GetValue<string>());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Status_ReadOnlyUriForExplicitDb_UsesPersistedProjectRootMetadata()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_status_uri");

@@ -812,6 +812,19 @@ public class DbWriter
     }
 
     /// <summary>
+    /// Stamp the current SQL graph storage contract version. Readers use this to distinguish
+    /// pre-fix SQL graph rows (stale call columns / symbol names) from rows rewritten by the
+    /// current extractor/name-resolution contract.
+    /// SQL graph 保存契約の current version を stamp する。
+    /// </summary>
+    public void MarkSqlGraphContractReady()
+    {
+        SetMeta(
+            DbContext.SqlGraphContractVersionMetaKey,
+            DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>
     /// Stamp the current authoritative version for hotspot family grouping semantics.
     /// Only fully authoritative DB states should call this; mixed legacy/current DBs must
     /// stay unstamped so readers degrade to conservative same-file counting.

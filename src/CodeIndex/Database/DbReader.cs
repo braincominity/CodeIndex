@@ -15,6 +15,11 @@ public readonly record struct HotspotFamilySignal(
     bool Relevant,
     string? DegradedReason);
 
+public readonly record struct SqlGraphContractSignal(
+    bool Ready,
+    bool Relevant,
+    string? DegradedReason);
+
 /// <summary>
 /// Handles read/query operations against the database for search, symbols, and files.
 /// 検索・シンボル・ファイル一覧などのDB読み取り操作を担当する。
@@ -38,6 +43,7 @@ public partial class DbReader
     // #86: name_folded 列が全行埋まっているか（fold 経路を使えるか）。
     internal readonly bool _foldReady;
     internal readonly bool _csharpSymbolNameContractCurrent;
+    internal readonly bool _sqlGraphContractCurrent;
     // Tracks which languages have authoritative cross-file hotspot family semantics.
     // Mixed legacy/update states can therefore degrade only the affected language instead of
     // globally disabling families for unrelated marker types.
@@ -178,6 +184,10 @@ public partial class DbReader
         _csharpSymbolNameContractCurrent = string.Equals(
             TryGetMetaString(_conn, DbContext.CSharpSymbolNameContractVersionMetaKey),
             DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            StringComparison.Ordinal);
+        _sqlGraphContractCurrent = string.Equals(
+            TryGetMetaString(_conn, DbContext.SqlGraphContractVersionMetaKey),
+            DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
             StringComparison.Ordinal);
         _hotspotFamilyReadyLanguages = LoadHotspotFamilyReadyLanguages(connection);
         // NOTE: row presence is intentionally NOT used as a fallback. A legacy DB or an
@@ -395,6 +405,23 @@ public partial class DbReader
             DegradedReason: "csharp_symbol_name_ready=false (canonical C# operator / conversion operator / indexer / verbatim identifier names are stale in this DB)");
     }
 
+    private ExactQuerySignal? GetSqlGraphContractExactQuerySignal(
+        string? lang = null,
+        IReadOnlyList<string>? pathPatterns = null,
+        IReadOnlyList<string>? excludePathPatterns = null,
+        bool excludeTests = false)
+    {
+        var signal = GetSqlGraphContractSignal(lang, pathPatterns, excludePathPatterns, excludeTests);
+        if (!signal.Relevant || signal.Ready)
+            return null;
+
+        return new(
+            ExactIndexAvailable: false,
+            HasMissingIndex: false,
+            HasMissingTable: false,
+            DegradedReason: signal.DegradedReason);
+    }
+
     private bool ScopeMayIncludeCSharpFiles(
         string? lang,
         IReadOnlyList<string>? pathPatterns,
@@ -417,6 +444,43 @@ public partial class DbReader
             cmd.Parameters.AddWithValue("@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         return cmd.ExecuteScalar() != null;
+    }
+
+    private bool ScopeMayIncludeSqlFiles(
+        string? lang,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests)
+    {
+        if (lang != null && !string.Equals(lang, "sql", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        using var cmd = _conn.CreateCommand();
+        var sql = "SELECT 1 FROM files f WHERE f.lang = 'sql'";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += " LIMIT 1";
+
+        cmd.CommandText = sql;
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        return cmd.ExecuteScalar() != null;
+    }
+
+    internal SqlGraphContractSignal GetSqlGraphContractSignal(
+        string? lang = null,
+        IReadOnlyList<string>? pathPatterns = null,
+        IReadOnlyList<string>? excludePathPatterns = null,
+        bool excludeTests = false)
+    {
+        if (!ScopeMayIncludeSqlFiles(lang, pathPatterns, excludePathPatterns, excludeTests))
+            return new SqlGraphContractSignal(Ready: true, Relevant: false, DegradedReason: null);
+
+        if (_sqlGraphContractCurrent)
+            return new SqlGraphContractSignal(Ready: true, Relevant: true, DegradedReason: null);
+
+        return new SqlGraphContractSignal(
+            Ready: false,
+            Relevant: true,
+            DegradedReason: "sql_graph_contract_ready=false (SQL graph rows may still use a stale call-column / qualified-name contract; rerun `cdidx index <projectPath>` before trusting SQL graph/dependency results)");
     }
 
     private static ExactQuerySignal CombineExactSignals(params ExactQuerySignal?[] signals)
@@ -468,7 +532,8 @@ public partial class DbReader
         => CombineExactSignals(
             BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
                 _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase"),
-            GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
+            GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
+            GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
 
     public ExactQuerySignal GetCallersExactQuerySignal(
         string? lang = null,
@@ -478,7 +543,8 @@ public partial class DbReader
         => CombineExactSignals(
             BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
                 _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase"),
-            GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
+            GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
+            GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
 
     public ExactQuerySignal GetCalleesExactQuerySignal(
         string? lang = null,
@@ -488,7 +554,8 @@ public partial class DbReader
         => CombineExactSignals(
             BuildExactGraphSignal(ContainerNameExactGraphIndexAvailable,
                 _foldReady ? "idx_symbol_refs_container_name_folded" : "idx_symbol_refs_container_nocase"),
-            GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
+            GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
+            GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
 
     public ExactQuerySignal GetAnalyzeSymbolExactQuerySignal(
         bool includeGraphSignal = true,
@@ -499,7 +566,8 @@ public partial class DbReader
     {
         return CombineExactSignals(
             GetDefinitionExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
-            includeGraphSignal ? BuildAnalyzeGraphExactQuerySignal() : null);
+            includeGraphSignal ? BuildAnalyzeGraphExactQuerySignal() : null,
+            includeGraphSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null);
     }
 
     internal bool HasGraphApplicableFiles(string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
@@ -2668,6 +2736,7 @@ public partial class DbReader
         var freshness = GetWorkspaceFreshness();
         var hasCSharpFiles = ScopeMayIncludeCSharpFiles("csharp", pathPatterns: null, excludePathPatterns: null, excludeTests: false, since: null);
         var csharpSymbolNameReady = !hasCSharpFiles || _csharpSymbolNameContractCurrent;
+        var sqlGraphContractSignal = GetSqlGraphContractSignal(lang: null);
         var hotspotFamilySignal = GetHotspotFamilySignal(lang: null);
 
         // Language breakdown / 言語別内訳
@@ -2692,6 +2761,8 @@ public partial class DbReader
             HotspotFamilyReady = hotspotFamilySignal.Ready,
             HotspotFamilyDegradedReason = hotspotFamilySignal.DegradedReason,
             CSharpSymbolNameReady = csharpSymbolNameReady,
+            SqlGraphContractReady = sqlGraphContractSignal.Ready,
+            SqlGraphContractDegradedReason = sqlGraphContractSignal.DegradedReason,
             FoldReady = _foldReady,
         };
     }
