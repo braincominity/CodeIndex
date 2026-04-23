@@ -8933,6 +8933,42 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_ConstLocalsAndQualifiedCallArguments_DoNotLeakPhantomFunctions()
+    {
+        var content = """
+            using System;
+
+            namespace Demo;
+
+            public class Repro
+            {
+                public void M(TimeSpan elapsed)
+                {
+                    const string content = "hello";
+                    Assert.True(
+                        elapsed < TimeSpan.FromSeconds(10),
+                        $"x {elapsed.TotalSeconds:F2}");
+                }
+            }
+
+            public static class Assert
+            {
+                public static void True(bool condition, string message) { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "Demo");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Repro");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Assert");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "True");
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "content");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "FromSeconds");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsMultiLineFieldDeclaration()
     {
         // Plain field whose type occupies one line and whose name / initializer spill
