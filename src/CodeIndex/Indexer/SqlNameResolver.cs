@@ -8,6 +8,7 @@ internal static class SqlNameResolver
     private readonly record struct SqlNameParts(string NormalizedName, string LeafName, int SegmentCount);
     private readonly record struct QualifiedNameMatch(
         string NormalizedName,
+        int SegmentCount,
         int StartIndex,
         int EndIndexExclusive,
         int LeafStartIndex,
@@ -27,34 +28,39 @@ internal static class SqlNameResolver
 
     public static bool ContextContainsQualifiedNameAtColumn(string? context, string? query, int? columnNumber)
     {
-        var normalizedQuery = NormalizeQualifiedName(query);
-        if (normalizedQuery.Length == 0 || !HasQualifier(query) || string.IsNullOrWhiteSpace(context))
+        var queryParts = ParseParts(query);
+        if (queryParts.NormalizedName.Length == 0 || queryParts.SegmentCount <= 1 || string.IsNullOrWhiteSpace(context))
             return false;
 
         return TryGetQualifiedNameAtColumn(context, columnNumber, out var match)
-            && string.Equals(match.NormalizedName, normalizedQuery, StringComparison.OrdinalIgnoreCase);
+            && match.SegmentCount == queryParts.SegmentCount
+            && string.Equals(match.NormalizedName, queryParts.NormalizedName, StringComparison.OrdinalIgnoreCase);
     }
 
     public static bool ContextContainsQualifiedNameLikeAtColumn(string? context, string? query, int? columnNumber)
     {
-        var normalizedQuery = NormalizeQualifiedName(query);
-        if (normalizedQuery.Length == 0 || !HasQualifier(query) || string.IsNullOrWhiteSpace(context))
+        var queryParts = ParseParts(query);
+        if (queryParts.NormalizedName.Length == 0 || queryParts.SegmentCount <= 1 || string.IsNullOrWhiteSpace(context))
             return false;
 
         return TryGetQualifiedNameAtColumn(context, columnNumber, out var match)
-            && match.NormalizedName.Contains(normalizedQuery, StringComparison.OrdinalIgnoreCase);
+            && match.SegmentCount == queryParts.SegmentCount
+            && match.NormalizedName.Contains(queryParts.NormalizedName, StringComparison.OrdinalIgnoreCase);
     }
 
     public static bool ContextContainsQualifiedName(string? context, string? query)
     {
-        var normalizedQuery = NormalizeQualifiedName(query);
-        if (normalizedQuery.Length == 0 || !HasQualifier(query) || string.IsNullOrWhiteSpace(context))
+        var queryParts = ParseParts(query);
+        if (queryParts.NormalizedName.Length == 0 || queryParts.SegmentCount <= 1 || string.IsNullOrWhiteSpace(context))
             return false;
 
-        foreach (var candidate in EnumerateQualifiedNames(context))
+        foreach (var candidate in EnumerateQualifiedNameMatches(context))
         {
-            if (string.Equals(candidate, normalizedQuery, StringComparison.OrdinalIgnoreCase))
+            if (candidate.SegmentCount == queryParts.SegmentCount
+                && string.Equals(candidate.NormalizedName, queryParts.NormalizedName, StringComparison.OrdinalIgnoreCase))
+            {
                 return true;
+            }
         }
 
         return false;
@@ -131,44 +137,72 @@ internal static class SqlNameResolver
         return resolved.Length == 0 ? string.Empty : NameFold.Fold(resolved) ?? resolved;
     }
 
+    public static int ResolveReferenceSegmentCountAtColumn(string? symbolName, string? context, string? containerName, int? columnNumber)
+    {
+        var normalizedSymbolName = NormalizeQualifiedName(symbolName);
+        if (normalizedSymbolName.Length == 0)
+            return 0;
+        if (string.IsNullOrWhiteSpace(context))
+            return GetSegmentCount(normalizedSymbolName);
+
+        var leafName = GetLeafName(symbolName);
+        if (leafName.Length > 0 && columnNumber.HasValue && columnNumber.Value > 0)
+        {
+            if (TryGetQualifiedNameAtColumn(context, columnNumber, out var match)
+                && string.Equals(GetLeafName(match.NormalizedName), leafName, StringComparison.OrdinalIgnoreCase))
+            {
+                return match.SegmentCount;
+            }
+
+            return GetSegmentCount(QualifyLeafNameFromContainer(normalizedSymbolName, containerName));
+        }
+
+        return GetSegmentCount(ResolveReferenceName(symbolName, context, containerName));
+    }
+
     public static bool ContextContainsQualifiedNameFoldedAtColumn(string? context, string? query, int? columnNumber)
     {
-        var normalizedQuery = NormalizeQualifiedName(query);
-        if (normalizedQuery.Length == 0 || !HasQualifier(query) || string.IsNullOrWhiteSpace(context))
+        var queryParts = ParseParts(query);
+        if (queryParts.NormalizedName.Length == 0 || queryParts.SegmentCount <= 1 || string.IsNullOrWhiteSpace(context))
             return false;
         if (!TryGetQualifiedNameAtColumn(context, columnNumber, out var match))
             return false;
 
         var foldedCandidate = NameFold.Fold(match.NormalizedName) ?? match.NormalizedName;
-        var foldedQuery = NameFold.Fold(normalizedQuery) ?? normalizedQuery;
-        return string.Equals(foldedCandidate, foldedQuery, StringComparison.Ordinal);
+        var foldedQuery = NameFold.Fold(queryParts.NormalizedName) ?? queryParts.NormalizedName;
+        return match.SegmentCount == queryParts.SegmentCount
+            && string.Equals(foldedCandidate, foldedQuery, StringComparison.Ordinal);
     }
 
     public static bool ContextContainsQualifiedNameLikeFoldedAtColumn(string? context, string? query, int? columnNumber)
     {
-        var normalizedQuery = NormalizeQualifiedName(query);
-        if (normalizedQuery.Length == 0 || !HasQualifier(query) || string.IsNullOrWhiteSpace(context))
+        var queryParts = ParseParts(query);
+        if (queryParts.NormalizedName.Length == 0 || queryParts.SegmentCount <= 1 || string.IsNullOrWhiteSpace(context))
             return false;
         if (!TryGetQualifiedNameAtColumn(context, columnNumber, out var match))
             return false;
 
         var foldedCandidate = NameFold.Fold(match.NormalizedName) ?? match.NormalizedName;
-        var foldedQuery = NameFold.Fold(normalizedQuery) ?? normalizedQuery;
-        return foldedCandidate.Contains(foldedQuery, StringComparison.Ordinal);
+        var foldedQuery = NameFold.Fold(queryParts.NormalizedName) ?? queryParts.NormalizedName;
+        return match.SegmentCount == queryParts.SegmentCount
+            && foldedCandidate.Contains(foldedQuery, StringComparison.Ordinal);
     }
 
     public static bool ContextContainsQualifiedNameFolded(string? context, string? query)
     {
-        var normalizedQuery = NormalizeQualifiedName(query);
-        if (normalizedQuery.Length == 0 || !HasQualifier(query) || string.IsNullOrWhiteSpace(context))
+        var queryParts = ParseParts(query);
+        if (queryParts.NormalizedName.Length == 0 || queryParts.SegmentCount <= 1 || string.IsNullOrWhiteSpace(context))
             return false;
 
-        var foldedQuery = NameFold.Fold(normalizedQuery) ?? normalizedQuery;
-        foreach (var candidate in EnumerateQualifiedNames(context))
+        var foldedQuery = NameFold.Fold(queryParts.NormalizedName) ?? queryParts.NormalizedName;
+        foreach (var candidate in EnumerateQualifiedNameMatches(context))
         {
-            var foldedCandidate = NameFold.Fold(candidate) ?? candidate;
-            if (string.Equals(foldedCandidate, foldedQuery, StringComparison.Ordinal))
+            var foldedCandidate = NameFold.Fold(candidate.NormalizedName) ?? candidate.NormalizedName;
+            if (candidate.SegmentCount == queryParts.SegmentCount
+                && string.Equals(foldedCandidate, foldedQuery, StringComparison.Ordinal))
+            {
                 return true;
+            }
         }
 
         return false;
@@ -183,6 +217,9 @@ internal static class SqlNameResolver
         var zeroBasedColumn = columnNumber.Value - 1;
         foreach (var candidate in EnumerateQualifiedNameMatches(context))
         {
+            if (candidate.SegmentCount <= 1 && !candidate.NormalizedName.Contains('.', StringComparison.Ordinal))
+                continue;
+
             if (zeroBasedColumn >= candidate.LeafStartIndex && zeroBasedColumn < candidate.LeafEndIndexExclusive)
             {
                 match = candidate;
@@ -276,18 +313,10 @@ internal static class SqlNameResolver
 
     private static IEnumerable<string> EnumerateQualifiedNames(string text)
     {
-        for (var i = 0; i < text.Length; i++)
+        foreach (var match in EnumerateQualifiedNameMatches(text))
         {
-            if (!IsSqlIdentifierStartChar(text[i]))
-                continue;
-
-            if (!TryReadQualifiedName(text, i, out var match))
-                continue;
-
-            if (GetSegmentCount(match.NormalizedName) > 1)
+            if (match.SegmentCount > 1)
                 yield return match.NormalizedName;
-
-            i = Math.Max(i, match.EndIndexExclusive - 1);
         }
     }
 
@@ -301,8 +330,7 @@ internal static class SqlNameResolver
             if (!TryReadQualifiedName(text, i, out var match))
                 continue;
 
-            if (GetSegmentCount(match.NormalizedName) > 1)
-                yield return match;
+            yield return match;
 
             i = Math.Max(i, match.EndIndexExclusive - 1);
         }
@@ -374,7 +402,7 @@ internal static class SqlNameResolver
         if (normalizedName.Length == 0)
             return false;
 
-        match = new QualifiedNameMatch(normalizedName, startIndex, index, leafStartIndex, leafEndIndexExclusive);
+        match = new QualifiedNameMatch(normalizedName, segments.Count, startIndex, index, leafStartIndex, leafEndIndexExclusive);
         return true;
     }
 

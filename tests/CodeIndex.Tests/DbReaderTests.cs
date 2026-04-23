@@ -3071,6 +3071,104 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_ExactGraphReadersDoNotConflateQuotedSingleIdentifierDotsWithQualifiedNames()
+    {
+        InsertIndexedFile("src/sql_dotted_identifier_graph_targets.sql", "sql",
+            """
+            CREATE PROCEDURE sales.fn_Target
+            AS
+            SELECT 1;
+            GO
+
+            CREATE PROCEDURE "sales.fn_Target"
+            AS
+            SELECT 2;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_dotted_identifier_graph_callers.sql", "sql",
+            """
+            CREATE PROCEDURE sales.caller
+            AS
+            BEGIN
+                EXEC sales.fn_Target;
+            END
+            GO
+
+            CREATE PROCEDURE quoted.caller
+            AS
+            BEGIN
+                CALL "sales.fn_Target";
+            END
+            GO
+            """);
+
+        var references = _reader.SearchReferences("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]);
+        var reference = Assert.Single(references);
+        Assert.Equal("sales.caller", reference.ContainerName);
+        Assert.Equal(4, reference.Line);
+        Assert.Equal(1, _reader.CountSearchReferences("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountSearchReferencesTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
+
+        var callers = _reader.GetCallers("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]);
+        var caller = Assert.Single(callers);
+        Assert.Equal("sales.caller", caller.CallerName);
+        Assert.Equal(1, caller.ReferenceCount);
+        Assert.Equal(1, _reader.CountCallers("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCallersTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
+
+        var impact = _reader.AnalyzeImpact("sales.fn_Target", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_dotted_identifier_graph"]);
+        Assert.Equal("sales.fn_Target", Assert.Single(impact.Definitions).Name);
+        Assert.Equal("sales.caller", Assert.Single(impact.Callers).CallerName);
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_AggregatesDoNotConflateQuotedSingleIdentifierDotsWithQualifiedNames()
+    {
+        InsertIndexedFile("src/sql_dotted_identifier_deps_target.sql", "sql",
+            """
+            CREATE PROCEDURE sales.fn_Target
+            AS
+            SELECT 1;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_dotted_identifier_deps_quoted.sql", "sql",
+            """
+            CREATE PROCEDURE "sales.fn_Target"
+            AS
+            SELECT 2;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_dotted_identifier_deps_caller.sql", "sql",
+            """
+            CREATE PROCEDURE sales.caller
+            AS
+            BEGIN
+                EXEC sales.fn_Target;
+            END
+            GO
+            """);
+
+        var dependency = Assert.Single(
+            _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_dotted_identifier_deps"], excludePathPatterns: null, excludeTests: false));
+        Assert.Equal("src/sql_dotted_identifier_deps_caller.sql", dependency.SourcePath);
+        Assert.Equal("src/sql_dotted_identifier_deps_target.sql", dependency.TargetPath);
+        Assert.Equal(1, dependency.ReferenceCount);
+        Assert.Equal("sales.fn_Target", dependency.Symbols);
+
+        var hotspots = _reader.GetSymbolHotspots(10, "function", "sql", ["sql_dotted_identifier_deps"], null, false);
+        Assert.Equal(1, Assert.Single(hotspots, item => item.Symbol.Name == "sales.fn_Target").ReferenceCount);
+        Assert.DoesNotContain(hotspots, item => item.Symbol.Name == "\"sales.fn_Target\"");
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "function", lang: "sql",
+            pathPatterns: ["sql_dotted_identifier_deps"], excludePathPatterns: null, excludeTests: false);
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "sales.fn_Target");
+        Assert.Contains(unused, symbol => symbol.Name == "\"sales.fn_Target\"");
+    }
+
+    [Fact]
     public void SqlQualifiedNames_UnicodeExactGraphReadersPreserveFoldedLeafFallback()
     {
         InsertIndexedFile("src/sql_unicode_exact_leaf_fallback.sql", "sql",

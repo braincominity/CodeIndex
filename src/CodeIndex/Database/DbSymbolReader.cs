@@ -1108,24 +1108,23 @@ public partial class DbReader
             logical_references AS (
                 SELECT sr.file_id,
                        rf.lang,
-                       CASE
-                           WHEN rf.lang = 'sql' THEN sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number)
-                           ELSE sr.symbol_name
-                       END AS symbol_name,
+                       " + BuildLogicalReferenceNameExpr("rf.lang", "sr.symbol_name", "sr.context", "sr.container_name", "sr.column_number") + @" AS symbol_name,
+                       " + BuildLogicalReferenceSegmentCountExpr("rf.lang", "sr.symbol_name", "sr.context", "sr.container_name", "sr.column_number") + @" AS symbol_segment_count,
                        sr.line,
                        sr.column_number,
                        " + GetLogicalReferenceKindSql("sr.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references sr
                 JOIN files rf ON rf.id = sr.file_id
                 WHERE sr.reference_kind IN " + CallGraphReferenceKindsSql + @"
-                GROUP BY rf.lang, sr.file_id, symbol_name, sr.line, sr.column_number, logical_reference_kind
+                GROUP BY rf.lang, sr.file_id, symbol_name, symbol_segment_count, sr.line, sr.column_number, logical_reference_kind
             ),
             global_reference_counts AS (
                 SELECT lang,
                        symbol_name,
+                       symbol_segment_count,
                        COUNT(*) AS ref_count
                 FROM logical_references
-                GROUP BY lang, symbol_name
+                GROUP BY lang, symbol_name, symbol_segment_count
             ),
             file_target_cardinality AS (
                 SELECT lang,
@@ -1148,9 +1147,10 @@ public partial class DbReader
                 SELECT lang,
                        file_id,
                        symbol_name,
+                       symbol_segment_count,
                        COUNT(*) AS ref_count
                 FROM logical_references
-                GROUP BY lang, file_id, symbol_name
+                GROUP BY lang, file_id, symbol_name, symbol_segment_count
             ),
             conservative_reference_counts AS (
                 SELECT ctf.logical_target_key,
@@ -1170,8 +1170,8 @@ public partial class DbReader
                  AND (
                         (ctf.lang != 'sql' AND frc.symbol_name = ctf.name)
                      OR (ctf.lang = 'sql' AND (
-                            frc.symbol_name = sql_normalize_name(ctf.name) COLLATE NOCASE
-                         OR (sql_segment_count(frc.symbol_name) = 1 AND frc.symbol_name = sql_leaf_name(ctf.name) COLLATE NOCASE)
+                            (frc.symbol_segment_count = sql_segment_count(ctf.name) AND frc.symbol_name = sql_normalize_name(ctf.name) COLLATE NOCASE)
+                         OR (frc.symbol_segment_count = 1 AND frc.symbol_name = sql_leaf_name(ctf.name) COLLATE NOCASE)
                      ))
                  )
                 GROUP BY ctf.logical_target_key, ctf.name, ctf.kind
@@ -1193,8 +1193,8 @@ public partial class DbReader
                  AND (
                         (gr.lang != 'sql' AND grc.symbol_name = gr.name)
                      OR (gr.lang = 'sql' AND (
-                            grc.symbol_name = sql_normalize_name(gr.name) COLLATE NOCASE
-                         OR (sql_segment_count(grc.symbol_name) = 1 AND grc.symbol_name = sql_leaf_name(gr.name) COLLATE NOCASE)
+                            (grc.symbol_segment_count = sql_segment_count(gr.name) AND grc.symbol_name = sql_normalize_name(gr.name) COLLATE NOCASE)
+                         OR (grc.symbol_segment_count = 1 AND grc.symbol_name = sql_leaf_name(gr.name) COLLATE NOCASE)
                      ))
                  )
                 LEFT JOIN conservative_reference_counts crc
@@ -1337,24 +1337,23 @@ public partial class DbReader
             logical_references AS (
                 SELECT sr.file_id,
                        rf.lang,
-                       CASE
-                           WHEN rf.lang = 'sql' THEN sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number)
-                           ELSE sr.symbol_name
-                       END AS symbol_name,
+                       " + BuildLogicalReferenceNameExpr("rf.lang", "sr.symbol_name", "sr.context", "sr.container_name", "sr.column_number") + @" AS symbol_name,
+                       " + BuildLogicalReferenceSegmentCountExpr("rf.lang", "sr.symbol_name", "sr.context", "sr.container_name", "sr.column_number") + @" AS symbol_segment_count,
                        sr.line,
                        sr.column_number,
                        " + GetLogicalReferenceKindSql("sr.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references sr
                 JOIN files rf ON rf.id = sr.file_id
                 WHERE sr.reference_kind IN " + CallGraphReferenceKindsSql + @"
-                GROUP BY rf.lang, sr.file_id, symbol_name, sr.line, sr.column_number, logical_reference_kind
+                GROUP BY rf.lang, sr.file_id, symbol_name, symbol_segment_count, sr.line, sr.column_number, logical_reference_kind
             ),
             global_reference_counts AS (
                 SELECT lang,
                        symbol_name,
+                       symbol_segment_count,
                        COUNT(*) AS ref_count
                 FROM logical_references
-                GROUP BY lang, symbol_name
+                GROUP BY lang, symbol_name, symbol_segment_count
             ),
             file_target_cardinality AS (
                 SELECT lang,
@@ -1377,9 +1376,10 @@ public partial class DbReader
                 SELECT lang,
                        file_id,
                        symbol_name,
+                       symbol_segment_count,
                        COUNT(*) AS ref_count
                 FROM logical_references
-                GROUP BY lang, file_id, symbol_name
+                GROUP BY lang, file_id, symbol_name, symbol_segment_count
             ),
             conservative_reference_counts AS (
                 SELECT ctf.logical_target_key,
@@ -1399,8 +1399,8 @@ public partial class DbReader
                  AND (
                         (ctf.lang != 'sql' AND frc.symbol_name = ctf.name)
                      OR (ctf.lang = 'sql' AND (
-                            frc.symbol_name = sql_normalize_name(ctf.name) COLLATE NOCASE
-                         OR (sql_segment_count(frc.symbol_name) = 1 AND frc.symbol_name = sql_leaf_name(ctf.name) COLLATE NOCASE)
+                            (frc.symbol_segment_count = sql_segment_count(ctf.name) AND frc.symbol_name = sql_normalize_name(ctf.name) COLLATE NOCASE)
+                         OR (frc.symbol_segment_count = 1 AND frc.symbol_name = sql_leaf_name(ctf.name) COLLATE NOCASE)
                      ))
                  )
                 GROUP BY ctf.logical_target_key, ctf.name, ctf.kind
@@ -1422,8 +1422,8 @@ public partial class DbReader
                  AND (
                         (fc.lang != 'sql' AND grc.symbol_name = fc.name)
                      OR (fc.lang = 'sql' AND (
-                            grc.symbol_name = sql_normalize_name(fc.name) COLLATE NOCASE
-                         OR (sql_segment_count(grc.symbol_name) = 1 AND grc.symbol_name = sql_leaf_name(fc.name) COLLATE NOCASE)
+                            (grc.symbol_segment_count = sql_segment_count(fc.name) AND grc.symbol_name = sql_normalize_name(fc.name) COLLATE NOCASE)
+                         OR (grc.symbol_segment_count = 1 AND grc.symbol_name = sql_leaf_name(fc.name) COLLATE NOCASE)
                      ))
                  )
                 LEFT JOIN conservative_reference_counts crc
@@ -1657,8 +1657,9 @@ public partial class DbReader
                       JOIN files rf ON rf.id = sr.file_id
                       WHERE sr.symbol_name = s.name
                          OR (f.lang = 'sql' AND rf.lang = 'sql' AND (
-                                sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_normalize_name(s.name) COLLATE NOCASE
-                             OR (sql_segment_count(sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number)) = 1
+                                (sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_segment_count(s.name)
+                                 AND sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_normalize_name(s.name) COLLATE NOCASE)
+                             OR (sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = 1
                                  AND sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_leaf_name(s.name) COLLATE NOCASE)
                          ))
                   )";
@@ -1789,8 +1790,9 @@ public partial class DbReader
                   JOIN files rf ON rf.id = sr.file_id
                   WHERE sr.symbol_name = s.name
                      OR (f.lang = 'sql' AND rf.lang = 'sql' AND (
-                            sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_normalize_name(s.name) COLLATE NOCASE
-                         OR (sql_segment_count(sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number)) = 1
+                            (sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_segment_count(s.name)
+                             AND sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_normalize_name(s.name) COLLATE NOCASE)
+                         OR (sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = 1
                              AND sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_leaf_name(s.name) COLLATE NOCASE)
                      ))
               )";

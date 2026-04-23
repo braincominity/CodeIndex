@@ -2886,6 +2886,21 @@ public partial class DbReader
     private static string BuildLogicalDependencySymbolNameExpr(string fileAlias, string symbolNameExpr)
         => $"CASE WHEN {fileAlias}.lang = 'sql' THEN sql_normalize_name({symbolNameExpr}) ELSE {symbolNameExpr} END";
 
+    private static string BuildLogicalDependencySymbolSegmentCountExpr(string fileAlias, string symbolNameExpr)
+        => $"CASE WHEN {fileAlias}.lang = 'sql' THEN sql_segment_count({symbolNameExpr}) ELSE 1 END";
+
+    private static string BuildLogicalReferenceNameExpr(string langExpr, string symbolNameExpr, string contextExpr, string containerNameExpr, string columnNumberExpr)
+        => $@"CASE
+                WHEN {langExpr} = 'sql' THEN sql_resolve_reference_name_at({symbolNameExpr}, {contextExpr}, {containerNameExpr}, {columnNumberExpr})
+                ELSE {symbolNameExpr}
+            END";
+
+    private static string BuildLogicalReferenceSegmentCountExpr(string langExpr, string symbolNameExpr, string contextExpr, string containerNameExpr, string columnNumberExpr)
+        => $@"CASE
+                WHEN {langExpr} = 'sql' THEN sql_resolve_reference_segment_count_at({symbolNameExpr}, {contextExpr}, {containerNameExpr}, {columnNumberExpr})
+                ELSE 1
+            END";
+
     /// <summary>
     /// Compute file-level dependency edges: which files reference symbols defined in which other files.
     /// ファイル間の依存関係エッジを算出: どのファイルがどのファイルで定義されたシンボルを参照しているか。
@@ -2903,11 +2918,12 @@ public partial class DbReader
         var sourceFilterAlias = "src";
         var targetFilterAlias = "dst";
         var targetLogicalSymbolNameExpr = BuildLogicalDependencySymbolNameExpr("dst", "s.name");
+        var targetLogicalSymbolSegmentCountExpr = BuildLogicalDependencySymbolSegmentCountExpr("dst", "s.name");
         var sqlDependencyTargetMatchExpr = @"(
                     (tf.target_lang != 'sql' AND tf.symbol_name = snc.symbol_name)
                  OR (tf.target_lang = 'sql' AND (
-                        tf.symbol_name = snc.symbol_name COLLATE NOCASE
-                     OR (sql_segment_count(snc.symbol_name) = 1 AND sql_leaf_name(tf.symbol_name) = snc.symbol_name COLLATE NOCASE)
+                        (tf.symbol_segment_count = snc.symbol_segment_count AND tf.symbol_name = snc.symbol_name COLLATE NOCASE)
+                     OR (snc.symbol_segment_count = 1 AND sql_leaf_name(tf.symbol_name) = snc.symbol_name COLLATE NOCASE)
                  ))
                 )";
         var sql = @"
@@ -2961,10 +2977,8 @@ public partial class DbReader
             ),
             logical_references AS (
                 SELECT source_file_id, source_path, source_lang,
-                       CASE
-                           WHEN source_lang = 'sql' THEN sql_resolve_reference_name_at(symbol_name, context, container_name, column_number)
-                           ELSE symbol_name
-                       END AS symbol_name,
+                       " + BuildLogicalReferenceNameExpr("source_lang", "symbol_name", "context", "container_name", "column_number") + @" AS symbol_name,
+                       " + BuildLogicalReferenceSegmentCountExpr("source_lang", "symbol_name", "context", "container_name", "column_number") + @" AS symbol_segment_count,
                        line, column_number, logical_reference_kind,
                        0 AS is_attribute_alias,
                        CASE WHEN logical_reference_kind IN ('attribute', 'annotation') THEN 1 ELSE 0 END AS is_metadata
@@ -2982,6 +2996,7 @@ public partial class DbReader
                 -- 偶然 'FooAttribute' という名前を持つ関数やプロパティへの誤ったエッジを防ぐ。
                 SELECT source_file_id, source_path, source_lang,
                        symbol_name || 'Attribute' AS symbol_name,
+                       1 AS symbol_segment_count,
                        line, column_number, logical_reference_kind,
                        1 AS is_attribute_alias,
                        1 AS is_metadata
@@ -3003,11 +3018,12 @@ public partial class DbReader
                        source_path,
                        source_lang,
                        symbol_name,
+                       symbol_segment_count,
                        is_attribute_alias,
                        is_metadata,
                        COUNT(*) AS ref_count
                 FROM logical_references
-                GROUP BY source_file_id, source_path, source_lang, symbol_name, is_attribute_alias, is_metadata
+                GROUP BY source_file_id, source_path, source_lang, symbol_name, symbol_segment_count, is_attribute_alias, is_metadata
             ),
             target_files AS (
                 -- Collapse per-symbol rows to one per (target_path, target_lang, symbol_name)
@@ -3036,6 +3052,7 @@ public partial class DbReader
                 SELECT dst.path AS target_path,
                        dst.lang AS target_lang,
                        " + targetLogicalSymbolNameExpr + @" AS symbol_name,
+                       " + targetLogicalSymbolSegmentCountExpr + @" AS symbol_segment_count,
                        MAX(CASE WHEN s.kind IN ('class','struct','interface') THEN 1 ELSE 0 END) AS has_class_like_kind,
                        MAX(CASE WHEN " + BuildMetadataTargetKindExpr("dst") + @"
                                 THEN 1 ELSE 0 END) AS has_metadata_target_kind
@@ -3060,7 +3077,7 @@ public partial class DbReader
         if (reverse && excludeTests)
             sql += $" AND NOT {TestPathCondition.Replace("f.path", $"{targetFilterAlias}.path")}";
         sql += @"
-                GROUP BY dst.path, dst.lang, " + targetLogicalSymbolNameExpr + @"
+                GROUP BY dst.path, dst.lang, " + targetLogicalSymbolNameExpr + @", " + targetLogicalSymbolSegmentCountExpr + @"
             ),
             metadata_raw_suppression AS (
                 -- When a raw C# attribute reference '[Foo]' (stored as symbol_name='Foo',
@@ -3077,6 +3094,7 @@ public partial class DbReader
                 JOIN target_files tf_alias
                   ON tf_alias.target_lang = lrp.source_lang
                  AND tf_alias.symbol_name = lrp.symbol_name || 'Attribute'
+                 AND tf_alias.symbol_segment_count = 1
                  AND tf_alias.has_metadata_target_kind = 1
                 WHERE lrp.source_lang = 'csharp'
                   AND lrp.logical_reference_kind = 'attribute'
@@ -3103,6 +3121,7 @@ public partial class DbReader
                 -- 当たらないため、lang / path / graph-supported スコープはそのまま継承。
                 SELECT tf.target_lang,
                        tf.symbol_name,
+                       tf.symbol_segment_count,
                        COUNT(*) AS class_like_target_count
                 FROM target_files tf
                 JOIN files dst
@@ -3111,6 +3130,7 @@ public partial class DbReader
                 JOIN symbols s
                   ON s.file_id = dst.id
                  AND " + targetLogicalSymbolNameExpr + @" = tf.symbol_name
+                 AND " + targetLogicalSymbolSegmentCountExpr + @" = tf.symbol_segment_count
                  -- Same language-aware metadata-eligibility filter as
                  -- target_files: C# restricts to `class` with inheritance
                  -- clause (interface/struct cannot be attribute targets);
@@ -3122,7 +3142,7 @@ public partial class DbReader
                  -- それ以外は class-like 全体を候補にする。
                  AND " + BuildMetadataTargetKindExpr("dst") + @"
                 WHERE tf.has_metadata_target_kind = 1
-                GROUP BY tf.target_lang, tf.symbol_name
+                GROUP BY tf.target_lang, tf.symbol_name, tf.symbol_segment_count
             ),
             edges AS (
                 SELECT snc.source_path,
@@ -3139,6 +3159,7 @@ public partial class DbReader
                 LEFT JOIN target_ambiguity ta
                   ON ta.target_lang = snc.source_lang
                  AND ta.symbol_name = snc.symbol_name
+                 AND ta.symbol_segment_count = snc.symbol_segment_count
                 WHERE snc.source_path != tf.target_path
                   -- All metadata references ([Foo] / @Foo) and their synthetic C#
                   -- suffix aliases must only match class-like target kinds; otherwise

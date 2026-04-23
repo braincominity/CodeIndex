@@ -352,6 +352,13 @@ public class DbContext : IDisposable
                 var resolved = SqlNameResolver.ResolveReferenceNameFoldedAtColumn(symbolName, context, containerName, ToNullableInt(columnNumber));
                 return resolved.Length == 0 ? null : resolved;
             });
+        connection.CreateFunction(
+            "sql_resolve_reference_segment_count_at",
+            (string? symbolName, string? context, string? containerName, long? columnNumber) => (int?)(
+                SqlNameResolver.ResolveReferenceSegmentCountAtColumn(symbolName, context, containerName, ToNullableInt(columnNumber)) is var segmentCount
+                && segmentCount > 0
+                    ? segmentCount
+                    : null));
     }
 
     /// <summary>
