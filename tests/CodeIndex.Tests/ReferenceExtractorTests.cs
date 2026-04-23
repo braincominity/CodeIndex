@@ -5407,6 +5407,29 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_MergeUsingWithTargetHintStillCapturesSourceReference()
+    {
+        // issue #698: SQL Server `MERGE INTO target WITH (...) AS t USING source` should still keep
+        // the source-side `reference`, even when target hints include nested parens such as INDEX(...).
+        // issue #698: SQL Server の `MERGE INTO target WITH (...) AS t USING source` は、target hint
+        // に nested parens を含んでも source 側の `reference` を維持するべき。
+        const string content = """
+            MERGE INTO audit_log WITH (INDEX(ix_audit_log), HOLDLOCK) AS t
+            USING staging_log AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "INDEX");
+        Assert.DoesNotContain(references, r => r.SymbolName == "HOLDLOCK");
+    }
+
+    [Fact]
     public void Extract_SQL_DoubleQuotedDynamicSqlDoesNotLeakPhantomReferences()
     {
         // issue #689: preserving ANSI double-quoted identifiers must not let dynamic SQL strings
@@ -5428,6 +5451,23 @@ public class ReferenceExtractorTests
 
         var usersReference = Assert.Single(usersReferences);
         Assert.Equal(3, usersReference.Line);
+    }
+
+    [Fact]
+    public void Extract_SQL_SameLineDollarQuotedBodiesDoNotSwallowFollowingStatements()
+    {
+        // issue #697: when one dollar-quoted body ends and later same-line SQL continues, the
+        // sanitizer must close at the first real delimiter instead of blanking the later statement.
+        // issue #697: 1 つの dollar-quoted body が閉じた後に同一行の SQL が続く場合、sanitize は
+        // 後続 statement ごと空白化せず、最初の実 close delimiter で閉じなければならない。
+        const string content = """
+            DO $$BEGIN END$$; SELECT * FROM users; DO $$BEGIN END$$;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
     }
 
     [Fact]

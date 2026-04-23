@@ -209,6 +209,8 @@ public static class ReferenceExtractor
         @"(?:(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")\s*\.\s*)*(?<name>" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")";
     private const string SqlTopTargetModifierPattern =
         @"TOP\s*\([^)\r\n]*\)(?:\s+PERCENT)?(?:\s+WITH\s+TIES)?";
+    private const string SqlMergeTargetHintPattern =
+        @"WITH\s*\((?:[^()\r\n]+|\([^()\r\n]*\))*\)";
     private static readonly Regex SqlProcCallRegex = new(
         $@"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?(?:(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern})?\.)*(?<name>{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -225,7 +227,7 @@ public static class ReferenceExtractor
         $@"(?<![\w$])(?:FROM|JOIN|(?:CROSS|OUTER)\s+APPLY)\b\s+(?:(?:ONLY|LATERAL)\b\s+)*{SqlQualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SqlMergeUsingSourceRegex = new(
-        $@"(?<![\w$])MERGE\b(?:\s+{SqlTopTargetModifierPattern})?\s+INTO\s+{SqlQualifiedIdentifierNoCapturePattern}(?:\s+(?:AS\s+)?(?!USING\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s+USING\b\s+(?:(?:ONLY|LATERAL)\b\s+)*{SqlQualifiedIdentifierPattern}",
+        $@"(?<![\w$])MERGE\b(?:\s+{SqlTopTargetModifierPattern})?\s+INTO\s+{SqlQualifiedIdentifierNoCapturePattern}(?:\s+{SqlMergeTargetHintPattern})?(?:\s+(?:AS\s+)?(?!USING\b|WITH\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s+USING\b\s+(?:(?:ONLY|LATERAL)\b\s+)*{SqlQualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // SQL mutation targets such as `INSERT INTO tbl (...)` / `UPDATE tbl` / `TRUNCATE TABLE tbl`.
     // `INSERT INTO tbl (` is a table reference, not a function call; we later suppress the generic
@@ -1517,6 +1519,13 @@ public static class ReferenceExtractor
 
         delimiter = line[index..(probe + 1)];
         return true;
+    }
+
+    private static int SkipWhitespaceAhead(string text, int index)
+    {
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+            index++;
+        return index;
     }
 
     private static void CollectSqlTempObjectNamesFromStatement(
@@ -6818,16 +6827,24 @@ public static class ReferenceExtractor
                     break;
                 }
 
-                int nestedClosing = line.IndexOf(
-                    dollarQuoteDelimiter,
-                    closing + dollarQuoteDelimiter.Length,
-                    StringComparison.Ordinal);
-                if (nestedClosing >= 0)
+                int nextContent = SkipWhitespaceAhead(line, closing + dollarQuoteDelimiter.Length);
+                if (nextContent < line.Length
+                    && line[nextContent] != ';'
+                    && line[nextContent] != ','
+                    && line[nextContent] != ')'
+                    && line[nextContent] != ']')
                 {
-                    int end = nestedClosing + dollarQuoteDelimiter.Length;
-                    BlankRange(i, end);
-                    i = end;
-                    continue;
+                    int nestedClosing = line.IndexOf(
+                        dollarQuoteDelimiter,
+                        closing + dollarQuoteDelimiter.Length,
+                        StringComparison.Ordinal);
+                    if (nestedClosing >= 0)
+                    {
+                        int end = nestedClosing + dollarQuoteDelimiter.Length;
+                        BlankRange(i, end);
+                        i = end;
+                        continue;
+                    }
                 }
 
                 int closingEnd = closing + dollarQuoteDelimiter.Length;
