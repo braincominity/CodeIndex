@@ -2872,6 +2872,45 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_ResolveQuotedDefinitionsFromUnquotedQualifiedQueries()
+    {
+        InsertIndexedFile("src/sql_quoted_definition_target.sql", "sql",
+            """
+            CREATE PROCEDURE [dbo].[fn_Target]
+            AS
+            SELECT 1;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_quoted_definition_caller.sql", "sql",
+            """
+            CREATE PROCEDURE [sales].[fn_Target]
+            AS
+            EXEC [dbo].[fn_Target];
+            GO
+            """);
+
+        var definition = Assert.Single(
+            _reader.GetDefinitions("dbo.fn_Target", limit: 10, lang: "sql", pathPatterns: ["sql_quoted_definition"]));
+        Assert.Equal("[dbo].[fn_Target]", definition.Name);
+
+        var exactDefinition = Assert.Single(
+            _reader.GetDefinitions("dbo.fn_Target", limit: 10, lang: "sql", pathPatterns: ["sql_quoted_definition"], exact: true));
+        Assert.Equal("[dbo].[fn_Target]", exactDefinition.Name);
+
+        var analysis = _reader.AnalyzeSymbol("dbo.fn_Target", limit: 10, lang: "sql", pathPatterns: ["sql_quoted_definition"]);
+        Assert.Equal("[dbo].[fn_Target]", Assert.Single(analysis.Definitions).Name);
+
+        var exactAnalysis = _reader.AnalyzeSymbol("dbo.fn_Target", limit: 10, lang: "sql", pathPatterns: ["sql_quoted_definition"], exact: true);
+        Assert.Equal("[dbo].[fn_Target]", Assert.Single(exactAnalysis.Definitions).Name);
+
+        var impact = _reader.AnalyzeImpact("dbo.fn_Target", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_quoted_definition"]);
+        Assert.Equal(1, impact.DefinitionCount);
+        Assert.Equal("[dbo].[fn_Target]", Assert.Single(impact.Definitions).Name);
+        Assert.Equal("[sales].[fn_Target]", Assert.Single(impact.Callers).CallerName);
+    }
+
+    [Fact]
     public void GetFileDependencies_DoesNotJoinSameNameTargetsAcrossLanguages()
     {
         InsertIndexedFile("src/Foo.cs", "csharp",

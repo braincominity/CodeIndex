@@ -128,11 +128,16 @@ public partial class DbReader
 
         if (validQueries != null && validQueries.Count == 1)
         {
-            var exactColumn = exact && _foldReady ? "s.name_folded" : "s.name";
-            var exactSuffix = exact && _foldReady ? string.Empty : " COLLATE NOCASE";
+            var allowLeafFallback = !SqlNameResolver.HasQualifier(validQueries[0]);
             innerSql += exact
-                ? $" AND {exactColumn} = @query0{exactSuffix}"
-                : " AND s.name LIKE @query0 ESCAPE '\\'";
+                ? _foldReady
+                    ? allowLeafFallback
+                        ? " AND (s.name_folded = @query0 OR (f.lang = 'sql' AND (sql_normalize_name(s.name) = @query0Normalized COLLATE NOCASE OR sql_leaf_name(s.name) = @query0Leaf COLLATE NOCASE)))"
+                        : " AND (s.name_folded = @query0 OR (f.lang = 'sql' AND sql_normalize_name(s.name) = @query0Normalized COLLATE NOCASE))"
+                    : allowLeafFallback
+                        ? " AND (s.name = @query0 COLLATE NOCASE OR (f.lang = 'sql' AND (sql_normalize_name(s.name) = @query0Normalized COLLATE NOCASE OR sql_leaf_name(s.name) = @query0Leaf COLLATE NOCASE)))"
+                        : " AND (s.name = @query0 COLLATE NOCASE OR (f.lang = 'sql' AND sql_normalize_name(s.name) = @query0Normalized COLLATE NOCASE))"
+                : " AND (s.name LIKE @query0 ESCAPE '\\' OR (f.lang = 'sql' AND sql_normalize_name(s.name) LIKE @query0NormalizedLike ESCAPE '\\'))";
         }
         if (kind != null)
             innerSql += " AND s.kind = @kind";
@@ -153,6 +158,9 @@ public partial class DbReader
                     ? NameFold.Fold(value) ?? value
                     : value;
             cmd.Parameters.AddWithValue("@query0", paramValue);
+            cmd.Parameters.AddWithValue("@query0Normalized", SqlNameResolver.NormalizeQualifiedName(value));
+            cmd.Parameters.AddWithValue("@query0Leaf", SqlNameResolver.GetLeafName(value));
+            cmd.Parameters.AddWithValue("@query0NormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(value))}%");
         }
         if (kind != null)
             cmd.Parameters.AddWithValue("@kind", kind);
@@ -187,11 +195,19 @@ public partial class DbReader
         var effectiveQueries = queries?.Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
         if (effectiveQueries != null && effectiveQueries.Count > 0)
         {
-            var exactColumn = exact && _foldReady ? "s.name_folded" : "s.name";
-            var exactSuffix = exact && _foldReady ? string.Empty : " COLLATE NOCASE";
             var orClauses = exact
-                ? string.Join(" OR ", effectiveQueries.Select((_, idx) => $"{exactColumn} = @query{idx}{exactSuffix}"))
-                : string.Join(" OR ", effectiveQueries.Select((_, idx) => $"s.name LIKE @query{idx} ESCAPE '\\'"));
+                ? string.Join(" OR ", effectiveQueries.Select((queryValue, idx) =>
+                {
+                    var allowLeafFallback = !SqlNameResolver.HasQualifier(queryValue);
+                    return _foldReady
+                        ? allowLeafFallback
+                            ? $"(s.name_folded = @query{idx} OR (f.lang = 'sql' AND (sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
+                            : $"(s.name_folded = @query{idx} OR (f.lang = 'sql' AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE))"
+                        : allowLeafFallback
+                            ? $"(s.name = @query{idx} COLLATE NOCASE OR (f.lang = 'sql' AND (sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
+                            : $"(s.name = @query{idx} COLLATE NOCASE OR (f.lang = 'sql' AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE))";
+                }))
+                : string.Join(" OR ", effectiveQueries.Select((_, idx) => $"(s.name LIKE @query{idx} ESCAPE '\\' OR (f.lang = 'sql' AND sql_normalize_name(s.name) LIKE @query{idx}NormalizedLike ESCAPE '\\'))"));
             sql += $" AND ({orClauses})";
         }
         if (kind != null)
@@ -215,6 +231,9 @@ public partial class DbReader
                         ? NameFold.Fold(value) ?? value
                         : value;
                 cmd.Parameters.AddWithValue($"@query{i}", paramValue);
+                cmd.Parameters.AddWithValue($"@query{i}Normalized", SqlNameResolver.NormalizeQualifiedName(value));
+                cmd.Parameters.AddWithValue($"@query{i}Leaf", SqlNameResolver.GetLeafName(value));
+                cmd.Parameters.AddWithValue($"@query{i}NormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(value))}%");
             }
         }
         if (kind != null)
@@ -302,11 +321,19 @@ public partial class DbReader
             // Fallback: `s.name = @q COLLATE NOCASE` (indexed by idx_symbols_name_nocase). Both
             // paths stay SARGable. Using `lower(col)` would force a full scan per name.
             // --exact: FoldReady なら Unicode 折り畳み経路、未 ready ならレガシー NOCASE 経路へ fallback。
-            var exactColumn = exact && _foldReady ? "s.name_folded" : "s.name";
-            var exactSuffix = exact && _foldReady ? string.Empty : " COLLATE NOCASE";
             var orClauses = exact
-                ? string.Join(" OR ", effectiveQueries.Select((_, idx) => $"{exactColumn} = @query{idx}{exactSuffix}"))
-                : string.Join(" OR ", effectiveQueries.Select((_, idx) => $"s.name LIKE @query{idx} ESCAPE '\\'"));
+                ? string.Join(" OR ", effectiveQueries.Select((queryValue, idx) =>
+                {
+                    var allowLeafFallback = !SqlNameResolver.HasQualifier(queryValue);
+                    return _foldReady
+                        ? allowLeafFallback
+                            ? $"(s.name_folded = @query{idx} OR (f.lang = 'sql' AND (sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
+                            : $"(s.name_folded = @query{idx} OR (f.lang = 'sql' AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE))"
+                        : allowLeafFallback
+                            ? $"(s.name = @query{idx} COLLATE NOCASE OR (f.lang = 'sql' AND (sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
+                            : $"(s.name = @query{idx} COLLATE NOCASE OR (f.lang = 'sql' AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE))";
+                }))
+                : string.Join(" OR ", effectiveQueries.Select((_, idx) => $"(s.name LIKE @query{idx} ESCAPE '\\' OR (f.lang = 'sql' AND sql_normalize_name(s.name) LIKE @query{idx}NormalizedLike ESCAPE '\\'))"));
             sql += $" AND ({orClauses})";
         }
         if (kind != null)
@@ -318,8 +345,11 @@ public partial class DbReader
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += $" ORDER BY CASE " +
             "WHEN @preferLiteralExactMatch = 1 AND s.name = @rawQuery THEN 0 " +
-            "WHEN @preferCaseInsensitiveExactMatch = 1 AND s.name = @rawQuery COLLATE NOCASE THEN 1 " +
-            "ELSE 2 END, " +
+            "WHEN @preferLiteralNormalizedSqlMatch = 1 AND f.lang = 'sql' AND sql_normalize_name(s.name) = @rawQueryNormalized THEN 1 " +
+            "WHEN @preferCaseInsensitiveExactMatch = 1 AND s.name = @rawQuery COLLATE NOCASE THEN 2 " +
+            "WHEN @preferCaseInsensitiveNormalizedSqlMatch = 1 AND f.lang = 'sql' AND sql_normalize_name(s.name) = @rawQueryNormalized COLLATE NOCASE THEN 3 " +
+            "WHEN @preferCaseInsensitiveSqlLeafMatch = 1 AND f.lang = 'sql' AND sql_leaf_name(s.name) = @rawQueryLeaf COLLATE NOCASE THEN 4 " +
+            "ELSE 5 END, " +
             $"{PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line LIMIT @limit";
 
         cmd.CommandText = sql;
@@ -335,13 +365,22 @@ public partial class DbReader
                 else
                     paramValue = effectiveQueries[idx];
                 cmd.Parameters.AddWithValue($"@query{idx}", paramValue);
+                cmd.Parameters.AddWithValue($"@query{idx}Normalized", SqlNameResolver.NormalizeQualifiedName(effectiveQueries[idx]));
+                cmd.Parameters.AddWithValue($"@query{idx}Leaf", SqlNameResolver.GetLeafName(effectiveQueries[idx]));
+                cmd.Parameters.AddWithValue($"@query{idx}NormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(effectiveQueries[idx]))}%");
             }
         }
         var preferLiteralExactMatch = effectiveQueries != null && effectiveQueries.Count == 1;
         var preferCaseInsensitiveExactMatch = effectiveQueries != null && effectiveQueries.Count == 1;
+        var preferSqlLeafMatch = preferCaseInsensitiveExactMatch && !SqlNameResolver.HasQualifier(effectiveQueries![0]);
         cmd.Parameters.AddWithValue("@preferLiteralExactMatch", preferLiteralExactMatch ? 1 : 0);
+        cmd.Parameters.AddWithValue("@preferLiteralNormalizedSqlMatch", preferLiteralExactMatch ? 1 : 0);
         cmd.Parameters.AddWithValue("@preferCaseInsensitiveExactMatch", preferCaseInsensitiveExactMatch ? 1 : 0);
+        cmd.Parameters.AddWithValue("@preferCaseInsensitiveNormalizedSqlMatch", preferCaseInsensitiveExactMatch ? 1 : 0);
+        cmd.Parameters.AddWithValue("@preferCaseInsensitiveSqlLeafMatch", preferSqlLeafMatch ? 1 : 0);
         cmd.Parameters.AddWithValue("@rawQuery", preferLiteralExactMatch ? effectiveQueries![0] : string.Empty);
+        cmd.Parameters.AddWithValue("@rawQueryNormalized", preferLiteralExactMatch ? SqlNameResolver.NormalizeQualifiedName(effectiveQueries![0]) : string.Empty);
+        cmd.Parameters.AddWithValue("@rawQueryLeaf", preferLiteralExactMatch ? SqlNameResolver.GetLeafName(effectiveQueries![0]) : string.Empty);
         if (kind != null)
             cmd.Parameters.AddWithValue("@kind", kind);
         if (lang != null)
@@ -436,11 +475,16 @@ public partial class DbReader
 
         if (!string.IsNullOrWhiteSpace(query))
         {
-            var exactColumn = exact && _foldReady ? "s.name_folded" : "s.name";
-            var exactSuffix = exact && _foldReady ? string.Empty : " COLLATE NOCASE";
+            var allowLeafFallback = !SqlNameResolver.HasQualifier(query);
             sql += exact
-                ? $" AND {exactColumn} = @query{exactSuffix}"
-                : " AND s.name LIKE @query ESCAPE '\\'";
+                ? _foldReady
+                    ? allowLeafFallback
+                        ? " AND (s.name_folded = @query OR (f.lang = 'sql' AND (sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE OR sql_leaf_name(s.name) = @queryLeaf COLLATE NOCASE)))"
+                        : " AND (s.name_folded = @query OR (f.lang = 'sql' AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE))"
+                    : allowLeafFallback
+                        ? " AND (s.name = @query COLLATE NOCASE OR (f.lang = 'sql' AND (sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE OR sql_leaf_name(s.name) = @queryLeaf COLLATE NOCASE)))"
+                        : " AND (s.name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE))"
+                : " AND (s.name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND sql_normalize_name(s.name) LIKE @queryNormalizedLike ESCAPE '\\'))";
         }
         if (kind != null)
             sql += " AND s.kind = @kind";
@@ -468,6 +512,9 @@ public partial class DbReader
                     ? NameFold.Fold(query) ?? query
                     : query;
             cmd.Parameters.AddWithValue("@query", paramValue);
+            cmd.Parameters.AddWithValue("@queryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
+            cmd.Parameters.AddWithValue("@queryLeaf", SqlNameResolver.GetLeafName(query));
+            cmd.Parameters.AddWithValue("@queryNormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(query))}%");
         }
         if (kind != null)
             cmd.Parameters.AddWithValue("@kind", kind);
@@ -686,9 +733,14 @@ public partial class DbReader
     {
         using var cmd = _conn.CreateCommand();
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "supportedGraphLang");
+        var allowLeafFallback = !SqlNameResolver.HasQualifier(query);
         var nameCondition = _foldReady
-            ? "s.name_folded = @query"
-            : "s.name = @query COLLATE NOCASE";
+            ? allowLeafFallback
+                ? "(s.name_folded = @queryFolded OR (f.lang = 'sql' AND (sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE OR sql_leaf_name(s.name) = @queryLeaf COLLATE NOCASE)))"
+                : "(s.name_folded = @queryFolded OR (f.lang = 'sql' AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE))"
+            : allowLeafFallback
+                ? "(s.name = @queryRaw COLLATE NOCASE OR (f.lang = 'sql' AND (sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE OR sql_leaf_name(s.name) = @queryLeaf COLLATE NOCASE)))"
+                : "(s.name = @queryRaw COLLATE NOCASE OR (f.lang = 'sql' AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE))";
 
         var sql = @"
             SELECT f.lang
@@ -704,7 +756,10 @@ public partial class DbReader
         sql += " LIMIT 1";
 
         cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@query", _foldReady ? NameFold.Fold(query) ?? query : query);
+        cmd.Parameters.AddWithValue("@queryRaw", query);
+        cmd.Parameters.AddWithValue("@queryFolded", NameFold.Fold(query) ?? query);
+        cmd.Parameters.AddWithValue("@queryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
+        cmd.Parameters.AddWithValue("@queryLeaf", SqlNameResolver.GetLeafName(query));
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
@@ -724,9 +779,14 @@ public partial class DbReader
     {
         using var ownedCommand = command == null ? _conn.CreateCommand() : null;
         var cmd = command ?? ownedCommand!;
+        var allowLeafFallback = !SqlNameResolver.HasQualifier(query);
         var nameCondition = _foldReady
-            ? "s.name_folded = @query"
-            : "s.name = @query COLLATE NOCASE";
+            ? allowLeafFallback
+                ? "(s.name_folded = @queryFolded OR (f.lang = 'sql' AND (sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE OR sql_leaf_name(s.name) = @queryLeaf COLLATE NOCASE)))"
+                : "(s.name_folded = @queryFolded OR (f.lang = 'sql' AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE))"
+            : allowLeafFallback
+                ? "(s.name = @queryRaw COLLATE NOCASE OR (f.lang = 'sql' AND (sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE OR sql_leaf_name(s.name) = @queryLeaf COLLATE NOCASE)))"
+                : "(s.name = @queryRaw COLLATE NOCASE OR (f.lang = 'sql' AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE))";
 
         var sql = @"
             SELECT 1
@@ -740,7 +800,10 @@ public partial class DbReader
         sql += " LIMIT 1";
 
         cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@query", _foldReady ? NameFold.Fold(query) ?? query : query);
+        cmd.Parameters.AddWithValue("@queryRaw", query);
+        cmd.Parameters.AddWithValue("@queryFolded", NameFold.Fold(query) ?? query);
+        cmd.Parameters.AddWithValue("@queryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
+        cmd.Parameters.AddWithValue("@queryLeaf", SqlNameResolver.GetLeafName(query));
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);

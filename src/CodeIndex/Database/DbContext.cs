@@ -268,11 +268,14 @@ public class DbContext : IDisposable
         }
     }
 
-    private static void RegisterConnectionFunctions(SqliteConnection connection)
+    internal static void RegisterConnectionFunctions(SqliteConnection connection)
     {
         connection.CreateFunction(
             "sql_leaf_name",
             (string? name) => string.IsNullOrWhiteSpace(name) ? null : SqlNameResolver.GetLeafName(name));
+        connection.CreateFunction(
+            "sql_normalize_name",
+            (string? name) => string.IsNullOrWhiteSpace(name) ? null : SqlNameResolver.NormalizeQualifiedName(name));
     }
 
     /// <summary>

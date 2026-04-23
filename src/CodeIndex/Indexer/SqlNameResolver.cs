@@ -1,14 +1,17 @@
+using System.Text;
+
 namespace CodeIndex.Indexer;
 
 internal static class SqlNameResolver
 {
-    public static string GetLeafName(string? qualifiedName)
+    public static string NormalizeQualifiedName(string? qualifiedName)
     {
         if (string.IsNullOrWhiteSpace(qualifiedName))
             return string.Empty;
 
-        var trimmed = qualifiedName.AsSpan().Trim();
-        var segmentStart = 0;
+        var trimmed = qualifiedName.Trim();
+        var segments = new List<string>();
+        var current = new StringBuilder();
         char quote = '\0';
 
         for (var i = 0; i < trimmed.Length; i++)
@@ -22,12 +25,17 @@ internal static class SqlNameResolver
                     {
                         if (i + 1 < trimmed.Length && trimmed[i + 1] == ']')
                         {
+                            current.Append(']');
                             i++;
                         }
                         else
                         {
                             quote = '\0';
                         }
+                    }
+                    else
+                    {
+                        current.Append(ch);
                     }
 
                     continue;
@@ -37,12 +45,17 @@ internal static class SqlNameResolver
                 {
                     if (i + 1 < trimmed.Length && trimmed[i + 1] == quote)
                     {
+                        current.Append(quote);
                         i++;
                     }
                     else
                     {
                         quote = '\0';
                     }
+                }
+                else
+                {
+                    current.Append(ch);
                 }
 
                 continue;
@@ -55,26 +68,36 @@ internal static class SqlNameResolver
             }
 
             if (ch == '.')
-                segmentStart = i + 1;
+            {
+                AppendNormalizedSegment(segments, current);
+                continue;
+            }
+
+            current.Append(ch);
         }
 
-        return UnquoteIdentifier(trimmed[segmentStart..].Trim());
+        AppendNormalizedSegment(segments, current);
+        return string.Join(".", segments);
     }
 
-    private static string UnquoteIdentifier(ReadOnlySpan<char> identifier)
+    public static string GetLeafName(string? qualifiedName)
     {
-        if (identifier.Length < 2)
-            return identifier.ToString();
+        var normalized = NormalizeQualifiedName(qualifiedName);
+        if (string.IsNullOrEmpty(normalized))
+            return string.Empty;
 
-        if (identifier[0] == '[' && identifier[^1] == ']')
-            return identifier[1..^1].ToString().Replace("]]", "]");
+        var lastDot = normalized.LastIndexOf('.');
+        return lastDot >= 0 ? normalized[(lastDot + 1)..] : normalized;
+    }
 
-        if (identifier[0] == '"' && identifier[^1] == '"')
-            return identifier[1..^1].ToString().Replace("\"\"", "\"");
+    public static bool HasQualifier(string? qualifiedName)
+        => NormalizeQualifiedName(qualifiedName).Contains('.', StringComparison.Ordinal);
 
-        if (identifier[0] == '`' && identifier[^1] == '`')
-            return identifier[1..^1].ToString().Replace("``", "`");
-
-        return identifier.ToString();
+    private static void AppendNormalizedSegment(List<string> segments, StringBuilder current)
+    {
+        var value = current.ToString().Trim();
+        if (value.Length > 0)
+            segments.Add(value);
+        current.Clear();
     }
 }

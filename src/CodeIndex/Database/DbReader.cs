@@ -145,6 +145,7 @@ public partial class DbReader
     public DbReader(SqliteConnection connection, bool isReadOnly = false)
     {
         _conn = connection;
+        DbContext.RegisterConnectionFunctions(_conn);
         _isReadOnly = isReadOnly;
         _fileColumns = LoadColumns("files");
         _symbolColumns = LoadColumns("symbols");
@@ -1374,20 +1375,33 @@ public partial class DbReader
         // No path/test filters — definitions outside caller scope must still be found.
         // Only considers graph-supported languages to avoid resolving to unsupported ones.
         // FoldReady なら folded equality、legacy DB では ASCII `COLLATE NOCASE` にフォールバック。
+        var normalizedName = SqlNameResolver.NormalizeQualifiedName(symbolName);
+        var leafName = SqlNameResolver.GetLeafName(symbolName);
+        var allowLeafFallback = !SqlNameResolver.HasQualifier(symbolName);
         using var cmd = _conn.CreateCommand();
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "resolveLang");
         var nameCondition = _foldReady
-            ? "(s.name_folded = @nameFolded OR (f.lang = 'sql' AND sql_leaf_name(s.name) = @name COLLATE NOCASE))"
-            : "(s.name = @name COLLATE NOCASE OR (f.lang = 'sql' AND sql_leaf_name(s.name) = @name COLLATE NOCASE))";
+            ? allowLeafFallback
+                ? "(s.name_folded = @nameFolded OR (f.lang = 'sql' AND (sql_normalize_name(s.name) = @normalizedName COLLATE NOCASE OR sql_leaf_name(s.name) = @leafName COLLATE NOCASE)))"
+                : "(s.name_folded = @nameFolded OR (f.lang = 'sql' AND sql_normalize_name(s.name) = @normalizedName COLLATE NOCASE))"
+            : allowLeafFallback
+                ? "(s.name = @name COLLATE NOCASE OR (f.lang = 'sql' AND (sql_normalize_name(s.name) = @normalizedName COLLATE NOCASE OR sql_leaf_name(s.name) = @leafName COLLATE NOCASE)))"
+                : "(s.name = @name COLLATE NOCASE OR (f.lang = 'sql' AND sql_normalize_name(s.name) = @normalizedName COLLATE NOCASE))";
         cmd.CommandText = @"SELECT s.name FROM symbols s JOIN files f ON s.file_id = f.id
                             WHERE " + nameCondition + @"
                               AND " + supportedLangFilter + @"
                             ORDER BY CASE
                                          WHEN s.name = @name THEN 0
-                                         WHEN f.lang = 'sql' AND sql_leaf_name(s.name) = @name COLLATE NOCASE THEN 1
-                                         ELSE 2
+                                         WHEN f.lang = 'sql' AND sql_normalize_name(s.name) = @normalizedName THEN 1
+                                         WHEN f.lang = 'sql' AND sql_normalize_name(s.name) = @normalizedName COLLATE NOCASE THEN 2
+                                         WHEN @allowLeafFallback = 1 AND f.lang = 'sql' AND sql_leaf_name(s.name) = @leafName THEN 3
+                                         WHEN @allowLeafFallback = 1 AND f.lang = 'sql' AND sql_leaf_name(s.name) = @leafName COLLATE NOCASE THEN 4
+                                         ELSE 5
                                      END LIMIT 1";
         cmd.Parameters.AddWithValue("@name", symbolName);
+        cmd.Parameters.AddWithValue("@normalizedName", normalizedName);
+        cmd.Parameters.AddWithValue("@leafName", leafName);
+        cmd.Parameters.AddWithValue("@allowLeafFallback", allowLeafFallback ? 1 : 0);
         if (_foldReady)
             cmd.Parameters.AddWithValue("@nameFolded", NameFold.Fold(symbolName) ?? symbolName);
         using var reader = cmd.ExecuteTrackedReader();
@@ -1676,11 +1690,18 @@ public partial class DbReader
 
     private List<SymbolResult> ResolveImpactDefinitions(string resolvedName, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
+        var normalizedName = SqlNameResolver.NormalizeQualifiedName(resolvedName);
+        var leafName = SqlNameResolver.GetLeafName(resolvedName);
+        var allowLeafFallback = !SqlNameResolver.HasQualifier(resolvedName);
         using var cmd = _conn.CreateCommand();
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "impactDefLang");
         var nameCondition = _foldReady
-            ? "s.name_folded = @resolvedNameFolded"
-            : "s.name = @resolvedName COLLATE NOCASE";
+            ? allowLeafFallback
+                ? "(s.name_folded = @resolvedNameFolded OR (f.lang = 'sql' AND (sql_normalize_name(s.name) = @resolvedNameNormalized COLLATE NOCASE OR sql_leaf_name(s.name) = @resolvedNameLeaf COLLATE NOCASE)))"
+                : "(s.name_folded = @resolvedNameFolded OR (f.lang = 'sql' AND sql_normalize_name(s.name) = @resolvedNameNormalized COLLATE NOCASE))"
+            : allowLeafFallback
+                ? "(s.name = @resolvedName COLLATE NOCASE OR (f.lang = 'sql' AND (sql_normalize_name(s.name) = @resolvedNameNormalized COLLATE NOCASE OR sql_leaf_name(s.name) = @resolvedNameLeaf COLLATE NOCASE)))"
+                : "(s.name = @resolvedName COLLATE NOCASE OR (f.lang = 'sql' AND sql_normalize_name(s.name) = @resolvedNameNormalized COLLATE NOCASE))";
         var sql = $@"
             SELECT f.path, f.lang, s.kind, s.name, s.line,
                    {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
@@ -1700,10 +1721,20 @@ public partial class DbReader
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY CASE WHEN s.name = @resolvedName THEN 0 ELSE 1 END, {PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line LIMIT @limit";
+        sql += @" ORDER BY CASE
+                     WHEN s.name = @resolvedName THEN 0
+                     WHEN f.lang = 'sql' AND sql_normalize_name(s.name) = @resolvedNameNormalized THEN 1
+                     WHEN f.lang = 'sql' AND sql_normalize_name(s.name) = @resolvedNameNormalized COLLATE NOCASE THEN 2
+                     WHEN @allowLeafFallback = 1 AND f.lang = 'sql' AND sql_leaf_name(s.name) = @resolvedNameLeaf THEN 3
+                     WHEN @allowLeafFallback = 1 AND f.lang = 'sql' AND sql_leaf_name(s.name) = @resolvedNameLeaf COLLATE NOCASE THEN 4
+                     ELSE 5
+                   END, " + $"{PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line LIMIT @limit";
 
         cmd.CommandText = sql;
         cmd.Parameters.AddWithValue("@resolvedName", resolvedName);
+        cmd.Parameters.AddWithValue("@resolvedNameNormalized", normalizedName);
+        cmd.Parameters.AddWithValue("@resolvedNameLeaf", leafName);
+        cmd.Parameters.AddWithValue("@allowLeafFallback", allowLeafFallback ? 1 : 0);
         if (_foldReady)
             cmd.Parameters.AddWithValue("@resolvedNameFolded", NameFold.Fold(resolvedName) ?? resolvedName);
         if (lang != null)
