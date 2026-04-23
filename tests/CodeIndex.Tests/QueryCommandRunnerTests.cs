@@ -7121,6 +7121,48 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunCallers_Json_CSharpTopLevelStatementsUseSyntheticTopLevelCaller()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callers_csharp_toplevel");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Program.cs", "csharp",
+                """
+                using System;
+
+                Console.WriteLine("boot");
+
+                void Run()
+                {
+                    Console.WriteLine("inside");
+                }
+
+                Run();
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Run", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("function", json.GetProperty("caller_kind").GetString());
+            Assert.Equal("<top-level>", json.GetProperty("caller_name").GetString());
+            Assert.Equal("Run", json.GetProperty("callee_name").GetString());
+            Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunCallers_HumanOutput_ShowsReferenceKindPerRow()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callers_human_reference_kind");

@@ -1414,6 +1414,36 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetCallers_CSharpTopLevelStatementCallSurfacesSyntheticTopLevelCaller()
+    {
+        InsertIndexedFile("src/Program.cs", "csharp",
+            """
+            using System;
+
+            Console.WriteLine("boot");
+
+            int Add(int a, int b) => a + b;
+            void Run()
+            {
+                Console.WriteLine(Add(1, 2));
+            }
+
+            Run();
+            """);
+
+        var callers = _reader.GetCallers("Run", lang: "csharp", exact: true, pathPatterns: ["Program.cs"]);
+
+        var caller = Assert.Single(callers);
+        Assert.Equal("src/Program.cs", caller.Path);
+        Assert.Equal("function", caller.CallerKind);
+        Assert.Equal("<top-level>", caller.CallerName);
+        Assert.Equal("Run", caller.CalleeName);
+        Assert.Equal(1, caller.ReferenceCount);
+        Assert.Equal(1, _reader.CountCallers("Run", lang: "csharp", exact: true, pathPatterns: ["Program.cs"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCallersTotal("Run", lang: "csharp", exact: true, pathPatterns: ["Program.cs"]));
+    }
+
+    [Fact]
     public void GetCallees_ReturnsReferencedSymbolsForCaller()
     {
         InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return authenticate(user, password)\n");
@@ -2537,6 +2567,35 @@ public class DbReaderTests : IDisposable
         Assert.Equal("bootstrap", caller.CallerName);
         Assert.Equal("CAFÉ_INIT", caller.CalleeName);
         Assert.Equal(1, caller.Depth);
+    }
+
+    [Fact]
+    public void GetTransitiveCallers_CSharpTopLevelStatementCallSurfacesSyntheticTopLevelCallerWithoutRecursing()
+    {
+        InsertIndexedFile("src/Program.cs", "csharp",
+            """
+            using System;
+
+            Console.WriteLine("boot");
+
+            void Run()
+            {
+                Console.WriteLine("inside");
+            }
+
+            Run();
+            """);
+
+        var (results, truncated) = _reader.GetTransitiveCallers("Run", maxDepth: 3, limit: 10, lang: "csharp", pathPatterns: ["Program.cs"]);
+
+        Assert.False(truncated);
+        var caller = Assert.Single(results);
+        Assert.Equal("src/Program.cs", caller.Path);
+        Assert.Equal("function", caller.CallerKind);
+        Assert.Equal("<top-level>", caller.CallerName);
+        Assert.Equal("Run", caller.CalleeName);
+        Assert.Equal(1, caller.Depth);
+        Assert.Equal(1, caller.ReferenceCount);
     }
 
     [Fact]
