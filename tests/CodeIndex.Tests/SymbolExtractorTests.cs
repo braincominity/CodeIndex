@@ -8306,6 +8306,28 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_DetectsAllmanStyleCompactConstructors()
+    {
+        var content = """
+            public record Range(int low, int high) {
+                public Range
+                {
+                    if (low > high) throw new IllegalArgumentException();
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var compactCtor = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Range"));
+        Assert.Equal("class", compactCtor.ContainerKind);
+        Assert.Equal("Range", compactCtor.ContainerName);
+        Assert.Equal(2, compactCtor.StartLine);
+        Assert.NotNull(compactCtor.BodyStartLine);
+        Assert.NotNull(compactCtor.BodyEndLine);
+        Assert.True(compactCtor.BodyStartLine >= compactCtor.StartLine);
+    }
+
+    [Fact]
     public void Extract_Java_DetectsSameLineAnnotatedDeclarationsWhenAnnotationArgumentsContainParen()
     {
         var content = """
