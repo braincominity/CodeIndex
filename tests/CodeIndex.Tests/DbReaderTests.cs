@@ -3027,6 +3027,35 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_UnqualifiedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
+    {
+        InsertIndexedFile("src/sql_unqualified_unicode_exact_definition.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.Äpfel
+            AS
+            SELECT 1;
+            GO
+
+            CREATE PROCEDURE dbo.Caller
+            AS
+            EXEC dbo.äpfel;
+            GO
+            """);
+
+        Assert.Equal(1, _reader.CountSearchSymbols(["äpfel"], lang: "sql", pathPatterns: ["sql_unqualified_unicode_exact_definition"], exact: true));
+
+        var symbol = Assert.Single(_reader.SearchSymbols(["äpfel"], limit: 10, lang: "sql", pathPatterns: ["sql_unqualified_unicode_exact_definition"], exact: true));
+        Assert.Equal("dbo.Äpfel", symbol.Name);
+
+        var definition = Assert.Single(_reader.GetDefinitions("äpfel", limit: 10, lang: "sql", pathPatterns: ["sql_unqualified_unicode_exact_definition"], exact: true));
+        Assert.Equal("dbo.Äpfel", definition.Name);
+
+        var analysis = _reader.AnalyzeSymbol("äpfel", limit: 10, lang: "sql", pathPatterns: ["sql_unqualified_unicode_exact_definition"], exact: true);
+        Assert.Equal("dbo.Äpfel", Assert.Single(analysis.Definitions).Name);
+        Assert.Equal("dbo.Caller", Assert.Single(analysis.Callers).CallerName);
+    }
+
+    [Fact]
     public void GetFileDependencies_DoesNotJoinSameNameTargetsAcrossLanguages()
     {
         InsertIndexedFile("src/Foo.cs", "csharp",
