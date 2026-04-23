@@ -359,6 +359,10 @@ public class DbContext : IDisposable
                 && segmentCount > 0
                     ? segmentCount
                     : null));
+        connection.CreateFunction(
+            "sql_allow_leaf_fallback_at",
+            (string? symbolName, string? context, string? containerName, long? columnNumber) =>
+                SqlNameResolver.AllowLeafFallbackAtColumn(symbolName, context, containerName, ToNullableInt(columnNumber)) ? 1 : 0);
     }
 
     /// <summary>

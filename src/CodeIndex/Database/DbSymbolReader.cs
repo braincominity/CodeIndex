@@ -1110,21 +1110,31 @@ public partial class DbReader
                        rf.lang,
                        " + BuildLogicalReferenceNameExpr("rf.lang", "sr.symbol_name", "sr.context", "sr.container_name", "sr.column_number") + @" AS symbol_name,
                        " + BuildLogicalReferenceSegmentCountExpr("rf.lang", "sr.symbol_name", "sr.context", "sr.container_name", "sr.column_number") + @" AS symbol_segment_count,
+                       " + BuildLogicalReferenceLeafFallbackAllowedExpr("rf.lang", "sr.symbol_name", "sr.context", "sr.container_name", "sr.column_number") + @" AS allow_leaf_fallback,
                        sr.line,
                        sr.column_number,
                        " + GetLogicalReferenceKindSql("sr.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references sr
                 JOIN files rf ON rf.id = sr.file_id
                 WHERE sr.reference_kind IN " + CallGraphReferenceKindsSql + @"
-                GROUP BY rf.lang, sr.file_id, symbol_name, symbol_segment_count, sr.line, sr.column_number, logical_reference_kind
+                GROUP BY rf.lang, sr.file_id, symbol_name, symbol_segment_count, allow_leaf_fallback, sr.line, sr.column_number, logical_reference_kind
             ),
-            global_reference_counts AS (
+            global_exact_reference_counts AS (
                 SELECT lang,
                        symbol_name,
                        symbol_segment_count,
                        COUNT(*) AS ref_count
                 FROM logical_references
                 GROUP BY lang, symbol_name, symbol_segment_count
+            ),
+            global_leaf_reference_counts AS (
+                SELECT lang,
+                       symbol_name,
+                       COUNT(*) AS ref_count
+                FROM logical_references
+                WHERE symbol_segment_count = 1
+                  AND allow_leaf_fallback = 1
+                GROUP BY lang, symbol_name
             ),
             file_target_cardinality AS (
                 SELECT lang,
@@ -1143,7 +1153,7 @@ public partial class DbReader
                        logical_target_key
                 FROM filtered_candidates
             ),
-            file_reference_counts AS (
+            file_reference_counts_exact AS (
                 SELECT lang,
                        file_id,
                        symbol_name,
@@ -1152,11 +1162,21 @@ public partial class DbReader
                 FROM logical_references
                 GROUP BY lang, file_id, symbol_name, symbol_segment_count
             ),
+            file_reference_counts_leaf AS (
+                SELECT lang,
+                       file_id,
+                       symbol_name,
+                       COUNT(*) AS ref_count
+                FROM logical_references
+                WHERE symbol_segment_count = 1
+                  AND allow_leaf_fallback = 1
+                GROUP BY lang, file_id, symbol_name
+            ),
             conservative_reference_counts AS (
                 SELECT ctf.logical_target_key,
                        ctf.name,
                        ctf.kind,
-                       SUM(COALESCE(frc.ref_count, 0)) AS ref_count
+                       SUM(COALESCE(frc_exact.ref_count, 0) + COALESCE(frc_leaf.ref_count, 0)) AS ref_count
                 FROM conservative_target_files ctf
                 JOIN file_target_cardinality ftc
                   ON ftc.lang = ctf.lang
@@ -1164,39 +1184,62 @@ public partial class DbReader
                  AND ftc.name = ctf.name
                  AND ftc.kind = ctf.kind
                  AND ftc.target_count = 1
-                LEFT JOIN file_reference_counts frc
-                  ON frc.lang = ctf.lang
-                 AND frc.file_id = ctf.file_id
+                LEFT JOIN file_reference_counts_exact frc_exact
+                  ON frc_exact.lang = ctf.lang
+                 AND frc_exact.file_id = ctf.file_id
                  AND (
-                        (ctf.lang != 'sql' AND frc.symbol_name = ctf.name)
-                     OR (ctf.lang = 'sql' AND (
-                            (frc.symbol_segment_count = sql_segment_count(ctf.name) AND frc.symbol_name = sql_normalize_name(ctf.name) COLLATE NOCASE)
-                         OR (frc.symbol_segment_count = 1 AND frc.symbol_name = sql_leaf_name(ctf.name) COLLATE NOCASE)
-                     ))
-                 )
+                         (ctf.lang != 'sql' AND frc_exact.symbol_name = ctf.name)
+                      OR (ctf.lang = 'sql' AND (
+                             (frc_exact.symbol_segment_count = sql_segment_count(ctf.name) AND frc_exact.symbol_name = sql_normalize_name(ctf.name) COLLATE NOCASE)
+                      ))
+                  )
+                LEFT JOIN file_reference_counts_leaf frc_leaf
+                  ON frc_leaf.lang = ctf.lang
+                 AND frc_leaf.file_id = ctf.file_id
+                 AND ctf.lang = 'sql'
+                 AND sql_segment_count(ctf.name) > 1
+                 AND frc_leaf.symbol_name = sql_leaf_name(ctf.name) COLLATE NOCASE
+                 AND NOT EXISTS (
+                        SELECT 1
+                        FROM filtered_candidates fc_exact
+                        WHERE fc_exact.lang = ctf.lang
+                          AND sql_segment_count(fc_exact.name) = 1
+                          AND sql_normalize_name(fc_exact.name) = frc_leaf.symbol_name COLLATE NOCASE
+                    )
                 GROUP BY ctf.logical_target_key, ctf.name, ctf.kind
             ),
             reference_counts AS (
                 SELECT gr.symbol_id,
                        CASE
-                           WHEN nc.defs = 1
-                             OR (nc.count_safe_defs = nc.defs AND nc.count_safe_groups = 1)
-                               THEN COALESCE(grc.ref_count, 0)
-                           ELSE COALESCE(crc.ref_count, 0)
-                       END AS ref_count
+                            WHEN nc.defs = 1
+                              OR (nc.count_safe_defs = nc.defs AND nc.count_safe_groups = 1)
+                                THEN COALESCE(gerc.ref_count, 0) + COALESCE(glrc.ref_count, 0)
+                            ELSE COALESCE(crc.ref_count, 0)
+                        END AS ref_count
                 FROM grouped_rows gr
                 JOIN name_cardinality nc
                   ON nc.lang = gr.lang
-                 AND nc.name = gr.name
-                LEFT JOIN global_reference_counts grc
-                  ON grc.lang = gr.lang
+                  AND nc.name = gr.name
+                LEFT JOIN global_exact_reference_counts gerc
+                  ON gerc.lang = gr.lang
                  AND (
-                        (gr.lang != 'sql' AND grc.symbol_name = gr.name)
-                     OR (gr.lang = 'sql' AND (
-                            (grc.symbol_segment_count = sql_segment_count(gr.name) AND grc.symbol_name = sql_normalize_name(gr.name) COLLATE NOCASE)
-                         OR (grc.symbol_segment_count = 1 AND grc.symbol_name = sql_leaf_name(gr.name) COLLATE NOCASE)
-                     ))
-                 )
+                         (gr.lang != 'sql' AND gerc.symbol_name = gr.name)
+                      OR (gr.lang = 'sql' AND (
+                             (gerc.symbol_segment_count = sql_segment_count(gr.name) AND gerc.symbol_name = sql_normalize_name(gr.name) COLLATE NOCASE)
+                      ))
+                  )
+                LEFT JOIN global_leaf_reference_counts glrc
+                  ON glrc.lang = gr.lang
+                 AND gr.lang = 'sql'
+                 AND sql_segment_count(gr.name) > 1
+                 AND glrc.symbol_name = sql_leaf_name(gr.name) COLLATE NOCASE
+                 AND NOT EXISTS (
+                        SELECT 1
+                        FROM filtered_candidates fc_exact
+                        WHERE fc_exact.lang = gr.lang
+                          AND sql_segment_count(fc_exact.name) = 1
+                          AND sql_normalize_name(fc_exact.name) = glrc.symbol_name COLLATE NOCASE
+                    )
                 LEFT JOIN conservative_reference_counts crc
                   ON crc.logical_target_key = gr.logical_target_key
                  AND crc.name = gr.name
@@ -1660,6 +1703,7 @@ public partial class DbReader
                                 (sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_segment_count(s.name)
                                  AND sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_normalize_name(s.name) COLLATE NOCASE)
                              OR (sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = 1
+                                 AND sql_allow_leaf_fallback_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = 1
                                  AND sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_leaf_name(s.name) COLLATE NOCASE)
                          ))
                   )";
@@ -1793,6 +1837,7 @@ public partial class DbReader
                             (sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_segment_count(s.name)
                              AND sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_normalize_name(s.name) COLLATE NOCASE)
                          OR (sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = 1
+                             AND sql_allow_leaf_fallback_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = 1
                              AND sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_leaf_name(s.name) COLLATE NOCASE)
                      ))
               )";

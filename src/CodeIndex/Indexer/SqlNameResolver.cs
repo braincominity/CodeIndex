@@ -160,6 +160,23 @@ internal static class SqlNameResolver
         return GetSegmentCount(ResolveReferenceName(symbolName, context, containerName));
     }
 
+    public static bool AllowLeafFallbackAtColumn(string? symbolName, string? context, string? containerName, int? columnNumber)
+    {
+        var normalizedSymbolName = NormalizeQualifiedName(symbolName);
+        if (normalizedSymbolName.Length == 0 || HasQualifier(normalizedSymbolName))
+            return false;
+
+        var leafName = GetLeafName(symbolName);
+        if (leafName.Length > 0
+            && TryGetQualifiedNameAtColumn(context, columnNumber, out var match)
+            && string.Equals(GetLeafName(match.NormalizedName), leafName, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return !IsQuotedSingleIdentifierWithDots(containerName);
+    }
+
     public static bool ContextContainsQualifiedNameFoldedAtColumn(string? context, string? query, int? columnNumber)
     {
         var queryParts = ParseParts(query);
@@ -341,15 +358,15 @@ internal static class SqlNameResolver
         if (normalizedSymbolName.Length == 0 || HasQualifier(normalizedSymbolName))
             return normalizedSymbolName;
 
-        var normalizedContainerName = NormalizeQualifiedName(containerName);
-        if (normalizedContainerName.Length == 0)
+        var containerParts = ParseParts(containerName);
+        if (containerParts.NormalizedName.Length == 0 || containerParts.SegmentCount <= 1)
             return normalizedSymbolName;
 
-        var lastDot = normalizedContainerName.LastIndexOf('.');
+        var lastDot = containerParts.NormalizedName.LastIndexOf('.');
         if (lastDot <= 0)
             return normalizedSymbolName;
 
-        return normalizedContainerName[..(lastDot + 1)] + normalizedSymbolName;
+        return containerParts.NormalizedName[..(lastDot + 1)] + normalizedSymbolName;
     }
 
     private static void AppendNormalizedSegment(List<string> segments, StringBuilder current)
@@ -358,6 +375,25 @@ internal static class SqlNameResolver
         if (value.Length > 0)
             segments.Add(value);
         current.Clear();
+    }
+
+    private static bool IsQuotedSingleIdentifierWithDots(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return false;
+
+        var trimmed = name.Trim();
+        if (trimmed.Length < 2)
+            return false;
+
+        var first = trimmed[0];
+        var last = trimmed[^1];
+        if (!((first == '[' && last == ']') || (first == '"' && last == '"') || (first == '`' && last == '`')))
+            return false;
+
+        var parts = ParseParts(trimmed);
+        return parts.SegmentCount == 1
+            && parts.NormalizedName.Contains('.', StringComparison.Ordinal);
     }
 
     private static bool TryReadQualifiedName(string text, int startIndex, out QualifiedNameMatch match)

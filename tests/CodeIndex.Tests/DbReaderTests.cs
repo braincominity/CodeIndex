@@ -3227,6 +3227,60 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_QuotedSingleIdentifierContainersDoNotDonateFakeQualifiersToLeafFallback()
+    {
+        InsertIndexedFile("src/sql_quoted_container_leaf_fallback_schema_target.sql", "sql",
+            """
+            CREATE PROCEDURE sales.fn_Target
+            AS
+            SELECT 1;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_quoted_container_leaf_fallback_quoted_target.sql", "sql",
+            """
+            CREATE PROCEDURE "fn_Target"
+            AS
+            SELECT 2;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_quoted_container_leaf_fallback_caller.sql", "sql",
+            """
+            CREATE PROCEDURE "sales.Caller"
+            AS
+            BEGIN
+                EXEC fn_Target;
+            END
+            GO
+            """);
+
+        Assert.Empty(_reader.GetCallers("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_quoted_container_leaf_fallback"]));
+        Assert.Equal(0, _reader.CountCallers("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_quoted_container_leaf_fallback"]));
+        Assert.Equal(new QueryCountResult(0, 0), _reader.CountCallersTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_quoted_container_leaf_fallback"]));
+
+        var leafCaller = Assert.Single(_reader.GetCallers("fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_quoted_container_leaf_fallback"]));
+        Assert.Equal("\"sales.Caller\"", leafCaller.CallerName);
+        Assert.Equal(1, leafCaller.ReferenceCount);
+
+        var dependency = Assert.Single(
+            _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_quoted_container_leaf_fallback"], excludePathPatterns: null, excludeTests: false));
+        Assert.Equal("src/sql_quoted_container_leaf_fallback_caller.sql", dependency.SourcePath);
+        Assert.Equal("src/sql_quoted_container_leaf_fallback_quoted_target.sql", dependency.TargetPath);
+        Assert.Equal(1, dependency.ReferenceCount);
+        Assert.Equal("fn_Target", dependency.Symbols);
+
+        var hotspots = _reader.GetSymbolHotspots(10, "function", "sql", ["sql_quoted_container_leaf_fallback"], null, false);
+        Assert.Equal(1, Assert.Single(hotspots, item => item.Symbol.Name == "\"fn_Target\"").ReferenceCount);
+        Assert.DoesNotContain(hotspots, item => item.Symbol.Name == "sales.fn_Target");
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "function", lang: "sql",
+            pathPatterns: ["sql_quoted_container_leaf_fallback"], excludePathPatterns: null, excludeTests: false);
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "\"fn_Target\"");
+        Assert.Contains(unused, symbol => symbol.Name == "sales.fn_Target");
+    }
+
+    [Fact]
     public void SqlQualifiedNames_UnicodeExactGraphReadersPreserveFoldedLeafFallback()
     {
         InsertIndexedFile("src/sql_unicode_exact_leaf_fallback.sql", "sql",
