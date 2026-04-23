@@ -845,6 +845,7 @@ public partial class DbReader
                 ReferenceKind = reader.GetString(3),
                 Line = reader.GetInt32(4),
                 Column = column,
+                RawContext = context,
                 Context = clampedContext.Text,
                 ContextTruncated = clampedContext.Truncated,
                 ContainerKind = GetNullableString(reader, 7),
@@ -860,10 +861,13 @@ public partial class DbReader
 
     private bool ShouldSuppressCSharpUsingStaticConstantPatternReference(ReferenceResult result)
     {
+        var contextForFilter = string.IsNullOrWhiteSpace(result.RawContext)
+            ? result.Context
+            : result.RawContext;
         if (!string.Equals(result.Lang, "csharp", StringComparison.Ordinal)
             || !string.Equals(result.ReferenceKind, "type_reference", StringComparison.Ordinal)
             || string.IsNullOrWhiteSpace(result.SymbolName)
-            || string.IsNullOrWhiteSpace(result.Context)
+            || string.IsNullOrWhiteSpace(contextForFilter)
             || result.SymbolName.IndexOf('.') >= 0
             || result.SymbolName.IndexOf(':') >= 0
             || result.SymbolName.IndexOf('<') >= 0
@@ -873,9 +877,9 @@ public partial class DbReader
             return false;
         }
 
-        var trimmedContext = result.Context.TrimStart();
+        var trimmedContext = contextForFilter.TrimStart();
         if (!trimmedContext.StartsWith("case ", StringComparison.Ordinal)
-            && result.Context.IndexOf(" is ", StringComparison.Ordinal) < 0)
+            && contextForFilter.IndexOf(" is ", StringComparison.Ordinal) < 0)
         {
             return false;
         }
