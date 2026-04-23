@@ -14373,6 +14373,68 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpVerbatimPatternTypesSurviveBareTokenFilter()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_verbatim_pattern_types");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Probe;
+
+                class @not {}
+                class @default {}
+
+                class Demo
+                {
+                    bool MatchNot(object value) => value is @not;
+                    bool MatchDefault(object value) => value is @default;
+                    bool Guard(object value) => value is not null;
+                    bool TypeOfNot() => typeof(@not) == typeof(@not);
+                    bool TypeOfDefault() => typeof(@default) == typeof(@default);
+
+                    void Run(object value)
+                    {
+                        switch (value)
+                        {
+                            case @not:
+                                break;
+                            case @default:
+                                break;
+                            case default:
+                                break;
+                        }
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (notExitCode, notStdout, notStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["not", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            var notRows = ParseJsonLines(notStdout);
+
+            var (defaultExitCode, defaultStdout, defaultStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["default", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            var defaultRows = ParseJsonLines(defaultStdout);
+
+            Assert.Equal(CommandExitCodes.Success, notExitCode);
+            Assert.Equal(string.Empty, notStderr);
+            Assert.Equal(4, notRows.Count);
+
+            Assert.Equal(CommandExitCodes.Success, defaultExitCode);
+            Assert.Equal(string.Empty, defaultStderr);
+            Assert.Equal(4, defaultRows.Count);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpGlobalQualifiedUsingAliasNameDoesNotCreateReference()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_global_alias_name_invalid");

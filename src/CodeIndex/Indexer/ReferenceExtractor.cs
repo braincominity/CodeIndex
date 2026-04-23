@@ -1163,16 +1163,18 @@ public static class ReferenceExtractor
                 continue;
             }
 
-            if (!IsIgnoredTypeReferenceSegment(language, segment))
+            var normalizedSegment = language == "csharp" ? NormalizeCSharpIdentifier(segment) : segment;
+            var isEscapedCSharpIdentifier = language == "csharp" && segment[0] == '@';
+            if (!IsIgnoredTypeReferenceSegment(language, normalizedSegment, isEscapedCSharpIdentifier))
             {
                 int column = argStartInLine + offset + 1; // 1-based / 1始まり
-                var dedupeKey = $"{lineNumber}:{column}:type_reference:{segment}";
+                var dedupeKey = $"{lineNumber}:{column}:type_reference:{normalizedSegment}";
                 if (seen.Add(dedupeKey))
                 {
                     references.Add(new ReferenceRecord
                     {
                         FileId = fileId,
-                        SymbolName = segment,
+                        SymbolName = normalizedSegment,
                         ReferenceKind = "type_reference",
                         Line = lineNumber,
                         Column = column,
@@ -1187,8 +1189,10 @@ public static class ReferenceExtractor
         }
     }
 
-    private static bool IsIgnoredTypeReferenceSegment(string language, string segment)
+    private static bool IsIgnoredTypeReferenceSegment(string language, string segment, bool isEscapedCSharpIdentifier = false)
     {
+        if (isEscapedCSharpIdentifier)
+            return false;
         if (IsIgnoredCallName(language, segment))
             return true;
         if (language == "java" && JavaPrimitiveTypeNames.Contains(segment))
@@ -1273,9 +1277,13 @@ public static class ReferenceExtractor
             if (expectSegment && IsCSharpIdentifierStart(c))
             {
                 int segStart = i;
+                if (line[i] == '@')
+                    i++;
                 while (i < line.Length && IsCSharpIdentifierPart(line[i]))
                     i++;
-                var segment = line.Substring(segStart, i - segStart);
+                var rawSegment = line.Substring(segStart, i - segStart);
+                var segment = NormalizeCSharpIdentifier(rawSegment);
+                var isEscapedCSharpIdentifier = rawSegment.Length > 0 && rawSegment[0] == '@';
                 // `Alias::Member` — the left-hand side is a namespace alias, not an indexed
                 // type. Drop it instead of emitting it, and treat what follows the `::` as a
                 // fresh segment head.
@@ -1288,7 +1296,7 @@ public static class ReferenceExtractor
                     continue;
                 }
 
-                AddTypeReferenceSegment(references, seen, fileId, segment, segStart, context, lineNumber, container, language);
+                AddTypeReferenceSegment(references, seen, fileId, segment, segStart, context, lineNumber, container, language, isEscapedCSharpIdentifier);
                 expectSegment = false;
                 continue;
             }
@@ -2068,12 +2076,16 @@ public static class ReferenceExtractor
                 continue;
 
             int segmentStart = i;
+            if (language == "csharp" && expression[i] == '@')
+                i++;
             while (i < expression.Length && IsTypeExpressionIdentifierPart(language, expression[i]))
                 i++;
 
-            var segment = expression.Substring(segmentStart, i - segmentStart);
+            var rawSegment = expression.Substring(segmentStart, i - segmentStart);
+            var isEscapedCSharpIdentifier = language == "csharp" && rawSegment.Length > 0 && rawSegment[0] == '@';
+            var segment = rawSegment;
             if (language == "csharp")
-                segment = NormalizeCSharpIdentifier(segment);
+                segment = NormalizeCSharpIdentifier(rawSegment);
 
             if (i + 1 < expression.Length && expression[i] == ':' && expression[i + 1] == ':')
             {
@@ -2081,7 +2093,7 @@ public static class ReferenceExtractor
                 continue;
             }
 
-            AddTypeReferenceSegment(references, seen, fileId, segment, expressionStartInLine + segmentStart, context, lineNumber, container, language);
+            AddTypeReferenceSegment(references, seen, fileId, segment, expressionStartInLine + segmentStart, context, lineNumber, container, language, isEscapedCSharpIdentifier);
             i--;
         }
     }
@@ -3408,14 +3420,20 @@ public static class ReferenceExtractor
 
     private static bool IsCSharpNonTypePatternExpression(string typeExpression)
     {
-        var candidate = NormalizeCSharpIdentifier(typeExpression.Trim());
-        return candidate.IndexOf('.') < 0
-            && candidate.IndexOf(':') < 0
-            && candidate.IndexOf('<') < 0
-            && candidate.IndexOf('[') < 0
-            && candidate.IndexOf('?') < 0
-            && candidate.IndexOf(' ') < 0
-            && CSharpNonTypePatternTokens.Contains(candidate);
+        var trimmed = typeExpression.Trim();
+        if (trimmed.Length == 0)
+            return false;
+
+        if (trimmed[0] == '@')
+            return false;
+
+        return trimmed.IndexOf('.') < 0
+            && trimmed.IndexOf(':') < 0
+            && trimmed.IndexOf('<') < 0
+            && trimmed.IndexOf('[') < 0
+            && trimmed.IndexOf('?') < 0
+            && trimmed.IndexOf(' ') < 0
+            && CSharpNonTypePatternTokens.Contains(trimmed);
     }
 
     private static int SkipWhitespace(string text, int index)
@@ -6368,9 +6386,10 @@ public static class ReferenceExtractor
         string context,
         int lineNumber,
         SymbolRecord? container,
-        string language)
+        string language,
+        bool isEscapedCSharpIdentifier = false)
     {
-        if (segment.Length == 0 || IsIgnoredTypeReferenceSegment(language, segment))
+        if (segment.Length == 0 || IsIgnoredTypeReferenceSegment(language, segment, isEscapedCSharpIdentifier))
             return;
 
         int column = startInLine + 1; // 1-based / 1始まり

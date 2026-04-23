@@ -7129,6 +7129,59 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpVerbatimPatternTypeNames_DoNotCollapseIntoBarePatternTokens()
+    {
+        // issue #677: `@not` / `@default` are legal type names, so the non-type pattern
+        // filter must not erase them just because their normalized spellings match keyword-like tokens.
+        // issue #677: `@not` / `@default` は合法な型名なので、normalized 後に keyword 風 token
+        // と一致しても non-type pattern filter で消してはいけない。
+        const string content = """
+            namespace Probe;
+
+            class @not {}
+            class @default {}
+
+            class Demo
+            {
+                bool MatchNot(object value) => value is @not;
+                bool MatchDefault(object value) => value is @default;
+                bool Guard(object value) => value is not null;
+                bool TypeOfNot() => typeof(@not) == typeof(@not);
+                bool TypeOfDefault() => typeof(@default) == typeof(@default);
+
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case @not:
+                            break;
+                        case @default:
+                            break;
+                        case default:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var notRefs = references.Where(r => r.SymbolName == "not" && r.ReferenceKind == "type_reference").ToList();
+        var defaultRefs = references.Where(r => r.SymbolName == "default" && r.ReferenceKind == "type_reference").ToList();
+
+        Assert.Equal(4, notRefs.Count);
+        Assert.Equal(4, defaultRefs.Count);
+        Assert.Contains(notRefs, r => r.ContainerName == "MatchNot");
+        Assert.Contains(notRefs, r => r.ContainerName == "Run");
+        Assert.Equal(2, notRefs.Count(r => r.ContainerName == "TypeOfNot"));
+        Assert.Contains(defaultRefs, r => r.ContainerName == "MatchDefault");
+        Assert.Contains(defaultRefs, r => r.ContainerName == "Run");
+        Assert.Equal(2, defaultRefs.Count(r => r.ContainerName == "TypeOfDefault"));
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "type_reference" && r.ContainerName == "Guard");
+    }
+
+    [Fact]
     public void Extract_CsharpCaseRecursiveAndPositionalPatterns_CaptureTypeReferences()
     {
         // issue #661: recursive/property and positional `case Type ...` patterns without
