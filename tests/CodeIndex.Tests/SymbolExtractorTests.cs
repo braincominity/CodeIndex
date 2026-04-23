@@ -8248,6 +8248,64 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_DetectsSameLineAnnotatedMethodsCompactConstructorsAndEnumConstantOverrides()
+    {
+        var content = """
+            package com.example;
+
+            public class Same {
+                @Override public String toString() { return "x"; }
+                @Deprecated public int legacy() { return 0; }
+
+                @Override
+                public int hashCode() { return 42; }
+            }
+
+            public enum Op {
+                ADD {
+                    @Override public int apply(int a, int b) { return a + b; }
+                },
+                SUB {
+                    @Override public int apply(int a, int b) { return a - b; }
+                };
+                public abstract int apply(int a, int b);
+            }
+
+            public record Range(int low, int high) {
+                public Range {
+                    if (low > high) throw new IllegalArgumentException();
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var toString = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "toString"));
+        Assert.Equal("class", toString.ContainerKind);
+        Assert.Equal("Same", toString.ContainerName);
+
+        var legacy = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "legacy"));
+        Assert.Equal("class", legacy.ContainerKind);
+        Assert.Equal("Same", legacy.ContainerName);
+
+        var addApply = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "apply" && s.ContainerName == "ADD"));
+        Assert.Equal("function", addApply.ContainerKind);
+        Assert.Equal("Op.ADD", addApply.ContainerQualifiedName);
+
+        var subApply = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "apply" && s.ContainerName == "SUB"));
+        Assert.Equal("function", subApply.ContainerKind);
+        Assert.Equal("Op.SUB", subApply.ContainerQualifiedName);
+
+        var abstractApply = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "apply" && s.ContainerName == "Op"));
+        Assert.Equal("enum", abstractApply.ContainerKind);
+
+        var compactCtor = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Range"));
+        Assert.Equal("class", compactCtor.ContainerKind);
+        Assert.Equal("Range", compactCtor.ContainerName);
+        Assert.NotNull(compactCtor.BodyStartLine);
+        Assert.NotNull(compactCtor.BodyEndLine);
+    }
+
+    [Fact]
     public void Extract_Java_DetectsStaticFinalAndEnumMembers()
     {
         var content = "public class Config {\n    public static final String VERSION = \"1.0\";\n    private static final int MAX_RETRIES = 3;\n}\n\npublic enum Status {\n    ACTIVE,\n    INACTIVE,\n    PENDING;\n}";
@@ -8424,7 +8482,7 @@ public class SymbolExtractorTests
         var content = "public enum WithBody {\n    A {\n        void f() {}\n    },\n    B;\n}";
         var symbols = SymbolExtractor.Extract(1, "java", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "A" && s.ContainerName == "WithBody" && s.BodyStartLine == null);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "A" && s.ContainerName == "WithBody" && s.BodyStartLine != null);
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B" && s.ContainerName == "WithBody" && s.BodyStartLine == null);
     }
 

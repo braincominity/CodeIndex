@@ -76,6 +76,7 @@ public static class SymbolExtractor
     // `delegate` is a non-type keyword only when it is NOT followed by `*` — `delegate*<...>` is a valid return type.
     // `delegate` は `*` を伴わないときだけ非型キーワード扱い。`delegate*<...>` は戻り値型として有効。
     private const string CSharpNonTypeKeywordPattern = @"(?:(?:public|private|protected|internal|static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|required|ref)\b|delegate\b(?!\s*\*))";
+    private const string JavaLeadingAnnotationsPattern = @"(?:@[\w.]+(?:\s*\([^)]*\))?\s+)*";
     private static readonly Regex PartialModifierRegex = new(@"\bpartial\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private enum BodyStyle
@@ -243,6 +244,9 @@ public static class SymbolExtractor
     private static readonly Regex CSharpEnumDeclarationRegex = new($@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+|(?:file)\s+)*enum\s+(?<name>{CSharpIdentifierPattern})", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpEnumMemberRegex = new(@"^\s*(?<name>@?[_\p{L}]\w*)\s*(?:=\s*(?:-?\d|0x|@?[_\p{L}]\w*(?:\s*\|\s*@?[_\p{L}]\w*)*)[^""']*)?,?\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpEnumMemberNameRegex = new(@"^\s*(?<name>@?[_\p{L}]\w*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex JavaCompactConstructorRegex = new(
+        $@"^\s*{JavaLeadingAnnotationsPattern}(?:(?<visibility>public|private|protected)\s+)?(?<name>\w+)\s*\{{",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpSameLinePropertyStatementStartRegex = new(
         $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?:ref(?:\s+readonly)?)\s+)?(?:{CSharpTypePattern})\s+(?:{CSharpExplicitInterfaceQualifierPattern}\.)?{CSharpIdentifierPattern}\s*(?:\{{|=>\s*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -691,22 +695,22 @@ public static class SymbolExtractor
         ["java"] =
         [
             // Annotation type (@interface) / アノテーション型
-            new("class",    new Regex(@"^\s*(?<visibility>public|private|protected)?\s*@interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex($@"^\s*{JavaLeadingAnnotationsPattern}(?<visibility>public|private|protected)?\s*@interface\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
             // record (Java 16+) — must come before general class pattern / record は一般クラスパターンの前に配置
-            new("class",    new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*record\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex($@"^\s*{JavaLeadingAnnotationsPattern}(?<visibility>public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*record\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
             // Interface / インターフェース
-            new("interface", new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|abstract|sealed|non-sealed|strictfp)\s+)*interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("interface", new Regex($@"^\s*{JavaLeadingAnnotationsPattern}(?<visibility>public|private|protected)?\s*(?:(?:static|abstract|sealed|non-sealed|strictfp)\s+)*interface\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
             // Enum / enum
-            new("enum",     new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|strictfp)\s+)*enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("enum",     new Regex($@"^\s*{JavaLeadingAnnotationsPattern}(?<visibility>public|private|protected)?\s*(?:(?:static|strictfp)\s+)*enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
             // Class — with extended modifiers (final, sealed, static, abstract, strictfp)
             // クラス — 拡張修飾子対応（final, sealed, static, abstract, strictfp）
-            new("class",    new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex($@"^\s*{JavaLeadingAnnotationsPattern}(?<visibility>public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*class\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
             // Static final field (Java equivalent of C# const) — order-flexible (static final or final static), generic types with spaces
             // static final フィールド — 語順柔軟（static final / final static）、スペース含むジェネリック型対応
-            new("function", new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final)\s+){2}(?<returnType>[\w?.<>\[\],\s]+?)\s+(?<name>[A-Z_]\w*)\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            new("function", new Regex($@"^\s*{JavaLeadingAnnotationsPattern}(?<visibility>public|private|protected)?\s*(?:(?:static|final)\s+){{2}}(?<returnType>[\w?.<>\[\],\s]+?)\s+(?<name>[A-Z_]\w*)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, "visibility", "returnType"),
             // Method with return type — expanded modifiers (default, native, synchronized, final)
             // 戻り値型付きメソッド — 拡張修飾子対応（default, native, synchronized, final）
-            new("function", new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|abstract|synchronized|final|default|native|strictfp)\s+)*(?<returnType>\w+(?:<[^>]+>)?(?:\[\])?)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("function", new Regex($@"^\s*{JavaLeadingAnnotationsPattern}(?<visibility>public|private|protected)?\s*(?:(?:static|abstract|synchronized|final|default|native|strictfp)\s+)*(?<returnType>\w+(?:<[^>]+>)?(?:\[\])?)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility", "returnType"),
             // Enum members are extracted by ExtractJavaEnumMembers using a body-scoped scanner,
             // which handles any indent style (tab, 2-space, 4-space) and skips member-like lines
             // outside the enum body (e.g. `\tRED();` method calls inside a class body).
@@ -2294,7 +2298,10 @@ public static class SymbolExtractor
         else if (lang == "csharp")
             ExtractCSharpEnumMembers(fileId, lines, structuralLines, csharpMatchLines!, symbols);
         else if (lang == "java")
+        {
             ExtractJavaEnumMembers(fileId, lines, symbols);
+            ExtractJavaCompactConstructors(fileId, lines, symbols);
+        }
 
         AssignContainers(symbols, lines, csharpLineStartStates);
         MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
@@ -3255,6 +3262,108 @@ public static class SymbolExtractor
         }
     }
 
+    private static void ExtractJavaCompactConstructors(long fileId, string[] rawLines, List<SymbolRecord> symbols)
+    {
+        var recordDeclarations = symbols
+            .Where(symbol =>
+                symbol.FileId == fileId
+                && symbol.Kind == "class"
+                && symbol.BodyStartLine != null
+                && symbol.BodyEndLine != null
+                && IsJavaRecordSymbol(rawLines, symbol))
+            .OrderBy(symbol => symbol.StartLine)
+            .ThenByDescending(symbol => symbol.EndLine)
+            .ToList();
+
+        foreach (var recordSymbol in recordDeclarations)
+        {
+            if (!TryFindJavaSymbolBodyBounds(rawLines, recordSymbol, out var bodyStartLineIndex, out var bodyStartColumn, out var bodyEndLineIndex, out var bodyEndColumnExclusive))
+                continue;
+
+            var mode = JavaScanMode.Normal;
+            var braceDepth = 0;
+            for (int i = bodyStartLineIndex; i <= bodyEndLineIndex; i++)
+            {
+                if (mode == JavaScanMode.LineComment)
+                    mode = JavaScanMode.Normal;
+
+                var line = rawLines[i];
+                var segmentStart = i == bodyStartLineIndex
+                    ? Math.Min(bodyStartColumn, line.Length)
+                    : 0;
+                var segmentEndExclusive = i == bodyEndLineIndex
+                    ? Math.Min(bodyEndColumnExclusive, line.Length)
+                    : line.Length;
+                var lineStartBraceDepth = braceDepth;
+                var lineStartMode = mode;
+
+                if (lineStartBraceDepth == 0
+                    && lineStartMode == JavaScanMode.Normal
+                    && segmentStart < segmentEndExclusive)
+                {
+                    var segment = line[segmentStart..segmentEndExclusive];
+                    var match = JavaCompactConstructorRegex.Match(segment);
+                    if (match.Success && match.Index == 0 && match.Groups["name"].Value == recordSymbol.Name)
+                    {
+                        var absoluteStartColumn = segmentStart + match.Index;
+                        var visibility = TryGetGroup(match, "visibility");
+                        var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(rawLines, i, BodyStyle.Brace, "java", absoluteStartColumn);
+                        if (!symbols.Any(symbol =>
+                                symbol.FileId == fileId
+                                && symbol.Kind == "function"
+                                && symbol.Name == recordSymbol.Name
+                                && symbol.StartLine == i + 1
+                                && symbol.ContainerKind == "class"
+                                && symbol.ContainerName == recordSymbol.Name))
+                        {
+                            symbols.Add(new SymbolRecord
+                            {
+                                FileId = fileId,
+                                Kind = "function",
+                                Name = recordSymbol.Name,
+                                Line = i + 1,
+                                StartLine = i + 1,
+                                StartColumn = absoluteStartColumn,
+                                EndLine = Math.Max(i + 1, endLine),
+                                BodyStartLine = bodyStartLine,
+                                BodyEndLine = bodyEndLine,
+                                Signature = line[absoluteStartColumn..].Trim(),
+                                ContainerKind = "class",
+                                ContainerName = recordSymbol.Name,
+                                Visibility = visibility,
+                            });
+                        }
+                    }
+                }
+
+                var column = segmentStart;
+                while (column < segmentEndExclusive)
+                {
+                    if (TryConsumeJavaNonCode(line, ref column, ref mode))
+                        continue;
+
+                    var ch = line[column];
+                    if (ch == '{')
+                        braceDepth++;
+                    else if (ch == '}' && braceDepth > 0)
+                        braceDepth--;
+
+                    column++;
+                }
+            }
+        }
+    }
+
+    private static bool IsJavaRecordSymbol(string[] rawLines, SymbolRecord symbol)
+    {
+        var declarationLineIndex = symbol.StartLine - 1;
+        if (declarationLineIndex < 0 || declarationLineIndex >= rawLines.Length)
+            return false;
+
+        return GetCurrentDeclarationRecordRegex("java", symbol.Kind, symbol.Name)
+            .IsMatch(rawLines[declarationLineIndex]);
+    }
+
     // Track Java source-code scanner state (strings, char literals, comments, text blocks).
     // Java ソース scanner の state（文字列・char literal・コメント・text block）を表す。
     private enum JavaScanMode
@@ -3275,16 +3384,33 @@ public static class SymbolExtractor
         out int bodyEndLineIndex,
         out int bodyEndColumnExclusive)
     {
+        return TryFindJavaSymbolBodyBounds(
+            rawLines,
+            enumSymbol,
+            out bodyStartLineIndex,
+            out bodyStartColumn,
+            out bodyEndLineIndex,
+            out bodyEndColumnExclusive);
+    }
+
+    private static bool TryFindJavaSymbolBodyBounds(
+        string[] rawLines,
+        SymbolRecord containerSymbol,
+        out int bodyStartLineIndex,
+        out int bodyStartColumn,
+        out int bodyEndLineIndex,
+        out int bodyEndColumnExclusive)
+    {
         bodyStartLineIndex = 0;
         bodyStartColumn = 0;
         bodyEndLineIndex = 0;
         bodyEndColumnExclusive = 0;
 
-        var declarationLineIndex = enumSymbol.StartLine - 1;
+        var declarationLineIndex = containerSymbol.StartLine - 1;
         if (declarationLineIndex < 0 || declarationLineIndex >= rawLines.Length)
             return false;
 
-        var scanEndLineIndex = Math.Min(enumSymbol.EndLine, rawLines.Length) - 1;
+        var scanEndLineIndex = Math.Min(containerSymbol.EndLine, rawLines.Length) - 1;
         if (scanEndLineIndex < declarationLineIndex)
             return false;
 
@@ -3699,6 +3825,14 @@ public static class SymbolExtractor
         if (string.IsNullOrEmpty(name))
             return;
 
+        int? bodyStartLine = null;
+        int? bodyEndLine = null;
+        if (TryFindJavaEnumMemberBodyBounds(rawLines, start, endExclusive, out var anonymousBodyStartLine, out var anonymousBodyEndLine))
+        {
+            bodyStartLine = anonymousBodyStartLine;
+            bodyEndLine = anonymousBodyEndLine;
+        }
+
         symbols.Add(new SymbolRecord
         {
             FileId = fileId,
@@ -3707,10 +3841,90 @@ public static class SymbolExtractor
             Line = start.LineIndex + 1,
             StartLine = start.LineIndex + 1,
             EndLine = endExclusive.LineIndex + 1,
+            BodyStartLine = bodyStartLine,
+            BodyEndLine = bodyEndLine,
             Signature = rawSignature,
             ContainerKind = "enum",
             ContainerName = enumSymbol.Name,
         });
+    }
+
+    private static bool TryFindJavaEnumMemberBodyBounds(
+        string[] rawLines,
+        (int LineIndex, int Column) start,
+        (int LineIndex, int Column) endExclusive,
+        out int bodyStartLine,
+        out int bodyEndLine)
+    {
+        bodyStartLine = 0;
+        bodyEndLine = 0;
+
+        var mode = JavaScanMode.Normal;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var foundBody = false;
+
+        for (int lineIndex = start.LineIndex; lineIndex <= endExclusive.LineIndex && lineIndex < rawLines.Length; lineIndex++)
+        {
+            if (mode == JavaScanMode.LineComment)
+                mode = JavaScanMode.Normal;
+
+            var line = rawLines[lineIndex];
+            var column = lineIndex == start.LineIndex
+                ? start.Column
+                : 0;
+            var scanEndColumnExclusive = lineIndex == endExclusive.LineIndex
+                ? Math.Min(endExclusive.Column, line.Length)
+                : line.Length;
+
+            while (column < scanEndColumnExclusive)
+            {
+                if (TryConsumeJavaNonCode(line, ref column, ref mode))
+                    continue;
+
+                var ch = line[column];
+                if (ch == '(')
+                {
+                    parenDepth++;
+                }
+                else if (ch == ')' && parenDepth > 0)
+                {
+                    parenDepth--;
+                }
+                else if (ch == '[')
+                {
+                    bracketDepth++;
+                }
+                else if (ch == ']' && bracketDepth > 0)
+                {
+                    bracketDepth--;
+                }
+                else if (ch == '{')
+                {
+                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                    {
+                        foundBody = true;
+                        bodyStartLine = lineIndex + 1;
+                    }
+
+                    braceDepth++;
+                }
+                else if (ch == '}' && braceDepth > 0)
+                {
+                    braceDepth--;
+                    if (foundBody && braceDepth == 0)
+                    {
+                        bodyEndLine = lineIndex + 1;
+                        return true;
+                    }
+                }
+
+                column++;
+            }
+        }
+
+        return false;
     }
 
     private static int SkipLeadingJavaAnnotations(string span)
@@ -12731,7 +12945,7 @@ public static class SymbolExtractor
                 : new Regex(@"^\s*(?:(?:public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*record(?:\s+class)?\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant);
         }
 
-        return new Regex(@"^\s*(?:public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*record\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant);
+        return new Regex(@"^\s*" + JavaLeadingAnnotationsPattern + @"(?:public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*record\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant);
     }
 
     private static int FindRecordPrimaryComponentListStart(string declaration, int startIndex)
@@ -13941,6 +14155,14 @@ public static class SymbolExtractor
 
     private static bool CanContainSymbols(SymbolRecord symbol)
     {
+        if (symbol.Kind == "function"
+            && symbol.ContainerKind == "enum"
+            && symbol.BodyStartLine != null
+            && symbol.BodyEndLine != null)
+        {
+            return true;
+        }
+
         if (!ContainerKinds.Contains(symbol.Kind))
             return false;
 
@@ -14209,6 +14431,7 @@ public static class SymbolExtractor
     {
         return (container.Kind, candidate.Kind) switch
         {
+            ("function", _) when container.ContainerKind == "enum" && container.BodyStartLine != null && container.BodyEndLine != null => true,
             ("enum", "enum") => true,
             ("namespace", _) => true,
             ("class", _) => true,
