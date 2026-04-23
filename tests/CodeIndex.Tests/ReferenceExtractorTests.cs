@@ -5358,7 +5358,9 @@ public class ReferenceExtractorTests
         // 実際の source/target を引き続き索引できるべき。
         const string content = """
             UPDATE TOP (10) audit_log SET action = 'done';
+            DELETE TOP (5) FROM audit_log;
             SELECT * FROM ONLY public.users;
+            UPDATE ONLY public.users SET active = true;
             SELECT * FROM LATERAL fn_users(42);
             MERGE TOP (5) INTO audit_log AS t
             USING staging_log AS s
@@ -5370,13 +5372,37 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "sql", content);
         var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
 
-        Assert.Equal(2, references.Count(r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference"));
-        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+        Assert.Equal(3, references.Count(r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "users" && r.ReferenceKind == "reference"));
         Assert.Contains(references, r => r.SymbolName == "fn_users" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "TOP");
         Assert.DoesNotContain(references, r => r.SymbolName == "ONLY");
         Assert.DoesNotContain(references, r => r.SymbolName == "LATERAL");
+    }
+
+    [Fact]
+    public void Extract_SQL_DoubleQuotedDynamicSqlDoesNotLeakPhantomReferences()
+    {
+        // issue #689: preserving ANSI double-quoted identifiers must not let dynamic SQL strings
+        // leak phantom source references into the graph.
+        // issue #689: ANSI 二重引用符識別子を保持しても、dynamic SQL 文字列から phantom source
+        // reference が漏れてはいけない。
+        const string content = """
+            SET @sql = "SELECT * FROM users";
+            EXECUTE IMMEDIATE @sql;
+            SELECT * FROM "users";
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var usersReferences = references
+            .Where(r => r.SymbolName == "users" && r.ReferenceKind == "reference")
+            .ToList();
+
+        var usersReference = Assert.Single(usersReferences);
+        Assert.Equal(3, usersReference.Line);
     }
 
     [Fact]
@@ -5493,8 +5519,12 @@ public class ReferenceExtractorTests
             SELECT id INTO #comment_temp -- trailing comment
             FROM users;
             SELECT * FROM #comment_temp;
+            DELETE FROM #deleted_temp;
+            SELECT * FROM #deleted_temp;
             SELECT * FROM #future_temp;
             CREATE TABLE #future_temp (id int)
+            SELECT * FROM #future_deleted_temp;
+            DELETE FROM #future_deleted_temp;
             """;
 
         var symbols = SymbolExtractor.Extract(1, "sql", content);
@@ -5505,8 +5535,11 @@ public class ReferenceExtractorTests
         Assert.Equal(2, references.Count(r => r.SymbolName == "#inserted_temp" && r.ReferenceKind == "reference"));
         Assert.Equal(2, references.Count(r => r.SymbolName == "#updated_temp" && r.ReferenceKind == "reference"));
         Assert.Equal(2, references.Count(r => r.SymbolName == "#comment_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#deleted_temp" && r.ReferenceKind == "reference"));
         Assert.Empty(references.Where(r => r.SymbolName == "#future_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(1, references.Count(r => r.SymbolName == "#future_deleted_temp" && r.ReferenceKind == "reference"));
         Assert.DoesNotContain(references, r => r.SymbolName == "#future_temp" && r.ReferenceKind == "reference" && r.Line == 12);
+        Assert.DoesNotContain(references, r => r.SymbolName == "#future_deleted_temp" && r.ReferenceKind == "reference" && r.Line == 15);
         Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 3);
         Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 10);
     }

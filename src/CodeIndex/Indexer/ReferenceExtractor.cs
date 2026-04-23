@@ -225,10 +225,10 @@ public static class ReferenceExtractor
     // `INSERT INTO tbl (` は関数呼び出しではなくテーブル参照なので、直後に `(` がある場合は後段で
     // 同じ識別子の generic CallRegex を抑止する。
     private static readonly Regex SqlTargetReferenceRegex = new(
-        $@"(?<![\w$])(?:INSERT\s+INTO|UPDATE\b(?:\s+{SqlTopTargetModifierPattern})?|TRUNCATE\s+TABLE|MERGE\b(?:\s+{SqlTopTargetModifierPattern})?\s+INTO)\s+{SqlQualifiedIdentifierPattern}",
+        $@"(?<![\w$])(?:INSERT\s+INTO|UPDATE\b(?:\s+(?:{SqlTopTargetModifierPattern}|ONLY\b))*|TRUNCATE\s+TABLE|MERGE\b(?:\s+{SqlTopTargetModifierPattern})?\s+INTO|DELETE\b(?:\s+{SqlTopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?)\s+{SqlQualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SqlTopCallSuppressionRegex = new(
-        @"(?<![\w$])(?:UPDATE|MERGE)\b\s+(?<name>TOP)\s*\(",
+        @"(?<![\w$])(?:UPDATE|MERGE|DELETE)\b\s+(?<name>TOP)\s*\(",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // SQL Server temp-table materialization: `SELECT ... INTO #tmp` / `SELECT ... INTO ##tmp`.
     // Procedural `SELECT ... INTO variable` remains intentionally excluded. issue #649.
@@ -780,6 +780,8 @@ public static class ReferenceExtractor
 
                             foreach (Match match in SqlProcCallRegex.Matches(sqlStatement))
                             {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
                                 var nameGroup = match.Groups["name"];
                                 if (nameGroup.Index < sqlStatementLineOffset)
                                     continue;
@@ -805,6 +807,8 @@ public static class ReferenceExtractor
 
                             foreach (Match match in SqlSourceReferenceRegex.Matches(sqlStatement))
                             {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
                                 var nameGroup = match.Groups["name"];
                                 if (nameGroup.Index < sqlStatementLineOffset)
                                     continue;
@@ -836,6 +840,8 @@ public static class ReferenceExtractor
 
                             foreach (Match match in SqlSelectIntoTempTargetStatementRegex.Matches(sqlStatement))
                             {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
                                 var nameGroup = match.Groups["name"];
                                 if (nameGroup.Index < sqlStatementLineOffset)
                                     continue;
@@ -850,6 +856,8 @@ public static class ReferenceExtractor
 
                             foreach (Match match in SqlTargetReferenceRegex.Matches(sqlStatement))
                             {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
                                 var nameGroup = match.Groups["name"];
                                 if (nameGroup.Index < sqlStatementLineOffset)
                                     continue;
@@ -1355,6 +1363,28 @@ public static class ReferenceExtractor
         }
 
         return -1;
+    }
+
+    private static bool IsInsideSqlDoubleQuotedRegion(string text, int index)
+    {
+        if (index <= 0)
+            return false;
+
+        bool inside = false;
+        for (int i = 0; i < index && i < text.Length; i++)
+        {
+            if (text[i] != '"')
+                continue;
+            if (inside && i + 1 < index && text[i + 1] == '"')
+            {
+                i++;
+                continue;
+            }
+
+            inside = !inside;
+        }
+
+        return inside;
     }
 
     private static void CollectSqlTempObjectNamesFromStatement(
