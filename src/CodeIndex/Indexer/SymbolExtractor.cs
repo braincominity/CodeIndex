@@ -243,6 +243,9 @@ public static class SymbolExtractor
     private static readonly Regex CSharpEnumDeclarationRegex = new($@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+|(?:file)\s+)*enum\s+(?<name>{CSharpIdentifierPattern})", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpEnumMemberRegex = new(@"^\s*(?<name>@?[_\p{L}]\w*)\s*(?:=\s*(?:-?\d|0x|@?[_\p{L}]\w*(?:\s*\|\s*@?[_\p{L}]\w*)*)[^""']*)?,?\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpEnumMemberNameRegex = new(@"^\s*(?<name>@?[_\p{L}]\w*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex JavaCompactConstructorRegex = new(
+        @"^\s*(?:(?<visibility>public|private|protected)\s+)?(?<name>\w+)\s*(?:\{)?\s*$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpSameLinePropertyStatementStartRegex = new(
         $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?:ref(?:\s+readonly)?)\s+)?(?:{CSharpTypePattern})\s+(?:{CSharpExplicitInterfaceQualifierPattern}\.)?{CSharpIdentifierPattern}\s*(?:\{{|=>\s*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -1305,102 +1308,109 @@ public static class SymbolExtractor
                     string? csharpWrappedModifierPrefix = null;
                     while (lineOffset >= 0 && lineOffset < patternMatchLine.Length)
                     {
-                    var match = pattern.Regex.Match(patternMatchLine[lineOffset..]);
-                    if (!match.Success
-                        && lang == "csharp"
-                        && pattern.Kind == "function"
-                        && lineOffset == 0
-                        && csharpMatchLines != null
-                        && csharpWrappedModifierPrefix == null)
-                    {
-                        // Wrapped leading modifier recovery: when a C# function-kind pattern
-                        // fails at column 0 of the identifier line, try prepending the
-                        // modifier prefix accumulated from preceding modifier-only lines
-                        // (`static\nFoo() { ... }`, `public\nBar() { ... }`, etc.) and retry.
-                        // The method regex already tolerates an omitted modifier run, so it
-                        // matches on the identifier line alone — this branch only fires for
-                        // constructor / static-constructor shapes that require the modifier
-                        // on the same line as the name. Closes #348.
-                        // ラップされた先頭モディファイアの救済: C# の function 系パターンが
-                        // 識別子行の先頭マッチに失敗した場合、直前のモディファイアのみ行
-                        // （`static\nFoo() { ... }` や `public\nBar() { ... }` 等）から
-                        // 再構築した prefix を付け直して再試行する。メソッド regex は
-                        // 先頭モディファイアが無くても識別子行単体でマッチするため、この
-                        // 分岐は修飾子が識別子と同行に必要な constructor / static ctor
-                        // シェイプでのみ発火する。Closes #348.
-                        var wrappedInfo = TryFindCSharpWrappedHeaderModifier(csharpMatchLines!, i);
-                        if (wrappedInfo != null)
+                        var javaLeadingAnnotationOffset = 0;
+                        var match = lang == "java"
+                            ? (TryMatchJavaDeclarationSegment(pattern.Regex, patternMatchLine[lineOffset..], out var javaMatch, out javaLeadingAnnotationOffset)
+                                ? javaMatch
+                                : pattern.Regex.Match(patternMatchLine[lineOffset..]))
+                            : pattern.Regex.Match(patternMatchLine[lineOffset..]);
+                        if (!match.Success
+                            && lang == "csharp"
+                            && pattern.Kind == "function"
+                            && lineOffset == 0
+                            && csharpMatchLines != null
+                            && csharpWrappedModifierPrefix == null)
                         {
-                            foreach (var candidatePrefix in EnumerateCSharpWrappedModifierCandidates(wrappedInfo.Value.Prefix))
+                            // Wrapped leading modifier recovery: when a C# function-kind pattern
+                            // fails at column 0 of the identifier line, try prepending the
+                            // modifier prefix accumulated from preceding modifier-only lines
+                            // (`static\nFoo() { ... }`, `public\nBar() { ... }`, etc.) and retry.
+                            // The method regex already tolerates an omitted modifier run, so it
+                            // matches on the identifier line alone — this branch only fires for
+                            // constructor / static-constructor shapes that require the modifier
+                            // on the same line as the name. Closes #348.
+                            // ラップされた先頭モディファイアの救済: C# の function 系パターンが
+                            // 識別子行の先頭マッチに失敗した場合、直前のモディファイアのみ行
+                            // （`static\nFoo() { ... }` や `public\nBar() { ... }` 等）から
+                            // 再構築した prefix を付け直して再試行する。メソッド regex は
+                            // 先頭モディファイアが無くても識別子行単体でマッチするため、この
+                            // 分岐は修飾子が識別子と同行に必要な constructor / static ctor
+                            // シェイプでのみ発火する。Closes #348.
+                            var wrappedInfo = TryFindCSharpWrappedHeaderModifier(csharpMatchLines!, i);
+                            if (wrappedInfo != null)
                             {
-                                var wrappedMatchLine = candidatePrefix + " " + patternMatchLine.TrimStart();
-                                var wrappedMatch = pattern.Regex.Match(wrappedMatchLine);
-                                if (wrappedMatch.Success)
+                                foreach (var candidatePrefix in EnumerateCSharpWrappedModifierCandidates(wrappedInfo.Value.Prefix))
                                 {
-                                    match = wrappedMatch;
-                                    patternMatchLine = wrappedMatchLine;
-                                    // Preserve the full prefix in the stored signature so
-                                    // declarations like `public\nstatic\nP1()` retain
-                                    // `public static P1()`, even when the matching regex
-                                    // variant only accepted `static P1()`. Closes #348.
-                                    // シグネチャには完全な prefix を残し、`public\nstatic\nP1()`
-                                    // のような宣言を `public static P1()` として保存する。
-                                    // マッチした regex 変種が `static P1()` 形だけを受け付けた
-                                    // 場合でも、保存シグネチャは完全な prefix を保持する。Closes #348.
-                                    csharpWrappedModifierPrefix = wrappedInfo.Value.Prefix;
-                                    break;
+                                    var wrappedMatchLine = candidatePrefix + " " + patternMatchLine.TrimStart();
+                                    var wrappedMatch = pattern.Regex.Match(wrappedMatchLine);
+                                    if (wrappedMatch.Success)
+                                    {
+                                        match = wrappedMatch;
+                                        patternMatchLine = wrappedMatchLine;
+                                        // Preserve the full prefix in the stored signature so
+                                        // declarations like `public\nstatic\nP1()` retain
+                                        // `public static P1()`, even when the matching regex
+                                        // variant only accepted `static P1()`. Closes #348.
+                                        // シグネチャには完全な prefix を残し、`public\nstatic\nP1()`
+                                        // のような宣言を `public static P1()` として保存する。
+                                        // マッチした regex 変種が `static P1()` 形だけを受け付けた
+                                        // 場合でも、保存シグネチャは完全な prefix を保持する。Closes #348.
+                                        csharpWrappedModifierPrefix = wrappedInfo.Value.Prefix;
+                                        break;
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    if (!match.Success)
-                    {
-                        if (lang == "csharp"
-                            && pattern.Kind == "property"
-                            && pattern.BodyStyle == BodyStyle.Brace
-                            && ShouldDeferCSharpBracePropertySameLineAdvance(matchLine, lineOffset))
+                        if (!match.Success)
                         {
-                            break;
-                        }
-
-                        if (lang == "csharp"
-                            && pattern.Kind == "function"
-                            && ShouldDeferCSharpFunctionSameLineAdvance(matchLine, lineOffset))
-                        {
-                            break;
-                        }
-
-                        if (lang == "csharp"
-                            && pattern.Kind is "event" or "delegate"
-                            && pattern.BodyStyle == BodyStyle.None
-                            && ShouldDeferCSharpEventOrDelegateSameLineAdvance(matchLine, lineOffset, pattern.Kind))
-                        {
-                            break;
-                        }
-
-                        if (lang is "javascript" or "typescript" or "css"
-                            || (lang == "csharp"
-                                && pattern.Kind == "enum"
-                                && pattern.BodyStyle == BodyStyle.Brace
-                                && patternStartOffset > 0)
-                            || (lang == "csharp"
+                            if (lang == "csharp"
                                 && pattern.Kind == "property"
+                                && pattern.BodyStyle == BodyStyle.Brace
+                                && ShouldDeferCSharpBracePropertySameLineAdvance(matchLine, lineOffset))
+                            {
+                                break;
+                            }
+
+                            if (lang == "csharp"
+                                && pattern.Kind == "function"
+                                && ShouldDeferCSharpFunctionSameLineAdvance(matchLine, lineOffset))
+                            {
+                                break;
+                            }
+
+                            if (lang == "csharp"
+                                && pattern.Kind is "event" or "delegate"
                                 && pattern.BodyStyle == BodyStyle.None
-                                && !TryMatchAnyRecoverableCSharpPattern(
-                                    matchLine[lineOffset..],
-                                    insideEnumBody: false,
-                                    attributeParenDepth: 0)))
-                        {
-                            lineOffset = FindNextSameLineBraceStatementStart(matchLine, lineOffset + 1, lang);
-                            continue;
+                                && ShouldDeferCSharpEventOrDelegateSameLineAdvance(matchLine, lineOffset, pattern.Kind))
+                            {
+                                break;
+                            }
+
+                            if (lang is "javascript" or "typescript" or "css" or "java"
+                                || (lang == "csharp"
+                                    && pattern.Kind == "enum"
+                                    && pattern.BodyStyle == BodyStyle.Brace
+                                    && patternStartOffset > 0)
+                                || (lang == "csharp"
+                                    && pattern.Kind == "property"
+                                    && pattern.BodyStyle == BodyStyle.None
+                                    && !TryMatchAnyRecoverableCSharpPattern(
+                                        matchLine[lineOffset..],
+                                        insideEnumBody: false,
+                                        attributeParenDepth: 0)))
+                            {
+                                lineOffset = FindNextSameLineBraceStatementStart(matchLine, lineOffset + 1, lang);
+                                continue;
+                            }
+
+                            break;
                         }
 
-                        break;
-                    }
-
-                    var absoluteStartColumn = lineOffset + match.Index;
-                    var nextSameLineOffsetAfterRejectedCSharpProperty = -1;
+                        var absoluteStartColumn = lineOffset + match.Index;
+                        if (lang == "java" && javaLeadingAnnotationOffset > 0)
+                            absoluteStartColumn = lineOffset + javaLeadingAnnotationOffset;
+                        var nextSameLineOffsetAfterRejectedCSharpProperty = -1;
                     if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, patternMatchLine, csharpSwitchExpressionLines, i)
                         || TrySkipCSharpBracePropertyCandidate(
                             lang,
@@ -2294,7 +2304,10 @@ public static class SymbolExtractor
         else if (lang == "csharp")
             ExtractCSharpEnumMembers(fileId, lines, structuralLines, csharpMatchLines!, symbols);
         else if (lang == "java")
+        {
             ExtractJavaEnumMembers(fileId, lines, symbols);
+            ExtractJavaCompactConstructors(fileId, lines, symbols);
+        }
 
         AssignContainers(symbols, lines, csharpLineStartStates);
         MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
@@ -3255,6 +3268,131 @@ public static class SymbolExtractor
         }
     }
 
+    private static void ExtractJavaCompactConstructors(long fileId, string[] rawLines, List<SymbolRecord> symbols)
+    {
+        var recordDeclarations = symbols
+            .Where(symbol =>
+                symbol.FileId == fileId
+                && symbol.Kind == "class"
+                && symbol.BodyStartLine != null
+                && symbol.BodyEndLine != null
+                && IsJavaRecordSymbol(rawLines, symbol))
+            .OrderBy(symbol => symbol.StartLine)
+            .ThenByDescending(symbol => symbol.EndLine)
+            .ToList();
+
+        foreach (var recordSymbol in recordDeclarations)
+        {
+            if (!TryFindJavaSymbolBodyBounds(rawLines, recordSymbol, out var bodyStartLineIndex, out var bodyStartColumn, out var bodyEndLineIndex, out var bodyEndColumnExclusive))
+                continue;
+
+            var mode = JavaScanMode.Normal;
+            var braceDepth = 0;
+            for (int i = bodyStartLineIndex; i <= bodyEndLineIndex; i++)
+            {
+                if (mode == JavaScanMode.LineComment)
+                    mode = JavaScanMode.Normal;
+
+                var line = rawLines[i];
+                var segmentStart = i == bodyStartLineIndex
+                    ? Math.Min(bodyStartColumn, line.Length)
+                    : 0;
+                var segmentEndExclusive = i == bodyEndLineIndex
+                    ? Math.Min(bodyEndColumnExclusive, line.Length)
+                    : line.Length;
+                var lineStartBraceDepth = braceDepth;
+                var lineStartMode = mode;
+
+                if (lineStartBraceDepth == 0
+                    && lineStartMode == JavaScanMode.Normal
+                    && segmentStart < segmentEndExclusive)
+                {
+                    var segment = line[segmentStart..segmentEndExclusive];
+                    if (TryMatchJavaDeclarationSegment(JavaCompactConstructorRegex, segment, out var match, out var javaLeadingAnnotationOffset)
+                        && match.Groups["name"].Value == recordSymbol.Name)
+                    {
+                        var absoluteStartColumn = segmentStart + (javaLeadingAnnotationOffset > 0 ? 0 : match.Index);
+                        var visibility = TryGetGroup(match, "visibility");
+                        var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(rawLines, i, BodyStyle.Brace, "java", absoluteStartColumn);
+                        var sameLineEndColumn = bodyEndLine == i + 1
+                            ? FindSameLineBraceEndColumn(line, absoluteStartColumn, "java", "function")
+                            : -1;
+                        if (!symbols.Any(symbol =>
+                                symbol.FileId == fileId
+                                && symbol.Kind == "function"
+                                && symbol.Name == recordSymbol.Name
+                                && symbol.StartLine == i + 1
+                                && symbol.ContainerKind == "class"
+                                && symbol.ContainerName == recordSymbol.Name))
+                        {
+                            symbols.Add(new SymbolRecord
+                            {
+                                FileId = fileId,
+                                Kind = "function",
+                                Name = recordSymbol.Name,
+                                Line = i + 1,
+                                StartLine = i + 1,
+                                StartColumn = absoluteStartColumn,
+                                EndLine = Math.Max(i + 1, endLine),
+                                BodyStartLine = bodyStartLine,
+                                BodyEndLine = bodyEndLine,
+                                Signature = sameLineEndColumn >= absoluteStartColumn
+                                    ? line[absoluteStartColumn..(sameLineEndColumn + 1)].Trim()
+                                    : line[absoluteStartColumn..].Trim(),
+                                ContainerKind = "class",
+                                ContainerName = recordSymbol.Name,
+                                Visibility = visibility,
+                            });
+                        }
+                    }
+                }
+
+                var column = segmentStart;
+                while (column < segmentEndExclusive)
+                {
+                    if (TryConsumeJavaNonCode(line, ref column, ref mode))
+                        continue;
+
+                    var ch = line[column];
+                    if (ch == '{')
+                        braceDepth++;
+                    else if (ch == '}' && braceDepth > 0)
+                        braceDepth--;
+
+                    column++;
+                }
+            }
+        }
+    }
+
+    private static bool IsJavaRecordSymbol(string[] rawLines, SymbolRecord symbol)
+    {
+        var declarationLineIndex = symbol.StartLine - 1;
+        if (declarationLineIndex < 0 || declarationLineIndex >= rawLines.Length)
+            return false;
+
+        return TryMatchJavaDeclarationSegment(
+            GetCurrentDeclarationRecordRegex("java", symbol.Kind, symbol.Name),
+            rawLines[declarationLineIndex],
+            out _,
+            out _);
+    }
+
+    private static bool TryMatchJavaDeclarationSegment(Regex regex, string declarationSegment, out Match match, out int javaLeadingAnnotationOffset)
+    {
+        javaLeadingAnnotationOffset = 0;
+        match = Match.Empty;
+        if (string.IsNullOrWhiteSpace(declarationSegment))
+            return false;
+
+        javaLeadingAnnotationOffset = SkipLeadingJavaAnnotations(declarationSegment);
+        if (javaLeadingAnnotationOffset >= declarationSegment.Length)
+            return false;
+
+        match = regex.Match(declarationSegment[javaLeadingAnnotationOffset..]);
+        return match.Success;
+    }
+
     // Track Java source-code scanner state (strings, char literals, comments, text blocks).
     // Java ソース scanner の state（文字列・char literal・コメント・text block）を表す。
     private enum JavaScanMode
@@ -3285,6 +3423,80 @@ public static class SymbolExtractor
             return false;
 
         var scanEndLineIndex = Math.Min(enumSymbol.EndLine, rawLines.Length) - 1;
+        if (scanEndLineIndex < declarationLineIndex)
+            return false;
+
+        var mode = JavaScanMode.Normal;
+        var depth = 0;
+        var opened = false;
+
+        var lineIndex = declarationLineIndex;
+        var column = 0;
+        while (lineIndex <= scanEndLineIndex)
+        {
+            if (mode == JavaScanMode.LineComment)
+                mode = JavaScanMode.Normal;
+
+            var line = rawLines[lineIndex];
+            while (column < line.Length)
+            {
+                if (TryConsumeJavaNonCode(line, ref column, ref mode))
+                    continue;
+
+                var ch = line[column];
+                if (ch == '{')
+                {
+                    depth++;
+                    if (!opened)
+                    {
+                        opened = true;
+                        bodyStartLineIndex = lineIndex;
+                        bodyStartColumn = column + 1;
+                    }
+                }
+                else if (ch == '}' && opened)
+                {
+                    depth--;
+                    if (depth == 0)
+                    {
+                        bodyEndLineIndex = lineIndex;
+                        bodyEndColumnExclusive = column;
+                        return true;
+                    }
+                }
+                column++;
+            }
+
+            lineIndex++;
+            column = 0;
+        }
+
+        if (!opened)
+            return false;
+
+        bodyEndLineIndex = scanEndLineIndex;
+        bodyEndColumnExclusive = rawLines[scanEndLineIndex].Length;
+        return true;
+    }
+
+    private static bool TryFindJavaSymbolBodyBounds(
+        string[] rawLines,
+        SymbolRecord containerSymbol,
+        out int bodyStartLineIndex,
+        out int bodyStartColumn,
+        out int bodyEndLineIndex,
+        out int bodyEndColumnExclusive)
+    {
+        bodyStartLineIndex = 0;
+        bodyStartColumn = 0;
+        bodyEndLineIndex = 0;
+        bodyEndColumnExclusive = 0;
+
+        var declarationLineIndex = containerSymbol.StartLine - 1;
+        if (declarationLineIndex < 0 || declarationLineIndex >= rawLines.Length)
+            return false;
+
+        var scanEndLineIndex = Math.Min(containerSymbol.EndLine, rawLines.Length) - 1;
         if (scanEndLineIndex < declarationLineIndex)
             return false;
 
@@ -3699,6 +3911,14 @@ public static class SymbolExtractor
         if (string.IsNullOrEmpty(name))
             return;
 
+        int? bodyStartLine = null;
+        int? bodyEndLine = null;
+        if (TryFindJavaEnumMemberBodyBounds(rawLines, start, endExclusive, out var anonymousBodyStartLine, out var anonymousBodyEndLine))
+        {
+            bodyStartLine = anonymousBodyStartLine;
+            bodyEndLine = anonymousBodyEndLine;
+        }
+
         symbols.Add(new SymbolRecord
         {
             FileId = fileId,
@@ -3706,11 +3926,92 @@ public static class SymbolExtractor
             Name = name,
             Line = start.LineIndex + 1,
             StartLine = start.LineIndex + 1,
+            StartColumn = start.Column,
             EndLine = endExclusive.LineIndex + 1,
+            BodyStartLine = bodyStartLine,
+            BodyEndLine = bodyEndLine,
             Signature = rawSignature,
             ContainerKind = "enum",
             ContainerName = enumSymbol.Name,
         });
+    }
+
+    private static bool TryFindJavaEnumMemberBodyBounds(
+        string[] rawLines,
+        (int LineIndex, int Column) start,
+        (int LineIndex, int Column) endExclusive,
+        out int bodyStartLine,
+        out int bodyEndLine)
+    {
+        bodyStartLine = 0;
+        bodyEndLine = 0;
+
+        var mode = JavaScanMode.Normal;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var foundBody = false;
+
+        for (int lineIndex = start.LineIndex; lineIndex <= endExclusive.LineIndex && lineIndex < rawLines.Length; lineIndex++)
+        {
+            if (mode == JavaScanMode.LineComment)
+                mode = JavaScanMode.Normal;
+
+            var line = rawLines[lineIndex];
+            var column = lineIndex == start.LineIndex
+                ? start.Column
+                : 0;
+            var scanEndColumnExclusive = lineIndex == endExclusive.LineIndex
+                ? Math.Min(endExclusive.Column, line.Length)
+                : line.Length;
+
+            while (column < scanEndColumnExclusive)
+            {
+                if (TryConsumeJavaNonCode(line, ref column, ref mode))
+                    continue;
+
+                var ch = line[column];
+                if (ch == '(')
+                {
+                    parenDepth++;
+                }
+                else if (ch == ')' && parenDepth > 0)
+                {
+                    parenDepth--;
+                }
+                else if (ch == '[')
+                {
+                    bracketDepth++;
+                }
+                else if (ch == ']' && bracketDepth > 0)
+                {
+                    bracketDepth--;
+                }
+                else if (ch == '{')
+                {
+                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                    {
+                        foundBody = true;
+                        bodyStartLine = lineIndex + 1;
+                    }
+
+                    braceDepth++;
+                }
+                else if (ch == '}' && braceDepth > 0)
+                {
+                    braceDepth--;
+                    if (foundBody && braceDepth == 0)
+                    {
+                        bodyEndLine = lineIndex + 1;
+                        return true;
+                    }
+                }
+
+                column++;
+            }
+        }
+
+        return false;
     }
 
     private static int SkipLeadingJavaAnnotations(string span)
@@ -9525,7 +9826,7 @@ public static class SymbolExtractor
         if (bodyStyle != BodyStyle.Brace || endLine != startLine || sameLineEndColumn < absoluteStartColumn)
             return false;
 
-        return lang is "javascript" or "typescript" or "css"
+        return lang is "javascript" or "typescript" or "css" or "java"
             || (lang == "csharp" && CanContinueScanningSameLineCSharpBraceBody(kind));
     }
 
@@ -9729,7 +10030,7 @@ public static class SymbolExtractor
         {
             "javascript" or "typescript" => FindJavaScriptTypeScriptSameLineBraceEndColumn(line, startColumn, lang),
             "css" => FindCssSameLineBraceEndColumn(line, startColumn),
-            "csharp" => FindCSharpSameLineBraceEndColumn(line, startColumn),
+            "csharp" or "java" => FindCSharpSameLineBraceEndColumn(line, startColumn),
             _ => -1,
         };
     }
@@ -13847,26 +14148,54 @@ public static class SymbolExtractor
 
             if (containerPath.Count > 0)
             {
+                var effectiveContainer = containerPath[^1];
                 if (symbol.ContainerKind != null && symbol.ContainerName != null)
                 {
-                    var explicitContainerAlreadyPresent = containerPath.Count > 0
-                        && containerPath[^1].Kind == symbol.ContainerKind
-                        && containerPath[^1].Name == symbol.ContainerName;
-                    var parentQualifiedName = BuildQualifiedContainerName(containerPath);
-                    symbol.ContainerQualifiedName ??= explicitContainerAlreadyPresent
-                        ? parentQualifiedName
-                        : string.IsNullOrWhiteSpace(parentQualifiedName)
-                            ? symbol.ContainerName
-                            : $"{parentQualifiedName}.{symbol.ContainerName}";
+                    var explicitContainerIndex = -1;
+                    for (var i = containerPath.Count - 1; i >= 0; i--)
+                    {
+                        var container = containerPath[i];
+                        if (container.Kind == symbol.ContainerKind
+                            && container.Name == symbol.ContainerName)
+                        {
+                            explicitContainerIndex = i;
+                            break;
+                        }
+                    }
+
+                    var shouldPromoteToMoreSpecificContainer =
+                        symbol.ContainerKind == "enum"
+                        && explicitContainerIndex >= 0
+                        && explicitContainerIndex < containerPath.Count - 1
+                        && effectiveContainer.Kind == "function"
+                        && effectiveContainer.ContainerKind == "enum";
+
+                    if (shouldPromoteToMoreSpecificContainer)
+                    {
+                        effectiveContainer = containerPath[^1];
+                        symbol.ContainerKind = effectiveContainer.Kind;
+                        symbol.ContainerName = effectiveContainer.Name;
+                        var effectiveParentPath = containerPath.Take(containerPath.Count - 1);
+                        symbol.ContainerQualifiedName = BuildQualifiedContainerName(effectiveParentPath);
+                    }
+                    else
+                    {
+                        var explicitContainerAlreadyPresent = explicitContainerIndex == containerPath.Count - 1;
+                        var parentQualifiedName = BuildQualifiedContainerName(containerPath);
+                        symbol.ContainerQualifiedName ??= explicitContainerAlreadyPresent
+                            ? parentQualifiedName
+                            : string.IsNullOrWhiteSpace(parentQualifiedName)
+                                ? symbol.ContainerName
+                                : $"{parentQualifiedName}.{symbol.ContainerName}";
+                    }
                 }
                 else
                 {
-                    var container = containerPath[^1];
-                    symbol.ContainerKind ??= container.Kind;
-                    symbol.ContainerName ??= container.Name;
+                    symbol.ContainerKind ??= effectiveContainer.Kind;
+                    symbol.ContainerName ??= effectiveContainer.Name;
                     var qualifiedContainerName = BuildQualifiedContainerName(containerPath);
                     symbol.ContainerQualifiedName = qualifiedContainerName;
-                    symbol.FamilyKey = BuildInheritedFamilyKey(container, qualifiedContainerName);
+                    symbol.FamilyKey = BuildInheritedFamilyKey(effectiveContainer, qualifiedContainerName);
                 }
             }
 
@@ -13941,6 +14270,14 @@ public static class SymbolExtractor
 
     private static bool CanContainSymbols(SymbolRecord symbol)
     {
+        if (symbol.Kind == "function"
+            && symbol.ContainerKind == "enum"
+            && symbol.BodyStartLine != null
+            && symbol.BodyEndLine != null)
+        {
+            return true;
+        }
+
         if (!ContainerKinds.Contains(symbol.Kind))
             return false;
 
@@ -14209,6 +14546,7 @@ public static class SymbolExtractor
     {
         return (container.Kind, candidate.Kind) switch
         {
+            ("function", _) when container.ContainerKind == "enum" && container.BodyStartLine != null && container.BodyEndLine != null => true,
             ("enum", "enum") => true,
             ("namespace", _) => true,
             ("class", _) => true,
