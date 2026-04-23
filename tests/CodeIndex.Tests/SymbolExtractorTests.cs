@@ -12862,6 +12862,31 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_AllmanCompactConstructors_StayIndexed()
+    {
+        const string content = """
+            public record Sample(int value)
+            {
+                public Sample
+                {
+                    if (value < 0) throw new IllegalArgumentException();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var compactCtor = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Sample"));
+        Assert.Equal("class", compactCtor.ContainerKind);
+        Assert.Equal("Sample", compactCtor.ContainerName);
+        Assert.Equal("public Sample", compactCtor.Signature);
+        Assert.Null(compactCtor.ReturnType);
+        Assert.NotNull(compactCtor.BodyStartLine);
+        Assert.NotNull(compactCtor.BodyEndLine);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "value" && s.ContainerName == "Sample");
+    }
+
+    [Fact]
     public void Extract_Java_EnumAnonymousMemberBodyMethods_StayNestedUnderMemberBodies()
     {
         const string content = """
