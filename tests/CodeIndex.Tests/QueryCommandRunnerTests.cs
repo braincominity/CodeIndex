@@ -8214,7 +8214,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_WithJsonSkipsCSharpEnumMembers()
+    public void RunUnused_WithJsonKeepsReferencedCSharpEnumMembersOutWithoutDegradedMetadata()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_unused_enum_members");
         try
@@ -8252,11 +8252,10 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.True(document.RootElement.GetProperty("graph_supported").GetBoolean());
-            Assert.True(document.RootElement.GetProperty("graph_degraded").GetBoolean());
-            Assert.Equal("enum_member", document.RootElement.GetProperty("unsupported_symbol_kind").GetString());
-            Assert.Contains("currently excluded from unused analysis", document.RootElement.GetProperty("graph_support_reason").GetString());
+            Assert.False(document.RootElement.TryGetProperty("graph_degraded", out _));
+            Assert.False(document.RootElement.TryGetProperty("unsupported_symbol_kind", out _));
             Assert.DoesNotContain("A", names);
-            Assert.DoesNotContain("B", names);
+            Assert.Contains("B", names);
         }
         finally
         {
@@ -8265,7 +8264,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_WithJsonKeepsCSharpEnumDeclarationsWhileSkippingEnumMembers()
+    public void RunUnused_WithJsonIncludesUnusedCSharpEnumMembers()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_unused_enum_declarations");
         try
@@ -8308,14 +8307,13 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.True(document.RootElement.GetProperty("graph_supported").GetBoolean());
-            Assert.True(document.RootElement.GetProperty("graph_degraded").GetBoolean());
-            Assert.Equal("enum_member", document.RootElement.GetProperty("unsupported_symbol_kind").GetString());
-            Assert.Contains("currently excluded from unused analysis", document.RootElement.GetProperty("graph_support_reason").GetString());
+            Assert.False(document.RootElement.TryGetProperty("graph_degraded", out _));
+            Assert.False(document.RootElement.TryGetProperty("unsupported_symbol_kind", out _));
             Assert.DoesNotContain("Color", names);
             Assert.Contains("TrulyUnused", names);
             Assert.DoesNotContain("Red", names);
-            Assert.DoesNotContain("Blue", names);
-            Assert.DoesNotContain("Green", names);
+            Assert.Contains("Blue", names);
+            Assert.Contains("Green", names);
         }
         finally
         {
@@ -8324,7 +8322,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_WithKindEnum_KeepsUnusedEnumDeclarationsVisible()
+    public void RunUnused_WithKindEnum_IncludesUnusedEnumDeclarationsAndMembers()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_unused_kind_enum_declarations");
         try
@@ -8370,8 +8368,8 @@ public class QueryCommandRunnerTests
             Assert.DoesNotContain("Color", names);
             Assert.Contains("TrulyUnused", names);
             Assert.DoesNotContain("Red", names);
-            Assert.DoesNotContain("Blue", names);
-            Assert.DoesNotContain("Green", names);
+            Assert.Contains("Blue", names);
+            Assert.Contains("Green", names);
         }
         finally
         {
@@ -8417,7 +8415,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_JsonWithoutLangMarksCSharpEnumMemberGapWhenScopeContainsEnumMembers()
+    public void RunUnused_JsonWithoutLangKeepsGraphMetadataCleanWhenScopeContainsEnumMembers()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_unused_without_lang_enum_members");
         try
@@ -8444,10 +8442,9 @@ public class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.True(json.GetProperty("graph_supported").GetBoolean());
-            Assert.True(json.GetProperty("graph_degraded").GetBoolean());
-            Assert.Equal("enum_member", json.GetProperty("unsupported_symbol_kind").GetString());
-            Assert.Contains("currently excluded from unused analysis", json.GetProperty("graph_support_reason").GetString());
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("graph_supported").ValueKind);
+            Assert.False(json.TryGetProperty("graph_degraded", out _));
+            Assert.False(json.TryGetProperty("unsupported_symbol_kind", out _));
         }
         finally
         {

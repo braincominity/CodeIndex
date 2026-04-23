@@ -4132,7 +4132,7 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_UnusedSymbols_KeepsCSharpEnumDeclarationsWhileSkippingEnumMembers()
+    public void ToolsCall_UnusedSymbols_IncludesUnusedCSharpEnumMembersWithoutDegradedMetadata()
     {
         InsertIndexedFile("src/cases.cs", "csharp",
             """
@@ -4168,18 +4168,17 @@ public class McpServerTests : IDisposable
             .ToHashSet(StringComparer.Ordinal);
 
         Assert.True(structured["graph_supported"]!.GetValue<bool>());
-        Assert.True(structured["graph_degraded"]!.GetValue<bool>());
-        Assert.Equal("enum_member", structured["unsupported_symbol_kind"]!.GetValue<string>());
-        Assert.Contains("currently excluded from unused analysis", structured["graph_support_reason"]!.GetValue<string>());
+        Assert.Null(structured["graph_degraded"]);
+        Assert.Null(structured["unsupported_symbol_kind"]);
         Assert.DoesNotContain("Color", names);
         Assert.Contains("TrulyUnused", names);
         Assert.DoesNotContain("Red", names);
-        Assert.DoesNotContain("Blue", names);
-        Assert.DoesNotContain("Green", names);
+        Assert.Contains("Blue", names);
+        Assert.Contains("Green", names);
     }
 
     [Fact]
-    public void ToolsCall_UnusedSymbols_EnumDeclarationsStillReturnDegradedSummary()
+    public void ToolsCall_UnusedSymbols_EnumDeclarationsReturnNormalSummary()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_unused_enum_gap_summary");
         try
@@ -4225,11 +4224,11 @@ public class McpServerTests : IDisposable
                 .ToHashSet(StringComparer.Ordinal);
 
             Assert.True(structured["count"]!.GetValue<int>() >= 2);
-            Assert.True(structured["graph_degraded"]!.GetValue<bool>());
-            Assert.Equal("enum_member", structured["unsupported_symbol_kind"]!.GetValue<string>());
-            Assert.Contains("currently excluded from unused analysis", structured["graph_support_reason"]!.GetValue<string>());
+            Assert.Null(structured["graph_degraded"]);
+            Assert.Null(structured["unsupported_symbol_kind"]);
             Assert.DoesNotContain("Color", names);
             Assert.Contains("TrulyUnused", names);
+            Assert.Contains("Green", names);
             Assert.Contains(
                 "Found",
                 response["result"]!["content"]![0]!["text"]!.GetValue<string>());

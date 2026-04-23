@@ -1319,7 +1319,6 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.GetUnusedSymbols(limit, kind, lang, pathPatterns, excludePaths, excludeTests);
-            var hasEnumMemberGap = reader.HasFilteredCSharpEnumSymbols(kind, lang, pathPatterns, excludePaths, excludeTests);
             var bucketCounts = results
                 .GroupBy(result => result.UnusedBucket, StringComparer.Ordinal)
                 .OrderBy(group => Array.IndexOf(new[] { "likely_unused_private", "maybe_unused_nonpublic", "public_or_exported_no_refs", "reflection_or_config_suspect" }, group.Key))
@@ -1327,24 +1326,14 @@ public partial class McpServer
             var payload = new JsonObject
             {
                 ["count"] = results.Count,
-                ["graph_supported"] = hasEnumMemberGap ? true : graphSupported,
-                ["graph_support_reason"] = hasEnumMemberGap
-                    ? "C# enum members are currently excluded from unused analysis, and enum declarations may still be false positives."
-                    : graphSupportReason,
+                ["graph_supported"] = graphSupported,
+                ["graph_support_reason"] = graphSupportReason,
                 ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(bucketCounts, _jsonOptions),
                 ["symbols"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
-            if (hasEnumMemberGap)
-            {
-                payload["graph_language"] = "csharp";
-                payload["graph_degraded"] = true;
-                payload["unsupported_symbol_kind"] = "enum_member";
-            }
             var summary = results.Count > 0
                 ? $"Found {results.Count} potentially unused symbol(s) across {bucketCounts.Count} returned bucket(s). Private hits are ranked ahead of exported/config suspects, but not labeled high-confidence from indexed refs alone. Note: name-based matching — same-named symbols in different contexts may mask true unused symbols."
-                : hasEnumMemberGap
-                    ? "No unused symbols found, but C# enum members are still excluded from unused analysis and enum declarations may still be false positives."
-                    : "No unused symbols found.";
+                : "No unused symbols found.";
             if (graphSupported == false)
                 summary += $" Warning: '{lang}' does not support reference extraction. Unused results are unavailable for this language.";
             if (!reader._hasReferencesTable)
