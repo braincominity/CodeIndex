@@ -10930,6 +10930,57 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_SqlUsingSourceMatcherSkipsDdlUsingClauses()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_using_source_matcher");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "sql", "repro.sql"),
+                """
+                CREATE INDEX idx_users_name ON users USING btree (name);
+                ALTER TABLE users ALTER COLUMN name TYPE text USING lower(name);
+                MERGE INTO audit_log AS t
+                USING staging_log AS s
+                ON t.id = s.id
+                WHEN MATCHED THEN
+                    UPDATE SET action = s.action;
+                """);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (stagingExitCode, stagingStdout, stagingStderr) = RunBuiltCli(["references", "staging_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (btreeExitCode, btreeStdout, btreeStderr) = RunBuiltCli(["references", "btree", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (lowerExitCode, lowerStdout, lowerStderr) = RunBuiltCli(["references", "lower", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+
+            var stagingRows = ParseJsonLines(stagingStdout);
+            using var btreeDocument = ParseJsonOutput(btreeStdout);
+            using var lowerDocument = ParseJsonOutput(lowerStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            Assert.Equal(CommandExitCodes.Success, stagingExitCode);
+            Assert.Equal(string.Empty, stagingStderr);
+            var stagingRow = Assert.Single(stagingRows);
+            Assert.Equal("staging_log", stagingRow.RootElement.GetProperty("symbol_name").GetString());
+            Assert.Equal("reference", stagingRow.RootElement.GetProperty("reference_kind").GetString());
+
+            Assert.Equal(CommandExitCodes.NotFound, btreeExitCode);
+            Assert.Equal(string.Empty, btreeStderr);
+            Assert.Equal(0, btreeDocument.RootElement.GetProperty("count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.NotFound, lowerExitCode);
+            Assert.Equal(string.Empty, lowerStderr);
+            Assert.Equal(0, lowerDocument.RootElement.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_SqlDoubleQuotedDynamicSqlDoesNotLeakUsersReference()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_double_quoted_dynamic_sql");
@@ -10958,6 +11009,47 @@ public class QueryCommandRunnerTests
             var json = usersRow.RootElement;
             Assert.Equal("users", json.GetProperty("symbol_name").GetString());
             Assert.Equal(3, json.GetProperty("line").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_SqlEscapedSingleQuotedStringsDoNotLeakPhantomReference()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_escaped_single_quoted_strings");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "sql", "repro.sql"),
+                """
+                SELECT 'abc\' FROM phantom';
+                SELECT 'abc'' FROM still_phantom';
+                SELECT * FROM users # comment with comment_phantom;
+                """);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (phantomExitCode, phantomStdout, phantomStderr) = RunBuiltCli(["references", "phantom", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (usersExitCode, usersStdout, usersStderr) = RunBuiltCli(["references", "users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+
+            using var phantomDocument = ParseJsonOutput(phantomStdout);
+            var usersRows = ParseJsonLines(usersStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            Assert.Equal(CommandExitCodes.NotFound, phantomExitCode);
+            Assert.Equal(string.Empty, phantomStderr);
+            Assert.Equal(0, phantomDocument.RootElement.GetProperty("count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.Success, usersExitCode);
+            Assert.Equal(string.Empty, usersStderr);
+            var usersRow = Assert.Single(usersRows);
+            Assert.Equal("users", usersRow.RootElement.GetProperty("symbol_name").GetString());
+            Assert.Equal(3, usersRow.RootElement.GetProperty("line").GetInt32());
         }
         finally
         {

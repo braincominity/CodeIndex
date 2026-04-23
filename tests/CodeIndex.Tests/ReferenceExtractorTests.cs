@@ -5382,6 +5382,31 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_MergeUsingDoesNotTreatOtherUsingClausesAsSources()
+    {
+        // issue #695: `USING` should stay on the SQL source path only for `MERGE ... USING <source>`,
+        // not for PostgreSQL DDL/operator clauses such as `CREATE INDEX ... USING btree (...)`.
+        // issue #695: `USING` は `MERGE ... USING <source>` にだけ source 経路を与えるべきであり、
+        // `CREATE INDEX ... USING btree (...)` のような PostgreSQL DDL/演算子節まで拾ってはいけない。
+        const string content = """
+            CREATE INDEX idx_users_name ON users USING btree (name);
+            ALTER TABLE users ALTER COLUMN name TYPE text USING lower(name);
+            MERGE INTO audit_log AS t
+            USING staging_log AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "btree");
+        Assert.DoesNotContain(references, r => r.SymbolName == "lower");
+    }
+
+    [Fact]
     public void Extract_SQL_DoubleQuotedDynamicSqlDoesNotLeakPhantomReferences()
     {
         // issue #689: preserving ANSI double-quoted identifiers must not let dynamic SQL strings
@@ -5403,6 +5428,28 @@ public class ReferenceExtractorTests
 
         var usersReference = Assert.Single(usersReferences);
         Assert.Equal(3, usersReference.Line);
+    }
+
+    [Fact]
+    public void Extract_SQL_SingleQuotedStringsWithEscapedQuotesDoNotLeakPhantomReferences()
+    {
+        // issue #696: the SQL single-quote scanner must preserve both MySQL `\'` escapes and
+        // doubled SQL quotes so string contents never leak phantom source references.
+        // issue #696: SQL の single-quote scanner は MySQL の `\'` escape と doubled quote の
+        // 両方を維持し、文字列内容から phantom source reference を漏らしてはいけない。
+        const string content = """
+            SELECT 'abc\' FROM phantom';
+            SELECT 'abc'' FROM still_phantom';
+            SELECT * FROM users # comment with comment_phantom;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "phantom" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "still_phantom" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "comment_phantom" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
     }
 
     [Fact]

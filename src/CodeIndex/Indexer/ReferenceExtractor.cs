@@ -203,6 +203,8 @@ public static class ReferenceExtractor
     private const string SqlBareIdentifierPattern = @"(?:##?\w+|\w+)";
     private const string SqlTempIdentifierPattern =
         @"(?:\[(?:##?\w+)\]|`(?:##?\w+)`|" + "\"(?:##?\\w+)\"" + @"|##?\w+)";
+    private const string SqlQualifiedIdentifierNoCapturePattern =
+        @"(?:(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")\s*\.\s*)*(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")";
     private const string SqlQualifiedIdentifierPattern =
         @"(?:(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")\s*\.\s*)*(?<name>" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")";
     private const string SqlTopTargetModifierPattern =
@@ -211,12 +213,19 @@ public static class ReferenceExtractor
         $@"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?(?:(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern})?\.)*(?<name>{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // SQL named source references that should become `reference` edges rather than `call` edges.
+    // Bare `USING` is intentionally excluded because SQL dialects also reuse it for non-source
+    // syntax such as `CREATE INDEX ... USING btree (...)` and `ALTER TABLE ... USING expr`.
     // `FROM dbo.fn_TableValued(...)` intentionally stays out because the trailing `(` means the
-    // shared CallRegex already captures it as a function call. issue #284.
+    // shared CallRegex already captures it as a function call. issues #284 / #695.
     // SQL のソース参照で、`call` ではなく `reference` として扱うべき形。
+    // bare な `USING` は `CREATE INDEX ... USING btree (...)` や
+    // `ALTER TABLE ... USING expr` のような非 source 構文にも使われるため意図的に除外する。
     // `FROM dbo.fn_TableValued(...)` は末尾 `(` により既存 CallRegex が `call` を出すため除外する。
     private static readonly Regex SqlSourceReferenceRegex = new(
-        $@"(?<![\w$])(?:FROM|JOIN|USING|(?:CROSS|OUTER)\s+APPLY)\b\s+(?:(?:ONLY|LATERAL)\b\s+)*{SqlQualifiedIdentifierPattern}",
+        $@"(?<![\w$])(?:FROM|JOIN|(?:CROSS|OUTER)\s+APPLY)\b\s+(?:(?:ONLY|LATERAL)\b\s+)*{SqlQualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlMergeUsingSourceRegex = new(
+        $@"(?<![\w$])MERGE\b(?:\s+{SqlTopTargetModifierPattern})?\s+INTO\s+{SqlQualifiedIdentifierNoCapturePattern}(?:\s+(?:AS\s+)?(?!USING\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s+USING\b\s+(?:(?:ONLY|LATERAL)\b\s+)*{SqlQualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // SQL mutation targets such as `INSERT INTO tbl (...)` / `UPDATE tbl` / `TRUNCATE TABLE tbl`.
     // `INSERT INTO tbl (` is a table reference, not a function call; we later suppress the generic
@@ -229,6 +238,9 @@ public static class ReferenceExtractor
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SqlTopCallSuppressionRegex = new(
         @"(?<![\w$])(?:UPDATE|MERGE|DELETE)\b\s+(?<name>TOP)\s*\(",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlUsingClauseCallSuppressionRegex = new(
+        $@"(?<![\w$])USING\b\s+(?<name>{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern})(?=\s*\()",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // SQL Server temp-table materialization: `SELECT ... INTO #tmp` / `SELECT ... INTO ##tmp`.
     // Procedural `SELECT ... INTO variable` remains intentionally excluded. issue #649.
@@ -778,10 +790,35 @@ public static class ReferenceExtractor
 
                         if (!string.IsNullOrWhiteSpace(sqlStatement))
                         {
+                            HashSet<int>? sqlMergeUsingSourceIndices = null;
+                            foreach (Match match in SqlMergeUsingSourceRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+
+                                (sqlMergeUsingSourceIndices ??= []).Add(nameGroup.Index);
+                            }
+
                             foreach (Match match in SqlTopCallSuppressionRegex.Matches(sqlStatement))
                             {
                                 var nameGroup = match.Groups["name"];
                                 if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+
+                                sqlSuppressedCallIndices?.Add(nameGroup.Index + sqlStatementStart - sqlLineOffset);
+                            }
+
+                            foreach (Match match in SqlUsingClauseCallSuppressionRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+                                if (sqlMergeUsingSourceIndices != null && sqlMergeUsingSourceIndices.Contains(nameGroup.Index))
                                     continue;
 
                                 sqlSuppressedCallIndices?.Add(nameGroup.Index + sqlStatementStart - sqlLineOffset);
@@ -815,6 +852,39 @@ public static class ReferenceExtractor
                             }
 
                             foreach (Match match in SqlSourceReferenceRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+                                var followedByOpenParen = IsFollowedByOpenParen(sqlStatement, nameGroup.Index + nameGroup.Length);
+                                NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+                                if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                    continue;
+                                if (followedByOpenParen)
+                                {
+                                    var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
+                                    AddChainReference(
+                                        references, seen, fileId, resolvedName, nameColumn + 1,
+                                        "call", context, lineNumber, sqlCallContainer);
+                                    if (!wasQuoted)
+                                    {
+                                        sqlSuppressedCallIndices?.Add(
+                                            GetSqlCallLikeSuppressionIndex(sqlStatement, nameGroup.Index) + sqlStatementStart - sqlLineOffset);
+                                    }
+                                    continue;
+                                }
+                                if (resolvedName.StartsWith("#", StringComparison.Ordinal)
+                                    && (sqlEstablishedTempObjectNames == null || !sqlEstablishedTempObjectNames.Contains(resolvedName)))
+                                    continue;
+
+                                var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
+                                AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                            }
+
+                            foreach (Match match in SqlMergeUsingSourceRegex.Matches(sqlStatement))
                             {
                                 if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
                                     continue;
@@ -1378,6 +1448,11 @@ public static class ReferenceExtractor
     {
         for (int i = startIndex; i < text.Length; i++)
         {
+            if (text[i] == '\\' && i + 1 < text.Length)
+            {
+                i++;
+                continue;
+            }
             if (text[i] != '\'')
                 continue;
             if (i + 1 < text.Length && text[i + 1] == '\'')
