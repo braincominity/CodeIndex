@@ -14625,6 +14625,56 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpCrossFileSameNamespaceTypePatternStaysVisible()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_cross_file_same_namespace_type_pattern_visible");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "Use.cs"),
+                """
+                using static Probe.Color;
+
+                namespace Probe;
+
+                enum Color { Red }
+
+                class Demo
+                {
+                    bool Match(object value) => value is Red;
+                    void ProbeType() { _ = typeof(Red); }
+                }
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "Other.cs"),
+                """
+                namespace Probe;
+
+                class Red {}
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
+            var rows = ParseJsonLines(stdout).Select(line => line.RootElement).ToList();
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, rows.Count);
+            Assert.All(rows, row => Assert.Equal("type_reference", row.GetProperty("reference_kind").GetString()));
+            Assert.Contains(rows, row => row.GetProperty("context").GetString()!.Contains("value is Red", StringComparison.Ordinal));
+            Assert.Contains(rows, row => row.GetProperty("context").GetString()!.Contains("typeof(Red)", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpUsingAliasDoesNotRescueUnqualifiedTypePattern()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_using_alias_does_not_rescue_unqualified_type_pattern");

@@ -7182,14 +7182,48 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpUsingStaticLogicalConstantPatterns_DoNotEmitTypeReferences()
+    public void Extract_CsharpQualifiedConstantPatterns_DoNotEmitTypeReferences()
     {
-        // issue #682: `using static Probe.Color;` imports enum members as unqualified
-        // constant patterns, so `Red` / `Blue` must not leak as type tests while a
-        // genuine type head in the same logical pattern still survives.
-        // issue #682: `using static Probe.Color;` で enum member が unqualified な
-        // constant pattern になるため、`Red` / `Blue` は型テストとして漏れてはならず、
-        // 同じ logical pattern に混ざる本物の型 head は残さなければならない。
+        const string content = """
+            namespace Probe;
+
+            enum Color { Red, Blue }
+            class Point {}
+
+            class Demo
+            {
+                bool Match(object value) => value is Color.Red or Color.Blue or Point;
+
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case Color.Red:
+                            break;
+                        case Color.Red or Color.Blue:
+                            break;
+                        case Color.Red or Point:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference");
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(2, pointRefs.Count);
+        Assert.Contains(pointRefs, r => r.ContainerName == "Match");
+        Assert.Contains(pointRefs, r => r.ContainerName == "Run");
+    }
+
+    [Fact]
+    public void Extract_CsharpUsingStaticLogicalConstantPatterns_KeepAmbiguousHeadsForReadTimeFiltering()
+    {
         const string content = """
             using static Probe.Color;
 
@@ -7220,11 +7254,17 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference");
-
+        var redRefs = references.Where(r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference").ToList();
+        var blueRefs = references.Where(r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference").ToList();
         var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+
+        Assert.Equal(4, redRefs.Count);
+        Assert.Equal(2, blueRefs.Count);
         Assert.Equal(2, pointRefs.Count);
+        Assert.Contains(redRefs, r => r.ContainerName == "Match");
+        Assert.Equal(3, redRefs.Count(r => r.ContainerName == "Run"));
+        Assert.Contains(blueRefs, r => r.ContainerName == "Match");
+        Assert.Contains(blueRefs, r => r.ContainerName == "Run");
         Assert.Contains(pointRefs, r => r.ContainerName == "Match");
         Assert.Contains(pointRefs, r => r.ContainerName == "Run");
     }

@@ -593,11 +593,6 @@ public static class ReferenceExtractor
         var csharpKnownTypeNames = BuildCSharpKnownTypeNames(language, symbols);
         var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols, csharpKnownTypeNames);
         var csharpUsingStatics = BuildCSharpUsingStatics(language, symbols);
-        var csharpNamespaceScopes = BuildCSharpNamespaceScopes(language, symbols, lines.Length);
-        var csharpUsingNamespaceScopes = BuildCSharpUsingNamespaceScopes(language, symbols);
-        var csharpContainingTypeScopes = BuildCSharpContainingTypeScopes(language, symbols);
-        var csharpTopLevelTypeNamespacesByName = BuildCSharpTopLevelTypeNamespacesByName(language, symbols);
-        var csharpNestedTypeContainersByName = BuildCSharpNestedTypeContainersByName(language, symbols);
         var csharpValueReceiverNames = BuildCSharpValueReceiverNamesByContainingType(language, symbols);
         var csharpFunctionValueReceiverNames = BuildCSharpValueReceiverNamesByFunctionStartLine(
             language,
@@ -605,16 +600,13 @@ public static class ReferenceExtractor
             structuralLines,
             csharpKnownTypeNames,
             csharpUsingAliases);
-        bool HasActiveSameFileCSharpTypeCandidate(string typeExpression, int lineNumber)
-            => HasActiveCSharpSameFileTypeCandidate(
-                typeExpression,
-                lineNumber,
-                csharpNamespaceScopes,
-                csharpUsingNamespaceScopes,
-                csharpContainingTypeScopes,
-                csharpUsingAliases,
-                csharpTopLevelTypeNamespacesByName,
-                csharpNestedTypeContainersByName);
+        // Workspace-wide same-name type rescue needs cross-file visibility, so the
+        // extractor leaves ambiguous unqualified using-static pattern heads for the
+        // read path to disambiguate.
+        // ワークスペース全体の同名型 rescue には cross-file 可視性が必要なため、
+        // extractor は曖昧な unqualified using-static pattern head を残し、
+        // read path 側で判定させる。
+        static bool HasActiveSameFileCSharpTypeCandidate(string typeExpression, int lineNumber) => false;
 
         var references = new List<ReferenceRecord>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -3795,144 +3787,10 @@ public static class ReferenceExtractor
         Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
     {
         return IsCSharpQualifiedConstantPatternMemberHead(
-                typeExpression,
-                lineNumber,
-                csharpQualifiedConstantPatternMemberLookup,
-                csharpUsingAliases)
-            || IsCSharpUsingStaticConstantPatternMemberHead(
-                typeExpression,
-                lineNumber,
-                csharpQualifiedConstantPatternMemberLookup,
-                csharpUsingStatics,
-                hasActiveSameFileCSharpTypeCandidate);
-    }
-
-    private static bool IsCSharpUsingStaticConstantPatternMemberHead(
-        string typeExpression,
-        int lineNumber,
-        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
-        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
-        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
-    {
-        if (csharpUsingStatics.Count == 0)
-            return false;
-
-        var trimmed = typeExpression.Trim();
-        if (!TryReadCSharpQualifiedAccess(trimmed, 0, out var parsed)
-            || parsed.LastSeparatorWasDot
-            || parsed.Segments.Count != 1
-            || SkipWhitespace(trimmed, parsed.NextIndex) != trimmed.Length)
-        {
-            return false;
-        }
-
-        var member = parsed.Segments[0];
-        var memberName = NormalizeCSharpIdentifier(trimmed.Substring(member.Start, member.End - member.Start));
-        if (hasActiveSameFileCSharpTypeCandidate(memberName, lineNumber))
-            return false;
-        if (!csharpQualifiedConstantPatternMemberLookup.TryGetValue(memberName, out var targets))
-            return false;
-
-        foreach (var target in targets)
-        {
-            var qualifiedContainer = !string.IsNullOrWhiteSpace(target.QualifiedContainerName)
-                ? target.QualifiedContainerName!
-                : target.ContainerName;
-            if (HasActiveCSharpUsingStaticTarget(qualifiedContainer, lineNumber, csharpUsingStatics))
-                return true;
-        }
-
-        return false;
-    }
-
-    private static bool HasActiveCSharpSameFileTypeCandidate(
-        string typeExpression,
-        int lineNumber,
-        IReadOnlyList<CSharpNamespaceScope> csharpNamespaceScopes,
-        IReadOnlyList<CSharpUsingNamespaceScope> csharpUsingNamespaceScopes,
-        IReadOnlyList<CSharpContainingTypeScope> csharpContainingTypeScopes,
-        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
-        IReadOnlyDictionary<string, HashSet<string>> csharpTopLevelTypeNamespacesByName,
-        IReadOnlyDictionary<string, HashSet<string>> csharpNestedTypeContainersByName)
-    {
-        if (!TryReadCSharpQualifiedAccess(typeExpression.Trim(), 0, out var parsed)
-            || parsed.LastSeparatorWasDot
-            || parsed.Segments.Count != 1)
-        {
-            return false;
-        }
-
-        var member = parsed.Segments[0];
-        var memberName = NormalizeCSharpIdentifier(typeExpression.Trim().Substring(member.Start, member.End - member.Start));
-        if (memberName.Length == 0)
-            return false;
-
-        if (HasActiveCSharpTypeAliasCandidate(memberName, lineNumber, csharpUsingAliases))
-            return true;
-
-        if (csharpTopLevelTypeNamespacesByName.TryGetValue(memberName, out var namespaces))
-        {
-            var activeNamespaces = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var scope in csharpNamespaceScopes)
-            {
-                if (lineNumber >= scope.ScopeStartLine && lineNumber <= scope.ScopeEndLine)
-                    activeNamespaces.Add(scope.QualifiedName);
-            }
-
-            if (activeNamespaces.Count == 0)
-                activeNamespaces.Add(string.Empty);
-
-            foreach (var scope in csharpUsingNamespaceScopes)
-            {
-                if (scope.Line > lineNumber)
-                    continue;
-                if (lineNumber < scope.ScopeStartLine || lineNumber > scope.ScopeEndLine)
-                    continue;
-                activeNamespaces.Add(scope.TargetQualifiedName);
-            }
-
-            foreach (var activeNamespace in activeNamespaces)
-            {
-                if (namespaces.Contains(activeNamespace))
-                    return true;
-            }
-        }
-
-        if (!csharpNestedTypeContainersByName.TryGetValue(memberName, out var containingTypes))
-            return false;
-
-        foreach (var scope in csharpContainingTypeScopes)
-        {
-            if (lineNumber >= scope.ScopeStartLine
-                && lineNumber <= scope.ScopeEndLine
-                && containingTypes.Contains(scope.QualifiedName))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static bool HasActiveCSharpTypeAliasCandidate(string memberName, int lineNumber, IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
-    {
-        if (string.IsNullOrWhiteSpace(memberName) || csharpUsingAliases.Count == 0)
-            return false;
-
-        for (var i = csharpUsingAliases.Count - 1; i >= 0; i--)
-        {
-            var alias = csharpUsingAliases[i];
-            if (!alias.TargetsType)
-                continue;
-            if (alias.Line > lineNumber)
-                continue;
-            if (lineNumber < alias.ScopeStartLine || lineNumber > alias.ScopeEndLine)
-                continue;
-            if (string.Equals(alias.AliasName, memberName, StringComparison.Ordinal))
-                return true;
-        }
-
-        return false;
+            typeExpression,
+            lineNumber,
+            csharpQualifiedConstantPatternMemberLookup,
+            csharpUsingAliases);
     }
 
     private static bool IsCSharpNonTypePatternExpression(string typeExpression)
