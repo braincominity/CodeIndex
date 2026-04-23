@@ -7230,6 +7230,37 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpUsingStaticTypeAliasPattern_KeepsTypeReference()
+    {
+        const string content = """
+            using static Probe.Color;
+            using Red = Probe.Real.Red;
+
+            namespace Probe
+            {
+                enum Color { Red }
+
+                namespace Real
+                {
+                    class Red {}
+                }
+
+                class Demo
+                {
+                    bool Match(object value) => value is Red;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var redRef = Assert.Single(references.Where(r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference"));
+
+        Assert.Equal("Match", redRef.ContainerName);
+        Assert.Contains("value is Red", redRef.Context, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Extract_CsharpCaseRecursiveAndPositionalPatterns_CaptureTypeReferences()
     {
         // issue #661: recursive/property and positional `case Type ...` patterns without

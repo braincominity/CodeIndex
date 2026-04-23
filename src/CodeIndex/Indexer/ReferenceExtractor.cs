@@ -587,13 +587,13 @@ public static class ReferenceExtractor
         var csharpQualifiedEnumMemberLookup = BuildCSharpQualifiedEnumMemberLookup(language, symbols);
         var csharpQualifiedConstantPatternMemberLookup = BuildCSharpQualifiedConstantPatternMemberLookup(language, symbols);
         var csharpQualifiedTypePatternLookup = BuildCSharpQualifiedTypePatternLookup(language, symbols);
-        var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols);
+        var csharpKnownTypeNames = BuildCSharpKnownTypeNames(language, symbols);
+        var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols, csharpKnownTypeNames);
         var csharpUsingStatics = BuildCSharpUsingStatics(language, symbols);
         var csharpNamespaceScopes = BuildCSharpNamespaceScopes(language, symbols, lines.Length);
         var csharpContainingTypeScopes = BuildCSharpContainingTypeScopes(language, symbols);
         var csharpTopLevelTypeNamespacesByName = BuildCSharpTopLevelTypeNamespacesByName(language, symbols);
         var csharpNestedTypeContainersByName = BuildCSharpNestedTypeContainersByName(language, symbols);
-        var csharpKnownTypeNames = BuildCSharpKnownTypeNames(language, symbols);
         var csharpValueReceiverNames = BuildCSharpValueReceiverNamesByContainingType(language, symbols);
         var csharpFunctionValueReceiverNames = BuildCSharpValueReceiverNamesByFunctionStartLine(
             language,
@@ -607,6 +607,7 @@ public static class ReferenceExtractor
                 lineNumber,
                 csharpNamespaceScopes,
                 csharpContainingTypeScopes,
+                csharpUsingAliases,
                 csharpTopLevelTypeNamespacesByName,
                 csharpNestedTypeContainersByName);
 
@@ -2572,13 +2573,13 @@ public static class ReferenceExtractor
     private readonly record struct CSharpRecursivePatternValueNameRecord(string Name, int Offset, bool IsCasePattern, int ArrowIndex = -1);
     private sealed record CSharpNamespaceScope(string QualifiedName, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpContainingTypeScope(string QualifiedName, int ScopeStartLine, int ScopeEndLine);
-    private sealed record CSharpUsingAliasRecord(string AliasName, string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
+    private sealed record CSharpUsingAliasRecord(string AliasName, string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine, bool TargetsType);
     private sealed record CSharpUsingStaticRecord(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpCastTypeShape(IReadOnlyList<string> IdentifierSegments, string? SimpleQualifiedName, bool HasTypeOnlySyntax, bool AllIdentifiersTypeLike);
     private sealed record CSharpContainingTypeValueReceiverNames(HashSet<string> InstanceNames, HashSet<string> StaticNames);
     private sealed record CSharpFunctionValueReceiverNameRecord(string Name, int ScopeStartLine, int ScopeStartColumn, int ScopeEndLine, int ScopeEndColumn);
 
-    private static List<CSharpUsingAliasRecord> BuildCSharpUsingAliases(string language, IReadOnlyList<SymbolRecord> symbols)
+    private static List<CSharpUsingAliasRecord> BuildCSharpUsingAliases(string language, IReadOnlyList<SymbolRecord> symbols, IReadOnlySet<string> csharpKnownTypeNames)
     {
         var aliases = new List<CSharpUsingAliasRecord>();
         if (language != "csharp")
@@ -2623,7 +2624,13 @@ public static class ReferenceExtractor
                 scopeWidth = width;
             }
 
-            aliases.Add(new CSharpUsingAliasRecord(alias, target, symbol.Line, scopeStartLine, scopeEndLine));
+            aliases.Add(new CSharpUsingAliasRecord(
+                alias,
+                target,
+                symbol.Line,
+                scopeStartLine,
+                scopeEndLine,
+                IsCSharpUsingAliasTypeTarget(target, csharpKnownTypeNames)));
         }
 
         aliases.Sort(static (left, right) => left.Line.CompareTo(right.Line));
@@ -2839,6 +2846,49 @@ public static class ReferenceExtractor
         }
 
         return names;
+    }
+
+    private static bool IsCSharpUsingAliasTypeTarget(string targetQualifiedName, IReadOnlySet<string> csharpKnownTypeNames)
+    {
+        var normalizedTarget = NormalizeCSharpAliasTargetForTypeLookup(targetQualifiedName);
+        return normalizedTarget.Length > 0 && csharpKnownTypeNames.Contains(normalizedTarget);
+    }
+
+    private static string NormalizeCSharpAliasTargetForTypeLookup(string targetQualifiedName)
+    {
+        if (string.IsNullOrWhiteSpace(targetQualifiedName))
+            return string.Empty;
+
+        var trimmed = targetQualifiedName.Trim();
+        var builder = new System.Text.StringBuilder(trimmed.Length);
+        var genericDepth = 0;
+        for (var i = 0; i < trimmed.Length; i++)
+        {
+            var ch = trimmed[i];
+            if (ch == '<')
+            {
+                genericDepth++;
+                continue;
+            }
+
+            if (ch == '>')
+            {
+                if (genericDepth > 0)
+                    genericDepth--;
+                continue;
+            }
+
+            if (genericDepth == 0)
+                builder.Append(ch);
+        }
+
+        var normalized = builder.ToString().Trim();
+        while (normalized.EndsWith("?", StringComparison.Ordinal))
+            normalized = normalized[..^1].TrimEnd();
+        while (normalized.EndsWith("[]", StringComparison.Ordinal))
+            normalized = normalized[..^2].TrimEnd();
+
+        return normalized;
     }
 
     private static Dictionary<string, CSharpContainingTypeValueReceiverNames> BuildCSharpValueReceiverNamesByContainingType(string language, IReadOnlyList<SymbolRecord> symbols)
@@ -3729,6 +3779,7 @@ public static class ReferenceExtractor
         int lineNumber,
         IReadOnlyList<CSharpNamespaceScope> csharpNamespaceScopes,
         IReadOnlyList<CSharpContainingTypeScope> csharpContainingTypeScopes,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
         IReadOnlyDictionary<string, HashSet<string>> csharpTopLevelTypeNamespacesByName,
         IReadOnlyDictionary<string, HashSet<string>> csharpNestedTypeContainersByName)
     {
@@ -3743,6 +3794,9 @@ public static class ReferenceExtractor
         var memberName = NormalizeCSharpIdentifier(typeExpression.Trim().Substring(member.Start, member.End - member.Start));
         if (memberName.Length == 0)
             return false;
+
+        if (HasActiveCSharpTypeAliasCandidate(memberName, lineNumber, csharpUsingAliases))
+            return true;
 
         if (csharpTopLevelTypeNamespacesByName.TryGetValue(memberName, out var namespaces))
         {
@@ -3774,6 +3828,27 @@ public static class ReferenceExtractor
             {
                 return true;
             }
+        }
+
+        return false;
+    }
+
+    private static bool HasActiveCSharpTypeAliasCandidate(string memberName, int lineNumber, IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
+    {
+        if (string.IsNullOrWhiteSpace(memberName) || csharpUsingAliases.Count == 0)
+            return false;
+
+        for (var i = csharpUsingAliases.Count - 1; i >= 0; i--)
+        {
+            var alias = csharpUsingAliases[i];
+            if (!alias.TargetsType)
+                continue;
+            if (alias.Line > lineNumber)
+                continue;
+            if (lineNumber < alias.ScopeStartLine || lineNumber > alias.ScopeEndLine)
+                continue;
+            if (string.Equals(alias.AliasName, memberName, StringComparison.Ordinal))
+                return true;
         }
 
         return false;
