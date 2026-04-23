@@ -5454,6 +5454,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_DoubleQuotedDynamicSqlDoesNotEstablishTempTables()
+    {
+        // issue #707: dynamic SQL text inside double quotes must not establish temp tables for
+        // later statement-order reads.
+        // issue #707: 二重引用符内の dynamic SQL テキストは、後続 statement-order read 向けの
+        // temp table を確立した扱いになってはいけない。
+        const string content = """
+            SET @sql = "SELECT id INTO #temp_users FROM users";
+            SELECT * FROM #temp_users;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "#temp_users" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_SQL_SameLineDollarQuotedBodiesDoNotSwallowFollowingStatements()
     {
         // issue #697: when one dollar-quoted body ends and later same-line SQL continues, the

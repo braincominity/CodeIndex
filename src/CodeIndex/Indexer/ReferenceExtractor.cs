@@ -1532,15 +1532,17 @@ public static class ReferenceExtractor
         string statement,
         HashSet<string> names)
     {
-        CollectSqlTempObjectNamesFromMatches(SqlTargetReferenceRegex.Matches(statement), names);
-        CollectSqlTempObjectNamesFromMatches(SqlSelectIntoTempTargetStatementRegex.Matches(statement), names);
-        CollectSqlTempObjectNamesFromMatches(SqlCreateTempTableRegex.Matches(statement), names);
+        CollectSqlTempObjectNamesFromMatches(SqlTargetReferenceRegex.Matches(statement), statement, names);
+        CollectSqlTempObjectNamesFromMatches(SqlSelectIntoTempTargetStatementRegex.Matches(statement), statement, names);
+        CollectSqlTempObjectNamesFromMatches(SqlCreateTempTableRegex.Matches(statement), statement, names);
     }
 
-    private static void CollectSqlTempObjectNamesFromMatches(MatchCollection matches, HashSet<string> names)
+    private static void CollectSqlTempObjectNamesFromMatches(MatchCollection matches, string statement, HashSet<string> names)
     {
         foreach (Match match in matches)
         {
+            if (IsInsideSqlDoubleQuotedRegion(statement, match.Index))
+                continue;
             var nameGroup = match.Groups["name"];
             NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out _, out _);
             if (resolvedName.StartsWith("#", StringComparison.Ordinal))
