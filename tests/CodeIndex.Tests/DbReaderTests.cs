@@ -2852,6 +2852,26 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_SameLineCrossSchemaCallStillReachesReaders()
+    {
+        InsertIndexedFile("src/sql_same_line_cross_schema.sql", "sql",
+            """
+            CREATE PROCEDURE sales.fn_Target AS EXEC dbo.fn_Target;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_cross_schema"]));
+        Assert.Equal(1, reference.Line);
+        Assert.Equal("sales.fn_Target", reference.ContainerName);
+
+        var caller = Assert.Single(
+            _reader.GetCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_cross_schema"]));
+        Assert.Equal("sales.fn_Target", caller.CallerName);
+        Assert.Equal(1, caller.ReferenceCount);
+    }
+
+    [Fact]
     public void GetFileDependencies_DoesNotJoinSameNameTargetsAcrossLanguages()
     {
         InsertIndexedFile("src/Foo.cs", "csharp",

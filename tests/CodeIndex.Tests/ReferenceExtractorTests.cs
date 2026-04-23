@@ -8980,6 +8980,22 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SqlQualifiedDefinition_SameLineCrossSchemaCallStillEmitsReference()
+    {
+        const string content = """
+            CREATE PROCEDURE sales.fn_Target AS EXEC dbo.fn_Target;
+            GO
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRef = Assert.Single(references.Where(r => r.SymbolName == "fn_Target" && r.ReferenceKind == "call"));
+        Assert.Equal(1, targetRef.Line);
+        Assert.Equal("sales.fn_Target", targetRef.ContainerName);
+    }
+
+    [Fact]
     public void Extract_SqlExecDynamicSql_DoesNotEmitPhantomKeywordReference()
     {
         // T-SQL dynamic-SQL execution `EXEC(@sql)` / `EXEC('...')` / `EXECUTE(@sql)` pass a string or

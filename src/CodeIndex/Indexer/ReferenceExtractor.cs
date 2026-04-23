@@ -10,6 +10,8 @@ namespace CodeIndex.Indexer;
 /// </summary>
 public static class ReferenceExtractor
 {
+    private readonly record struct SqlDefinitionLeafSpan(string LeafName, int StartIndex, int EndIndexExclusive);
+
     private static readonly HashSet<string> SupportedLanguages =
     [
         "python", "javascript", "typescript", "csharp", "go", "rust",
@@ -541,6 +543,9 @@ public static class ReferenceExtractor
 
                     return names;
                 });
+        var sqlDefinitionLeafSpansByLine = language == "sql"
+            ? BuildSqlDefinitionLeafSpansByLine(lines, symbols)
+            : null;
         // Include 'property' so expression-bodied and block-bodied property accessors
         // attribute their calls to the property rather than falling through to the
         // enclosing class (see issue #233).
@@ -617,6 +622,9 @@ public static class ReferenceExtractor
             var definitionNames = definitionNamesByLine.TryGetValue(lineNumber, out var namesOnLine)
                 ? namesOnLine
                 : null;
+            List<SqlDefinitionLeafSpan>? sqlDefinitionLeafSpans = null;
+            if (language == "sql")
+                sqlDefinitionLeafSpansByLine?.TryGetValue(lineNumber, out sqlDefinitionLeafSpans);
             var container = FindInnermostContainer(containerCandidates, lineNumber);
 
             // Per-line Java same-line ctor synthesis. When `public Leaf(){super(0); doWork();}`
@@ -685,6 +693,30 @@ public static class ReferenceExtractor
                 }
 
                 return container;
+            }
+
+            bool ShouldSuppressDefinitionCall(string resolvedName, int callIndex)
+            {
+                if (definitionNames == null)
+                    return false;
+
+                if (language != "sql")
+                    return definitionNames.Contains(resolvedName);
+
+                if (sqlDefinitionLeafSpans == null)
+                    return false;
+
+                foreach (var span in sqlDefinitionLeafSpans)
+                {
+                    if (callIndex >= span.StartIndex
+                        && callIndex < span.EndIndexExclusive
+                        && string.Equals(span.LeafName, resolvedName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
             }
 
             // Event subscription/unsubscription (C#) / イベント購読・解除 (C#)
@@ -820,7 +852,7 @@ public static class ReferenceExtractor
                         // `[ORDER]` / `` `order` `` のような正当な名前を落とさないため keyword ignore list をスキップする。
                         if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
                             continue;
-                        if (definitionNames != null && definitionNames.Contains(resolvedName))
+                        if (ShouldSuppressDefinitionCall(resolvedName, nameIndex))
                             continue;
 
                         var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
@@ -972,7 +1004,7 @@ public static class ReferenceExtractor
                 }
                 if (IsIgnoredCallName(language, name))
                     return;
-                if (definitionNames != null && definitionNames.Contains(normalizedName))
+                if (ShouldSuppressDefinitionCall(normalizedName, callIndex))
                     return;
 
                 // issue #293: reclassify C# attribute / Java/Kotlin/Scala/TypeScript annotation
@@ -7437,6 +7469,51 @@ public static class ReferenceExtractor
 
         segment = segment.Trim();
         return segment.Length > 0 ? segment : null;
+    }
+
+    private static Dictionary<int, List<SqlDefinitionLeafSpan>> BuildSqlDefinitionLeafSpansByLine(string[] lines, IReadOnlyList<SymbolRecord> symbols)
+    {
+        var spansByLine = new Dictionary<int, List<SqlDefinitionLeafSpan>>();
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Line < 1 || symbol.Line > lines.Length)
+                continue;
+            if (!TryFindSqlDefinitionLeafSpan(lines[symbol.Line - 1], symbol.Name, out var span))
+                continue;
+
+            if (!spansByLine.TryGetValue(symbol.Line, out var spans))
+            {
+                spans = [];
+                spansByLine[symbol.Line] = spans;
+            }
+
+            spans.Add(span);
+        }
+
+        return spansByLine;
+    }
+
+    private static bool TryFindSqlDefinitionLeafSpan(string line, string qualifiedName, out SqlDefinitionLeafSpan span)
+    {
+        span = default;
+        if (string.IsNullOrWhiteSpace(line) || string.IsNullOrWhiteSpace(qualifiedName))
+            return false;
+
+        var leafName = SqlNameResolver.GetLeafName(qualifiedName);
+        if (string.IsNullOrWhiteSpace(leafName))
+            return false;
+
+        var qualifiedIndex = line.IndexOf(qualifiedName, StringComparison.OrdinalIgnoreCase);
+        if (qualifiedIndex < 0)
+            return false;
+
+        var leafOffset = qualifiedName.LastIndexOf(leafName, StringComparison.OrdinalIgnoreCase);
+        if (leafOffset < 0)
+            return false;
+
+        var startIndex = qualifiedIndex + leafOffset;
+        span = new SqlDefinitionLeafSpan(leafName, startIndex, startIndex + leafName.Length);
+        return true;
     }
 
     // SQL-aware line sanitizer used only for the `EXEC` / `EXECUTE` / `CALL` no-parens scan.
