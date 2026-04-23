@@ -4334,6 +4334,54 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchReferences_ExactSameLineResults_AreOrderedByColumn()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reference_order.py",
+            Lang = "python",
+            Size = 32,
+            Lines = 10,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 10,
+                Content = "def outer():\n    pass\n",
+            }
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Target",
+                ReferenceKind = "call",
+                Line = 5,
+                Column = 20,
+                Context = "target_late() target_early()",
+            },
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Target",
+                ReferenceKind = "call",
+                Line = 5,
+                Column = 5,
+                Context = "target_early() target_late()",
+            },
+        ]);
+
+        var results = _reader.SearchReferences("Target", limit: 2, lang: "python", exact: true, pathPatterns: ["src/reference_order.py"]);
+        Assert.Collection(results,
+            first => Assert.Equal(5, first.Column),
+            second => Assert.Equal(20, second.Column));
+    }
+
+    [Fact]
     public void GraphQueries_DefaultGraphQueriesKeepSubscribeRowsVisible()
     {
         InsertIndexedFile("src/event_publisher.cs", "csharp",

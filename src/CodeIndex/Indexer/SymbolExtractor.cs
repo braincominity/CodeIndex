@@ -3539,8 +3539,36 @@ public static class SymbolExtractor
         if (scanEndLineIndex < declarationLineIndex)
             return false;
 
+        return TryFindJavaBraceDelimitedBodyBounds(
+            rawLines,
+            declarationLineIndex,
+            scanEndLineIndex,
+            ignoreLeadingAnnotationArrayBraces: true,
+            out bodyStartLineIndex,
+            out bodyStartColumn,
+            out bodyEndLineIndex,
+            out bodyEndColumnExclusive);
+    }
+
+    private static bool TryFindJavaBraceDelimitedBodyBounds(
+        string[] rawLines,
+        int declarationLineIndex,
+        int scanEndLineIndex,
+        bool ignoreLeadingAnnotationArrayBraces,
+        out int bodyStartLineIndex,
+        out int bodyStartColumn,
+        out int bodyEndLineIndex,
+        out int bodyEndColumnExclusive)
+    {
+        bodyStartLineIndex = 0;
+        bodyStartColumn = 0;
+        bodyEndLineIndex = 0;
+        bodyEndColumnExclusive = 0;
+
         var mode = JavaScanMode.Normal;
         var depth = 0;
+        var parenDepth = 0;
+        var bracketDepth = 0;
         var opened = false;
 
         var lineIndex = declarationLineIndex;
@@ -3557,14 +3585,40 @@ public static class SymbolExtractor
                     continue;
 
                 var ch = line[column];
-                if (ch == '{')
+                if (ch == '(')
                 {
-                    depth++;
+                    parenDepth++;
+                }
+                else if (ch == ')' && parenDepth > 0)
+                {
+                    parenDepth--;
+                }
+                else if (ch == '[')
+                {
+                    bracketDepth++;
+                }
+                else if (ch == ']' && bracketDepth > 0)
+                {
+                    bracketDepth--;
+                }
+                else if (ch == '{')
+                {
                     if (!opened)
                     {
+                        if (ignoreLeadingAnnotationArrayBraces && (parenDepth > 0 || bracketDepth > 0))
+                        {
+                            column++;
+                            continue;
+                        }
+
                         opened = true;
+                        depth = 1;
                         bodyStartLineIndex = lineIndex;
                         bodyStartColumn = column + 1;
+                    }
+                    else
+                    {
+                        depth++;
                     }
                 }
                 else if (ch == '}' && opened)
@@ -3577,6 +3631,7 @@ public static class SymbolExtractor
                         return true;
                     }
                 }
+
                 column++;
             }
 
@@ -7807,6 +7862,8 @@ public static class SymbolExtractor
                         column++;
                         continue;
                     }
+                    if (ch == ';')
+                        return (i + 1, null, null);
                 }
 
                 if (ch == '{')
@@ -10069,7 +10126,8 @@ public static class SymbolExtractor
         {
             "javascript" or "typescript" => FindJavaScriptTypeScriptSameLineBraceEndColumn(line, startColumn, lang),
             "css" => FindCssSameLineBraceEndColumn(line, startColumn),
-            "csharp" or "java" => FindCSharpSameLineBraceEndColumn(line, startColumn),
+            "csharp" => FindCSharpSameLineBraceEndColumn(line, startColumn),
+            "java" => FindJavaSameLineBraceEndColumn(line, startColumn),
             _ => -1,
         };
     }
@@ -10211,6 +10269,67 @@ public static class SymbolExtractor
                 expressionBody = true;
                 index++;
             }
+        }
+
+        return -1;
+    }
+
+    private static int FindJavaSameLineBraceEndColumn(string line, int startColumn)
+    {
+        var mode = JavaScanMode.Normal;
+        var depth = 0;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var opened = false;
+        var column = Math.Max(0, startColumn);
+        while (column < line.Length)
+        {
+            if (TryConsumeJavaNonCode(line, ref column, ref mode))
+                continue;
+
+            var ch = line[column];
+            if (ch == '(')
+            {
+                parenDepth++;
+            }
+            else if (ch == ')' && parenDepth > 0)
+            {
+                parenDepth--;
+            }
+            else if (ch == '[')
+            {
+                bracketDepth++;
+            }
+            else if (ch == ']' && bracketDepth > 0)
+            {
+                bracketDepth--;
+            }
+            else if (ch == '{')
+            {
+                if (!opened)
+                {
+                    if (parenDepth > 0 || bracketDepth > 0)
+                    {
+                        column++;
+                        continue;
+                    }
+
+                    opened = true;
+                    depth = 1;
+                }
+                else
+                {
+                    depth++;
+                }
+            }
+            else if (ch == '}' && opened)
+            {
+                depth--;
+                if (depth == 0)
+                    return column;
+            }
+
+            column++;
         }
 
         return -1;
