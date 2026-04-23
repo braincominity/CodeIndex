@@ -1496,7 +1496,6 @@ public partial class DbReader
         var signatureSql = $"lower({GetSymbolColumnSql("signature", "''")})";
         const string pathSql = "lower(f.path)";
         var isPublicOrExportedSql = $"{visibilitySql} IN ('public', 'open', 'pub', 'export')";
-        var isCSharpEnumMemberSql = "(f.lang = 'csharp' AND s.kind = 'enum' AND " + GetSymbolColumnSql("container_kind", "''") + " = 'enum')";
         var hasConfigContextSql = $@"(
                 {pathSql} LIKE 'config/%'
                 OR {pathSql} LIKE '%/config/%'
@@ -1538,7 +1537,6 @@ public partial class DbReader
                 FROM symbols s
                 JOIN files f ON s.file_id = f.id
                 WHERE s.kind NOT IN ('import', 'namespace')
-                  AND NOT {isCSharpEnumMemberSql}
                   AND NOT EXISTS (
                       SELECT 1 FROM symbol_references sr WHERE sr.symbol_name = s.name
                   )";
@@ -1657,14 +1655,12 @@ public partial class DbReader
             return (0, 0);
 
         var graphLangs = ReferenceExtractor.GetSupportedLanguages();
-        var isCSharpEnumMemberSql = "(f.lang = 'csharp' AND s.kind = 'enum' AND " + GetSymbolColumnSql("container_kind", "''") + " = 'enum')";
         using var cmd = _conn.CreateCommand();
         var sql = @"
             SELECT COUNT(*), COUNT(DISTINCT f.path)
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE s.kind NOT IN ('import', 'namespace')
-              AND NOT " + isCSharpEnumMemberSql + @"
               AND NOT EXISTS (
                   SELECT 1 FROM symbol_references sr WHERE sr.symbol_name = s.name
               )";

@@ -6851,6 +6851,16 @@ public static class ReferenceExtractor
         return best ?? FindInnermostContainer(candidates, lineNumber);
     }
 
+    private static bool IsCSharpXmlDocCommentLine(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+            return false;
+
+        var trimmed = line.TrimStart();
+        return trimmed.StartsWith("///", StringComparison.Ordinal)
+            && (trimmed.Length == 3 || trimmed[3] != '/');
+    }
+
     private static SymbolRecord? FindInnermostSameLineCSharpContainer(
         IReadOnlyList<SymbolRecord> candidates,
         string structuralLine,
