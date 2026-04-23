@@ -287,6 +287,16 @@ public class DbContext : IDisposable
             "sql_normalize_name",
             (string? name) => string.IsNullOrWhiteSpace(name) ? null : SqlNameResolver.NormalizeQualifiedName(name));
         connection.CreateFunction(
+            "sql_normalize_name_folded",
+            (string? name) =>
+            {
+                if (string.IsNullOrWhiteSpace(name))
+                    return null;
+
+                var normalizedName = SqlNameResolver.NormalizeQualifiedName(name);
+                return normalizedName.Length == 0 ? null : NameFold.Fold(normalizedName) ?? normalizedName;
+            });
+        connection.CreateFunction(
             "sql_segment_count",
             (string? name) => string.IsNullOrWhiteSpace(name) ? (int?)null : SqlNameResolver.GetSegmentCount(name));
     }

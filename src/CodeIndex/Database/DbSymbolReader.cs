@@ -132,8 +132,8 @@ public partial class DbReader
             innerSql += exact
                 ? _foldReady
                     ? allowLeafFallback
-                        ? " AND (s.name_folded = @query0 OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name(s.name) = @query0Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query0Leaf COLLATE NOCASE)))"
-                        : " AND (s.name_folded = @query0 OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name(s.name) = @query0Normalized COLLATE NOCASE))"
+                        ? " AND (s.name_folded = @query0 OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name_folded(s.name) = @query0NormalizedFolded) OR sql_leaf_name(s.name) = @query0Leaf COLLATE NOCASE)))"
+                        : " AND (s.name_folded = @query0 OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name_folded(s.name) = @query0NormalizedFolded))"
                     : allowLeafFallback
                         ? " AND (s.name = @query0 COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name(s.name) = @query0Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query0Leaf COLLATE NOCASE)))"
                         : " AND (s.name = @query0 COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name(s.name) = @query0Normalized COLLATE NOCASE))"
@@ -159,6 +159,7 @@ public partial class DbReader
                     : value;
             cmd.Parameters.AddWithValue("@query0", paramValue);
             cmd.Parameters.AddWithValue("@query0Normalized", SqlNameResolver.NormalizeQualifiedName(value));
+            cmd.Parameters.AddWithValue("@query0NormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(value)) ?? SqlNameResolver.NormalizeQualifiedName(value));
             cmd.Parameters.AddWithValue("@query0Leaf", SqlNameResolver.GetLeafName(value));
             cmd.Parameters.AddWithValue("@query0SegmentCount", SqlNameResolver.GetSegmentCount(value));
             cmd.Parameters.AddWithValue("@query0NormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(value))}%");
@@ -202,8 +203,8 @@ public partial class DbReader
                     var allowLeafFallback = !SqlNameResolver.HasQualifier(queryValue);
                     return _foldReady
                         ? allowLeafFallback
-                            ? $"(s.name_folded = @query{idx} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
-                            : $"(s.name_folded = @query{idx} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE))"
+                            ? $"(s.name_folded = @query{idx} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded) OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
+                            : $"(s.name_folded = @query{idx} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded))"
                         : allowLeafFallback
                             ? $"(s.name = @query{idx} COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
                             : $"(s.name = @query{idx} COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE))";
@@ -233,6 +234,7 @@ public partial class DbReader
                         : value;
                 cmd.Parameters.AddWithValue($"@query{i}", paramValue);
                 cmd.Parameters.AddWithValue($"@query{i}Normalized", SqlNameResolver.NormalizeQualifiedName(value));
+                cmd.Parameters.AddWithValue($"@query{i}NormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(value)) ?? SqlNameResolver.NormalizeQualifiedName(value));
                 cmd.Parameters.AddWithValue($"@query{i}Leaf", SqlNameResolver.GetLeafName(value));
                 cmd.Parameters.AddWithValue($"@query{i}SegmentCount", SqlNameResolver.GetSegmentCount(value));
                 cmd.Parameters.AddWithValue($"@query{i}NormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(value))}%");
@@ -329,8 +331,8 @@ public partial class DbReader
                     var allowLeafFallback = !SqlNameResolver.HasQualifier(queryValue);
                     return _foldReady
                         ? allowLeafFallback
-                            ? $"(s.name_folded = @query{idx} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
-                            : $"(s.name_folded = @query{idx} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE))"
+                            ? $"(s.name_folded = @query{idx} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded) OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
+                            : $"(s.name_folded = @query{idx} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded))"
                         : allowLeafFallback
                             ? $"(s.name = @query{idx} COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
                             : $"(s.name = @query{idx} COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE))";
@@ -349,7 +351,7 @@ public partial class DbReader
             "WHEN @preferLiteralExactMatch = 1 AND s.name = @rawQuery THEN 0 " +
             "WHEN @preferLiteralNormalizedSqlMatch = 1 AND f.lang = 'sql' AND sql_segment_count(s.name) = @rawQuerySegmentCount AND sql_normalize_name(s.name) = @rawQueryNormalized THEN 1 " +
             "WHEN @preferCaseInsensitiveExactMatch = 1 AND s.name = @rawQuery COLLATE NOCASE THEN 2 " +
-            "WHEN @preferCaseInsensitiveNormalizedSqlMatch = 1 AND f.lang = 'sql' AND sql_segment_count(s.name) = @rawQuerySegmentCount AND sql_normalize_name(s.name) = @rawQueryNormalized COLLATE NOCASE THEN 3 " +
+            "WHEN @preferCaseInsensitiveNormalizedSqlMatch = 1 AND f.lang = 'sql' AND sql_segment_count(s.name) = @rawQuerySegmentCount AND sql_normalize_name_folded(s.name) = @rawQueryNormalizedFolded THEN 3 " +
             "WHEN @preferCaseInsensitiveSqlLeafMatch = 1 AND f.lang = 'sql' AND sql_leaf_name(s.name) = @rawQueryLeaf COLLATE NOCASE THEN 4 " +
             "ELSE 5 END, " +
             $"{PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line LIMIT @limit";
@@ -368,6 +370,7 @@ public partial class DbReader
                     paramValue = effectiveQueries[idx];
                 cmd.Parameters.AddWithValue($"@query{idx}", paramValue);
                 cmd.Parameters.AddWithValue($"@query{idx}Normalized", SqlNameResolver.NormalizeQualifiedName(effectiveQueries[idx]));
+                cmd.Parameters.AddWithValue($"@query{idx}NormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(effectiveQueries[idx])) ?? SqlNameResolver.NormalizeQualifiedName(effectiveQueries[idx]));
                 cmd.Parameters.AddWithValue($"@query{idx}Leaf", SqlNameResolver.GetLeafName(effectiveQueries[idx]));
                 cmd.Parameters.AddWithValue($"@query{idx}SegmentCount", SqlNameResolver.GetSegmentCount(effectiveQueries[idx]));
                 cmd.Parameters.AddWithValue($"@query{idx}NormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(effectiveQueries[idx]))}%");
@@ -383,6 +386,7 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@preferCaseInsensitiveSqlLeafMatch", preferSqlLeafMatch ? 1 : 0);
         cmd.Parameters.AddWithValue("@rawQuery", preferLiteralExactMatch ? effectiveQueries![0] : string.Empty);
         cmd.Parameters.AddWithValue("@rawQueryNormalized", preferLiteralExactMatch ? SqlNameResolver.NormalizeQualifiedName(effectiveQueries![0]) : string.Empty);
+        cmd.Parameters.AddWithValue("@rawQueryNormalizedFolded", preferLiteralExactMatch ? NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(effectiveQueries![0])) ?? SqlNameResolver.NormalizeQualifiedName(effectiveQueries![0]) : string.Empty);
         cmd.Parameters.AddWithValue("@rawQueryLeaf", preferLiteralExactMatch ? SqlNameResolver.GetLeafName(effectiveQueries![0]) : string.Empty);
         cmd.Parameters.AddWithValue("@rawQuerySegmentCount", preferLiteralExactMatch ? SqlNameResolver.GetSegmentCount(effectiveQueries![0]) : 0);
         if (kind != null)
@@ -483,8 +487,8 @@ public partial class DbReader
             sql += exact
                 ? _foldReady
                     ? allowLeafFallback
-                        ? " AND (s.name_folded = @query OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @queryLeaf COLLATE NOCASE)))"
-                        : " AND (s.name_folded = @query OR (f.lang = 'sql' AND sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE))"
+                        ? " AND (s.name_folded = @query OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name_folded(s.name) = @queryNormalizedFolded) OR sql_leaf_name(s.name) = @queryLeaf COLLATE NOCASE)))"
+                        : " AND (s.name_folded = @query OR (f.lang = 'sql' AND sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name_folded(s.name) = @queryNormalizedFolded))"
                     : allowLeafFallback
                         ? " AND (s.name = @query COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @queryLeaf COLLATE NOCASE)))"
                         : " AND (s.name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE))"
@@ -517,6 +521,7 @@ public partial class DbReader
                     : query;
             cmd.Parameters.AddWithValue("@query", paramValue);
             cmd.Parameters.AddWithValue("@queryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
+            cmd.Parameters.AddWithValue("@queryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
             cmd.Parameters.AddWithValue("@queryLeaf", SqlNameResolver.GetLeafName(query));
             cmd.Parameters.AddWithValue("@querySegmentCount", SqlNameResolver.GetSegmentCount(query));
             cmd.Parameters.AddWithValue("@queryNormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(query))}%");
@@ -741,8 +746,8 @@ public partial class DbReader
         var allowLeafFallback = !SqlNameResolver.HasQualifier(query);
         var nameCondition = _foldReady
             ? allowLeafFallback
-                ? "(s.name_folded = @queryFolded OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @queryLeaf COLLATE NOCASE)))"
-                : "(s.name_folded = @queryFolded OR (f.lang = 'sql' AND sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE))"
+                ? "(s.name_folded = @queryFolded OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name_folded(s.name) = @queryNormalizedFolded) OR sql_leaf_name(s.name) = @queryLeaf COLLATE NOCASE)))"
+                : "(s.name_folded = @queryFolded OR (f.lang = 'sql' AND sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name_folded(s.name) = @queryNormalizedFolded))"
             : allowLeafFallback
                 ? "(s.name = @queryRaw COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @queryLeaf COLLATE NOCASE)))"
                 : "(s.name = @queryRaw COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE))";
@@ -764,6 +769,7 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@queryRaw", query);
         cmd.Parameters.AddWithValue("@queryFolded", NameFold.Fold(query) ?? query);
         cmd.Parameters.AddWithValue("@queryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
+        cmd.Parameters.AddWithValue("@queryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
         cmd.Parameters.AddWithValue("@queryLeaf", SqlNameResolver.GetLeafName(query));
         cmd.Parameters.AddWithValue("@querySegmentCount", SqlNameResolver.GetSegmentCount(query));
         if (lang != null)

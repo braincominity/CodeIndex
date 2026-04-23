@@ -1392,8 +1392,8 @@ public partial class DbReader
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "resolveLang");
         var nameCondition = _foldReady
             ? allowLeafFallback
-                ? "(s.name_folded = @nameFolded OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @segmentCount AND sql_normalize_name(s.name) = @normalizedName COLLATE NOCASE) OR sql_leaf_name(s.name) = @leafName COLLATE NOCASE)))"
-                : "(s.name_folded = @nameFolded OR (f.lang = 'sql' AND sql_segment_count(s.name) = @segmentCount AND sql_normalize_name(s.name) = @normalizedName COLLATE NOCASE))"
+                ? "(s.name_folded = @nameFolded OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @segmentCount AND sql_normalize_name_folded(s.name) = @normalizedNameFolded) OR sql_leaf_name(s.name) = @leafName COLLATE NOCASE)))"
+                : "(s.name_folded = @nameFolded OR (f.lang = 'sql' AND sql_segment_count(s.name) = @segmentCount AND sql_normalize_name_folded(s.name) = @normalizedNameFolded))"
             : allowLeafFallback
                 ? "(s.name = @name COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @segmentCount AND sql_normalize_name(s.name) = @normalizedName COLLATE NOCASE) OR sql_leaf_name(s.name) = @leafName COLLATE NOCASE)))"
                 : "(s.name = @name COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @segmentCount AND sql_normalize_name(s.name) = @normalizedName COLLATE NOCASE))";
@@ -1403,13 +1403,14 @@ public partial class DbReader
                             ORDER BY CASE
                                          WHEN s.name = @name THEN 0
                                          WHEN f.lang = 'sql' AND sql_segment_count(s.name) = @segmentCount AND sql_normalize_name(s.name) = @normalizedName THEN 1
-                                         WHEN f.lang = 'sql' AND sql_segment_count(s.name) = @segmentCount AND sql_normalize_name(s.name) = @normalizedName COLLATE NOCASE THEN 2
+                                         WHEN f.lang = 'sql' AND sql_segment_count(s.name) = @segmentCount AND sql_normalize_name_folded(s.name) = @normalizedNameFolded THEN 2
                                          WHEN @allowLeafFallback = 1 AND f.lang = 'sql' AND sql_leaf_name(s.name) = @leafName THEN 3
                                          WHEN @allowLeafFallback = 1 AND f.lang = 'sql' AND sql_leaf_name(s.name) = @leafName COLLATE NOCASE THEN 4
                                          ELSE 5
                                      END LIMIT 1";
         cmd.Parameters.AddWithValue("@name", symbolName);
         cmd.Parameters.AddWithValue("@normalizedName", normalizedName);
+        cmd.Parameters.AddWithValue("@normalizedNameFolded", NameFold.Fold(normalizedName) ?? normalizedName);
         cmd.Parameters.AddWithValue("@leafName", leafName);
         cmd.Parameters.AddWithValue("@segmentCount", segmentCount);
         cmd.Parameters.AddWithValue("@allowLeafFallback", allowLeafFallback ? 1 : 0);
@@ -1710,8 +1711,8 @@ public partial class DbReader
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "impactDefLang");
         var nameCondition = _foldReady
             ? allowLeafFallback
-                ? "(s.name_folded = @resolvedNameFolded OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name(s.name) = @resolvedNameNormalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @resolvedNameLeaf COLLATE NOCASE)))"
-                : "(s.name_folded = @resolvedNameFolded OR (f.lang = 'sql' AND sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name(s.name) = @resolvedNameNormalized COLLATE NOCASE))"
+                ? "(s.name_folded = @resolvedNameFolded OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name_folded(s.name) = @resolvedNameNormalizedFolded) OR sql_leaf_name(s.name) = @resolvedNameLeaf COLLATE NOCASE)))"
+                : "(s.name_folded = @resolvedNameFolded OR (f.lang = 'sql' AND sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name_folded(s.name) = @resolvedNameNormalizedFolded))"
             : allowLeafFallback
                 ? "(s.name = @resolvedName COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name(s.name) = @resolvedNameNormalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @resolvedNameLeaf COLLATE NOCASE)))"
                 : "(s.name = @resolvedName COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name(s.name) = @resolvedNameNormalized COLLATE NOCASE))";
@@ -1737,7 +1738,7 @@ public partial class DbReader
         sql += @" ORDER BY CASE
                      WHEN s.name = @resolvedName THEN 0
                      WHEN f.lang = 'sql' AND sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name(s.name) = @resolvedNameNormalized THEN 1
-                     WHEN f.lang = 'sql' AND sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name(s.name) = @resolvedNameNormalized COLLATE NOCASE THEN 2
+                     WHEN f.lang = 'sql' AND sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name_folded(s.name) = @resolvedNameNormalizedFolded THEN 2
                      WHEN @allowLeafFallback = 1 AND f.lang = 'sql' AND sql_leaf_name(s.name) = @resolvedNameLeaf THEN 3
                      WHEN @allowLeafFallback = 1 AND f.lang = 'sql' AND sql_leaf_name(s.name) = @resolvedNameLeaf COLLATE NOCASE THEN 4
                      ELSE 5
@@ -1746,6 +1747,7 @@ public partial class DbReader
         cmd.CommandText = sql;
         cmd.Parameters.AddWithValue("@resolvedName", resolvedName);
         cmd.Parameters.AddWithValue("@resolvedNameNormalized", normalizedName);
+        cmd.Parameters.AddWithValue("@resolvedNameNormalizedFolded", NameFold.Fold(normalizedName) ?? normalizedName);
         cmd.Parameters.AddWithValue("@resolvedNameLeaf", leafName);
         cmd.Parameters.AddWithValue("@resolvedNameSegmentCount", segmentCount);
         cmd.Parameters.AddWithValue("@allowLeafFallback", allowLeafFallback ? 1 : 0);

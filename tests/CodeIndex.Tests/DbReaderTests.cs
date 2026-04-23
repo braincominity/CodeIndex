@@ -2993,6 +2993,40 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
+    {
+        InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",
+            """
+            CREATE PROCEDURE [dbo].[Äpfel]
+            AS
+            SELECT 1;
+            GO
+
+            CREATE PROCEDURE [dbo].[Caller]
+            AS
+            EXEC [dbo].[äpfel];
+            GO
+            """);
+
+        Assert.Equal(1, _reader.CountSearchSymbols(["dbo.äpfel"], lang: "sql", pathPatterns: ["sql_quoted_unicode_exact_definition"], exact: true));
+
+        var symbol = Assert.Single(_reader.SearchSymbols(["dbo.äpfel"], limit: 10, lang: "sql", pathPatterns: ["sql_quoted_unicode_exact_definition"], exact: true));
+        Assert.Equal("[dbo].[Äpfel]", symbol.Name);
+
+        var definition = Assert.Single(_reader.GetDefinitions("dbo.äpfel", limit: 10, lang: "sql", pathPatterns: ["sql_quoted_unicode_exact_definition"], exact: true));
+        Assert.Equal("[dbo].[Äpfel]", definition.Name);
+
+        var analysis = _reader.AnalyzeSymbol("dbo.äpfel", limit: 10, lang: "sql", pathPatterns: ["sql_quoted_unicode_exact_definition"], exact: true);
+        Assert.Equal("[dbo].[Äpfel]", Assert.Single(analysis.Definitions).Name);
+        Assert.Equal("[dbo].[Caller]", Assert.Single(analysis.Callers).CallerName);
+
+        var impact = _reader.AnalyzeImpact("dbo.äpfel", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_quoted_unicode_exact_definition"]);
+        Assert.Equal(1, impact.DefinitionCount);
+        Assert.Equal("[dbo].[Äpfel]", Assert.Single(impact.Definitions).Name);
+        Assert.Equal("[dbo].[Caller]", Assert.Single(impact.Callers).CallerName);
+    }
+
+    [Fact]
     public void GetFileDependencies_DoesNotJoinSameNameTargetsAcrossLanguages()
     {
         InsertIndexedFile("src/Foo.cs", "csharp",
