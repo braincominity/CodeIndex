@@ -8996,6 +8996,52 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SqlQualifiedDefinition_SameLineCallAfterStringLiteralPreservesRawColumn()
+    {
+        const string content = """
+            CREATE PROCEDURE sales.host
+            AS
+            BEGIN
+                SELECT 'prefix'; EXEC dbo.fn_Target;
+            END
+            GO
+            CREATE PROCEDURE dbo.fn_Target AS SELECT 1;
+            GO
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRef = Assert.Single(references.Where(r => r.SymbolName == "fn_Target" && r.ReferenceKind == "call"));
+        Assert.Equal(4, targetRef.Line);
+        Assert.Equal(31, targetRef.Column);
+        Assert.Equal("sales.host", targetRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_SqlQualifiedDefinition_SameLineCallAfterInlineBlockCommentPreservesRawColumn()
+    {
+        const string content = """
+            CREATE PROCEDURE sales.host
+            AS
+            BEGIN
+                SELECT /*note*/ 1; EXEC dbo.fn_Target;
+            END
+            GO
+            CREATE PROCEDURE dbo.fn_Target AS SELECT 1;
+            GO
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRef = Assert.Single(references.Where(r => r.SymbolName == "fn_Target" && r.ReferenceKind == "call"));
+        Assert.Equal(4, targetRef.Line);
+        Assert.Equal(33, targetRef.Column);
+        Assert.Equal("sales.host", targetRef.ContainerName);
+    }
+
+    [Fact]
     public void Extract_SqlExecDynamicSql_DoesNotEmitPhantomKeywordReference()
     {
         // T-SQL dynamic-SQL execution `EXEC(@sql)` / `EXEC('...')` / `EXECUTE(@sql)` pass a string or

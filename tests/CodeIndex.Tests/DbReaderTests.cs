@@ -2957,6 +2957,64 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_SameLineQualifiedCallAfterStringLiteralStillReachesReaders()
+    {
+        InsertIndexedFile("src/sql_same_line_string_literal.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.fn_Target
+            AS
+            SELECT 1;
+            GO
+
+            CREATE PROCEDURE sales.host
+            AS
+            BEGIN
+                SELECT 'prefix'; EXEC dbo.fn_Target;
+            END
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_string_literal"]));
+        Assert.Equal(9, reference.Line);
+        Assert.Equal("sales.host", reference.ContainerName);
+
+        var caller = Assert.Single(
+            _reader.GetCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_string_literal"]));
+        Assert.Equal("sales.host", caller.CallerName);
+        Assert.Equal(1, caller.ReferenceCount);
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_SameLineQualifiedCallAfterInlineBlockCommentStillReachesReaders()
+    {
+        InsertIndexedFile("src/sql_same_line_block_comment.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.fn_Target
+            AS
+            SELECT 1;
+            GO
+
+            CREATE PROCEDURE sales.host
+            AS
+            BEGIN
+                SELECT /*note*/ 1; EXEC dbo.fn_Target;
+            END
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_block_comment"]));
+        Assert.Equal(9, reference.Line);
+        Assert.Equal("sales.host", reference.ContainerName);
+
+        var caller = Assert.Single(
+            _reader.GetCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_block_comment"]));
+        Assert.Equal("sales.host", caller.CallerName);
+        Assert.Equal(1, caller.ReferenceCount);
+    }
+
+    [Fact]
     public void SqlQualifiedNames_ResolveQuotedDefinitionsFromUnquotedQualifiedQueries()
     {
         InsertIndexedFile("src/sql_quoted_definition_target.sql", "sql",

@@ -7610,19 +7610,21 @@ public static class ReferenceExtractor
 
     // SQL-aware line sanitizer used only for the `EXEC` / `EXECUTE` / `CALL` no-parens scan.
     // Preserves identifier quoting (`[name]`, `` `name` ``, `"name"`) so quoted SQL call targets
-    // can be matched, while still stripping `'...'` string literals and SQL line / block
-    // comments so text inside comments does not emit a phantom reference. Line-comment tokens
+    // can be matched, while masking `'...'` string literals and SQL line / block comments with
+    // equal-length spaces so text inside comments does not emit a phantom reference and the
+    // recorded call column stays aligned with the raw source line. Line-comment tokens
     // `--` (ANSI / T-SQL / MySQL) and `#` (MySQL / MariaDB) are scanned with awareness of
     // bracket / backtick / double-quote identifier quoting, so a legitimate name containing `#`
     // or `-` such as `` CALL `proc#1`; `` or `CALL "proc-name"` is not truncated mid-identifier.
     // `EXEC` / `EXECUTE` / `CALL` の括弧なし抽出向けの SQL 特化サニタイザ。識別子引用
     // （`[name]`, `` `name` ``, `"name"`）は保持したまま、`'...'` と `--` / `#` / `/* ... */`
-    // の SQL コメントを除去する。`--` と `#` の走査は bracket / backtick / double-quote 引用を
-    // 尊重するため、`` CALL `proc#1`; `` や `CALL "proc-name"` のような識別子が途中で切られない。
+    // の SQL コメントを同じ長さの空白へマスクし、幽霊 reference を防ぎつつ記録列を生ソース行に
+    // 揃え続ける。`--` と `#` の走査は bracket / backtick / double-quote 引用を尊重するため、
+    // `` CALL `proc#1`; `` や `CALL "proc-name"` のような識別子が途中で切られない。
     private static string PrepareSqlLineForIdentifierScan(string line)
     {
-        var result = SqlStringLiteralRegex.Replace(line, "\"\"");
-        result = InlineBlockCommentRegex.Replace(result, " ");
+        var result = ReplaceRegexMatchesWithSpaces(SqlStringLiteralRegex, line);
+        result = ReplaceRegexMatchesWithSpaces(InlineBlockCommentRegex, result);
 
         int commentStart = -1;
         for (int i = 0; i < result.Length; i++)
@@ -7685,6 +7687,11 @@ public static class ReferenceExtractor
             result = result[..commentStart];
 
         return result;
+    }
+
+    private static string ReplaceRegexMatchesWithSpaces(Regex regex, string input)
+    {
+        return regex.Replace(input, static match => match.Length == 0 ? string.Empty : new string(' ', match.Length));
     }
 
     private static string PrepareLine(string lang, string line)
