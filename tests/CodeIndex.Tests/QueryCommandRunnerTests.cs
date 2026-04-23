@@ -10966,6 +10966,60 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_SqlNonCodeRegionsDoNotLeakPhantomReference()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_non_code_regions");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "sql", "repro.sql"),
+                """
+                SELECT * FROM users /* comment
+                FROM phantom */;
+                UPDATE audit_log SET action = 'done';
+                DO $$
+                BEGIN
+                  EXECUTE $$SELECT * FROM phantom$$;
+                END
+                $$;
+                DO $body$
+                BEGIN
+                  UPDATE phantom SET action = 'nope';
+                END
+                $body$;
+                SELECT * FROM accounts;
+                DELETE FROM archived_accounts;
+                """);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (phantomExitCode, phantomStdout, phantomStderr) = RunBuiltCli(["references", "phantom", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (accountsExitCode, accountsStdout, accountsStderr) = RunBuiltCli(["references", "accounts", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+
+            using var phantomDocument = ParseJsonOutput(phantomStdout);
+            var accountsRows = ParseJsonLines(accountsStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            Assert.Equal(CommandExitCodes.NotFound, phantomExitCode);
+            Assert.Equal(string.Empty, phantomStderr);
+            Assert.Equal(0, phantomDocument.RootElement.GetProperty("count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.Success, accountsExitCode);
+            Assert.Equal(string.Empty, accountsStderr);
+            var accountsRow = Assert.Single(accountsRows);
+            var json = accountsRow.RootElement;
+            Assert.Equal("accounts", json.GetProperty("symbol_name").GetString());
+            Assert.Equal(14, json.GetProperty("line").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpMultilineThrowBeforeGroupDoesNotLeakReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_orderby_multiline_throw_group_local_function");

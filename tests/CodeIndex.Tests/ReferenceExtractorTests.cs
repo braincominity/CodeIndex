@@ -5406,6 +5406,41 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_NonCodeRegionsDoNotLeakPhantomSourceOrTargetReferences()
+    {
+        // issue #694: SQL source/target extraction must ignore multiline block comments and
+        // PostgreSQL dollar-quoted bodies so non-code text does not leak authoritative references.
+        // issue #694: SQL source/target 抽出は複数行 block comment と PostgreSQL dollar quote 本体を
+        // 無視し、非コード領域から authoritative な reference が漏れないようにするべき。
+        const string content = """
+            SELECT * FROM users /* comment
+            FROM phantom */;
+            UPDATE audit_log SET action = 'done';
+            DO $$
+            BEGIN
+              EXECUTE $$SELECT * FROM phantom$$;
+            END
+            $$;
+            DO $body$
+            BEGIN
+              UPDATE phantom SET action = 'nope';
+            END
+            $body$;
+            SELECT * FROM accounts;
+            DELETE FROM archived_accounts;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "phantom" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "accounts" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "archived_accounts" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_SQL_HandlesTempTablesAndDoesNotTreatSelectIntoVariablesAsReferences()
     {
         // issue #638 / #639 / #648 / #649: temp tables should stay on the SQL reference path,

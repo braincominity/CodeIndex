@@ -243,6 +243,9 @@ public static class ReferenceExtractor
     private static readonly Regex SqlCreateTempTableRegex = new(
         $@"(?<![\w$])CREATE(?:\s+(?:TEMP|TEMPORARY))?\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+(?<name>{SqlTempIdentifierPattern})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private readonly record struct SqlIdentifierScanState(
+        bool InBlockComment,
+        string? DollarQuoteDelimiter);
     // C# event subscription/unsubscription: Click += OnClick — both LHS and RHS must be PascalCase identifiers
     // C# イベント購読・解除: Click += OnClick — LHS と RHS の両方が PascalCase 識別子のみ
     private static readonly Regex EventSubscriptionRegex = new(@"(?<name>[A-Z]\w*)\s*[+-]=\s*(?:new\s+)?[A-Z]\w*", RegexOptions.Compiled);
@@ -590,6 +593,7 @@ public static class ReferenceExtractor
         var seen = new HashSet<string>(StringComparer.Ordinal);
         HashSet<string>? sqlEstablishedTempObjectNames = null;
         string? sqlStatementPrefix = null;
+        var sqlIdentifierScanState = default(SqlIdentifierScanState);
         if (language == "sql")
         {
             sqlEstablishedTempObjectNames = new HashSet<string>(StringComparer.Ordinal);
@@ -747,8 +751,13 @@ public static class ReferenceExtractor
                 // SQL-aware stripper that only drops single-quoted literals and comments.
                 // 共有 PrepareLine はバッククォート内容を文字列として除去する（他言語のテンプレート
                 // リテラル等に対応するため）。SQL ではバッククォートと二重引用符が識別子引用になり得る
-                // ため、単引用符リテラルとコメントだけを除去する sanitization を別途適用する。
-                var sqlLineFragment = PrepareSqlLineForIdentifierScan(structuralLines[i], out var sqlLineEndedByLineComment);
+                // ため、単引用符リテラル、複数行 block comment、PostgreSQL dollar quote、行コメント
+                // だけを除去する stateful sanitization を別途適用する。
+                var sqlLineFragment = PrepareSqlLineForIdentifierScan(
+                    structuralLines[i],
+                    sqlIdentifierScanState,
+                    out var sqlLineEndedByLineComment,
+                    out sqlIdentifierScanState);
                 if (!string.IsNullOrWhiteSpace(sqlLineFragment))
                 {
                     if (ShouldFlushSqlTempObjectPrefixAtLineBoundary(sqlStatementPrefix!, sqlLineFragment))
@@ -1365,6 +1374,24 @@ public static class ReferenceExtractor
         return -1;
     }
 
+    private static int FindClosingSqlSingleQuote(string text, int startIndex)
+    {
+        for (int i = startIndex; i < text.Length; i++)
+        {
+            if (text[i] != '\'')
+                continue;
+            if (i + 1 < text.Length && text[i + 1] == '\'')
+            {
+                i++;
+                continue;
+            }
+
+            return i;
+        }
+
+        return -1;
+    }
+
     private static bool IsInsideSqlDoubleQuotedRegion(string text, int index)
     {
         if (index <= 0)
@@ -1385,6 +1412,36 @@ public static class ReferenceExtractor
         }
 
         return inside;
+    }
+
+    private static bool TryReadSqlDollarQuoteDelimiter(
+        string line,
+        int index,
+        out string delimiter)
+    {
+        delimiter = string.Empty;
+        if (index < 0 || index >= line.Length || line[index] != '$')
+            return false;
+        if (index > 0 && (char.IsLetterOrDigit(line[index - 1]) || line[index - 1] == '_'))
+            return false;
+        if (index + 1 >= line.Length)
+            return false;
+        if (line[index + 1] == '$')
+        {
+            delimiter = "$$";
+            return true;
+        }
+        if (!(char.IsLetter(line[index + 1]) || line[index + 1] == '_'))
+            return false;
+
+        int probe = index + 2;
+        while (probe < line.Length && (char.IsLetterOrDigit(line[probe]) || line[probe] == '_'))
+            probe++;
+        if (probe >= line.Length || line[probe] != '$')
+            return false;
+
+        delimiter = line[index..(probe + 1)];
+        return true;
     }
 
     private static void CollectSqlTempObjectNamesFromStatement(
@@ -6631,72 +6688,148 @@ public static class ReferenceExtractor
         return segment.Length > 0 ? segment : null;
     }
 
-    // SQL-aware line sanitizer used only for the `EXEC` / `EXECUTE` / `CALL` no-parens scan.
-    // Preserves backtick-quoted identifiers (MySQL / MariaDB) so `` CALL `proc-name`; `` can be
-    // matched, while still stripping `'...'` / `"..."` string literals and SQL line / block
-    // comments so text inside comments does not emit a phantom reference. Line-comment tokens
-    // `--` (ANSI / T-SQL / MySQL) and `#` (MySQL / MariaDB) are scanned with awareness of
-    // backtick and bracket identifier quoting, so a legitimate name containing `#` or `-` such
-    // as `` CALL `proc#1`; `` or `EXEC [proc-name]` is not truncated mid-identifier.
-    // `EXEC` / `EXECUTE` / `CALL` の括弧なし抽出向けの SQL 特化サニタイザ。バッククォート引用と
-    // ANSI 二重引用符識別子は保持したまま、`'...'` と `--` / `#` / `/* ... */`
-    // の SQL コメントを除去する。`--` と `#` の走査は backtick / bracket / double-quoted
-    // identifier を尊重するため、`` CALL `proc#1`; `` や `EXEC [proc-name]`、
-    // `SELECT * FROM "proc#1"` のような識別子が途中で切られない。
-    private static string PrepareSqlLineForIdentifierScan(string line, out bool lineEndedByLineComment)
+    // SQL-aware line sanitizer used only for the SQL source/target and `EXEC` / `EXECUTE` / `CALL`
+    // scans. Preserves backtick/bracket/double-quoted identifiers, blanks single-quoted strings,
+    // multiline `/* ... */` comments, PostgreSQL `$$...$$` / `$tag$...$tag$` bodies, and line
+    // comments so non-code regions cannot leak phantom references into the graph.
+    // SQL source/target と `EXEC` / `EXECUTE` / `CALL` 抽出向けの SQL 特化サニタイザ。
+    // backtick / bracket / double-quoted identifier は保持しつつ、単引用符文字列、複数行
+    // `/* ... */` コメント、PostgreSQL の `$$...$$` / `$tag$...$tag$` 本体、行コメントを空白化し、
+    // 非コード領域から phantom reference が漏れないようにする。
+    private static string PrepareSqlLineForIdentifierScan(
+        string line,
+        SqlIdentifierScanState state,
+        out bool lineEndedByLineComment,
+        out SqlIdentifierScanState nextState)
     {
         lineEndedByLineComment = false;
-        var result = SqlSingleQuotedStringLiteralRegex.Replace(line, "\"\"");
-        result = InlineBlockCommentRegex.Replace(result, " ");
-
-        int commentStart = -1;
-        for (int i = 0; i < result.Length; i++)
+        if (string.IsNullOrEmpty(line))
         {
-            char c = result[i];
-            if (c == '`')
+            nextState = state;
+            return line;
+        }
+
+        var sanitized = line.ToCharArray();
+        bool inBlockComment = state.InBlockComment;
+        string? dollarQuoteDelimiter = state.DollarQuoteDelimiter;
+
+        void BlankRange(int start, int endExclusive)
+        {
+            start = Math.Max(0, start);
+            endExclusive = Math.Min(sanitized.Length, endExclusive);
+            for (int blankIndex = start; blankIndex < endExclusive; blankIndex++)
+                sanitized[blankIndex] = ' ';
+        }
+
+        for (int i = 0; i < line.Length;)
+        {
+            if (inBlockComment)
             {
-                var closing = result.IndexOf('`', i + 1);
+                int closing = line.IndexOf("*/", i, StringComparison.Ordinal);
+                int end = closing >= 0 ? closing + 2 : line.Length;
+                BlankRange(i, end);
                 if (closing < 0)
                     break;
-                i = closing;
+                i = end;
+                inBlockComment = false;
+                continue;
+            }
+            if (!string.IsNullOrEmpty(dollarQuoteDelimiter))
+            {
+                int closing = line.IndexOf(dollarQuoteDelimiter, i, StringComparison.Ordinal);
+                if (closing < 0)
+                {
+                    BlankRange(i, line.Length);
+                    break;
+                }
+
+                int nestedClosing = line.IndexOf(
+                    dollarQuoteDelimiter,
+                    closing + dollarQuoteDelimiter.Length,
+                    StringComparison.Ordinal);
+                if (nestedClosing >= 0)
+                {
+                    int end = nestedClosing + dollarQuoteDelimiter.Length;
+                    BlankRange(i, end);
+                    i = end;
+                    continue;
+                }
+
+                int closingEnd = closing + dollarQuoteDelimiter.Length;
+                BlankRange(i, closingEnd);
+                i = closingEnd;
+                dollarQuoteDelimiter = null;
+                continue;
+            }
+
+            char c = line[i];
+            if (c == '"')
+            {
+                int closing = FindClosingSqlDoubleQuote(line, i + 1);
+                if (closing < 0)
+                    break;
+                i = closing + 1;
+                continue;
+            }
+            if (c == '`')
+            {
+                int closing = line.IndexOf('`', i + 1);
+                if (closing < 0)
+                    break;
+                i = closing + 1;
                 continue;
             }
             if (c == '[')
             {
-                var closing = result.IndexOf(']', i + 1);
+                int closing = line.IndexOf(']', i + 1);
                 if (closing < 0)
                     break;
-                i = closing;
+                i = closing + 1;
                 continue;
             }
-            if (c == '"')
+            if (c == '\'')
             {
-                int closing = FindClosingSqlDoubleQuote(result, i + 1);
-                if (closing < 0)
-                    break;
-                i = closing;
+                int closing = FindClosingSqlSingleQuote(line, i + 1);
+                int end = closing >= 0 ? closing + 1 : line.Length;
+                BlankRange(i, end);
+                i = end;
                 continue;
             }
-            if (c == '-' && i + 1 < result.Length && result[i + 1] == '-')
+            if (c == '/' && i + 1 < line.Length && line[i + 1] == '*')
+            {
+                BlankRange(i, i + 2);
+                i += 2;
+                inBlockComment = true;
+                continue;
+            }
+            if (c == '-' && i + 1 < line.Length && line[i + 1] == '-')
             {
                 lineEndedByLineComment = true;
-                commentStart = i;
+                BlankRange(i, line.Length);
                 break;
             }
             if (c == '#')
             {
-                if (ShouldTreatHashAsSqlComment(result, i))
+                if (ShouldTreatHashAsSqlComment(line, i))
                 {
                     lineEndedByLineComment = true;
-                    commentStart = i;
+                    BlankRange(i, line.Length);
                     break;
                 }
             }
-        }
-        if (commentStart >= 0)
-            result = result[..commentStart];
+            if (c == '$' && TryReadSqlDollarQuoteDelimiter(line, i, out var delimiter))
+            {
+                BlankRange(i, i + delimiter.Length);
+                i += delimiter.Length;
+                dollarQuoteDelimiter = delimiter;
+                continue;
+            }
 
-        return result;
+            i++;
+        }
+
+        nextState = new SqlIdentifierScanState(inBlockComment, dollarQuoteDelimiter);
+        return new string(sanitized);
     }
 
     private static bool ShouldTreatHashAsSqlComment(string line, int hashIndex)
