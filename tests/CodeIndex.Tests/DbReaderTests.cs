@@ -2950,6 +2950,49 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_UnicodeExactGraphReadersPreserveFoldedLeafFallback()
+    {
+        InsertIndexedFile("src/sql_unicode_exact_leaf_fallback.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.Äpfel
+            AS
+            SELECT 1;
+            GO
+
+            CREATE PROCEDURE dbo.Caller
+            AS
+            EXEC dbo.äpfel;
+            GO
+
+            CREATE PROCEDURE dbo.ÄCaller
+            AS
+            EXEC dbo.Äpfel;
+            GO
+            """);
+
+        var references = _reader.SearchReferences("dbo.Äpfel", lang: "sql", exact: true, pathPatterns: ["sql_unicode_exact_leaf_fallback"]);
+        Assert.Equal(2, references.Count);
+        Assert.Contains(references, reference => reference.ContainerName == "dbo.Caller" && reference.Line == 8);
+        Assert.Contains(references, reference => reference.ContainerName == "dbo.ÄCaller" && reference.Line == 13);
+        Assert.Equal(2, _reader.CountSearchReferences("dbo.Äpfel", lang: "sql", exact: true, pathPatterns: ["sql_unicode_exact_leaf_fallback"]));
+
+        var callers = _reader.GetCallers("dbo.Äpfel", lang: "sql", exact: true, pathPatterns: ["sql_unicode_exact_leaf_fallback"]);
+        Assert.Equal(2, callers.Count);
+        Assert.Contains(callers, item => item.CallerName == "dbo.Caller");
+        Assert.Contains(callers, item => item.CallerName == "dbo.ÄCaller");
+        Assert.Equal(2, _reader.CountCallers("dbo.Äpfel", lang: "sql", exact: true, pathPatterns: ["sql_unicode_exact_leaf_fallback"]));
+
+        var callee = Assert.Single(_reader.GetCallees("äcaller", lang: "sql", exact: true, pathPatterns: ["sql_unicode_exact_leaf_fallback"]));
+        Assert.Equal("Äpfel", callee.CalleeName);
+        Assert.Equal(1, _reader.CountCallees("äcaller", lang: "sql", exact: true, pathPatterns: ["sql_unicode_exact_leaf_fallback"]));
+
+        var impact = _reader.AnalyzeImpact("dbo.Äpfel", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_unicode_exact_leaf_fallback"]);
+        Assert.Equal(2, impact.Callers.Count);
+        Assert.Contains(impact.Callers, item => item.CallerName == "dbo.Caller");
+        Assert.Contains(impact.Callers, item => item.CallerName == "dbo.ÄCaller");
+    }
+
+    [Fact]
     public void GetFileDependencies_DoesNotJoinSameNameTargetsAcrossLanguages()
     {
         InsertIndexedFile("src/Foo.cs", "csharp",

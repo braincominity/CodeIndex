@@ -723,8 +723,8 @@ public partial class DbReader
             // 別名節は C# の attribute 行に限定し、誤一致を避ける。
             if (exact && _foldReady)
                 sql += referencesSuffixAlias != null
-                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{referencesAliasScope}) OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafReferenceScope}))"
-                    : $" AND (r.symbol_name_folded = @query OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafReferenceScope}))";
+                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{referencesAliasScope}) OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafReferenceScope}))"
+                    : $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafReferenceScope}))";
             else if (exact)
                 sql += referencesSuffixAlias != null
                     ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}) OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafReferenceScope}))"
@@ -762,6 +762,7 @@ public partial class DbReader
                 queryParam = query;
             cmd.Parameters.AddWithValue("@query", queryParam);
             cmd.Parameters.AddWithValue("@aliasQuery", query);
+            cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
             if (referencesSuffixAlias != null)
             {
                 // Exact-match alias value is used both in --exact paths (folded / NOCASE)
@@ -838,8 +839,8 @@ public partial class DbReader
         {
             if (exact && _foldReady)
                 innerSql += countSuffixAlias != null
-                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{countAliasScope}) OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafCountScope}))"
-                    : $" AND (r.symbol_name_folded = @query OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafCountScope}))";
+                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{countAliasScope}) OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafCountScope}))"
+                    : $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafCountScope}))";
             else if (exact)
                 innerSql += countSuffixAlias != null
                     ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}) OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafCountScope}))"
@@ -868,6 +869,7 @@ public partial class DbReader
                     : query;
             cmd.Parameters.AddWithValue("@query", value);
             cmd.Parameters.AddWithValue("@aliasQuery", query);
+            cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
             if (countSuffixAlias != null)
             {
                 var aliasParam = exact && _foldReady
@@ -912,8 +914,8 @@ public partial class DbReader
         {
             if (exact && _foldReady)
                 innerSql += totalSuffixAlias != null
-                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{totalAliasScope}) OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafTotalScope}))"
-                    : $" AND (r.symbol_name_folded = @query OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafTotalScope}))";
+                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{totalAliasScope}) OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafTotalScope}))"
+                    : $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafTotalScope}))";
             else if (exact)
                 innerSql += totalSuffixAlias != null
                     ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}) OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafTotalScope}))"
@@ -942,6 +944,7 @@ public partial class DbReader
                     : query;
             cmd.Parameters.AddWithValue("@query", value);
             cmd.Parameters.AddWithValue("@aliasQuery", query);
+            cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
             if (totalSuffixAlias != null)
             {
                 var aliasParam = exact && _foldReady
@@ -993,7 +996,7 @@ public partial class DbReader
         else
             sql += NonInvocationReferenceKindsExclusion;
         if (exact && _foldReady)
-            sql += " AND (r.symbol_name_folded = @query OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
+            sql += " AND (r.symbol_name_folded = @query OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))";
         else if (exact)
             sql += " AND (r.symbol_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
         else
@@ -1028,6 +1031,7 @@ public partial class DbReader
             callersQueryParam = query;
         cmd.Parameters.AddWithValue("@query", callersQueryParam);
         cmd.Parameters.AddWithValue("@aliasQuery", query);
+        cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
         cmd.Parameters.AddWithValue("@preferExactCase", exact ? 1 : 0);
         cmd.Parameters.AddWithValue("@rawQuery", exact ? query : string.Empty);
         cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
@@ -1076,7 +1080,7 @@ public partial class DbReader
         else
             groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
         if (exact && _foldReady)
-            groupedSql += " AND (r.symbol_name_folded = @query OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
+            groupedSql += " AND (r.symbol_name_folded = @query OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))";
         else if (exact)
             groupedSql += " AND (r.symbol_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
         else
@@ -1096,6 +1100,7 @@ public partial class DbReader
                 : query;
         cmd.Parameters.AddWithValue("@query", value);
         cmd.Parameters.AddWithValue("@aliasQuery", query);
+        cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
@@ -1128,7 +1133,7 @@ public partial class DbReader
         else
             groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
         if (exact && _foldReady)
-            groupedSql += " AND (r.symbol_name_folded = @query OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
+            groupedSql += " AND (r.symbol_name_folded = @query OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))";
         else if (exact)
             groupedSql += " AND (r.symbol_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
         else
@@ -1148,6 +1153,7 @@ public partial class DbReader
                 : query;
         cmd.Parameters.AddWithValue("@query", value);
         cmd.Parameters.AddWithValue("@aliasQuery", query);
+        cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
@@ -1191,7 +1197,7 @@ public partial class DbReader
         else
             sql += NonInvocationReferenceKindsExclusion;
         if (exact && _foldReady)
-            sql += " AND (r.container_name_folded = @query OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))";
+            sql += " AND (r.container_name_folded = @query OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))";
         else if (exact)
             sql += " AND (r.container_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))";
         else
@@ -1225,6 +1231,7 @@ public partial class DbReader
             calleesQueryParam = query;
         cmd.Parameters.AddWithValue("@query", calleesQueryParam);
         cmd.Parameters.AddWithValue("@aliasQuery", query);
+        cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
         cmd.Parameters.AddWithValue("@preferExactCase", exact ? 1 : 0);
         cmd.Parameters.AddWithValue("@rawQuery", exact ? query : string.Empty);
         cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
@@ -1276,7 +1283,7 @@ public partial class DbReader
         else
             groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
         if (exact && _foldReady)
-            groupedSql += " AND (r.container_name_folded = @query OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))";
+            groupedSql += " AND (r.container_name_folded = @query OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))";
         else if (exact)
             groupedSql += " AND (r.container_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))";
         else
@@ -1296,6 +1303,7 @@ public partial class DbReader
                 : query;
         cmd.Parameters.AddWithValue("@query", value);
         cmd.Parameters.AddWithValue("@aliasQuery", query);
+        cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
@@ -1331,7 +1339,7 @@ public partial class DbReader
         else
             groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
         if (exact && _foldReady)
-            groupedSql += " AND (r.container_name_folded = @query OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))";
+            groupedSql += " AND (r.container_name_folded = @query OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))";
         else if (exact)
             groupedSql += " AND (r.container_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))";
         else
@@ -1351,6 +1359,7 @@ public partial class DbReader
                 : query;
         cmd.Parameters.AddWithValue("@query", value);
         cmd.Parameters.AddWithValue("@aliasQuery", query);
+        cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
@@ -1432,7 +1441,7 @@ public partial class DbReader
         // `COLLATE NOCASE` fallback。definition と caller 行の casing 差もここで吸収する。
         var nameCondition = _foldReady
             ? @"
-              AND (r.symbol_name_folded = @symbolNameFolded OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@symbolName) COLLATE NOCASE))"
+              AND (r.symbol_name_folded = @symbolNameFolded OR (f.lang = 'sql' AND r.symbol_name_folded = @symbolNameLeafFolded))"
             : @"
               AND (r.symbol_name = @symbolName COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@symbolName) COLLATE NOCASE))";
 
@@ -1465,6 +1474,7 @@ public partial class DbReader
 
         cmd.CommandText = sql;
         cmd.Parameters.AddWithValue("@symbolName", symbolName);
+        cmd.Parameters.AddWithValue("@symbolNameLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(symbolName)) ?? SqlNameResolver.GetLeafName(symbolName));
         if (_foldReady)
             cmd.Parameters.AddWithValue("@symbolNameFolded", NameFold.Fold(symbolName) ?? symbolName);
         if (lang != null)

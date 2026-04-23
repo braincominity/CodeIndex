@@ -274,6 +274,16 @@ public class DbContext : IDisposable
             "sql_leaf_name",
             (string? name) => string.IsNullOrWhiteSpace(name) ? null : SqlNameResolver.GetLeafName(name));
         connection.CreateFunction(
+            "sql_leaf_name_folded",
+            (string? name) =>
+            {
+                if (string.IsNullOrWhiteSpace(name))
+                    return null;
+
+                var leafName = SqlNameResolver.GetLeafName(name);
+                return leafName.Length == 0 ? null : NameFold.Fold(leafName) ?? leafName;
+            });
+        connection.CreateFunction(
             "sql_normalize_name",
             (string? name) => string.IsNullOrWhiteSpace(name) ? null : SqlNameResolver.NormalizeQualifiedName(name));
         connection.CreateFunction(
