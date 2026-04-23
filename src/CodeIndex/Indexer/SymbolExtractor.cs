@@ -76,7 +76,6 @@ public static class SymbolExtractor
     // `delegate` is a non-type keyword only when it is NOT followed by `*` — `delegate*<...>` is a valid return type.
     // `delegate` は `*` を伴わないときだけ非型キーワード扱い。`delegate*<...>` は戻り値型として有効。
     private const string CSharpNonTypeKeywordPattern = @"(?:(?:public|private|protected|internal|static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|required|ref)\b|delegate\b(?!\s*\*))";
-    private const string JavaLeadingAnnotationsPattern = @"(?:@[\w.]+(?:\s*\([^)]*\))?\s+)*";
     private static readonly Regex PartialModifierRegex = new(@"\bpartial\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private enum BodyStyle
@@ -245,7 +244,7 @@ public static class SymbolExtractor
     private static readonly Regex CSharpEnumMemberRegex = new(@"^\s*(?<name>@?[_\p{L}]\w*)\s*(?:=\s*(?:-?\d|0x|@?[_\p{L}]\w*(?:\s*\|\s*@?[_\p{L}]\w*)*)[^""']*)?,?\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpEnumMemberNameRegex = new(@"^\s*(?<name>@?[_\p{L}]\w*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex JavaCompactConstructorRegex = new(
-        $@"^\s*{JavaLeadingAnnotationsPattern}(?:(?<visibility>public|private|protected)\s+)?(?<name>\w+)\s*\{{",
+        @"^\s*(?:(?<visibility>public|private|protected)\s+)?(?<name>\w+)\s*\{",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpSameLinePropertyStatementStartRegex = new(
         $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?:ref(?:\s+readonly)?)\s+)?(?:{CSharpTypePattern})\s+(?:{CSharpExplicitInterfaceQualifierPattern}\.)?{CSharpIdentifierPattern}\s*(?:\{{|=>\s*)",
@@ -695,22 +694,22 @@ public static class SymbolExtractor
         ["java"] =
         [
             // Annotation type (@interface) / アノテーション型
-            new("class",    new Regex($@"^\s*{JavaLeadingAnnotationsPattern}(?<visibility>public|private|protected)?\s*@interface\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex(@"^\s*(?<visibility>public|private|protected)?\s*@interface\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
             // record (Java 16+) — must come before general class pattern / record は一般クラスパターンの前に配置
-            new("class",    new Regex($@"^\s*{JavaLeadingAnnotationsPattern}(?<visibility>public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*record\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*record\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
             // Interface / インターフェース
-            new("interface", new Regex($@"^\s*{JavaLeadingAnnotationsPattern}(?<visibility>public|private|protected)?\s*(?:(?:static|abstract|sealed|non-sealed|strictfp)\s+)*interface\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
+            new("interface", new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|abstract|sealed|non-sealed|strictfp)\s+)*interface\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
             // Enum / enum
-            new("enum",     new Regex($@"^\s*{JavaLeadingAnnotationsPattern}(?<visibility>public|private|protected)?\s*(?:(?:static|strictfp)\s+)*enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
+            new("enum",     new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|strictfp)\s+)*enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
             // Class — with extended modifiers (final, sealed, static, abstract, strictfp)
             // クラス — 拡張修飾子対応（final, sealed, static, abstract, strictfp）
-            new("class",    new Regex($@"^\s*{JavaLeadingAnnotationsPattern}(?<visibility>public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*class\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*class\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
             // Static final field (Java equivalent of C# const) — order-flexible (static final or final static), generic types with spaces
             // static final フィールド — 語順柔軟（static final / final static）、スペース含むジェネリック型対応
-            new("function", new Regex($@"^\s*{JavaLeadingAnnotationsPattern}(?<visibility>public|private|protected)?\s*(?:(?:static|final)\s+){{2}}(?<returnType>[\w?.<>\[\],\s]+?)\s+(?<name>[A-Z_]\w*)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, "visibility", "returnType"),
+            new("function", new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final)\s+){2}(?<returnType>[\w?.<>\[\],\s]+?)\s+(?<name>[A-Z_]\w*)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, "visibility", "returnType"),
             // Method with return type — expanded modifiers (default, native, synchronized, final)
             // 戻り値型付きメソッド — 拡張修飾子対応（default, native, synchronized, final）
-            new("function", new Regex($@"^\s*{JavaLeadingAnnotationsPattern}(?<visibility>public|private|protected)?\s*(?:(?:static|abstract|synchronized|final|default|native|strictfp)\s+)*(?<returnType>\w+(?:<[^>]+>)?(?:\[\])?)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility", "returnType"),
+            new("function", new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|abstract|synchronized|final|default|native|strictfp)\s+)*(?<returnType>\w+(?:<[^>]+>)?(?:\[\])?)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility", "returnType"),
             // Enum members are extracted by ExtractJavaEnumMembers using a body-scoped scanner,
             // which handles any indent style (tab, 2-space, 4-space) and skips member-like lines
             // outside the enum body (e.g. `\tRED();` method calls inside a class body).
@@ -1309,54 +1308,59 @@ public static class SymbolExtractor
                     string? csharpWrappedModifierPrefix = null;
                     while (lineOffset >= 0 && lineOffset < patternMatchLine.Length)
                     {
-                    var match = pattern.Regex.Match(patternMatchLine[lineOffset..]);
-                    if (!match.Success
-                        && lang == "csharp"
-                        && pattern.Kind == "function"
-                        && lineOffset == 0
-                        && csharpMatchLines != null
-                        && csharpWrappedModifierPrefix == null)
-                    {
-                        // Wrapped leading modifier recovery: when a C# function-kind pattern
-                        // fails at column 0 of the identifier line, try prepending the
-                        // modifier prefix accumulated from preceding modifier-only lines
-                        // (`static\nFoo() { ... }`, `public\nBar() { ... }`, etc.) and retry.
-                        // The method regex already tolerates an omitted modifier run, so it
-                        // matches on the identifier line alone — this branch only fires for
-                        // constructor / static-constructor shapes that require the modifier
-                        // on the same line as the name. Closes #348.
-                        // ラップされた先頭モディファイアの救済: C# の function 系パターンが
-                        // 識別子行の先頭マッチに失敗した場合、直前のモディファイアのみ行
-                        // （`static\nFoo() { ... }` や `public\nBar() { ... }` 等）から
-                        // 再構築した prefix を付け直して再試行する。メソッド regex は
-                        // 先頭モディファイアが無くても識別子行単体でマッチするため、この
-                        // 分岐は修飾子が識別子と同行に必要な constructor / static ctor
-                        // シェイプでのみ発火する。Closes #348.
-                        var wrappedInfo = TryFindCSharpWrappedHeaderModifier(csharpMatchLines!, i);
-                        if (wrappedInfo != null)
+                        var javaLeadingAnnotationOffset = 0;
+                        var match = lang == "java"
+                            ? (TryMatchJavaDeclarationSegment(pattern.Regex, patternMatchLine[lineOffset..], out var javaMatch, out javaLeadingAnnotationOffset)
+                                ? javaMatch
+                                : pattern.Regex.Match(patternMatchLine[lineOffset..]))
+                            : pattern.Regex.Match(patternMatchLine[lineOffset..]);
+                        if (!match.Success
+                            && lang == "csharp"
+                            && pattern.Kind == "function"
+                            && lineOffset == 0
+                            && csharpMatchLines != null
+                            && csharpWrappedModifierPrefix == null)
                         {
-                            foreach (var candidatePrefix in EnumerateCSharpWrappedModifierCandidates(wrappedInfo.Value.Prefix))
+                            // Wrapped leading modifier recovery: when a C# function-kind pattern
+                            // fails at column 0 of the identifier line, try prepending the
+                            // modifier prefix accumulated from preceding modifier-only lines
+                            // (`static\nFoo() { ... }`, `public\nBar() { ... }`, etc.) and retry.
+                            // The method regex already tolerates an omitted modifier run, so it
+                            // matches on the identifier line alone — this branch only fires for
+                            // constructor / static-constructor shapes that require the modifier
+                            // on the same line as the name. Closes #348.
+                            // ラップされた先頭モディファイアの救済: C# の function 系パターンが
+                            // 識別子行の先頭マッチに失敗した場合、直前のモディファイアのみ行
+                            // （`static\nFoo() { ... }` や `public\nBar() { ... }` 等）から
+                            // 再構築した prefix を付け直して再試行する。メソッド regex は
+                            // 先頭モディファイアが無くても識別子行単体でマッチするため、この
+                            // 分岐は修飾子が識別子と同行に必要な constructor / static ctor
+                            // シェイプでのみ発火する。Closes #348.
+                            var wrappedInfo = TryFindCSharpWrappedHeaderModifier(csharpMatchLines!, i);
+                            if (wrappedInfo != null)
                             {
-                                var wrappedMatchLine = candidatePrefix + " " + patternMatchLine.TrimStart();
-                                var wrappedMatch = pattern.Regex.Match(wrappedMatchLine);
-                                if (wrappedMatch.Success)
+                                foreach (var candidatePrefix in EnumerateCSharpWrappedModifierCandidates(wrappedInfo.Value.Prefix))
                                 {
-                                    match = wrappedMatch;
-                                    patternMatchLine = wrappedMatchLine;
-                                    // Preserve the full prefix in the stored signature so
-                                    // declarations like `public\nstatic\nP1()` retain
-                                    // `public static P1()`, even when the matching regex
-                                    // variant only accepted `static P1()`. Closes #348.
-                                    // シグネチャには完全な prefix を残し、`public\nstatic\nP1()`
-                                    // のような宣言を `public static P1()` として保存する。
-                                    // マッチした regex 変種が `static P1()` 形だけを受け付けた
-                                    // 場合でも、保存シグネチャは完全な prefix を保持する。Closes #348.
-                                    csharpWrappedModifierPrefix = wrappedInfo.Value.Prefix;
-                                    break;
+                                    var wrappedMatchLine = candidatePrefix + " " + patternMatchLine.TrimStart();
+                                    var wrappedMatch = pattern.Regex.Match(wrappedMatchLine);
+                                    if (wrappedMatch.Success)
+                                    {
+                                        match = wrappedMatch;
+                                        patternMatchLine = wrappedMatchLine;
+                                        // Preserve the full prefix in the stored signature so
+                                        // declarations like `public\nstatic\nP1()` retain
+                                        // `public static P1()`, even when the matching regex
+                                        // variant only accepted `static P1()`. Closes #348.
+                                        // シグネチャには完全な prefix を残し、`public\nstatic\nP1()`
+                                        // のような宣言を `public static P1()` として保存する。
+                                        // マッチした regex 変種が `static P1()` 形だけを受け付けた
+                                        // 場合でも、保存シグネチャは完全な prefix を保持する。Closes #348.
+                                        csharpWrappedModifierPrefix = wrappedInfo.Value.Prefix;
+                                        break;
+                                    }
                                 }
                             }
                         }
-                    }
 
                     if (!match.Success)
                     {
@@ -1404,6 +1408,8 @@ public static class SymbolExtractor
                     }
 
                     var absoluteStartColumn = lineOffset + match.Index;
+                    if (lang == "java" && javaLeadingAnnotationOffset > 0)
+                        absoluteStartColumn = lineOffset;
                     var nextSameLineOffsetAfterRejectedCSharpProperty = -1;
                     if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, patternMatchLine, csharpSwitchExpressionLines, i)
                         || TrySkipCSharpBracePropertyCandidate(
@@ -3302,12 +3308,15 @@ public static class SymbolExtractor
                     && segmentStart < segmentEndExclusive)
                 {
                     var segment = line[segmentStart..segmentEndExclusive];
-                    var match = JavaCompactConstructorRegex.Match(segment);
-                    if (match.Success && match.Index == 0 && match.Groups["name"].Value == recordSymbol.Name)
+                    if (TryMatchJavaDeclarationSegment(JavaCompactConstructorRegex, segment, out var match, out var javaLeadingAnnotationOffset)
+                        && match.Groups["name"].Value == recordSymbol.Name)
                     {
-                        var absoluteStartColumn = segmentStart + match.Index;
+                        var absoluteStartColumn = segmentStart + (javaLeadingAnnotationOffset > 0 ? 0 : match.Index);
                         var visibility = TryGetGroup(match, "visibility");
                         var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(rawLines, i, BodyStyle.Brace, "java", absoluteStartColumn);
+                        var sameLineEndColumn = bodyEndLine == i + 1
+                            ? FindSameLineBraceEndColumn(line, absoluteStartColumn, "java", "function")
+                            : -1;
                         if (!symbols.Any(symbol =>
                                 symbol.FileId == fileId
                                 && symbol.Kind == "function"
@@ -3327,7 +3336,9 @@ public static class SymbolExtractor
                                 EndLine = Math.Max(i + 1, endLine),
                                 BodyStartLine = bodyStartLine,
                                 BodyEndLine = bodyEndLine,
-                                Signature = line[absoluteStartColumn..].Trim(),
+                                Signature = sameLineEndColumn >= absoluteStartColumn
+                                    ? line[absoluteStartColumn..(sameLineEndColumn + 1)].Trim()
+                                    : line[absoluteStartColumn..].Trim(),
                                 ContainerKind = "class",
                                 ContainerName = recordSymbol.Name,
                                 Visibility = visibility,
@@ -3360,8 +3371,11 @@ public static class SymbolExtractor
         if (declarationLineIndex < 0 || declarationLineIndex >= rawLines.Length)
             return false;
 
-        return GetCurrentDeclarationRecordRegex("java", symbol.Kind, symbol.Name)
-            .IsMatch(rawLines[declarationLineIndex]);
+        return TryMatchJavaDeclarationSegment(
+            GetCurrentDeclarationRecordRegex("java", symbol.Kind, symbol.Name),
+            rawLines[declarationLineIndex],
+            out _,
+            out _);
     }
 
     // Track Java source-code scanner state (strings, char literals, comments, text blocks).
@@ -3966,6 +3980,30 @@ public static class SymbolExtractor
         }
 
         return index;
+    }
+
+    private static bool TryMatchJavaDeclarationSegment(
+        Regex regex,
+        string segment,
+        out Match match,
+        out int leadingAnnotationOffset)
+    {
+        match = regex.Match(segment);
+        leadingAnnotationOffset = 0;
+        if (match.Success)
+            return true;
+
+        var skippedOffset = SkipLeadingJavaAnnotations(segment);
+        if (skippedOffset <= 0 || skippedOffset >= segment.Length)
+            return false;
+
+        var strippedMatch = regex.Match(segment[skippedOffset..]);
+        if (!strippedMatch.Success)
+            return false;
+
+        match = strippedMatch;
+        leadingAnnotationOffset = skippedOffset;
+        return true;
     }
 
     // Walk whitespace, comments, and newlines in a multi-line span until the next non-whitespace code position.
@@ -9739,7 +9777,7 @@ public static class SymbolExtractor
         if (bodyStyle != BodyStyle.Brace || endLine != startLine || sameLineEndColumn < absoluteStartColumn)
             return false;
 
-        return lang is "javascript" or "typescript" or "css"
+        return lang is "javascript" or "typescript" or "css" or "java"
             || (lang == "csharp" && CanContinueScanningSameLineCSharpBraceBody(kind));
     }
 
@@ -9944,8 +9982,40 @@ public static class SymbolExtractor
             "javascript" or "typescript" => FindJavaScriptTypeScriptSameLineBraceEndColumn(line, startColumn, lang),
             "css" => FindCssSameLineBraceEndColumn(line, startColumn),
             "csharp" => FindCSharpSameLineBraceEndColumn(line, startColumn),
+            "java" => FindJavaSameLineBraceEndColumn(line, startColumn),
             _ => -1,
         };
+    }
+
+    private static int FindJavaSameLineBraceEndColumn(string line, int startColumn)
+    {
+        var mode = JavaScanMode.Normal;
+        var depth = 0;
+        var opened = false;
+        var column = Math.Max(0, startColumn);
+
+        while (column < line.Length)
+        {
+            if (TryConsumeJavaNonCode(line, ref column, ref mode))
+                continue;
+
+            var ch = line[column];
+            if (ch == '{')
+            {
+                depth++;
+                opened = true;
+            }
+            else if (ch == '}' && opened)
+            {
+                depth--;
+                if (depth == 0)
+                    return column;
+            }
+
+            column++;
+        }
+
+        return -1;
     }
 
     private static int FindCssSameLineBraceEndColumn(string line, int startColumn)
@@ -12867,11 +12937,18 @@ public static class SymbolExtractor
             return false;
 
         var recordRegex = GetCurrentDeclarationRecordRegex(lang, kind, recordName);
-        var recordMatch = recordRegex.Match(declaration);
+        var javaLeadingAnnotationOffset = 0;
+        var recordMatch = lang == "java"
+            ? (TryMatchJavaDeclarationSegment(recordRegex, declaration, out var javaRecordMatch, out javaLeadingAnnotationOffset)
+                ? javaRecordMatch
+                : recordRegex.Match(declaration))
+            : recordRegex.Match(declaration);
         if (!recordMatch.Success)
             return false;
 
-        var parameterOpenIndex = FindRecordPrimaryComponentListStart(declaration, recordMatch.Index + recordMatch.Length);
+        var parameterOpenIndex = FindRecordPrimaryComponentListStart(
+            declaration,
+            recordMatch.Index + recordMatch.Length + javaLeadingAnnotationOffset);
         if (parameterOpenIndex < 0)
             return false;
 
@@ -12945,7 +13022,7 @@ public static class SymbolExtractor
                 : new Regex(@"^\s*(?:(?:public|private|protected\s+internal|private\s+protected|protected|internal)\s+)?(?:(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*record(?:\s+class)?\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant);
         }
 
-        return new Regex(@"^\s*" + JavaLeadingAnnotationsPattern + @"(?:public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*record\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant);
+        return new Regex(@"^\s*(?:public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*record\s+" + Regex.Escape(recordName) + @"\b", RegexOptions.CultureInvariant);
     }
 
     private static int FindRecordPrimaryComponentListStart(string declaration, int startIndex)

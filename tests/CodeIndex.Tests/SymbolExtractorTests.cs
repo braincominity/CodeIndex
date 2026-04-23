@@ -8306,6 +8306,41 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_DetectsSameLineAnnotatedDeclarationsWhenAnnotationArgumentsContainParen()
+    {
+        var content = """
+            public class Demo {
+                @Label(")") public int broken() { return 1; }
+            }
+
+            @Ann(value = helper(")"))
+            public record Wrapped(int value) {}
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "broken" && s.ContainerKind == "class" && s.ContainerName == "Demo");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Wrapped");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "value" && s.ContainerKind == "class" && s.ContainerName == "Wrapped");
+    }
+
+    [Fact]
+    public void Extract_Java_HandlesSameLineSiblingMethodsInsideEnumBody()
+    {
+        var content = """
+            public enum Demo {
+                A;
+                int first() { return 1; } int second() { return 2; }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var first = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "first" && s.ContainerKind == "enum" && s.ContainerName == "Demo"));
+        var second = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "second" && s.ContainerKind == "enum" && s.ContainerName == "Demo"));
+        Assert.Equal("int first() { return 1; }", first.Signature);
+        Assert.Equal("int second() { return 2; }", second.Signature);
+    }
+
+    [Fact]
     public void Extract_Java_DetectsStaticFinalAndEnumMembers()
     {
         var content = "public class Config {\n    public static final String VERSION = \"1.0\";\n    private static final int MAX_RETRIES = 3;\n}\n\npublic enum Status {\n    ACTIVE,\n    INACTIVE,\n    PENDING;\n}";
