@@ -36,7 +36,7 @@ public partial class DbReader
     private readonly Dictionary<string, List<CSharpContainingTypeScope>> _csharpContainingTypeScopesByPath = new(StringComparer.Ordinal);
     private readonly Dictionary<string, List<CSharpUsingNamespaceScope>> _csharpUsingNamespaceScopesByPath = new(StringComparer.Ordinal);
     private readonly Dictionary<string, HashSet<string>> _csharpConstantPatternContainersByMemberName = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, HashSet<string>> _csharpTypeNamespacesByName = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, List<CSharpTypeNamespaceCandidate>> _csharpTypeNamespacesByName = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, HashSet<string>> _csharpTypeContainingTypesByName = new(StringComparer.OrdinalIgnoreCase);
     private HashSet<string>? _csharpGlobalUsingStaticTargets;
     private HashSet<string>? _csharpGlobalUsingNamespaces;
@@ -96,6 +96,7 @@ public partial class DbReader
     private sealed record CSharpContainingTypeScope(string QualifiedName, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpUsingStaticScope(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpUsingNamespaceScope(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
+    private sealed record CSharpTypeNamespaceCandidate(string QualifiedName, string Path, bool IsFileLocal);
     private sealed record SearchReferenceRawRow(string Path, string? Lang, string SymbolName, string ReferenceKind, int Line, int Column, string Context, string? ContainerKind, string? ContainerName);
 
     /// <summary>
@@ -892,12 +893,8 @@ public partial class DbReader
             return false;
         }
 
-        var trimmedContext = contextForFilter.TrimStart();
-        if (!trimmedContext.StartsWith("case ", StringComparison.Ordinal)
-            && contextForFilter.IndexOf(" is ", StringComparison.Ordinal) < 0)
-        {
+        if (!IsCSharpUsingStaticConstantPatternContext(contextForFilter, symbolName))
             return false;
-        }
 
         var activeTargets = GetActiveCSharpUsingStaticTargets(path, lineNumber);
         if (activeTargets.Count == 0)
@@ -929,8 +926,14 @@ public partial class DbReader
         var activeNamespaces = GetActiveCSharpTypeNamespaces(path, lineNumber);
         foreach (var activeNamespace in activeNamespaces)
         {
-            if (candidateNamespaces.Contains(activeNamespace))
+            foreach (var candidateNamespace in candidateNamespaces)
+            {
+                if (!string.Equals(candidateNamespace.QualifiedName, activeNamespace, StringComparison.Ordinal))
+                    continue;
+                if (candidateNamespace.IsFileLocal && !string.Equals(candidateNamespace.Path, path, StringComparison.Ordinal))
+                    continue;
                 return true;
+            }
         }
 
         var activeContainingTypes = GetActiveCSharpContainingTypes(path, lineNumber);
@@ -1357,14 +1360,153 @@ public partial class DbReader
         return true;
     }
 
-    private HashSet<string> GetCSharpTypeNamespacesByName(string symbolName)
+    private static bool IsCSharpUsingStaticConstantPatternContext(string context, string symbolName)
+    {
+        if (string.IsNullOrWhiteSpace(context))
+            return false;
+
+        var symbolColumn = context.IndexOf(symbolName, StringComparison.Ordinal);
+        if (symbolColumn < 0)
+            return false;
+
+        var cursor = symbolColumn;
+        cursor = SkipCSharpTriviaBackward(context, cursor);
+        return IsCSharpUsingStaticConstantPatternAnchor(context, ref cursor);
+    }
+
+    private static bool IsCSharpUsingStaticConstantPatternAnchor(string text, ref int cursor)
+    {
+        cursor = SkipCSharpTriviaBackward(text, cursor);
+        if (TryConsumeTrailingCSharpToken(text, ref cursor, "not"))
+            cursor = SkipCSharpTriviaBackward(text, cursor);
+
+        while (true)
+        {
+            if (TryConsumeTrailingCSharpToken(text, ref cursor, "case")
+                || TryConsumeTrailingCSharpToken(text, ref cursor, "is"))
+            {
+                return true;
+            }
+
+            if (!TryConsumeTrailingCSharpToken(text, ref cursor, "or")
+                && !TryConsumeTrailingCSharpToken(text, ref cursor, "and"))
+            {
+                return false;
+            }
+
+            cursor = SkipCSharpTriviaBackward(text, cursor);
+            if (!SkipCSharpPatternHeadBackward(text, ref cursor))
+                return false;
+            cursor = SkipCSharpTriviaBackward(text, cursor);
+            if (TryConsumeTrailingCSharpToken(text, ref cursor, "not"))
+                cursor = SkipCSharpTriviaBackward(text, cursor);
+        }
+    }
+
+    private static int SkipCSharpTriviaBackward(string text, int cursor)
+    {
+        while (cursor > 0)
+        {
+            if (char.IsWhiteSpace(text[cursor - 1]))
+            {
+                cursor--;
+                continue;
+            }
+
+            if (cursor >= 2
+                && text[cursor - 1] == '/'
+                && text[cursor - 2] == '*')
+            {
+                var commentStart = text.LastIndexOf("/*", cursor - 2, StringComparison.Ordinal);
+                if (commentStart >= 0)
+                {
+                    cursor = commentStart;
+                    continue;
+                }
+            }
+
+            break;
+        }
+
+        return cursor;
+    }
+
+    private static bool SkipCSharpPatternHeadBackward(string text, ref int cursor)
+    {
+        if (!TryConsumeTrailingCSharpIdentifier(text, ref cursor))
+            return false;
+
+        while (true)
+        {
+            cursor = SkipCSharpTriviaBackward(text, cursor);
+            if (cursor >= 2
+                && text[cursor - 2] == ':'
+                && text[cursor - 1] == ':')
+            {
+                cursor -= 2;
+            }
+            else if (cursor > 0 && text[cursor - 1] == '.')
+            {
+                cursor--;
+            }
+            else
+            {
+                break;
+            }
+
+            cursor = SkipCSharpTriviaBackward(text, cursor);
+            if (!TryConsumeTrailingCSharpIdentifier(text, ref cursor))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryConsumeTrailingCSharpIdentifier(string text, ref int cursor)
+    {
+        var end = cursor;
+        while (cursor > 0
+               && (char.IsLetterOrDigit(text[cursor - 1])
+                   || text[cursor - 1] == '_'))
+        {
+            cursor--;
+        }
+
+        if (cursor == end)
+            return false;
+
+        if (cursor > 0 && text[cursor - 1] == '@')
+            cursor--;
+
+        return true;
+    }
+
+    private static bool TryConsumeTrailingCSharpToken(string text, ref int cursor, string token)
+    {
+        var tokenStart = cursor - token.Length;
+        if (tokenStart < 0
+            || !text.AsSpan(tokenStart, token.Length).SequenceEqual(token))
+        {
+            return false;
+        }
+
+        if (tokenStart > 0 && (char.IsLetterOrDigit(text[tokenStart - 1]) || text[tokenStart - 1] == '_'))
+            return false;
+        if (cursor < text.Length && (char.IsLetterOrDigit(text[cursor]) || text[cursor] == '_'))
+            return false;
+
+        cursor = tokenStart;
+        return true;
+    }
+
+    private List<CSharpTypeNamespaceCandidate> GetCSharpTypeNamespacesByName(string symbolName)
     {
         if (_csharpTypeNamespacesByName.TryGetValue(symbolName, out var cached))
             return cached;
 
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = @"
-            SELECT DISTINCT s.container_kind, s.container_name, s.container_qualified_name
+            SELECT DISTINCT s.container_kind, s.container_name, s.container_qualified_name, f.path, s.visibility, s.signature
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE f.lang = 'csharp'
@@ -1372,24 +1514,29 @@ public partial class DbReader
               AND s.kind IN ('class', 'struct', 'interface', 'enum', 'delegate')";
         cmd.Parameters.AddWithValue("@symbolName", symbolName);
 
-        var namespaces = new HashSet<string>(StringComparer.Ordinal);
+        var namespaces = new List<CSharpTypeNamespaceCandidate>();
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
             var containerKind = GetNullableString(reader, 0);
+            var path = reader.GetString(3);
+            var visibility = GetNullableString(reader, 4);
+            var signature = GetNullableString(reader, 5);
+            var isFileLocal = string.Equals(visibility, "file", StringComparison.OrdinalIgnoreCase)
+                || (!string.IsNullOrWhiteSpace(signature) && signature.Contains("file ", StringComparison.Ordinal));
             if (string.Equals(containerKind, "namespace", StringComparison.Ordinal))
             {
                 var qualifiedNamespace = GetNullableString(reader, 2);
                 var fallbackNamespace = GetNullableString(reader, 1);
-                namespaces.Add(
-                    NormalizeDbCSharpQualifiedName(qualifiedNamespace ?? fallbackNamespace ?? string.Empty)
-                    ?? string.Empty);
+                var namespaceName = NormalizeDbCSharpQualifiedName(qualifiedNamespace ?? fallbackNamespace ?? string.Empty)
+                    ?? string.Empty;
+                namespaces.Add(new CSharpTypeNamespaceCandidate(namespaceName, path, isFileLocal));
                 continue;
             }
 
             if (containerKind == null)
             {
-                namespaces.Add(string.Empty);
+                namespaces.Add(new CSharpTypeNamespaceCandidate(string.Empty, path, isFileLocal));
             }
         }
 
