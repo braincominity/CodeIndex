@@ -239,7 +239,7 @@ public static class ReferenceExtractor
         $@"(?<![\w$])(?:INSERT\s+INTO|UPDATE\b(?:\s+(?:{SqlTopTargetModifierPattern}|ONLY\b))*|TRUNCATE\s+TABLE|MERGE\b(?:\s+{SqlTopTargetModifierPattern})?\s+INTO|DELETE\b(?:\s+{SqlTopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?)\s+{SqlQualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SqlTopCallSuppressionRegex = new(
-        @"(?<![\w$])(?:UPDATE|MERGE|DELETE)\b\s+(?<name>TOP)\s*\(",
+        @"(?<![\w$])(?:SELECT|UPDATE|MERGE|DELETE)\b\s+(?<name>TOP)\s*\(",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SqlUsingClauseCallSuppressionRegex = new(
         $@"(?<![\w$])USING\b\s+(?<name>{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern})(?=\s*\()",
@@ -259,7 +259,8 @@ public static class ReferenceExtractor
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private readonly record struct SqlIdentifierScanState(
         bool InBlockComment,
-        string? DollarQuoteDelimiter);
+        string? DollarQuoteDelimiter,
+        bool InSingleQuotedString);
     // C# event subscription/unsubscription: Click += OnClick — both LHS and RHS must be PascalCase identifiers
     // C# イベント購読・解除: Click += OnClick — LHS と RHS の両方が PascalCase 識別子のみ
     private static readonly Regex EventSubscriptionRegex = new(@"(?<name>[A-Z]\w*)\s*[+-]=\s*(?:new\s+)?[A-Z]\w*", RegexOptions.Compiled);
@@ -6775,13 +6776,15 @@ public static class ReferenceExtractor
     }
 
     // SQL-aware line sanitizer used only for the SQL source/target and `EXEC` / `EXECUTE` / `CALL`
-    // scans. Preserves backtick/bracket/double-quoted identifiers, blanks single-quoted strings,
-    // multiline `/* ... */` comments, PostgreSQL `$$...$$` / `$tag$...$tag$` bodies, and line
-    // comments so non-code regions cannot leak phantom references into the graph.
+    // scans. Preserves backtick/bracket/double-quoted identifiers, blanks single-quoted strings
+    // (including multiline bodies), multiline `/* ... */` comments, PostgreSQL `$$...$$` /
+    // `$tag$...$tag$` bodies, and line comments so non-code regions cannot leak phantom references
+    // into the graph.
     // SQL source/target と `EXEC` / `EXECUTE` / `CALL` 抽出向けの SQL 特化サニタイザ。
-    // backtick / bracket / double-quoted identifier は保持しつつ、単引用符文字列、複数行
-    // `/* ... */` コメント、PostgreSQL の `$$...$$` / `$tag$...$tag$` 本体、行コメントを空白化し、
-    // 非コード領域から phantom reference が漏れないようにする。
+    // backtick / bracket / double-quoted identifier は保持しつつ、単引用符文字列
+    // （複数行本体を含む）、複数行 `/* ... */` コメント、PostgreSQL の `$$...$$` /
+    // `$tag$...$tag$` 本体、行コメントを空白化し、非コード領域から phantom reference が
+    // 漏れないようにする。
     private static string PrepareSqlLineForIdentifierScan(
         string line,
         SqlIdentifierScanState state,
@@ -6798,6 +6801,7 @@ public static class ReferenceExtractor
         var sanitized = line.ToCharArray();
         bool inBlockComment = state.InBlockComment;
         string? dollarQuoteDelimiter = state.DollarQuoteDelimiter;
+        bool inSingleQuotedString = state.InSingleQuotedString;
 
         void BlankRange(int start, int endExclusive)
         {
@@ -6855,6 +6859,20 @@ public static class ReferenceExtractor
                 dollarQuoteDelimiter = null;
                 continue;
             }
+            if (inSingleQuotedString)
+            {
+                int closing = FindClosingSqlSingleQuote(line, i);
+                int end = closing >= 0 ? closing + 1 : line.Length;
+                BlankRange(i, end);
+                i = end;
+                if (closing >= 0)
+                {
+                    inSingleQuotedString = false;
+                    continue;
+                }
+
+                break;
+            }
 
             char c = line[i];
             if (c == '"')
@@ -6887,6 +6905,8 @@ public static class ReferenceExtractor
                 int end = closing >= 0 ? closing + 1 : line.Length;
                 BlankRange(i, end);
                 i = end;
+                if (closing < 0)
+                    inSingleQuotedString = true;
                 continue;
             }
             if (c == '/' && i + 1 < line.Length && line[i + 1] == '*')
@@ -6922,7 +6942,7 @@ public static class ReferenceExtractor
             i++;
         }
 
-        nextState = new SqlIdentifierScanState(inBlockComment, dollarQuoteDelimiter);
+        nextState = new SqlIdentifierScanState(inBlockComment, dollarQuoteDelimiter, inSingleQuotedString);
         return new string(sanitized);
     }
 

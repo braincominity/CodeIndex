@@ -10869,6 +10869,7 @@ public class QueryCommandRunnerTests
             File.WriteAllText(
                 Path.Combine(projectRoot, "sql", "repro.sql"),
                 """
+                SELECT TOP (10) * FROM top_users;
                 UPDATE TOP (10) audit_log SET action = 'done';
                 DELETE TOP (5) FROM audit_log;
                 SELECT * FROM ONLY public.users;
@@ -10879,6 +10880,7 @@ public class QueryCommandRunnerTests
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
             var (auditExitCode, auditStdout, auditStderr) = RunBuiltCli(["references", "audit_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (topUsersExitCode, topUsersStdout, topUsersStderr) = RunBuiltCli(["references", "top_users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (usersExitCode, usersStdout, usersStderr) = RunBuiltCli(["references", "users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (fnExitCode, fnStdout, fnStderr) = RunBuiltCli(["references", "fn_users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (topExitCode, topStdout, topStderr) = RunBuiltCli(["references", "TOP", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
@@ -10886,6 +10888,7 @@ public class QueryCommandRunnerTests
             var (lateralExitCode, lateralStdout, lateralStderr) = RunBuiltCli(["references", "LATERAL", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
 
             var auditRows = ParseJsonLines(auditStdout);
+            var topUsersRows = ParseJsonLines(topUsersStdout);
             var usersRows = ParseJsonLines(usersStdout);
             var fnRows = ParseJsonLines(fnStdout);
             using var topDocument = ParseJsonOutput(topStdout);
@@ -10899,6 +10902,11 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, auditStderr);
             Assert.Equal(3, auditRows.Count);
             Assert.All(auditRows, row => Assert.Equal("audit_log", row.RootElement.GetProperty("symbol_name").GetString()));
+
+            Assert.Equal(CommandExitCodes.Success, topUsersExitCode);
+            Assert.Equal(string.Empty, topUsersStderr);
+            var topUsersRow = Assert.Single(topUsersRows);
+            Assert.Equal("top_users", topUsersRow.RootElement.GetProperty("symbol_name").GetString());
 
             Assert.Equal(CommandExitCodes.Success, usersExitCode);
             Assert.Equal(string.Empty, usersStderr);
@@ -11154,6 +11162,51 @@ public class QueryCommandRunnerTests
             var usersRow = Assert.Single(usersRows);
             Assert.Equal("users", usersRow.RootElement.GetProperty("symbol_name").GetString());
             Assert.Equal(3, usersRow.RootElement.GetProperty("line").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_SqlMultilineSingleQuotedStringsStayOpaque()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_multiline_single_quoted_strings");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "sql", "repro.sql"),
+                """
+                SELECT 'abc''
+                still escaped \'
+                FROM phantom
+                INTO #temp_users
+                ';
+                SELECT * FROM users;
+                SELECT * FROM #temp_users;
+                """);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (usersExitCode, usersStdout, usersStderr) = RunBuiltCli(["references", "users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (tempExitCode, tempStdout, tempStderr) = RunBuiltCli(["references", "#temp_users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+
+            var usersRows = ParseJsonLines(usersStdout);
+            using var tempDocument = ParseJsonOutput(tempStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            Assert.Equal(CommandExitCodes.Success, usersExitCode);
+            Assert.Equal(string.Empty, usersStderr);
+            var usersRow = Assert.Single(usersRows);
+            Assert.Equal("users", usersRow.RootElement.GetProperty("symbol_name").GetString());
+            Assert.Equal(6, usersRow.RootElement.GetProperty("line").GetInt32());
+
+            Assert.Equal(CommandExitCodes.NotFound, tempExitCode);
+            Assert.Equal(string.Empty, tempStderr);
+            Assert.Equal(0, tempDocument.RootElement.GetProperty("count").GetInt32());
         }
         finally
         {

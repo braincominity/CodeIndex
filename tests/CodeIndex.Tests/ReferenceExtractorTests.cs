@@ -5357,6 +5357,7 @@ public class ReferenceExtractorTests
         // issue #684: TOP / ONLY / LATERAL のような SQL 修飾子は phantom object 名にしてはならず、
         // 実際の source/target を引き続き索引できるべき。
         const string content = """
+            SELECT TOP (10) * FROM top_users;
             UPDATE TOP (10) audit_log SET action = 'done';
             DELETE TOP (5) FROM audit_log;
             SELECT * FROM ONLY public.users;
@@ -5372,6 +5373,7 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "sql", content);
         var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
 
+        Assert.Contains(references, r => r.SymbolName == "top_users" && r.ReferenceKind == "reference");
         Assert.Equal(3, references.Count(r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference"));
         Assert.Equal(2, references.Count(r => r.SymbolName == "users" && r.ReferenceKind == "reference"));
         Assert.Contains(references, r => r.SymbolName == "fn_users" && r.ReferenceKind == "call");
@@ -5509,6 +5511,31 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "still_phantom" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "comment_phantom" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_MultilineSingleQuotedStringsDoNotLeakSourcesOrEstablishTempTables()
+    {
+        // issue #708: multiline single-quoted SQL bodies must stay opaque across lines so source
+        // references and temp-table establishment do not leak out of the string body.
+        // issue #708: 複数行 single-quoted SQL 本体は行をまたいでも opaque のまま維持し、
+        // source 参照や temp-table establishment を文字列内から漏らしてはいけない。
+        const string content = """
+            SELECT 'abc''
+            still escaped \'
+            FROM phantom
+            INTO #temp_users
+            ';
+            SELECT * FROM users;
+            SELECT * FROM #temp_users;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "phantom" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "#temp_users" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 6);
     }
 
     [Fact]
