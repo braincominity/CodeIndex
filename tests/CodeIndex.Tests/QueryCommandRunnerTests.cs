@@ -10873,10 +10873,13 @@ public class QueryCommandRunnerTests
                 UPDATE ONLY public.users SET active = true;
                 SELECT * FROM LATERAL fn_users(42);
                 MERGE TOP (5) audit_log AS t USING staging_log AS s ON t.id = s.id WHEN MATCHED THEN UPDATE SET action = s.action;
+                MERGE TOP (5) #batch_log AS u USING staging_batch AS v ON u.id = v.id WHEN MATCHED THEN UPDATE SET action = v.action;
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
             var (auditExitCode, auditStdout, auditStderr) = RunBuiltCli(["references", "audit_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (batchExitCode, batchStdout, batchStderr) = RunBuiltCli(["references", "#batch_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (batchSourceExitCode, batchSourceStdout, batchSourceStderr) = RunBuiltCli(["references", "staging_batch", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (topUsersExitCode, topUsersStdout, topUsersStderr) = RunBuiltCli(["references", "top_users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (usersExitCode, usersStdout, usersStderr) = RunBuiltCli(["references", "users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (fnExitCode, fnStdout, fnStderr) = RunBuiltCli(["references", "fn_users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
@@ -10885,6 +10888,8 @@ public class QueryCommandRunnerTests
             var (lateralExitCode, lateralStdout, lateralStderr) = RunBuiltCli(["references", "LATERAL", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
 
             var auditRows = ParseJsonLines(auditStdout);
+            var batchRows = ParseJsonLines(batchStdout);
+            var batchSourceRows = ParseJsonLines(batchSourceStdout);
             var topUsersRows = ParseJsonLines(topUsersStdout);
             var usersRows = ParseJsonLines(usersStdout);
             var fnRows = ParseJsonLines(fnStdout);
@@ -10899,6 +10904,16 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, auditStderr);
             Assert.Equal(3, auditRows.Count);
             Assert.All(auditRows, row => Assert.Equal("audit_log", row.RootElement.GetProperty("symbol_name").GetString()));
+
+            Assert.Equal(CommandExitCodes.Success, batchExitCode);
+            Assert.Equal(string.Empty, batchStderr);
+            var batchRow = Assert.Single(batchRows);
+            Assert.Equal("#batch_log", batchRow.RootElement.GetProperty("symbol_name").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, batchSourceExitCode);
+            Assert.Equal(string.Empty, batchSourceStderr);
+            var batchSourceRow = Assert.Single(batchSourceRows);
+            Assert.Equal("staging_batch", batchSourceRow.RootElement.GetProperty("symbol_name").GetString());
 
             Assert.Equal(CommandExitCodes.Success, topUsersExitCode);
             Assert.Equal(string.Empty, topUsersStderr);
@@ -11125,8 +11140,8 @@ public class QueryCommandRunnerTests
             var stagingRows = ParseJsonLines(stagingStdout);
             var archiveTargetRows = ParseJsonLines(archiveTargetStdout);
             var archiveSourceRows = ParseJsonLines(archiveSourceStdout);
+            var lowerRows = ParseJsonLines(lowerStdout);
             using var btreeDocument = ParseJsonOutput(btreeStdout);
-            using var lowerDocument = ParseJsonOutput(lowerStdout);
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
@@ -11153,9 +11168,11 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, btreeStderr);
             Assert.Equal(0, btreeDocument.RootElement.GetProperty("count").GetInt32());
 
-            Assert.Equal(CommandExitCodes.NotFound, lowerExitCode);
+            Assert.Equal(CommandExitCodes.Success, lowerExitCode);
             Assert.Equal(string.Empty, lowerStderr);
-            Assert.Equal(0, lowerDocument.RootElement.GetProperty("count").GetInt32());
+            var lowerRow = Assert.Single(lowerRows);
+            Assert.Equal("lower", lowerRow.RootElement.GetProperty("symbol_name").GetString());
+            Assert.Equal("call", lowerRow.RootElement.GetProperty("reference_kind").GetString());
         }
         finally
         {
@@ -11194,6 +11211,51 @@ public class QueryCommandRunnerTests
             Assert.Equal("staging_log", stagingRow.RootElement.GetProperty("symbol_name").GetString());
             Assert.Equal("reference", stagingRow.RootElement.GetProperty("reference_kind").GetString());
             Assert.Equal(2, stagingRow.RootElement.GetProperty("line").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_SqlMergeTempTargetWithoutIntoResolvesTargetAndSource()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_merge_temp_without_into");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "sql", "repro.sql"),
+                """
+                MERGE #audit_log AS t
+                USING staging_log AS s
+                ON t.id = s.id
+                WHEN MATCHED THEN
+                    UPDATE SET action = s.action;
+                """);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (targetExitCode, targetStdout, targetStderr) = RunBuiltCli(["references", "#audit_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (sourceExitCode, sourceStdout, sourceStderr) = RunBuiltCli(["references", "staging_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+
+            var targetRows = ParseJsonLines(targetStdout);
+            var sourceRows = ParseJsonLines(sourceStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            Assert.Equal(CommandExitCodes.Success, targetExitCode);
+            Assert.Equal(string.Empty, targetStderr);
+            var targetRow = Assert.Single(targetRows);
+            Assert.Equal("#audit_log", targetRow.RootElement.GetProperty("symbol_name").GetString());
+            Assert.Equal("reference", targetRow.RootElement.GetProperty("reference_kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, sourceExitCode);
+            Assert.Equal(string.Empty, sourceStderr);
+            var sourceRow = Assert.Single(sourceRows);
+            Assert.Equal("staging_log", sourceRow.RootElement.GetProperty("symbol_name").GetString());
+            Assert.Equal("reference", sourceRow.RootElement.GetProperty("reference_kind").GetString());
         }
         finally
         {

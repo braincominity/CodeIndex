@@ -5368,6 +5368,11 @@ public class ReferenceExtractorTests
             ON t.id = s.id
             WHEN MATCHED THEN
                 UPDATE SET action = s.action;
+            MERGE TOP (5) #batch_log AS u
+            USING staging_batch AS v
+            ON u.id = v.id
+            WHEN MATCHED THEN
+                UPDATE SET action = v.action;
             """;
 
         var symbols = SymbolExtractor.Extract(1, "sql", content);
@@ -5378,6 +5383,8 @@ public class ReferenceExtractorTests
         Assert.Equal(2, references.Count(r => r.SymbolName == "users" && r.ReferenceKind == "reference"));
         Assert.Contains(references, r => r.SymbolName == "fn_users" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "#batch_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "staging_batch" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "TOP");
         Assert.DoesNotContain(references, r => r.SymbolName == "ONLY");
         Assert.DoesNotContain(references, r => r.SymbolName == "LATERAL");
@@ -5468,8 +5475,9 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "audit_log_archive" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "staging_archive" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "lower" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "btree");
-        Assert.DoesNotContain(references, r => r.SymbolName == "lower");
+        Assert.DoesNotContain(references, r => r.SymbolName == "btree" && r.ReferenceKind == "call");
     }
 
     [Fact]
@@ -5660,7 +5668,7 @@ public class ReferenceExtractorTests
             SELECT id INTO target_var FROM users;
             SELECT * FROM users # comment with ##ignored_temp;
 
-            MERGE INTO audit_log AS t
+            MERGE #audit_log AS t
             USING staging_log AS s
             ON t.id = s.id
             WHEN MATCHED THEN
@@ -5670,13 +5678,12 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "sql", content);
         var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
 
-        Assert.Equal(3, references.Count(r => r.SymbolName == "#audit_log" && r.ReferenceKind == "reference"));
+        Assert.Equal(4, references.Count(r => r.SymbolName == "#audit_log" && r.ReferenceKind == "reference"));
         Assert.Equal(3, references.Count(r => r.SymbolName == "##session_log" && r.ReferenceKind == "reference"));
         Assert.Contains(references, r => r.SymbolName == "#selected_users" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "##selected_global_users" && r.ReferenceKind == "reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "#audit_log" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "session_log" && r.ReferenceKind == "call");
-        Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "target_var");

@@ -247,8 +247,8 @@ public static class ReferenceExtractor
     private static readonly Regex SqlTopCallSuppressionRegex = new(
         @"(?<![\w$])(?:SELECT|UPDATE|MERGE|DELETE)\b\s+(?<name>TOP)\s*\(",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex SqlUsingClauseCallSuppressionRegex = new(
-        $@"(?<![\w$])USING\b\s+(?<name>{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern})(?=\s*\()",
+    private static readonly Regex SqlAccessMethodCallSuppressionRegex = new(
+        $@"(?<![\w$])CREATE\b(?:\s+UNIQUE\b)?\s+INDEX\b[\s\S]*?\bUSING\b\s+(?<name>{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern})(?=\s*\()",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // SQL Server temp-table materialization: `SELECT ... INTO #tmp` / `SELECT ... INTO ##tmp`.
     // Procedural `SELECT ... INTO variable` remains intentionally excluded. issue #649.
@@ -896,7 +896,7 @@ public static class ReferenceExtractor
                                 sqlSuppressedCallIndices?.Add(nameGroup.Index + sqlStatementStart - sqlLineOffset);
                             }
 
-                            foreach (Match match in SqlUsingClauseCallSuppressionRegex.Matches(sqlStatement))
+                            foreach (Match match in SqlAccessMethodCallSuppressionRegex.Matches(sqlStatement))
                             {
                                 if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
                                     continue;
@@ -8197,6 +8197,36 @@ public static class ReferenceExtractor
             return true;
         if (line[probe] == '.')
             return false;
+        if (line[probe] == ')')
+        {
+            int depth = 1;
+            probe--;
+            while (probe >= 0 && depth > 0)
+            {
+                if (line[probe] == ')')
+                    depth++;
+                else if (line[probe] == '(')
+                    depth--;
+                probe--;
+            }
+            while (probe >= 0 && char.IsWhiteSpace(line[probe]))
+                probe--;
+            if (probe < 0)
+                return true;
+
+            int modifierEnd = probe;
+            while (probe >= 0 && char.IsLetter(line[probe]))
+                probe--;
+            int modifierStart = probe + 1;
+            if (modifierStart <= modifierEnd
+                && string.Equals(line[modifierStart..(modifierEnd + 1)], "TOP", StringComparison.OrdinalIgnoreCase))
+            {
+                while (probe >= 0 && char.IsWhiteSpace(line[probe]))
+                    probe--;
+                if (probe < 0)
+                    return true;
+            }
+        }
 
         int tokenEnd = probe;
         while (probe >= 0 && char.IsLetter(line[probe]))
@@ -8208,6 +8238,7 @@ public static class ReferenceExtractor
         var token = line[tokenStart..(tokenEnd + 1)];
         return !string.Equals(token, "FROM", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(token, "JOIN", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "MERGE", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(token, "USING", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(token, "INTO", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(token, "UPDATE", StringComparison.OrdinalIgnoreCase)
