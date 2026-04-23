@@ -5445,6 +5445,43 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_TempTablesRespectSemicolonlessStatementBoundaries()
+    {
+        // issue #681: temp establishment must also survive semicolon-less statement boundaries and
+        // line-end comments, while forward reads before a later establish still stay excluded.
+        // issue #681: temp 確立は semicolon-less な statement 境界や行末コメント越しでも効き、
+        // 後続の establish より前にある forward read は引き続き除外されるべき。
+        const string content = """
+            CREATE TABLE #created_temp (id int)
+            SELECT * FROM #created_temp;
+            SELECT id INTO #selected_temp FROM users
+            SELECT * FROM #selected_temp;
+            INSERT INTO #inserted_temp (action) VALUES ('login')
+            SELECT * FROM #inserted_temp;
+            UPDATE #updated_temp SET action = 'done'
+            SELECT * FROM #updated_temp;
+            SELECT id INTO #comment_temp -- trailing comment
+            FROM users;
+            SELECT * FROM #comment_temp;
+            SELECT * FROM #future_temp;
+            CREATE TABLE #future_temp (id int)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(1, references.Count(r => r.SymbolName == "#created_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#selected_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#inserted_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#updated_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#comment_temp" && r.ReferenceKind == "reference"));
+        Assert.Empty(references.Where(r => r.SymbolName == "#future_temp" && r.ReferenceKind == "reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "#future_temp" && r.ReferenceKind == "reference" && r.Line == 12);
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 3);
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 10);
+    }
+
+    [Fact]
     public void Extract_SQL_MergeUpdateSetDoesNotEmitSetAsTargetReference()
     {
         // issue #660: `MERGE ... WHEN MATCHED THEN UPDATE SET ...` must not emit `SET` as a table

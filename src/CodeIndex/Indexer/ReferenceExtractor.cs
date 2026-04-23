@@ -746,6 +746,12 @@ public static class ReferenceExtractor
                 var sqlLineFragment = PrepareSqlLineForIdentifierScan(structuralLines[i], out var sqlLineEndedByLineComment);
                 if (!string.IsNullOrWhiteSpace(sqlLineFragment))
                 {
+                    if (ShouldFlushSqlTempObjectPrefixAtLineBoundary(sqlStatementPrefix!, sqlLineFragment))
+                    {
+                        CollectSqlTempObjectNamesFromStatement(sqlStatementPrefix!, sqlEstablishedTempObjectNames!);
+                        sqlStatementPrefix = string.Empty;
+                    }
+
                     var sqlCombinedLine = CombineSqlStatementPrefix(sqlStatementPrefix!, sqlLineFragment, out var sqlLineOffset);
                     int sqlStatementStart = 0;
 
@@ -862,10 +868,6 @@ public static class ReferenceExtractor
                     }
 
                     sqlStatementPrefix = AdvanceSqlStatementPrefix(sqlCombinedLine, sqlStatementStart, sqlLineEndedByLineComment);
-                }
-                else if (sqlLineEndedByLineComment)
-                {
-                    sqlStatementPrefix = string.Empty;
                 }
             }
 
@@ -1228,10 +1230,64 @@ public static class ReferenceExtractor
         int statementStart,
         bool lineEndedByLineComment)
     {
-        if (lineEndedByLineComment)
-            return string.Empty;
+        var remaining = statementStart == 0 ? combined : combined[statementStart..];
+        if (!lineEndedByLineComment)
+            return remaining;
 
-        return statementStart == 0 ? combined : combined[statementStart..];
+        return CanSqlStatementEstablishTempObject(remaining) ? remaining : string.Empty;
+    }
+
+    private static bool ShouldFlushSqlTempObjectPrefixAtLineBoundary(
+        string prefix,
+        string nextLine)
+    {
+        if (string.IsNullOrWhiteSpace(prefix) || string.IsNullOrWhiteSpace(nextLine))
+            return false;
+        if (!CanSqlStatementEstablishTempObject(prefix))
+            return false;
+
+        return StartsSqlTopLevelStatement(nextLine);
+    }
+
+    private static bool CanSqlStatementEstablishTempObject(string statement)
+    {
+        if (statement.IndexOf('#') < 0)
+            return false;
+
+        return SqlTargetReferenceRegex.IsMatch(statement)
+            || SqlSelectIntoTempTargetStatementRegex.IsMatch(statement)
+            || SqlCreateTempTableRegex.IsMatch(statement);
+    }
+
+    private static bool StartsSqlTopLevelStatement(string line)
+    {
+        int index = 0;
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+        if (index >= line.Length || !char.IsLetter(line[index]))
+            return false;
+
+        int start = index;
+        while (index < line.Length && char.IsLetter(line[index]))
+            index++;
+
+        return line[start..index].ToUpperInvariant() switch
+        {
+            "SELECT" => true,
+            "WITH" => true,
+            "INSERT" => true,
+            "UPDATE" => true,
+            "DELETE" => true,
+            "MERGE" => true,
+            "CREATE" => true,
+            "ALTER" => true,
+            "DROP" => true,
+            "TRUNCATE" => true,
+            "EXEC" => true,
+            "EXECUTE" => true,
+            "CALL" => true,
+            _ => false,
+        };
     }
 
     private static int FindSqlStatementTerminator(string text, int startIndex)
