@@ -5393,15 +5393,22 @@ public class ReferenceExtractorTests
         const string content = """
             TRUNCATE TABLE ONLY public.users;
             TRUNCATE TABLE audit_log, archived_log;
+            TRUNCATE TABLE [dbo].[users], `analytics`.`logs`, "public"."accounts";
             """;
 
         var symbols = SymbolExtractor.Extract(1, "sql", content);
         var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
 
-        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+        Assert.Equal(2, references.Count(r => r.SymbolName == "users" && r.ReferenceKind == "reference"));
         Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "archived_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "logs" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "accounts" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "ONLY");
+        Assert.DoesNotContain(references, r => r.SymbolName == "public.users");
+        Assert.DoesNotContain(references, r => r.SymbolName == "dbo].[users");
+        Assert.DoesNotContain(references, r => r.SymbolName == "analytics`.`logs");
+        Assert.DoesNotContain(references, r => r.SymbolName == "public\".\"accounts");
     }
 
     [Fact]
@@ -5414,14 +5421,23 @@ public class ReferenceExtractorTests
         const string content = """
             DELETE FROM audit_log USING staging_log, archived_log
             WHERE audit_log.id = staging_log.id;
+            DELETE FROM public.audit_log USING staging.stage_log, [archive].[archived_log], "public"."source"
+            WHERE audit_log.id = stage_log.id;
             """;
 
         var symbols = SymbolExtractor.Extract(1, "sql", content);
         var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
 
-        Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+        Assert.Equal(2, references.Count(r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference"));
         Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "archived_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "stage_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "source" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "public.audit_log");
+        Assert.DoesNotContain(references, r => r.SymbolName == "staging.stage_log");
+        Assert.DoesNotContain(references, r => r.SymbolName == "stage].[stage_log");
+        Assert.DoesNotContain(references, r => r.SymbolName == "archive].[archived_log");
+        Assert.DoesNotContain(references, r => r.SymbolName == "public\".\"source");
     }
 
     [Fact]

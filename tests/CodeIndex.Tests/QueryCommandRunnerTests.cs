@@ -10949,31 +10949,68 @@ public class QueryCommandRunnerTests
                 """
                 TRUNCATE TABLE ONLY public.users;
                 TRUNCATE TABLE audit_log, archived_log;
+                TRUNCATE TABLE [dbo].[users], `analytics`.`logs`, "public"."accounts";
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
             var (usersExitCode, usersStdout, usersStderr) = RunBuiltCli(["references", "users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (archivedExitCode, archivedStdout, archivedStderr) = RunBuiltCli(["references", "archived_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (logsExitCode, logsStdout, logsStderr) = RunBuiltCli(["references", "logs", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (accountsExitCode, accountsStdout, accountsStderr) = RunBuiltCli(["references", "accounts", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (onlyExitCode, onlyStdout, onlyStderr) = RunBuiltCli(["references", "ONLY", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (qualifiedExitCode, qualifiedStdout, qualifiedStderr) = RunBuiltCli(["references", "public.users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (mangledBracketExitCode, mangledBracketStdout, mangledBracketStderr) = RunBuiltCli(["references", "dbo].[users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (mangledBacktickExitCode, mangledBacktickStdout, mangledBacktickStderr) = RunBuiltCli(["references", "analytics`.`logs", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (mangledDoubleQuoteExitCode, mangledDoubleQuoteStdout, mangledDoubleQuoteStderr) = RunBuiltCli(["references", "public\".\"accounts", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
 
             var usersRows = ParseJsonLines(usersStdout);
             var archivedRows = ParseJsonLines(archivedStdout);
+            var logsRows = ParseJsonLines(logsStdout);
+            var accountsRows = ParseJsonLines(accountsStdout);
             using var onlyDocument = ParseJsonOutput(onlyStdout);
+            using var qualifiedDocument = ParseJsonOutput(qualifiedStdout);
+            using var mangledBracketDocument = ParseJsonOutput(mangledBracketStdout);
+            using var mangledBacktickDocument = ParseJsonOutput(mangledBacktickStdout);
+            using var mangledDoubleQuoteDocument = ParseJsonOutput(mangledDoubleQuoteStdout);
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
 
             Assert.Equal(CommandExitCodes.Success, usersExitCode);
             Assert.Equal(string.Empty, usersStderr);
-            Assert.Single(usersRows);
+            Assert.Equal(2, usersRows.Count);
 
             Assert.Equal(CommandExitCodes.Success, archivedExitCode);
             Assert.Equal(string.Empty, archivedStderr);
             Assert.Single(archivedRows);
 
+            Assert.Equal(CommandExitCodes.Success, logsExitCode);
+            Assert.Equal(string.Empty, logsStderr);
+            Assert.Single(logsRows);
+
+            Assert.Equal(CommandExitCodes.Success, accountsExitCode);
+            Assert.Equal(string.Empty, accountsStderr);
+            Assert.Single(accountsRows);
+
             Assert.Equal(CommandExitCodes.NotFound, onlyExitCode);
             Assert.Equal(string.Empty, onlyStderr);
             Assert.Equal(0, onlyDocument.RootElement.GetProperty("count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.NotFound, qualifiedExitCode);
+            Assert.Equal(string.Empty, qualifiedStderr);
+            Assert.Equal(0, qualifiedDocument.RootElement.GetProperty("count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.NotFound, mangledBracketExitCode);
+            Assert.Equal(string.Empty, mangledBracketStderr);
+            Assert.Equal(0, mangledBracketDocument.RootElement.GetProperty("count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.NotFound, mangledBacktickExitCode);
+            Assert.Equal(string.Empty, mangledBacktickStderr);
+            Assert.Equal(0, mangledBacktickDocument.RootElement.GetProperty("count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.NotFound, mangledDoubleQuoteExitCode);
+            Assert.Equal(string.Empty, mangledDoubleQuoteStderr);
+            Assert.Equal(0, mangledDoubleQuoteDocument.RootElement.GetProperty("count").GetInt32());
         }
         finally
         {
@@ -10993,14 +11030,28 @@ public class QueryCommandRunnerTests
                 """
                 DELETE FROM audit_log USING staging_log, archived_log
                 WHERE audit_log.id = staging_log.id;
+                DELETE FROM public.audit_log USING staging.stage_log, [archive].[archived_log], "public"."source"
+                WHERE audit_log.id = stage_log.id;
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
             var (stagingExitCode, stagingStdout, stagingStderr) = RunBuiltCli(["references", "staging_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (archivedExitCode, archivedStdout, archivedStderr) = RunBuiltCli(["references", "archived_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (stageExitCode, stageStdout, stageStderr) = RunBuiltCli(["references", "stage_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (sourceExitCode, sourceStdout, sourceStderr) = RunBuiltCli(["references", "source", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (qualifiedTargetExitCode, qualifiedTargetStdout, qualifiedTargetStderr) = RunBuiltCli(["references", "public.audit_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (qualifiedSourceExitCode, qualifiedSourceStdout, qualifiedSourceStderr) = RunBuiltCli(["references", "staging.stage_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (mangledBracketExitCode, mangledBracketStdout, mangledBracketStderr) = RunBuiltCli(["references", "archive].[archived_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (mangledDoubleQuoteExitCode, mangledDoubleQuoteStdout, mangledDoubleQuoteStderr) = RunBuiltCli(["references", "public\".\"source", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
 
             var stagingRows = ParseJsonLines(stagingStdout);
             var archivedRows = ParseJsonLines(archivedStdout);
+            var stageRows = ParseJsonLines(stageStdout);
+            var sourceRows = ParseJsonLines(sourceStdout);
+            using var qualifiedTargetDocument = ParseJsonOutput(qualifiedTargetStdout);
+            using var qualifiedSourceDocument = ParseJsonOutput(qualifiedSourceStdout);
+            using var mangledBracketDocument = ParseJsonOutput(mangledBracketStdout);
+            using var mangledDoubleQuoteDocument = ParseJsonOutput(mangledDoubleQuoteStdout);
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
@@ -11011,7 +11062,31 @@ public class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, archivedExitCode);
             Assert.Equal(string.Empty, archivedStderr);
-            Assert.Single(archivedRows);
+            Assert.Equal(2, archivedRows.Count);
+
+            Assert.Equal(CommandExitCodes.Success, stageExitCode);
+            Assert.Equal(string.Empty, stageStderr);
+            Assert.Single(stageRows);
+
+            Assert.Equal(CommandExitCodes.Success, sourceExitCode);
+            Assert.Equal(string.Empty, sourceStderr);
+            Assert.Single(sourceRows);
+
+            Assert.Equal(CommandExitCodes.NotFound, qualifiedTargetExitCode);
+            Assert.Equal(string.Empty, qualifiedTargetStderr);
+            Assert.Equal(0, qualifiedTargetDocument.RootElement.GetProperty("count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.NotFound, qualifiedSourceExitCode);
+            Assert.Equal(string.Empty, qualifiedSourceStderr);
+            Assert.Equal(0, qualifiedSourceDocument.RootElement.GetProperty("count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.NotFound, mangledBracketExitCode);
+            Assert.Equal(string.Empty, mangledBracketStderr);
+            Assert.Equal(0, mangledBracketDocument.RootElement.GetProperty("count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.NotFound, mangledDoubleQuoteExitCode);
+            Assert.Equal(string.Empty, mangledDoubleQuoteStderr);
+            Assert.Equal(0, mangledDoubleQuoteDocument.RootElement.GetProperty("count").GetInt32());
         }
         finally
         {
