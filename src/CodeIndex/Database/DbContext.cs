@@ -276,6 +276,9 @@ public class DbContext : IDisposable
         connection.CreateFunction(
             "sql_normalize_name",
             (string? name) => string.IsNullOrWhiteSpace(name) ? null : SqlNameResolver.NormalizeQualifiedName(name));
+        connection.CreateFunction(
+            "sql_segment_count",
+            (string? name) => string.IsNullOrWhiteSpace(name) ? (int?)null : SqlNameResolver.GetSegmentCount(name));
     }
 
     /// <summary>

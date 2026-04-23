@@ -2911,6 +2911,45 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_ExactLookups_DoNotConflateQuotedSingleIdentifierDotsWithQualifiedNames()
+    {
+        InsertIndexedFile("src/sql_dotted_identifier_collision.sql", "sql",
+            """
+            CREATE PROCEDURE sales.fn_Target
+            AS
+            SELECT 1;
+            GO
+
+            CREATE PROCEDURE "sales.fn_Target"
+            AS
+            SELECT 2;
+            GO
+            """);
+
+        var qualifiedDefinition = Assert.Single(
+            _reader.GetDefinitions("sales.fn_Target", limit: 10, lang: "sql", pathPatterns: ["sql_dotted_identifier_collision"], exact: true));
+        Assert.Equal("sales.fn_Target", qualifiedDefinition.Name);
+
+        var quotedDefinition = Assert.Single(
+            _reader.GetDefinitions("\"sales.fn_Target\"", limit: 10, lang: "sql", pathPatterns: ["sql_dotted_identifier_collision"], exact: true));
+        Assert.Equal("\"sales.fn_Target\"", quotedDefinition.Name);
+
+        var qualifiedAnalysis = _reader.AnalyzeSymbol("sales.fn_Target", limit: 10, lang: "sql", pathPatterns: ["sql_dotted_identifier_collision"], exact: true);
+        Assert.Equal("sales.fn_Target", Assert.Single(qualifiedAnalysis.Definitions).Name);
+
+        var quotedAnalysis = _reader.AnalyzeSymbol("\"sales.fn_Target\"", limit: 10, lang: "sql", pathPatterns: ["sql_dotted_identifier_collision"], exact: true);
+        Assert.Equal("\"sales.fn_Target\"", Assert.Single(quotedAnalysis.Definitions).Name);
+
+        var qualifiedImpact = _reader.AnalyzeImpact("sales.fn_Target", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_dotted_identifier_collision"]);
+        Assert.Equal(1, qualifiedImpact.DefinitionCount);
+        Assert.Equal("sales.fn_Target", Assert.Single(qualifiedImpact.Definitions).Name);
+
+        var quotedImpact = _reader.AnalyzeImpact("\"sales.fn_Target\"", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_dotted_identifier_collision"]);
+        Assert.Equal(1, quotedImpact.DefinitionCount);
+        Assert.Equal("\"sales.fn_Target\"", Assert.Single(quotedImpact.Definitions).Name);
+    }
+
+    [Fact]
     public void GetFileDependencies_DoesNotJoinSameNameTargetsAcrossLanguages()
     {
         InsertIndexedFile("src/Foo.cs", "csharp",

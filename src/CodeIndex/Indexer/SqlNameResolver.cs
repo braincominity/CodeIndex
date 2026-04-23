@@ -4,10 +4,24 @@ namespace CodeIndex.Indexer;
 
 internal static class SqlNameResolver
 {
+    private readonly record struct SqlNameParts(string NormalizedName, string LeafName, int SegmentCount);
+
     public static string NormalizeQualifiedName(string? qualifiedName)
+        => ParseParts(qualifiedName).NormalizedName;
+
+    public static string GetLeafName(string? qualifiedName)
+        => ParseParts(qualifiedName).LeafName;
+
+    public static int GetSegmentCount(string? qualifiedName)
+        => ParseParts(qualifiedName).SegmentCount;
+
+    public static bool HasQualifier(string? qualifiedName)
+        => ParseParts(qualifiedName).SegmentCount > 1;
+
+    private static SqlNameParts ParseParts(string? qualifiedName)
     {
         if (string.IsNullOrWhiteSpace(qualifiedName))
-            return string.Empty;
+            return new SqlNameParts(string.Empty, string.Empty, 0);
 
         var trimmed = qualifiedName.Trim();
         var segments = new List<string>();
@@ -77,21 +91,13 @@ internal static class SqlNameResolver
         }
 
         AppendNormalizedSegment(segments, current);
-        return string.Join(".", segments);
+        var segmentCount = segments.Count;
+        if (segmentCount == 0)
+            return new SqlNameParts(string.Empty, string.Empty, 0);
+
+        var normalized = string.Join(".", segments);
+        return new SqlNameParts(normalized, segments[^1], segmentCount);
     }
-
-    public static string GetLeafName(string? qualifiedName)
-    {
-        var normalized = NormalizeQualifiedName(qualifiedName);
-        if (string.IsNullOrEmpty(normalized))
-            return string.Empty;
-
-        var lastDot = normalized.LastIndexOf('.');
-        return lastDot >= 0 ? normalized[(lastDot + 1)..] : normalized;
-    }
-
-    public static bool HasQualifier(string? qualifiedName)
-        => NormalizeQualifiedName(qualifiedName).Contains('.', StringComparison.Ordinal);
 
     private static void AppendNormalizedSegment(List<string> segments, StringBuilder current)
     {
