@@ -278,6 +278,9 @@ public static class ReferenceExtractor
     private static readonly Regex SqlCreateTempTableRegex = new(
         $@"(?<![\w$])CREATE(?:\s+(?:TEMP|TEMPORARY))?\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+(?<name>{SqlTempIdentifierPattern})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlTrailingOnlyQualifiedIdentifierRegex = new(
+        $@"(?:(?:ONLY)\b\s+)?{SqlQualifiedIdentifierNoCapturePattern}\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SqlMergeTargetHintContinuationPrefixRegex = new(
         $@"(?<![\w$])MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?\s+{SqlQualifiedIdentifierNoCapturePattern}\s+WITH\s*\((?:[^()]|\([^()]*\))*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -1731,9 +1734,15 @@ public static class ReferenceExtractor
             if (IsInsideSqlDoubleQuotedRegion(statement, match.Index))
                 continue;
             var nameGroup = match.Groups["name"];
-            NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out _, out _);
-            if (resolvedName.StartsWith("#", StringComparison.Ordinal))
-                names.Add(resolvedName);
+            if (nameGroup.Captures.Count == 0)
+                continue;
+
+            foreach (Capture capture in nameGroup.Captures)
+            {
+                NormalizeSqlIdentifier(capture.Value, capture.Index, out var resolvedName, out _, out _);
+                if (resolvedName.StartsWith("#", StringComparison.Ordinal))
+                    names.Add(resolvedName);
+            }
         }
     }
 
@@ -8260,6 +8269,17 @@ public static class ReferenceExtractor
         int probe = hashIndex - 1;
         while (probe >= 0 && char.IsWhiteSpace(line[probe]))
             probe--;
+        while (probe >= 0 && line[probe] == ',')
+        {
+            var priorListItem = line[..probe];
+            var listMatch = SqlTrailingOnlyQualifiedIdentifierRegex.Match(priorListItem);
+            if (!listMatch.Success)
+                return true;
+
+            probe = listMatch.Index - 1;
+            while (probe >= 0 && char.IsWhiteSpace(line[probe]))
+                probe--;
+        }
         if (probe < 0)
             return true;
         if (line[probe] == '.')

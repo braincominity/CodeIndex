@@ -5450,6 +5450,28 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_DeleteUsingTempSourcesAfterComma_AreNotTreatedAsComments()
+    {
+        // issue #789: `#temp` after a comma in `DELETE ... USING #a, #b` must stay on the temp-table
+        // path, not fall into MySQL `# comment` stripping and disappear from the graph.
+        // issue #789: `DELETE ... USING #a, #b` の comma 後にある `#temp` は、MySQL の `# comment`
+        // 扱いへ落ちず temp-table 経路に残り、graph から消えてはいけない。
+        const string content = """
+            CREATE TABLE #staging_a (id int);
+            CREATE TABLE #staging_b (id int);
+            DELETE FROM audit_log USING #staging_a, #staging_b
+            WHERE audit_log.id = #staging_a.id;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(1, references.Count(r => r.SymbolName == "#staging_a" && r.ReferenceKind == "reference"));
+        Assert.Equal(1, references.Count(r => r.SymbolName == "#staging_b" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_SQL_MergeUsingDoesNotTreatOtherUsingClausesAsSources()
     {
         // issue #695: `USING` should stay on the SQL source path only for `MERGE ... USING <source>`,
@@ -5877,6 +5899,26 @@ public class ReferenceExtractorTests
         Assert.Equal(2, references.Count(r => r.SymbolName == "#truncate_temp" && r.ReferenceKind == "reference"));
         Assert.Equal(1, references.Count(r => r.SymbolName == "#future_temp" && r.ReferenceKind == "reference"));
         Assert.DoesNotContain(references, r => r.SymbolName == "#future_temp" && r.ReferenceKind == "reference" && r.Line == 3);
+    }
+
+    [Fact]
+    public void Extract_SQL_TruncateMultipleTempTargetsEstablishLaterReads()
+    {
+        // issues #768 / #789: comma-separated `TRUNCATE TABLE #a, #b` should establish every temp
+        // target so later reads of both names remain visible.
+        // issues #768 / #789: `TRUNCATE TABLE #a, #b` の comma-separated target は全て temp object
+        // として確立され、後続 read の両方が可視のまま残るべき。
+        const string content = """
+            TRUNCATE TABLE #truncate_a, #truncate_b;
+            SELECT * FROM #truncate_a;
+            SELECT * FROM #truncate_b;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#truncate_a" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#truncate_b" && r.ReferenceKind == "reference"));
     }
 
     [Fact]

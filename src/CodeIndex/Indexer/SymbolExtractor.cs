@@ -1798,6 +1798,17 @@ public static class SymbolExtractor
                             statementEnd = Math.Min(absoluteStartColumn + Math.Max(1, match.Length), line.Length);
                         signature = line[absoluteStartColumn..statementEnd].Trim();
                     }
+                    else if (lang == "java"
+                        && pattern.BodyStyle == BodyStyle.Brace
+                        && bodyStartLine == null)
+                    {
+                        var statementEnd = FindJavaSameLineStatementEnd(line, absoluteStartColumn);
+                        if (statementEnd > line.Length)
+                            statementEnd = line.Length;
+                        if (statementEnd <= absoluteStartColumn)
+                            statementEnd = Math.Min(absoluteStartColumn + Math.Max(1, match.Length), line.Length);
+                        signature = line[absoluteStartColumn..statementEnd].Trim();
+                    }
                     else if (lang == "csharp"
                         && pattern.Kind == "property"
                         && pattern.BodyStyle == BodyStyle.None)
@@ -1943,6 +1954,23 @@ public static class SymbolExtractor
                             || TryGetCSharpSameLineSemicolonSiblingOffset(patternMatchLine, absoluteStartColumn, out nextSemicolonSiblingOffset)))
                     {
                         restartPatternScanOffset = nextSemicolonSiblingOffset;
+                        break;
+                    }
+
+                    if (lang == "java"
+                        && pattern.BodyStyle == BodyStyle.Brace
+                        && bodyStartLine == null
+                        && TryGetJavaSameLineSemicolonSiblingOffset(patternMatchLine, absoluteStartColumn, out var nextJavaSiblingOffset))
+                    {
+                        // Body-less Java members inside `interface` / `@interface` / abstract-style
+                        // declarations can share one physical line (`String[] value(); int age();`).
+                        // Restart at the next sibling after the top-level `;` instead of stopping at
+                        // the first match, or later members on the same line disappear. Closes #788.
+                        // Java の body-less member（`interface` / `@interface` / abstract 形）は
+                        // `String[] value(); int age();` のように 1 行へ並ぶ。top-level `;`
+                        // の直後から sibling へ再開しないと、同一行の後続 member が最初の 1 個で
+                        // 途切れて消える。Closes #788.
+                        restartPatternScanOffset = nextJavaSiblingOffset;
                         break;
                     }
 
@@ -10335,6 +10363,73 @@ public static class SymbolExtractor
         return -1;
     }
 
+    // Body-less Java members (`void a();`, `String[] value();`, `int[] v() default {1};`) need a
+    // same-line statement-end scanner so later siblings on the same physical line stay reachable.
+    // Track comments / strings / text blocks with the Java lexer and balance `()`, `[]`, and
+    // annotation/default-value braces. If the enclosing `}` arrives before a top-level `;`, return
+    // that `}` position so callers can stop without absorbing the wrapper close.
+    // Java の body-less member（`void a();` / `String[] value();` / `int[] v() default {1};`）向けの
+    // same-line statement-end scanner。Java lexer で comment / 文字列 / text block を避けつつ、
+    // `()` / `[]` / annotation / default 値の `{}` を釣り合わせる。top-level `;` より先に
+    // 囲み `}` が来た場合はその位置を返し、呼び出し側が wrapper close を飲み込まず止まれるようにする。
+    private static int FindJavaSameLineStatementEnd(string line, int startColumn)
+    {
+        var mode = JavaScanMode.Normal;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var column = Math.Max(0, startColumn);
+        while (column < line.Length)
+        {
+            if (TryConsumeJavaNonCode(line, ref column, ref mode))
+                continue;
+
+            var ch = line[column];
+            if (ch == '(')
+            {
+                parenDepth++;
+            }
+            else if (ch == ')' && parenDepth > 0)
+            {
+                parenDepth--;
+            }
+            else if (ch == '[')
+            {
+                bracketDepth++;
+            }
+            else if (ch == ']' && bracketDepth > 0)
+            {
+                bracketDepth--;
+            }
+            else if (ch == '{')
+            {
+                braceDepth++;
+            }
+            else if (ch == '}')
+            {
+                if (braceDepth > 0)
+                {
+                    braceDepth--;
+                }
+                else
+                {
+                    return column;
+                }
+            }
+            else if (ch == ';'
+                && parenDepth == 0
+                && bracketDepth == 0
+                && braceDepth == 0)
+            {
+                return column + 1;
+            }
+
+            column++;
+        }
+
+        return line.Length;
+    }
+
     // Walk upward from the identifier line looking for a contiguous run of modifier-only
     // physical lines, skipping blank lines and attribute-stripped whitespace. Returns the
     // concatenated modifier prefix (in declaration order) so callers can prepend it to the
@@ -10817,6 +10912,39 @@ public static class SymbolExtractor
             return false;
 
         var nextOffset = FindNextSameLineNonClosingBraceStatementStart(matchLine, statementEnd, "csharp");
+        if (nextOffset <= statementEnd
+            || nextOffset >= matchLine.Length)
+        {
+            return false;
+        }
+
+        nextSameLineOffset = nextOffset;
+        return true;
+    }
+
+    private static bool TryGetJavaSameLineSemicolonSiblingOffset(string matchLine, int startColumn, out int nextSameLineOffset)
+    {
+        nextSameLineOffset = -1;
+        if (startColumn < 0 || startColumn >= matchLine.Length)
+            return false;
+
+        var statementEnd = FindJavaSameLineStatementEnd(matchLine, startColumn);
+        var semicolonIndex = statementEnd - 1;
+        if (semicolonIndex < startColumn
+            || semicolonIndex >= matchLine.Length
+            || matchLine[semicolonIndex] != ';')
+        {
+            return false;
+        }
+
+        var nextOffset = FindNextSameLineBraceStatementStart(matchLine, statementEnd, "java");
+        while (nextOffset >= 0
+            && nextOffset < matchLine.Length
+            && matchLine[nextOffset] == '}')
+        {
+            nextOffset = FindNextSameLineBraceStatementStart(matchLine, nextOffset + 1, "java");
+        }
+
         if (nextOffset <= statementEnd
             || nextOffset >= matchLine.Length)
         {

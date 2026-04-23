@@ -12902,6 +12902,28 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_SameLineAnnotationInterfaceMembers_KeepLaterMembers()
+    {
+        const string content = """
+            @interface Tags { String[] value(); int age(); } class C {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var valueMember = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "value"));
+        var ageMember = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "age"));
+        Assert.Equal("Tags", valueMember.ContainerName);
+        Assert.Equal("Tags", ageMember.ContainerName);
+        Assert.Equal(1, valueMember.EndLine);
+        Assert.Equal(1, ageMember.EndLine);
+        Assert.Null(valueMember.BodyStartLine);
+        Assert.Null(ageMember.BodyStartLine);
+        Assert.Equal("String[] value();", valueMember.Signature);
+        Assert.Equal("int age();", ageMember.Signature);
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "C" && s.StartLine == 1 && s.EndLine == 1);
+    }
+
+    [Fact]
     public void Extract_Java_RecordHeaderAnnotationArray_KeepsCompactConstructor()
     {
         const string content = """
