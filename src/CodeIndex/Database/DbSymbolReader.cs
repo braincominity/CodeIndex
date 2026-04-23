@@ -1080,7 +1080,7 @@ public partial class DbReader
                 LEFT JOIN file_reference_counts frc
                   ON frc.lang = ctf.lang
                  AND frc.file_id = ctf.file_id
-                 AND frc.symbol_name = ctf.name
+                 AND frc.symbol_name = CASE WHEN ctf.lang = 'sql' THEN sql_leaf_name(ctf.name) ELSE ctf.name END
                 GROUP BY ctf.logical_target_key, ctf.name, ctf.kind
             ),
             reference_counts AS (
@@ -1097,7 +1097,7 @@ public partial class DbReader
                  AND nc.name = gr.name
                 LEFT JOIN global_reference_counts grc
                   ON grc.lang = gr.lang
-                 AND grc.symbol_name = gr.name
+                 AND grc.symbol_name = CASE WHEN gr.lang = 'sql' THEN sql_leaf_name(gr.name) ELSE gr.name END
                 LEFT JOIN conservative_reference_counts crc
                   ON crc.logical_target_key = gr.logical_target_key
                  AND crc.name = gr.name
@@ -1294,7 +1294,7 @@ public partial class DbReader
                 LEFT JOIN file_reference_counts frc
                   ON frc.lang = ctf.lang
                  AND frc.file_id = ctf.file_id
-                 AND frc.symbol_name = ctf.name
+                 AND frc.symbol_name = CASE WHEN ctf.lang = 'sql' THEN sql_leaf_name(ctf.name) ELSE ctf.name END
                 GROUP BY ctf.logical_target_key, ctf.name, ctf.kind
             ),
             site_reference_counts AS (
@@ -1311,7 +1311,7 @@ public partial class DbReader
                  AND nc.name = fc.name
                 LEFT JOIN global_reference_counts grc
                   ON grc.lang = fc.lang
-                 AND grc.symbol_name = fc.name
+                 AND grc.symbol_name = CASE WHEN fc.lang = 'sql' THEN sql_leaf_name(fc.name) ELSE fc.name END
                 LEFT JOIN conservative_reference_counts crc
                   ON crc.logical_target_key = fc.logical_target_key
                  AND crc.name = fc.name
@@ -1538,7 +1538,11 @@ public partial class DbReader
                 JOIN files f ON s.file_id = f.id
                 WHERE s.kind NOT IN ('import', 'namespace')
                   AND NOT EXISTS (
-                      SELECT 1 FROM symbol_references sr WHERE sr.symbol_name = s.name
+                      SELECT 1
+                      FROM symbol_references sr
+                      JOIN files rf ON rf.id = sr.file_id
+                      WHERE sr.symbol_name = s.name
+                         OR (f.lang = 'sql' AND rf.lang = 'sql' AND sr.symbol_name = sql_leaf_name(s.name) COLLATE NOCASE)
                   )";
 
         if (lang != null)
@@ -1662,7 +1666,11 @@ public partial class DbReader
             JOIN files f ON s.file_id = f.id
             WHERE s.kind NOT IN ('import', 'namespace')
               AND NOT EXISTS (
-                  SELECT 1 FROM symbol_references sr WHERE sr.symbol_name = s.name
+                  SELECT 1
+                  FROM symbol_references sr
+                  JOIN files rf ON rf.id = sr.file_id
+                  WHERE sr.symbol_name = s.name
+                     OR (f.lang = 'sql' AND rf.lang = 'sql' AND sr.symbol_name = sql_leaf_name(s.name) COLLATE NOCASE)
               )";
 
         if (lang != null)

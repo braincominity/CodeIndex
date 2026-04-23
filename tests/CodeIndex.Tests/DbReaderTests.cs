@@ -2763,6 +2763,64 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_AlignGraphReadersHotspotsAndUnused()
+    {
+        InsertIndexedFile("src/sql_name_mismatch_fixture.sql", "sql",
+            """
+            CREATE FUNCTION dbo.fn_GetOrderItems(@orderId INT)
+            RETURNS TABLE
+            AS
+            RETURN (SELECT * FROM dbo.OrderItems WHERE OrderId = @orderId);
+            GO
+
+            CREATE PROCEDURE dbo.usp_GetOrders
+            AS
+            BEGIN
+                SELECT *
+                FROM dbo.Orders o
+                CROSS APPLY dbo.fn_GetOrderItems(o.OrderId) fi;
+            END
+            GO
+            """);
+
+        var bareRefs = _reader.SearchReferences("fn_GetOrderItems", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]);
+        var qualifiedRefs = _reader.SearchReferences("dbo.fn_GetOrderItems", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]);
+        Assert.Equal(12, Assert.Single(bareRefs).Line);
+        Assert.Equal(12, Assert.Single(qualifiedRefs).Line);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.fn_GetOrderItems", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]));
+
+        var bareCaller = Assert.Single(_reader.GetCallers("fn_GetOrderItems", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]));
+        var qualifiedCaller = Assert.Single(_reader.GetCallers("dbo.fn_GetOrderItems", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]));
+        Assert.Equal("dbo.usp_GetOrders", bareCaller.CallerName);
+        Assert.Equal("dbo.usp_GetOrders", qualifiedCaller.CallerName);
+        Assert.Equal(1, _reader.CountCallers("dbo.fn_GetOrderItems", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]));
+
+        var bareCallee = Assert.Single(_reader.GetCallees("usp_GetOrders", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]));
+        var qualifiedCallee = Assert.Single(_reader.GetCallees("dbo.usp_GetOrders", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]));
+        Assert.Equal("fn_GetOrderItems", bareCallee.CalleeName);
+        Assert.Equal("fn_GetOrderItems", qualifiedCallee.CalleeName);
+        Assert.Equal(1, _reader.CountCallees("usp_GetOrders", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]));
+
+        var (bareImpact, bareTruncated) = _reader.GetTransitiveCallers("fn_GetOrderItems", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_name_mismatch_fixture"]);
+        var (qualifiedImpact, qualifiedTruncated) = _reader.GetTransitiveCallers("dbo.fn_GetOrderItems", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_name_mismatch_fixture"]);
+        Assert.False(bareTruncated);
+        Assert.False(qualifiedTruncated);
+        Assert.Equal("dbo.usp_GetOrders", Assert.Single(bareImpact).CallerName);
+        Assert.Equal("dbo.usp_GetOrders", Assert.Single(qualifiedImpact).CallerName);
+
+        var hotspot = Assert.Single(
+            _reader.GetSymbolHotspots(10, "function", "sql", ["sql_name_mismatch_fixture"], null, false),
+            item => item.Symbol.Name == "dbo.fn_GetOrderItems");
+        Assert.Equal(1, hotspot.ReferenceCount);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "function", lang: "sql",
+            pathPatterns: ["sql_name_mismatch_fixture"], excludePathPatterns: null, excludeTests: false);
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "dbo.fn_GetOrderItems");
+        Assert.Equal((1, 1), _reader.CountUnusedSymbols(kind: "function", lang: "sql",
+            pathPatterns: ["sql_name_mismatch_fixture"], excludePathPatterns: null, excludeTests: false));
+    }
+
+    [Fact]
     public void GetFileDependencies_DoesNotJoinSameNameTargetsAcrossLanguages()
     {
         InsertIndexedFile("src/Foo.cs", "csharp",

@@ -518,9 +518,29 @@ public static class ReferenceExtractor
         // `[...]` の引数中に現れる enum / 修飾定数（`ConverterStrategy.AllowNumbers` など）が
         // no-arg attribute として誤分類されないよう、no-arg 属性用ゲートに使う。
         var csharpAttrTopLevelRanges = csharpAttrTables.Item2;
+        var definitionNamesComparer = language == "sql"
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
         var definitionNamesByLine = symbols
             .GroupBy(symbol => symbol.Line)
-            .ToDictionary(group => group.Key, group => group.Select(symbol => symbol.Name).ToHashSet(StringComparer.Ordinal));
+            .ToDictionary(
+                group => group.Key,
+                group =>
+                {
+                    var names = new HashSet<string>(definitionNamesComparer);
+                    foreach (var symbol in group)
+                    {
+                        names.Add(symbol.Name);
+                        if (language == "sql")
+                        {
+                            var leafName = SqlNameResolver.GetLeafName(symbol.Name);
+                            if (!string.IsNullOrWhiteSpace(leafName))
+                                names.Add(leafName);
+                        }
+                    }
+
+                    return names;
+                });
         // Include 'property' so expression-bodied and block-bodied property accessors
         // attribute their calls to the property rather than falling through to the
         // enclosing class (see issue #233).

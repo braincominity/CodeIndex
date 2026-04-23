@@ -8942,6 +8942,44 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SqlQualifiedDefinition_DoesNotEmitPhantomSelfReference()
+    {
+        // Schema-qualified SQL symbols keep their qualified definition name (`dbo.fn_X`), while
+        // CallRegex only captures the leaf call token (`fn_X`). The definition-line suppression
+        // must therefore compare both the full and leaf forms so the header is not misindexed as
+        // a self-call. Issue #296.
+        // SQL の定義名は `dbo.fn_X` のように修飾付きだが、CallRegex は leaf の `fn_X` だけを拾う。
+        // そのため定義行の自己呼び出し抑止は full/leaf の両方を比較し、ヘッダを幽霊 call にしない必要がある。
+        const string content = """
+            CREATE FUNCTION dbo.fn_GetOrderItems(@orderId INT)
+            RETURNS TABLE
+            AS
+            RETURN (SELECT * FROM dbo.OrderItems WHERE OrderId = @orderId);
+            GO
+
+            CREATE PROCEDURE dbo.usp_GetOrders
+            AS
+            BEGIN
+                SELECT *
+                FROM dbo.Orders o
+                CROSS APPLY dbo.fn_GetOrderItems(o.OrderId) fi;
+            END
+            GO
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRefs = references
+            .Where(r => r.SymbolName == "fn_GetOrderItems" && r.ReferenceKind == "call")
+            .ToList();
+
+        var realCall = Assert.Single(targetRefs);
+        Assert.Equal(12, realCall.Line);
+        Assert.Equal("dbo.usp_GetOrders", realCall.ContainerName);
+    }
+
+    [Fact]
     public void Extract_SqlExecDynamicSql_DoesNotEmitPhantomKeywordReference()
     {
         // T-SQL dynamic-SQL execution `EXEC(@sql)` / `EXEC('...')` / `EXECUTE(@sql)` pass a string or

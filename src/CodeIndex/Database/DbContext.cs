@@ -1,3 +1,4 @@
+using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Database;
@@ -112,6 +113,7 @@ public class DbContext : IDisposable
             {
                 _connection = new SqliteConnection($"Data Source={dbPath}");
                 _connection.Open();
+                RegisterConnectionFunctions(_connection);
                 _isReadOnly = true;
                 Execute("PRAGMA busy_timeout=5000");
                 return;
@@ -133,6 +135,7 @@ public class DbContext : IDisposable
         {
             _connection = new SqliteConnection(builder.ConnectionString);
             _connection.Open();
+            RegisterConnectionFunctions(_connection);
 
             // Enable WAL mode and verify it was applied / WALモードを有効にし適用を確認
             var journalMode = ExecuteScalar("PRAGMA journal_mode=WAL");
@@ -151,6 +154,7 @@ public class DbContext : IDisposable
             // immutable=1 を付けないと SQLite は -shm/-wal を触ろうとして CANTOPEN で落ちることがある。
             _connection?.Dispose();
             _connection = OpenReadOnly(dbPath);
+            RegisterConnectionFunctions(_connection);
             _isReadOnly = true;
         }
 
@@ -262,6 +266,13 @@ public class DbContext : IDisposable
             conn.Open();
             return conn;
         }
+    }
+
+    private static void RegisterConnectionFunctions(SqliteConnection connection)
+    {
+        connection.CreateFunction(
+            "sql_leaf_name",
+            (string? name) => string.IsNullOrWhiteSpace(name) ? null : SqlNameResolver.GetLeafName(name));
     }
 
     /// <summary>
