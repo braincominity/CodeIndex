@@ -361,7 +361,7 @@ public static class QueryCommandRunner
                     if (exact)
                         WriteGraphJsonResult(r, exactSignal, jsonOptions, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                     else
-                        Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
+                        WriteJsonResult(r, jsonOptions, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                 }
             }
             else
@@ -468,7 +468,7 @@ public static class QueryCommandRunner
                     if (exact)
                         WriteGraphJsonResult(r, exactSignal, jsonOptions, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                     else
-                        Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
+                        WriteJsonResult(r, jsonOptions, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                 }
             }
             else
@@ -571,7 +571,7 @@ public static class QueryCommandRunner
                     if (exact)
                         WriteGraphJsonResult(r, exactSignal, jsonOptions, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                     else
-                        Console.WriteLine(JsonSerializer.Serialize(r, jsonOptions));
+                        WriteJsonResult(r, jsonOptions, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                 }
             }
             else
@@ -3407,6 +3407,13 @@ public static class QueryCommandRunner
         var payload = JsonSerializer.SerializeToNode(result, jsonOptions)!.AsObject();
         AddExactGraphJsonFields(payload, exactSignal);
         AddGraphSupportOverrideFields(payload, graphSupportOverride);
+        extraFields?.Invoke(payload);
+        Console.WriteLine(payload.ToJsonString(jsonOptions));
+    }
+
+    private static void WriteJsonResult<T>(T result, JsonSerializerOptions jsonOptions, Action<JsonObject>? extraFields = null)
+    {
+        var payload = JsonSerializer.SerializeToNode(result, jsonOptions)!.AsObject();
         extraFields?.Invoke(payload);
         Console.WriteLine(payload.ToJsonString(jsonOptions));
     }
