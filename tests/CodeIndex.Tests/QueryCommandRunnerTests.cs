@@ -14435,6 +14435,84 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpUsingStaticConstantPatternsDoNotLeakAcrossFiles()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_using_static_constant_pattern_cross_file");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Defs.cs", "csharp",
+                """
+                namespace Probe;
+
+                public enum Color
+                {
+                    Red,
+                    Blue
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Use.cs", "csharp",
+                """
+                using static Probe.Color;
+
+                namespace Probe;
+
+                class Point {}
+
+                class Demo
+                {
+                    bool Match(object value) => value is Red or Blue or Point;
+
+                    void Run(object value)
+                    {
+                        switch (value)
+                        {
+                            case Red:
+                                break;
+                            case Red or Blue:
+                                break;
+                            case Red or Point:
+                                break;
+                        }
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (redExitCode, redStdout, redStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            using var redDocument = ParseJsonOutput(redStdout);
+
+            var (blueExitCode, blueStdout, blueStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Blue", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            using var blueDocument = ParseJsonOutput(blueStdout);
+
+            var (redCountExitCode, redCountStdout, redCountStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--count"],
+                _jsonOptions));
+            using var redCountDocument = ParseJsonOutput(redCountStdout);
+
+            Assert.Equal(CommandExitCodes.NotFound, redExitCode);
+            Assert.Equal(string.Empty, redStderr);
+            Assert.Equal(0, redDocument.RootElement.GetProperty("count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.NotFound, blueExitCode);
+            Assert.Equal(string.Empty, blueStderr);
+            Assert.Equal(0, blueDocument.RootElement.GetProperty("count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.Success, redCountExitCode);
+            Assert.Equal(string.Empty, redCountStderr);
+            Assert.Equal(0, redCountDocument.RootElement.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpGlobalQualifiedUsingAliasNameDoesNotCreateReference()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_global_alias_name_invalid");

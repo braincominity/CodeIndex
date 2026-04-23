@@ -7182,6 +7182,54 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpUsingStaticLogicalConstantPatterns_DoNotEmitTypeReferences()
+    {
+        // issue #682: `using static Probe.Color;` imports enum members as unqualified
+        // constant patterns, so `Red` / `Blue` must not leak as type tests while a
+        // genuine type head in the same logical pattern still survives.
+        // issue #682: `using static Probe.Color;` で enum member が unqualified な
+        // constant pattern になるため、`Red` / `Blue` は型テストとして漏れてはならず、
+        // 同じ logical pattern に混ざる本物の型 head は残さなければならない。
+        const string content = """
+            using static Probe.Color;
+
+            namespace Probe;
+
+            enum Color { Red, Blue }
+            class Point {}
+
+            class Demo
+            {
+                bool Match(object value) => value is Red or Blue or Point;
+
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case Red:
+                            break;
+                        case Red or Blue:
+                            break;
+                        case Red or Point:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference");
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(2, pointRefs.Count);
+        Assert.Contains(pointRefs, r => r.ContainerName == "Match");
+        Assert.Contains(pointRefs, r => r.ContainerName == "Run");
+    }
+
+    [Fact]
     public void Extract_CsharpCaseRecursiveAndPositionalPatterns_CaptureTypeReferences()
     {
         // issue #661: recursive/property and positional `case Type ...` patterns without
