@@ -5783,6 +5783,65 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_LineEndCommentsKeepUnfinishedSourceTargetAndHintContinuations()
+    {
+        // issue #752: line-end comments must not drop unfinished SQL prefixes before the decisive
+        // temp/source/hint token appears on a later line.
+        // issue #752: 行末コメントがあっても、決定的な temp/source/hint token が後続行に現れる前に
+        // 未完了の SQL prefix を捨ててはいけない。
+        const string content = """
+            SELECT id INTO -- trailing comment
+                #comment_temp
+            FROM users;
+            SELECT * FROM #comment_temp;
+
+            DELETE FROM audit_log USING staging_log, -- trailing comment
+                archived_log
+            WHERE audit_log.id = staging_log.id;
+
+            MERGE INTO audit_log WITH (INDEX(ix_audit_log), -- trailing comment
+                HOLDLOCK) AS t
+            USING staging_merge AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#comment_temp" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "archived_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "staging_merge" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_TempTablesRespectSemicolonlessSetAndDeclareBoundaries()
+    {
+        // issue #753: temp establishment must flush across semicolon-less top-level `SET` /
+        // `DECLARE` boundaries, while forward reads before a later establish still stay excluded.
+        // issue #753: temp 確立は semicolon-less な top-level `SET` / `DECLARE` 境界でも flush
+        // されるべきで、後続の establish より前にある forward read は引き続き除外されるべき。
+        const string content = """
+            SELECT * FROM #future_temp;
+            SELECT id INTO #set_temp FROM users
+            SET @count = (SELECT COUNT(*) FROM #set_temp);
+            SELECT id INTO #declare_temp FROM users
+            DECLARE @first_id INT = (SELECT TOP (1) id FROM #declare_temp);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Empty(references.Where(r => r.SymbolName == "#future_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#set_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#declare_temp" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 4);
+    }
+
+    [Fact]
     public void Extract_SQL_TempTablesRequirePriorEstablishmentAndSupportMultilineDefinitions()
     {
         // issue #664: temp reads should only succeed after an earlier statement established the temp

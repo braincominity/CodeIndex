@@ -210,7 +210,7 @@ public static class ReferenceExtractor
     private const string SqlTopTargetModifierPattern =
         @"TOP\s*\([^)\r\n]*\)(?:\s+PERCENT)?(?:\s+WITH\s+TIES)?";
     private const string SqlMergeTargetHintPattern =
-        @"WITH\s*\((?:[^()\r\n]+|\([^()\r\n]*\))*\)";
+        @"WITH\s*\((?:[^()]|\([^()]*\))*\)";
     private static readonly Regex SqlProcCallRegex = new(
         $@"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?(?:(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern})?\.)*(?<name>{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -237,6 +237,9 @@ public static class ReferenceExtractor
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SqlDeleteUsingPrefixRegex = new(
         $@"(?<![\w$])DELETE\b(?:\s+{SqlTopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?\s+{SqlQualifiedIdentifierNoCapturePattern}(?:\s+(?:AS\s+)?(?!USING\b|WHERE\b|RETURNING\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlDeleteUsingListContinuationPrefixRegex = new(
+        @"(?<![\w$])DELETE\b[\s\S]*\bUSING\b[\s\S]*,\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // SQL mutation targets such as `INSERT INTO tbl (...)` / `UPDATE tbl`.
     // `INSERT INTO tbl (` is a table reference, not a function call; we later suppress the generic
@@ -266,8 +269,14 @@ public static class ReferenceExtractor
     private static readonly Regex SqlSelectIntoTempTargetStatementRegex = new(
         $@"(?<![\w$])SELECT\b.*?\bINTO\s+(?<name>{SqlTempIdentifierPattern})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
+    private static readonly Regex SqlSelectIntoTempPrefixRegex = new(
+        @"(?<![\w$])SELECT\b.*?\bINTO\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SqlCreateTempTableRegex = new(
         $@"(?<![\w$])CREATE(?:\s+(?:TEMP|TEMPORARY))?\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+(?<name>{SqlTempIdentifierPattern})",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlMergeTargetHintContinuationPrefixRegex = new(
+        $@"(?<![\w$])MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?\s+{SqlQualifiedIdentifierNoCapturePattern}\s+WITH\s*\((?:[^()]|\([^()]*\))*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private readonly record struct SqlIdentifierScanState(
         bool InBlockComment,
@@ -845,6 +854,7 @@ public static class ReferenceExtractor
                 var sqlLineFragment = PrepareSqlLineForIdentifierScan(
                     structuralLines[i],
                     sqlIdentifierScanState,
+                    sqlStatementPrefix,
                     out var sqlLineEndedByLineComment,
                     out sqlIdentifierScanState);
                 if (!string.IsNullOrWhiteSpace(sqlLineFragment))
@@ -1512,8 +1522,11 @@ public static class ReferenceExtractor
             return false;
 
         return CanSqlStatementEstablishTempObject(statement)
+            || SqlSelectIntoTempPrefixRegex.IsMatch(statement)
             || SqlDeleteUsingPrefixRegex.IsMatch(statement)
-            || SqlMergeUsingPrefixRegex.IsMatch(statement);
+            || SqlDeleteUsingListContinuationPrefixRegex.IsMatch(statement)
+            || SqlMergeUsingPrefixRegex.IsMatch(statement)
+            || SqlMergeTargetHintContinuationPrefixRegex.IsMatch(statement);
     }
 
     private static bool StartsSqlTopLevelStatement(string line)
@@ -1548,6 +1561,10 @@ public static class ReferenceExtractor
             "ALTER" => true,
             "DROP" => true,
             "TRUNCATE" => true,
+            "SET" => true,
+            "DECLARE" => true,
+            "DO" => true,
+            "BEGIN" => true,
             "EXEC" => true,
             "EXECUTE" => true,
             "CALL" => true,
@@ -8038,6 +8055,7 @@ public static class ReferenceExtractor
     private static string PrepareSqlLineForIdentifierScan(
         string line,
         SqlIdentifierScanState state,
+        string? statementPrefix,
         out bool lineEndedByLineComment,
         out SqlIdentifierScanState nextState)
     {
@@ -8174,7 +8192,7 @@ public static class ReferenceExtractor
             }
             if (c == '#')
             {
-                if (ShouldTreatHashAsSqlComment(line, i))
+                if (ShouldTreatHashAsSqlComment(line, i, statementPrefix))
                 {
                     lineEndedByLineComment = true;
                     BlankRange(i, line.Length);
@@ -8196,7 +8214,24 @@ public static class ReferenceExtractor
         return new string(sanitized);
     }
 
-    private static bool ShouldTreatHashAsSqlComment(string line, int hashIndex)
+    private static bool ShouldTreatHashAsSqlComment(string line, int hashIndex, string? statementPrefix)
+    {
+        if (hashIndex < 0 || hashIndex >= line.Length || line[hashIndex] != '#')
+            return false;
+
+        int probe = hashIndex - 1;
+        while (probe >= 0 && char.IsWhiteSpace(line[probe]))
+            probe--;
+        if (probe < 0 && !string.IsNullOrWhiteSpace(statementPrefix))
+        {
+            var combined = statementPrefix + "\n" + line;
+            return ShouldTreatHashAsSqlCommentCore(combined, statementPrefix.Length + 1 + hashIndex);
+        }
+
+        return ShouldTreatHashAsSqlCommentCore(line, hashIndex);
+    }
+
+    private static bool ShouldTreatHashAsSqlCommentCore(string line, int hashIndex)
     {
         if (hashIndex < 0 || hashIndex >= line.Length || line[hashIndex] != '#')
             return false;
