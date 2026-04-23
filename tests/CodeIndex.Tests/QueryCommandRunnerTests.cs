@@ -14676,6 +14676,53 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpUsingNamespaceImportPatternStaysVisible()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_using_namespace_import_pattern_visible");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "Repro.cs"),
+                """
+                using static Probe.Color;
+                using RealTypes;
+
+                namespace Probe
+                {
+                    enum Color { Red }
+
+                    class Demo
+                    {
+                        bool Match(object value) => value is Red;
+                    }
+                }
+
+                namespace RealTypes
+                {
+                    class Red {}
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
+            var row = Assert.Single(ParseJsonLines(stdout)).RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("type_reference", row.GetProperty("reference_kind").GetString());
+            Assert.Contains("value is Red", row.GetProperty("context").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpCrossFileFileTypeDoesNotRescueUnqualifiedTypePattern()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_cross_file_file_type_does_not_rescue_unqualified_type_pattern");

@@ -255,6 +255,9 @@ public static class ReferenceExtractor
     private static readonly Regex CSharpUsingStaticRegex = new(
         @"^\s*(?:global\s+)?using\s+static\s+(?<target>[^;]+)",
         RegexOptions.Compiled);
+    private static readonly Regex CSharpUsingNamespaceRegex = new(
+        @"^\s*(?:global\s+)?using\s+(?!static\b)(?<target>[^;=]+)",
+        RegexOptions.Compiled);
     private static readonly Regex CSharpLocalValueNameRegex = new(
         @"(?:^\s*|[;{}]\s*)(?:(?:(?:await\s+)?using\s+var)|var|(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*))\s+(?<name>@?[A-Za-z_]\w*)\s*(?==|;|,)",
         RegexOptions.Compiled);
@@ -591,6 +594,7 @@ public static class ReferenceExtractor
         var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols, csharpKnownTypeNames);
         var csharpUsingStatics = BuildCSharpUsingStatics(language, symbols);
         var csharpNamespaceScopes = BuildCSharpNamespaceScopes(language, symbols, lines.Length);
+        var csharpUsingNamespaceScopes = BuildCSharpUsingNamespaceScopes(language, symbols);
         var csharpContainingTypeScopes = BuildCSharpContainingTypeScopes(language, symbols);
         var csharpTopLevelTypeNamespacesByName = BuildCSharpTopLevelTypeNamespacesByName(language, symbols);
         var csharpNestedTypeContainersByName = BuildCSharpNestedTypeContainersByName(language, symbols);
@@ -606,6 +610,7 @@ public static class ReferenceExtractor
                 typeExpression,
                 lineNumber,
                 csharpNamespaceScopes,
+                csharpUsingNamespaceScopes,
                 csharpContainingTypeScopes,
                 csharpUsingAliases,
                 csharpTopLevelTypeNamespacesByName,
@@ -2572,6 +2577,7 @@ public static class ReferenceExtractor
     private readonly record struct CSharpLineColumn(int Line, int Column);
     private readonly record struct CSharpRecursivePatternValueNameRecord(string Name, int Offset, bool IsCasePattern, int ArrowIndex = -1);
     private sealed record CSharpNamespaceScope(string QualifiedName, int ScopeStartLine, int ScopeEndLine);
+    private sealed record CSharpUsingNamespaceScope(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpContainingTypeScope(string QualifiedName, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpUsingAliasRecord(string AliasName, string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine, bool TargetsType);
     private sealed record CSharpUsingStaticRecord(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
@@ -2688,6 +2694,52 @@ public static class ReferenceExtractor
         return imports;
     }
 
+    private static List<CSharpUsingNamespaceScope> BuildCSharpUsingNamespaceScopes(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        var scopes = new List<CSharpUsingNamespaceScope>();
+        if (language != "csharp")
+            return scopes;
+
+        var namespaceScopes = symbols
+            .Where(symbol => symbol.Kind == "namespace")
+            .Select(symbol => (
+                StartLine: symbol.BodyStartLine ?? symbol.StartLine,
+                EndLine: symbol.BodyEndLine ?? symbol.EndLine))
+            .Where(scope => scope.StartLine > 0 && scope.EndLine >= scope.StartLine)
+            .ToList();
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "import" || string.IsNullOrWhiteSpace(symbol.Signature))
+                continue;
+
+            if (!TryParseCSharpUsingNamespaceImport(symbol.Signature!, out var target, out _))
+                continue;
+
+            var scopeStartLine = 1;
+            var scopeEndLine = int.MaxValue;
+            var scopeWidth = int.MaxValue;
+            foreach (var (startLine, endLine) in namespaceScopes)
+            {
+                if (symbol.Line < startLine || symbol.Line > endLine)
+                    continue;
+
+                var width = endLine - startLine;
+                if (width > scopeWidth)
+                    continue;
+
+                scopeStartLine = startLine;
+                scopeEndLine = endLine;
+                scopeWidth = width;
+            }
+
+            scopes.Add(new CSharpUsingNamespaceScope(target!, symbol.Line, scopeStartLine, scopeEndLine));
+        }
+
+        scopes.Sort(static (left, right) => left.Line.CompareTo(right.Line));
+        return scopes;
+    }
+
     private static List<CSharpNamespaceScope> BuildCSharpNamespaceScopes(string language, IReadOnlyList<SymbolRecord> symbols, int totalLineCount)
     {
         var scopes = new List<CSharpNamespaceScope>();
@@ -2715,6 +2767,25 @@ public static class ReferenceExtractor
         }
 
         return scopes;
+    }
+
+    private static bool TryParseCSharpUsingNamespaceImport(string signature, out string? target, out bool isGlobal)
+    {
+        target = null;
+        isGlobal = false;
+        if (string.IsNullOrWhiteSpace(signature) || signature.IndexOf('=') >= 0)
+            return false;
+
+        var match = CSharpUsingNamespaceRegex.Match(signature);
+        if (!match.Success)
+            return false;
+
+        target = TryNormalizeCSharpQualifiedName(match.Groups["target"].Value);
+        if (string.IsNullOrWhiteSpace(target))
+            return false;
+
+        isGlobal = signature.TrimStart().StartsWith("global using ", StringComparison.Ordinal);
+        return true;
     }
 
     private static List<CSharpContainingTypeScope> BuildCSharpContainingTypeScopes(string language, IReadOnlyList<SymbolRecord> symbols)
@@ -3778,6 +3849,7 @@ public static class ReferenceExtractor
         string typeExpression,
         int lineNumber,
         IReadOnlyList<CSharpNamespaceScope> csharpNamespaceScopes,
+        IReadOnlyList<CSharpUsingNamespaceScope> csharpUsingNamespaceScopes,
         IReadOnlyList<CSharpContainingTypeScope> csharpContainingTypeScopes,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
         IReadOnlyDictionary<string, HashSet<string>> csharpTopLevelTypeNamespacesByName,
@@ -3809,6 +3881,15 @@ public static class ReferenceExtractor
 
             if (activeNamespaces.Count == 0)
                 activeNamespaces.Add(string.Empty);
+
+            foreach (var scope in csharpUsingNamespaceScopes)
+            {
+                if (scope.Line > lineNumber)
+                    continue;
+                if (lineNumber < scope.ScopeStartLine || lineNumber > scope.ScopeEndLine)
+                    continue;
+                activeNamespaces.Add(scope.TargetQualifiedName);
+            }
 
             foreach (var activeNamespace in activeNamespaces)
             {
