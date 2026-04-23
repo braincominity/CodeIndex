@@ -3562,6 +3562,50 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_SqlExactNameCountSupportsMultipleUnicodeLeafQueries()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_sql_exact_multi_count");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/procs.sql",
+                "sql",
+                """
+                CREATE PROCEDURE dbo.Äpfel
+                AS
+                BEGIN
+                    SELECT 1;
+                END;
+                GO
+
+                CREATE PROCEDURE dbo.Bananen
+                AS
+                BEGIN
+                    SELECT 2;
+                END;
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "sql", "--name", "Äpfel", "--name", "Bananen", "--exact-name", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, json.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_CSharpConversionOperatorsUseDistinctExactNames()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_conversion_names");
