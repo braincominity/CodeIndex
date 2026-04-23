@@ -11349,6 +11349,66 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_SqlLineEndCommentsKeepMultilineUsingSources()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_line_end_comment_using");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "sql", "repro.sql"),
+                """
+                DELETE FROM audit_log -- trailing comment
+                USING staging_log
+                WHERE audit_log.id = staging_log.id;
+
+                MERGE INTO audit_log -- trailing comment
+                USING staging_merge AS s
+                ON audit_log.id = s.id
+                WHEN MATCHED THEN
+                    UPDATE SET action = s.action;
+
+                SELECT id INTO #comment_temp -- trailing comment
+                FROM users;
+                SELECT * FROM #comment_temp;
+                """);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (deleteExitCode, deleteStdout, deleteStderr) = RunBuiltCli(["references", "staging_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (mergeExitCode, mergeStdout, mergeStderr) = RunBuiltCli(["references", "staging_merge", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (tempExitCode, tempStdout, tempStderr) = RunBuiltCli(["references", "#comment_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+
+            var deleteRows = ParseJsonLines(deleteStdout);
+            var mergeRows = ParseJsonLines(mergeStdout);
+            var tempRows = ParseJsonLines(tempStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            Assert.Equal(CommandExitCodes.Success, deleteExitCode);
+            Assert.Equal(string.Empty, deleteStderr);
+            var deleteRow = Assert.Single(deleteRows);
+            Assert.Equal("staging_log", deleteRow.RootElement.GetProperty("symbol_name").GetString());
+            Assert.Equal("reference", deleteRow.RootElement.GetProperty("reference_kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, mergeExitCode);
+            Assert.Equal(string.Empty, mergeStderr);
+            var mergeRow = Assert.Single(mergeRows);
+            Assert.Equal("staging_merge", mergeRow.RootElement.GetProperty("symbol_name").GetString());
+            Assert.Equal("reference", mergeRow.RootElement.GetProperty("reference_kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, tempExitCode);
+            Assert.Equal(string.Empty, tempStderr);
+            Assert.Equal(2, tempRows.Count);
+            Assert.All(tempRows, row => Assert.Equal("#comment_temp", row.RootElement.GetProperty("symbol_name").GetString()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_SqlDoubleQuotedDynamicSqlDoesNotLeakUsersReference()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_double_quoted_dynamic_sql");

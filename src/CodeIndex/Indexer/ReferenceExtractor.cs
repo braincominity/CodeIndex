@@ -229,8 +229,14 @@ public static class ReferenceExtractor
     private static readonly Regex SqlMergeUsingSourceRegex = new(
         $@"(?<![\w$])MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?\s+{SqlQualifiedIdentifierNoCapturePattern}(?:\s+{SqlMergeTargetHintPattern})?(?:\s+(?:AS\s+)?(?!USING\b|WITH\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s+USING\b\s+(?:(?:ONLY|LATERAL)\b\s+)*{SqlQualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlMergeUsingPrefixRegex = new(
+        $@"(?<![\w$])MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?\s+{SqlQualifiedIdentifierNoCapturePattern}(?:\s+{SqlMergeTargetHintPattern})?(?:\s+(?:AS\s+)?(?!USING\b|WITH\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SqlDeleteUsingSourceRegex = new(
         $@"(?<![\w$])DELETE\b(?:\s+{SqlTopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?\s+{SqlQualifiedIdentifierNoCapturePattern}(?:\s+(?:AS\s+)?(?!USING\b|WHERE\b|RETURNING\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s+USING\b\s+(?:(?:ONLY|LATERAL)\b\s+)?{SqlQualifiedIdentifierPattern}(?:\s+(?:AS\s+)?(?!WHERE\b|RETURNING\b|ON\b|USING\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?(?:\s*,\s*(?:(?:ONLY|LATERAL)\b\s+)?{SqlQualifiedIdentifierPattern}(?:\s+(?:AS\s+)?(?!WHERE\b|RETURNING\b|ON\b|USING\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?)*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlDeleteUsingPrefixRegex = new(
+        $@"(?<![\w$])DELETE\b(?:\s+{SqlTopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?\s+{SqlQualifiedIdentifierNoCapturePattern}(?:\s+(?:AS\s+)?(?!USING\b|WHERE\b|RETURNING\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // SQL mutation targets such as `INSERT INTO tbl (...)` / `UPDATE tbl`.
     // `INSERT INTO tbl (` is a table reference, not a function call; we later suppress the generic
@@ -1475,7 +1481,7 @@ public static class ReferenceExtractor
         if (!lineEndedByLineComment)
             return remaining;
 
-        return CanSqlStatementEstablishTempObject(remaining) ? remaining : string.Empty;
+        return CanSqlStatementRequireLineCommentCarry(remaining) ? remaining : string.Empty;
     }
 
     private static bool ShouldFlushSqlTempObjectPrefixAtLineBoundary(
@@ -1498,6 +1504,16 @@ public static class ReferenceExtractor
         return SqlTargetReferenceRegex.IsMatch(statement)
             || SqlSelectIntoTempTargetStatementRegex.IsMatch(statement)
             || SqlCreateTempTableRegex.IsMatch(statement);
+    }
+
+    private static bool CanSqlStatementRequireLineCommentCarry(string statement)
+    {
+        if (string.IsNullOrWhiteSpace(statement))
+            return false;
+
+        return CanSqlStatementEstablishTempObject(statement)
+            || SqlDeleteUsingPrefixRegex.IsMatch(statement)
+            || SqlMergeUsingPrefixRegex.IsMatch(statement);
     }
 
     private static bool StartsSqlTopLevelStatement(string line)

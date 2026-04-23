@@ -5752,6 +5752,37 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_LineEndCommentsDoNotBreakDeleteUsingOrMergeUsingContinuations()
+    {
+        // issue #750: a trailing `-- comment` must not drop an unfinished multiline `DELETE ... USING`
+        // or `MERGE ... USING` prefix before the later source line is parsed.
+        // issue #750: 行末 `-- comment` があっても、未完了の複数行 `DELETE ... USING` / `MERGE ... USING`
+        // prefix を後続 source 行の解析前に捨ててはいけない。
+        const string content = """
+            DELETE FROM audit_log -- trailing comment
+            USING staging_log
+            WHERE audit_log.id = staging_log.id;
+
+            MERGE INTO audit_log -- trailing comment
+            USING staging_merge AS s
+            ON audit_log.id = s.id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action;
+
+            SELECT id INTO #comment_temp -- trailing comment
+            FROM users;
+            SELECT * FROM #comment_temp;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "staging_merge" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "#comment_temp" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_SQL_TempTablesRequirePriorEstablishmentAndSupportMultilineDefinitions()
     {
         // issue #664: temp reads should only succeed after an earlier statement established the temp
