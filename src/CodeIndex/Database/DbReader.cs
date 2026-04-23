@@ -1411,7 +1411,7 @@ public partial class DbReader
         if (string.IsNullOrWhiteSpace(normalizedReference))
             return null;
 
-        normalizedReference = ResolveActiveCSharpUsingAliasReference(path, lineNumber, normalizedReference);
+        normalizedReference = NormalizeCSharpBaseTypeReference(ResolveActiveCSharpUsingAliasReference(path, lineNumber, normalizedReference));
         if (string.IsNullOrWhiteSpace(normalizedReference))
             return null;
 

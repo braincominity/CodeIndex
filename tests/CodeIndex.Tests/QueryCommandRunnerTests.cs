@@ -15649,6 +15649,194 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpUsingStaticInheritedNestedTypeViaConstructedGenericTypeAliasPatternStaysVisible()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_using_static_inherited_nested_type_generic_type_alias_visible");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Repro.cs", "csharp",
+                """
+                using static Probe.Color;
+                using AliasBase = Probe.Base<int>;
+
+                namespace Probe;
+
+                enum Color { Red }
+
+                class Base<T>
+                {
+                    public class Red {}
+                }
+
+                class Derived : AliasBase
+                {
+                    bool Match(object value) => value is Red;
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            var rows = ParseJsonLines(stdout).Select(doc => doc.RootElement).ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Single(rows);
+            Assert.Contains("value is Red", rows[0].GetProperty("context").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactCountJson_CSharpUsingStaticInheritedNestedTypeViaConstructedGenericTypeAliasPatternStaysVisible()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_using_static_inherited_nested_type_generic_type_alias_count_visible");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Repro.cs", "csharp",
+                """
+                using static Probe.Color;
+                using AliasBase = Probe.Base<int>;
+
+                namespace Probe;
+
+                enum Color { Red }
+
+                class Base<T>
+                {
+                    public class Red {}
+                }
+
+                class Derived : AliasBase
+                {
+                    bool Match(object value) => value is Red;
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("files").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_CSharpUsingStaticInheritedNestedTypeViaGlobalConstructedGenericTypeAliasPatternStaysVisible()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_using_static_inherited_nested_type_global_generic_type_alias_visible");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/GlobalUsings.cs", "csharp",
+                """
+                global using AliasBase = Probe.Base<int>;
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Repro.cs", "csharp",
+                """
+                using static Probe.Color;
+
+                namespace Probe;
+
+                enum Color { Red }
+
+                class Base<T>
+                {
+                    public class Red {}
+                }
+
+                class Derived : AliasBase
+                {
+                    bool Match(object value) => value is Red;
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            var rows = ParseJsonLines(stdout).Select(doc => doc.RootElement).ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Single(rows);
+            Assert.Contains("value is Red", rows[0].GetProperty("context").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactCountJson_CSharpUsingStaticInheritedNestedTypeViaGlobalConstructedGenericTypeAliasPatternStaysVisible()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_using_static_inherited_nested_type_global_generic_type_alias_count_visible");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/GlobalUsings.cs", "csharp",
+                """
+                global using AliasBase = Probe.Base<int>;
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Repro.cs", "csharp",
+                """
+                using static Probe.Color;
+
+                namespace Probe;
+
+                enum Color { Red }
+
+                class Base<T>
+                {
+                    public class Red {}
+                }
+
+                class Derived : AliasBase
+                {
+                    bool Match(object value) => value is Red;
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.Equal(1, json.GetProperty("files").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpUsingStaticMultilineLogicalConstantPatternStaysSuppressed()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_using_static_multiline_logical_constant_pattern_suppressed");
