@@ -5350,6 +5350,36 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_SkipsModifierKeywordsBeforeSourcesAndTargets()
+    {
+        // issue #684: SQL source/target modifiers such as TOP / ONLY / LATERAL must not become
+        // phantom object names, and the real source/target should still be indexed.
+        // issue #684: TOP / ONLY / LATERAL のような SQL 修飾子は phantom object 名にしてはならず、
+        // 実際の source/target を引き続き索引できるべき。
+        const string content = """
+            UPDATE TOP (10) audit_log SET action = 'done';
+            SELECT * FROM ONLY public.users;
+            SELECT * FROM LATERAL fn_users(42);
+            MERGE TOP (5) INTO audit_log AS t
+            USING staging_log AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "fn_users" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "TOP");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ONLY");
+        Assert.DoesNotContain(references, r => r.SymbolName == "LATERAL");
+    }
+
+    [Fact]
     public void Extract_SQL_HandlesTempTablesAndDoesNotTreatSelectIntoVariablesAsReferences()
     {
         // issue #638 / #639 / #648 / #649: temp tables should stay on the SQL reference path,

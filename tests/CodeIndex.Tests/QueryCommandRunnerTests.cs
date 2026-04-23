@@ -10860,6 +10860,74 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_SqlModifierPrefixedObjectsResolveRealNames()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_modifier_prefixed_objects");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "sql", "repro.sql"),
+                """
+                UPDATE TOP (10) audit_log SET action = 'done';
+                SELECT * FROM ONLY public.users;
+                SELECT * FROM LATERAL fn_users(42);
+                MERGE TOP (5) INTO audit_log AS t USING staging_log AS s ON t.id = s.id WHEN MATCHED THEN UPDATE SET action = s.action;
+                """);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (auditExitCode, auditStdout, auditStderr) = RunBuiltCli(["references", "audit_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (usersExitCode, usersStdout, usersStderr) = RunBuiltCli(["references", "users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (fnExitCode, fnStdout, fnStderr) = RunBuiltCli(["references", "fn_users", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (topExitCode, topStdout, topStderr) = RunBuiltCli(["references", "TOP", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (onlyExitCode, onlyStdout, onlyStderr) = RunBuiltCli(["references", "ONLY", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (lateralExitCode, lateralStdout, lateralStderr) = RunBuiltCli(["references", "LATERAL", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+
+            var auditRows = ParseJsonLines(auditStdout);
+            var usersRows = ParseJsonLines(usersStdout);
+            var fnRows = ParseJsonLines(fnStdout);
+            using var topDocument = ParseJsonOutput(topStdout);
+            using var onlyDocument = ParseJsonOutput(onlyStdout);
+            using var lateralDocument = ParseJsonOutput(lateralStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            Assert.Equal(CommandExitCodes.Success, auditExitCode);
+            Assert.Equal(string.Empty, auditStderr);
+            Assert.Equal(2, auditRows.Count);
+            Assert.All(auditRows, row => Assert.Equal("audit_log", row.RootElement.GetProperty("symbol_name").GetString()));
+
+            Assert.Equal(CommandExitCodes.Success, usersExitCode);
+            Assert.Equal(string.Empty, usersStderr);
+            var usersRow = Assert.Single(usersRows);
+            Assert.Equal("users", usersRow.RootElement.GetProperty("symbol_name").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, fnExitCode);
+            Assert.Equal(string.Empty, fnStderr);
+            var fnRow = Assert.Single(fnRows);
+            Assert.Equal("fn_users", fnRow.RootElement.GetProperty("symbol_name").GetString());
+            Assert.Equal("call", fnRow.RootElement.GetProperty("reference_kind").GetString());
+
+            Assert.Equal(CommandExitCodes.NotFound, topExitCode);
+            Assert.Equal(string.Empty, topStderr);
+            Assert.Equal(0, topDocument.RootElement.GetProperty("count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.NotFound, onlyExitCode);
+            Assert.Equal(string.Empty, onlyStderr);
+            Assert.Equal(0, onlyDocument.RootElement.GetProperty("count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.NotFound, lateralExitCode);
+            Assert.Equal(string.Empty, lateralStderr);
+            Assert.Equal(0, lateralDocument.RootElement.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpMultilineThrowBeforeGroupDoesNotLeakReferenceContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_parenthesized_orderby_multiline_throw_group_local_function");

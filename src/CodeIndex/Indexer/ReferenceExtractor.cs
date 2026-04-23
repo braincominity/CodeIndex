@@ -205,6 +205,8 @@ public static class ReferenceExtractor
         @"(?:\[(?:##?\w+)\]|`(?:##?\w+)`|" + "\"(?:##?\\w+)\"" + @"|##?\w+)";
     private const string SqlQualifiedIdentifierPattern =
         @"(?:(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")\s*\.\s*)*(?<name>" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")";
+    private const string SqlTopTargetModifierPattern =
+        @"TOP\s*\([^)\r\n]*\)(?:\s+PERCENT)?(?:\s+WITH\s+TIES)?";
     private static readonly Regex SqlProcCallRegex = new(
         $@"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?(?:(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern})?\.)*(?<name>{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -214,7 +216,7 @@ public static class ReferenceExtractor
     // SQL のソース参照で、`call` ではなく `reference` として扱うべき形。
     // `FROM dbo.fn_TableValued(...)` は末尾 `(` により既存 CallRegex が `call` を出すため除外する。
     private static readonly Regex SqlSourceReferenceRegex = new(
-        $@"(?<![\w$])(?:FROM|JOIN|USING|(?:CROSS|OUTER)\s+APPLY)\b\s+{SqlQualifiedIdentifierPattern}",
+        $@"(?<![\w$])(?:FROM|JOIN|USING|(?:CROSS|OUTER)\s+APPLY)\b\s+(?:(?:ONLY|LATERAL)\b\s+)*{SqlQualifiedIdentifierPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // SQL mutation targets such as `INSERT INTO tbl (...)` / `UPDATE tbl` / `TRUNCATE TABLE tbl`.
     // `INSERT INTO tbl (` is a table reference, not a function call; we later suppress the generic
@@ -223,7 +225,10 @@ public static class ReferenceExtractor
     // `INSERT INTO tbl (` は関数呼び出しではなくテーブル参照なので、直後に `(` がある場合は後段で
     // 同じ識別子の generic CallRegex を抑止する。
     private static readonly Regex SqlTargetReferenceRegex = new(
-        $@"(?<![\w$])(?:INSERT\s+INTO|UPDATE|TRUNCATE\s+TABLE|MERGE\s+INTO)\b\s+{SqlQualifiedIdentifierPattern}",
+        $@"(?<![\w$])(?:INSERT\s+INTO|UPDATE\b(?:\s+{SqlTopTargetModifierPattern})?|TRUNCATE\s+TABLE|MERGE\b(?:\s+{SqlTopTargetModifierPattern})?\s+INTO)\s+{SqlQualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlTopCallSuppressionRegex = new(
+        @"(?<![\w$])(?:UPDATE|MERGE)\b\s+(?<name>TOP)\s*\(",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // SQL Server temp-table materialization: `SELECT ... INTO #tmp` / `SELECT ... INTO ##tmp`.
     // Procedural `SELECT ... INTO variable` remains intentionally excluded. issue #649.
@@ -764,6 +769,15 @@ public static class ReferenceExtractor
 
                         if (!string.IsNullOrWhiteSpace(sqlStatement))
                         {
+                            foreach (Match match in SqlTopCallSuppressionRegex.Matches(sqlStatement))
+                            {
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+
+                                sqlSuppressedCallIndices?.Add(nameGroup.Index + sqlStatementStart - sqlLineOffset);
+                            }
+
                             foreach (Match match in SqlProcCallRegex.Matches(sqlStatement))
                             {
                                 var nameGroup = match.Groups["name"];
