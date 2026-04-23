@@ -270,6 +270,9 @@ public class DbContext : IDisposable
 
     internal static void RegisterConnectionFunctions(SqliteConnection connection)
     {
+        static int? ToNullableInt(long? value)
+            => value is null || value < int.MinValue || value > int.MaxValue ? null : (int)value.Value;
+
         connection.CreateFunction(
             "sql_leaf_name",
             (string? name) => string.IsNullOrWhiteSpace(name) ? null : SqlNameResolver.GetLeafName(name));
@@ -306,6 +309,14 @@ public class DbContext : IDisposable
             "sql_context_has_name_folded",
             (string? context, string? query) => SqlNameResolver.ContextContainsQualifiedNameFolded(context, query) ? 1 : 0);
         connection.CreateFunction(
+            "sql_context_has_name_at",
+            (string? context, string? query, long? columnNumber) =>
+                SqlNameResolver.ContextContainsQualifiedNameAtColumn(context, query, ToNullableInt(columnNumber)) ? 1 : 0);
+        connection.CreateFunction(
+            "sql_context_has_name_folded_at",
+            (string? context, string? query, long? columnNumber) =>
+                SqlNameResolver.ContextContainsQualifiedNameFoldedAtColumn(context, query, ToNullableInt(columnNumber)) ? 1 : 0);
+        connection.CreateFunction(
             "sql_resolve_reference_name",
             (string? symbolName, string? context, string? containerName) =>
             {
@@ -317,6 +328,20 @@ public class DbContext : IDisposable
             (string? symbolName, string? context, string? containerName) =>
             {
                 var resolved = SqlNameResolver.ResolveReferenceNameFolded(symbolName, context, containerName);
+                return resolved.Length == 0 ? null : resolved;
+            });
+        connection.CreateFunction(
+            "sql_resolve_reference_name_at",
+            (string? symbolName, string? context, string? containerName, long? columnNumber) =>
+            {
+                var resolved = SqlNameResolver.ResolveReferenceNameAtColumn(symbolName, context, containerName, ToNullableInt(columnNumber));
+                return resolved.Length == 0 ? null : resolved;
+            });
+        connection.CreateFunction(
+            "sql_resolve_reference_name_folded_at",
+            (string? symbolName, string? context, string? containerName, long? columnNumber) =>
+            {
+                var resolved = SqlNameResolver.ResolveReferenceNameFoldedAtColumn(symbolName, context, containerName, ToNullableInt(columnNumber));
                 return resolved.Length == 0 ? null : resolved;
             });
     }

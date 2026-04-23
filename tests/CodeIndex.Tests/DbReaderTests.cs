@@ -3052,6 +3052,84 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_SameLineMultipleQualifiedCallsStayColumnScoped()
+    {
+        InsertIndexedFile("src/sql_same_line_multi_target_dbo.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.fn_Target
+            AS
+            SELECT 1;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_same_line_multi_target_sales.sql", "sql",
+            """
+            CREATE PROCEDURE sales.fn_Target
+            AS
+            SELECT 2;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_same_line_multi_caller.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.Caller
+            AS
+            BEGIN
+                EXEC dbo.fn_Target; EXEC sales.fn_Target;
+            END
+            GO
+            """);
+
+        var dboReference = Assert.Single(
+            _reader.SearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal("dbo.Caller", dboReference.ContainerName);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountSearchReferencesTotal("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+
+        var salesReference = Assert.Single(
+            _reader.SearchReferences("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal("dbo.Caller", salesReference.ContainerName);
+        Assert.Equal(1, _reader.CountSearchReferences("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountSearchReferencesTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+
+        var dboCaller = Assert.Single(
+            _reader.GetCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal("dbo.Caller", dboCaller.CallerName);
+        Assert.Equal(1, dboCaller.ReferenceCount);
+        Assert.Equal(1, _reader.CountCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCallersTotal("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+
+        var salesCaller = Assert.Single(
+            _reader.GetCallers("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal("dbo.Caller", salesCaller.CallerName);
+        Assert.Equal(1, salesCaller.ReferenceCount);
+        Assert.Equal(1, _reader.CountCallers("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCallersTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+
+        var dependencies = _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_same_line_multi"], excludePathPatterns: null, excludeTests: false)
+            .OrderBy(edge => edge.TargetPath, StringComparer.Ordinal)
+            .ToList();
+        Assert.Equal(2, dependencies.Count);
+        Assert.Collection(dependencies,
+            edge =>
+            {
+                Assert.Equal("src/sql_same_line_multi_caller.sql", edge.SourcePath);
+                Assert.Equal("src/sql_same_line_multi_target_dbo.sql", edge.TargetPath);
+                Assert.Equal(1, edge.ReferenceCount);
+            },
+            edge =>
+            {
+                Assert.Equal("src/sql_same_line_multi_caller.sql", edge.SourcePath);
+                Assert.Equal("src/sql_same_line_multi_target_sales.sql", edge.TargetPath);
+                Assert.Equal(1, edge.ReferenceCount);
+            });
+
+        var hotspots = _reader.GetSymbolHotspots(10, "function", "sql", ["sql_same_line_multi"], null, false);
+        Assert.Equal(1, Assert.Single(hotspots, item => item.Symbol.Name == "dbo.fn_Target").ReferenceCount);
+        Assert.Equal(1, Assert.Single(hotspots, item => item.Symbol.Name == "sales.fn_Target").ReferenceCount);
+    }
+
+    [Fact]
     public void SqlQualifiedNames_ExactCalleesStaySchemaScoped()
     {
         InsertIndexedFile("src/sql_callee_schema_scoped.sql", "sql",

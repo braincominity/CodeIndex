@@ -1109,7 +1109,7 @@ public partial class DbReader
                 SELECT sr.file_id,
                        rf.lang,
                        CASE
-                           WHEN rf.lang = 'sql' THEN sql_resolve_reference_name(sr.symbol_name, sr.context, sr.container_name)
+                           WHEN rf.lang = 'sql' THEN sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number)
                            ELSE sr.symbol_name
                        END AS symbol_name,
                        sr.line,
@@ -1338,7 +1338,7 @@ public partial class DbReader
                 SELECT sr.file_id,
                        rf.lang,
                        CASE
-                           WHEN rf.lang = 'sql' THEN sql_resolve_reference_name(sr.symbol_name, sr.context, sr.container_name)
+                           WHEN rf.lang = 'sql' THEN sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number)
                            ELSE sr.symbol_name
                        END AS symbol_name,
                        sr.line,
@@ -1657,9 +1657,9 @@ public partial class DbReader
                       JOIN files rf ON rf.id = sr.file_id
                       WHERE sr.symbol_name = s.name
                          OR (f.lang = 'sql' AND rf.lang = 'sql' AND (
-                                sql_resolve_reference_name(sr.symbol_name, sr.context, sr.container_name) = sql_normalize_name(s.name) COLLATE NOCASE
-                             OR (sql_segment_count(sql_resolve_reference_name(sr.symbol_name, sr.context, sr.container_name)) = 1
-                                 AND sql_resolve_reference_name(sr.symbol_name, sr.context, sr.container_name) = sql_leaf_name(s.name) COLLATE NOCASE)
+                                sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_normalize_name(s.name) COLLATE NOCASE
+                             OR (sql_segment_count(sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number)) = 1
+                                 AND sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_leaf_name(s.name) COLLATE NOCASE)
                          ))
                   )";
 
@@ -1789,9 +1789,9 @@ public partial class DbReader
                   JOIN files rf ON rf.id = sr.file_id
                   WHERE sr.symbol_name = s.name
                      OR (f.lang = 'sql' AND rf.lang = 'sql' AND (
-                            sql_resolve_reference_name(sr.symbol_name, sr.context, sr.container_name) = sql_normalize_name(s.name) COLLATE NOCASE
-                         OR (sql_segment_count(sql_resolve_reference_name(sr.symbol_name, sr.context, sr.container_name)) = 1
-                             AND sql_resolve_reference_name(sr.symbol_name, sr.context, sr.container_name) = sql_leaf_name(s.name) COLLATE NOCASE)
+                            sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_normalize_name(s.name) COLLATE NOCASE
+                         OR (sql_segment_count(sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number)) = 1
+                             AND sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_leaf_name(s.name) COLLATE NOCASE)
                      ))
               )";
 
