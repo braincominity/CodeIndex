@@ -2996,6 +2996,42 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_DoubleQuotedCallsResolveFromUnquotedQualifiedQueries()
+    {
+        InsertIndexedFile("src/sql_double_quoted_target.sql", "sql",
+            """
+            CREATE PROCEDURE "sales"."proc_name"
+            AS
+            SELECT 1;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_double_quoted_caller.sql", "sql",
+            """
+            CREATE PROCEDURE sales.caller
+            AS
+            BEGIN
+                CALL "sales"."proc_name";
+            END
+            GO
+            """);
+
+        var references = _reader.SearchReferences("sales.proc_name", lang: "sql", exact: true, pathPatterns: ["sql_double_quoted"]);
+        var reference = Assert.Single(references);
+        Assert.Equal(4, reference.Line);
+        Assert.Equal("sales.caller", reference.ContainerName);
+
+        var callers = _reader.GetCallers("sales.proc_name", lang: "sql", exact: true, pathPatterns: ["sql_double_quoted"]);
+        var caller = Assert.Single(callers);
+        Assert.Equal("sales.caller", caller.CallerName);
+        Assert.Equal(1, caller.ReferenceCount);
+
+        var impact = _reader.AnalyzeImpact("sales.proc_name", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_double_quoted"]);
+        Assert.Equal("\"sales\".\"proc_name\"", Assert.Single(impact.Definitions).Name);
+        Assert.Equal("sales.caller", Assert.Single(impact.Callers).CallerName);
+    }
+
+    [Fact]
     public void SqlQualifiedNames_ExactLookups_DoNotConflateQuotedSingleIdentifierDotsWithQualifiedNames()
     {
         InsertIndexedFile("src/sql_dotted_identifier_collision.sql", "sql",

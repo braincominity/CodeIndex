@@ -9267,6 +9267,34 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SqlCallDoubleQuotedIdentifier_IsCapturedAndDoesNotMisattributeQualifier()
+    {
+        // PostgreSQL / ANSI SQL use double quotes for delimited identifiers. The SQL no-parens
+        // scan must preserve `"..."` so `CALL "sales"."proc_name"` and `EXEC "dbo"."fn_Target"`
+        // still emit the leaf call edge instead of dropping the call entirely or misattributing
+        // the qualifier as a separate target. Single-quoted string literals must remain masked.
+        // PostgreSQL / ANSI SQL では二重引用符で識別子を区切る。SQL の括弧なし scan は `"..."` を
+        // 保持し、`CALL "sales"."proc_name"` や `EXEC "dbo"."fn_Target"` で call を落とさず、
+        // 修飾子を別ターゲットとして誤発行しない必要がある。単引用符の文字列リテラルは引き続き無視する。
+        const string content = """
+            CALL "proc_name";
+            CALL "sales"."proc_name";
+            EXEC "dbo"."fn_Target";
+            CALL 'not_a_proc';
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "proc_name" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "proc_name" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "fn_Target" && r.ReferenceKind == "call" && r.Line == 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "sales" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "dbo" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "not_a_proc" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_SqlCallBacktickReservedWord_SurvivesQuoteStripping()
     {
         // A MySQL user may legitimately name a procedure after a reserved word by backtick-quoting

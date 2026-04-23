@@ -11,7 +11,7 @@ namespace CodeIndex.Indexer;
 public static class ReferenceExtractor
 {
     private readonly record struct SqlDefinitionLeafSpan(string LeafName, int StartIndex, int EndIndexExclusive);
-    private const string SqlProcCallIdentifierPattern = @"(?:\[[^\[\]\r\n]+\]|`[^`\r\n]+`|\w+)";
+    private const string SqlProcCallIdentifierPattern = @"(?:\[[^\[\]\r\n]+\]|`[^`\r\n]+`|""(?:""""|[^""\r\n])+""|\w+)";
     private const string SqlProcCallQualifierPattern = @"(?:(?:" + SqlProcCallIdentifierPattern + @")?\s*\.\s*)*";
 
     private static readonly HashSet<string> SupportedLanguages =
@@ -148,18 +148,16 @@ public static class ReferenceExtractor
     private static readonly Regex StringLiteralRegex = new(
         "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`",
         RegexOptions.Compiled);
-    // SQL-specific string-literal stripper: preserve backticks because MySQL / MariaDB use them
-    // for identifier quoting (`` CALL `proc-name`; ``) rather than string literals. Strip only
-    // ANSI single-quoted and double-quoted literals plus comments. ANSI / SQL-PSM delimited
-    // identifiers (`"..."`) are intentionally treated as string literals here because the dominant
-    // real-world SQL codebase uses `"..."` for string content when double-quoted identifiers are
-    // not in effect, and #232 focuses on T-SQL brackets + MySQL backticks — not ANSI delimited
-    // identifiers.
-    // SQL 専用の文字列リテラル除去: MySQL / MariaDB はバッククォートを識別子引用に使うため保持し、
-    // `'...'` / `"..."` のみを除去する。ANSI / SQL-PSM の `"..."` delimited identifier は
-    // 実運用で文字列として使われる頻度が高く、今回の #232 の対象から外れるため意図的に文字列扱いとする。
+    // SQL-specific string-literal stripper: preserve identifier quoting (`[name]`, `` `name` ``,
+    // `"name"`) for the `EXEC` / `CALL` no-parens scanner and strip only true string literals
+    // (`'...'`) plus comments. This lets ANSI / PostgreSQL double-quoted identifiers survive to
+    // the SQL identifier parser without regressing comment / string masking.
+    // SQL 専用の文字列リテラル除去: `EXEC` / `CALL` の括弧なし抽出では識別子引用（`[name]`,
+    // `` `name` ``, `"name"`）を保持し、真の文字列リテラル (`'...'`) とコメントだけを除去する。
+    // これにより ANSI / PostgreSQL の二重引用識別子を SQL 識別子パーサーまで通しつつ、
+    // コメント / 文字列のマスキング回帰を防ぐ。
     private static readonly Regex SqlStringLiteralRegex = new(
-        "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'",
+        "'(?:\\\\.|[^'\\\\])*'",
         RegexOptions.Compiled);
     private static readonly Regex InlineBlockCommentRegex = new(@"/\*.*?\*/", RegexOptions.Compiled);
     private const string CSharpIdentifierPattern = @"@?[_\p{L}]\w*";
@@ -829,7 +827,8 @@ public static class ReferenceExtractor
                         bool wasQuoted;
                         if (rawName.Length >= 2
                             && ((rawName[0] == '[' && rawName[^1] == ']')
-                                || (rawName[0] == '`' && rawName[^1] == '`')))
+                                || (rawName[0] == '`' && rawName[^1] == '`')
+                                || (rawName[0] == '"' && rawName[^1] == '"')))
                         {
                             // Normalize `[sp_Target]` / `` `sp_Target` `` to `sp_Target` so it matches the
                             // indexed symbol name, and point the column at the inner identifier instead
@@ -7610,16 +7609,16 @@ public static class ReferenceExtractor
     }
 
     // SQL-aware line sanitizer used only for the `EXEC` / `EXECUTE` / `CALL` no-parens scan.
-    // Preserves backtick-quoted identifiers (MySQL / MariaDB) so `` CALL `proc-name`; `` can be
-    // matched, while still stripping `'...'` / `"..."` string literals and SQL line / block
+    // Preserves identifier quoting (`[name]`, `` `name` ``, `"name"`) so quoted SQL call targets
+    // can be matched, while still stripping `'...'` string literals and SQL line / block
     // comments so text inside comments does not emit a phantom reference. Line-comment tokens
     // `--` (ANSI / T-SQL / MySQL) and `#` (MySQL / MariaDB) are scanned with awareness of
-    // backtick and bracket identifier quoting, so a legitimate name containing `#` or `-` such
-    // as `` CALL `proc#1`; `` or `EXEC [proc-name]` is not truncated mid-identifier.
-    // `EXEC` / `EXECUTE` / `CALL` の括弧なし抽出向けの SQL 特化サニタイザ。バッククォート引用
-    // （MySQL / MariaDB の識別子引用）は保持したまま、`'...'` / `"..."` と `--` / `#` / `/* ... */`
-    // の SQL コメントを除去する。`--` と `#` の走査は backtick / bracket 引用を尊重するため、
-    // `` CALL `proc#1`; `` や `EXEC [proc-name]` のような識別子が途中で切られない。
+    // bracket / backtick / double-quote identifier quoting, so a legitimate name containing `#`
+    // or `-` such as `` CALL `proc#1`; `` or `CALL "proc-name"` is not truncated mid-identifier.
+    // `EXEC` / `EXECUTE` / `CALL` の括弧なし抽出向けの SQL 特化サニタイザ。識別子引用
+    // （`[name]`, `` `name` ``, `"name"`）は保持したまま、`'...'` と `--` / `#` / `/* ... */`
+    // の SQL コメントを除去する。`--` と `#` の走査は bracket / backtick / double-quote 引用を
+    // 尊重するため、`` CALL `proc#1`; `` や `CALL "proc-name"` のような識別子が途中で切られない。
     private static string PrepareSqlLineForIdentifierScan(string line)
     {
         var result = SqlStringLiteralRegex.Replace(line, "\"\"");
@@ -7642,6 +7641,32 @@ public static class ReferenceExtractor
                 var closing = result.IndexOf(']', i + 1);
                 if (closing < 0)
                     break;
+                i = closing;
+                continue;
+            }
+            if (c == '"')
+            {
+                var closing = i + 1;
+                while (closing < result.Length)
+                {
+                    if (result[closing] != '"')
+                    {
+                        closing++;
+                        continue;
+                    }
+
+                    if (closing + 1 < result.Length && result[closing + 1] == '"')
+                    {
+                        closing += 2;
+                        continue;
+                    }
+
+                    break;
+                }
+
+                if (closing >= result.Length)
+                    break;
+
                 i = closing;
                 continue;
             }
