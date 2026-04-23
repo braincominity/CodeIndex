@@ -11471,6 +11471,126 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_SqlLineEndCommentsKeepUnfinishedTargetPrefixes()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_line_end_comment_target_prefixes");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "sql", "repro.sql"),
+                """
+                INSERT INTO -- trailing comment
+                    audit_log (action) VALUES ('x');
+
+                UPDATE -- trailing comment
+                    #update_temp SET action = 'x';
+                SELECT * FROM #update_temp;
+
+                DELETE FROM -- trailing comment
+                    #delete_temp;
+                SELECT * FROM #delete_temp;
+
+                TRUNCATE TABLE -- trailing comment
+                    archived_log;
+
+                CREATE TABLE -- trailing comment
+                    #create_temp (id int);
+                SELECT * FROM #create_temp;
+                """);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (auditExitCode, auditStdout, auditStderr) = RunBuiltCli(["references", "audit_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (updateExitCode, updateStdout, updateStderr) = RunBuiltCli(["references", "#update_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (deleteExitCode, deleteStdout, deleteStderr) = RunBuiltCli(["references", "#delete_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (truncateExitCode, truncateStdout, truncateStderr) = RunBuiltCli(["references", "archived_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (createExitCode, createStdout, createStderr) = RunBuiltCli(["references", "#create_temp", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+
+            var auditRows = ParseJsonLines(auditStdout);
+            var updateRows = ParseJsonLines(updateStdout);
+            var deleteRows = ParseJsonLines(deleteStdout);
+            var truncateRows = ParseJsonLines(truncateStdout);
+            var createRows = ParseJsonLines(createStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            Assert.Equal(CommandExitCodes.Success, auditExitCode);
+            Assert.Equal(string.Empty, auditStderr);
+            var auditRow = Assert.Single(auditRows);
+            Assert.Equal("audit_log", auditRow.RootElement.GetProperty("symbol_name").GetString());
+            Assert.Equal("reference", auditRow.RootElement.GetProperty("reference_kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.Equal(string.Empty, updateStderr);
+            Assert.Equal(2, updateRows.Count);
+            Assert.All(updateRows, row => Assert.Equal("#update_temp", row.RootElement.GetProperty("symbol_name").GetString()));
+
+            Assert.Equal(CommandExitCodes.Success, deleteExitCode);
+            Assert.Equal(string.Empty, deleteStderr);
+            Assert.Equal(2, deleteRows.Count);
+            Assert.All(deleteRows, row => Assert.Equal("#delete_temp", row.RootElement.GetProperty("symbol_name").GetString()));
+
+            Assert.Equal(CommandExitCodes.Success, truncateExitCode);
+            Assert.Equal(string.Empty, truncateStderr);
+            var truncateRow = Assert.Single(truncateRows);
+            Assert.Equal("archived_log", truncateRow.RootElement.GetProperty("symbol_name").GetString());
+            Assert.Equal("reference", truncateRow.RootElement.GetProperty("reference_kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, createExitCode);
+            Assert.Equal(string.Empty, createStderr);
+            Assert.Single(createRows);
+            Assert.All(createRows, row => Assert.Equal("#create_temp", row.RootElement.GetProperty("symbol_name").GetString()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_SqlBareDollarIdentifiersStayWhole()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_bare_dollar_identifier");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "sql", "repro.sql"),
+                """
+                SELECT * FROM my$table;
+                INSERT INTO my$table (id) VALUES (1);
+                UPDATE my$table SET id = 2;
+                DELETE FROM my$table;
+                TRUNCATE TABLE my$table;
+                """);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (dollarExitCode, dollarStdout, dollarStderr) = RunBuiltCli(["references", "my$table", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (prefixExitCode, prefixStdout, prefixStderr) = RunBuiltCli(["references", "my", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+
+            var dollarRows = ParseJsonLines(dollarStdout);
+            using var prefixDocument = ParseJsonOutput(prefixStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            Assert.Equal(CommandExitCodes.Success, dollarExitCode);
+            Assert.Equal(string.Empty, dollarStderr);
+            Assert.Equal(5, dollarRows.Count);
+            Assert.All(dollarRows, row => Assert.Equal("my$table", row.RootElement.GetProperty("symbol_name").GetString()));
+
+            Assert.Equal(CommandExitCodes.NotFound, prefixExitCode);
+            Assert.Equal(string.Empty, prefixStderr);
+            Assert.Equal(0, prefixDocument.RootElement.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_SqlSemicolonlessSetAndDeclareKeepTempReads()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_semicolonless_set_declare_temp");

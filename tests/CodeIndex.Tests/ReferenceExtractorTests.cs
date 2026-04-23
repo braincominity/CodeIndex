@@ -5817,6 +5817,46 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_LineEndCommentsKeepUnfinishedTargetPrefixes()
+    {
+        // issue #759: unfinished SQL target prefixes before a line-end comment must still carry to
+        // the next line so target references survive and `INSERT INTO ... (` does not regress into
+        // a phantom call on the target identifier.
+        // issue #759: 行末コメントより前で終わる未完了の SQL target prefix も次行へ継続し、
+        // target reference を落とさず、`INSERT INTO ... (` が target 識別子への phantom call に
+        // 戻らないようにする必要がある。
+        const string content = """
+            INSERT INTO -- trailing comment
+                audit_log (action) VALUES ('x');
+
+            UPDATE -- trailing comment
+                #update_temp SET action = 'x';
+            SELECT * FROM #update_temp;
+
+            DELETE FROM -- trailing comment
+                #delete_temp;
+            SELECT * FROM #delete_temp;
+
+            TRUNCATE TABLE -- trailing comment
+                archived_log;
+
+            CREATE TABLE -- trailing comment
+                #create_temp (id int);
+            SELECT * FROM #create_temp;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(1, references.Count(r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "call");
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#update_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#delete_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(1, references.Count(r => r.SymbolName == "archived_log" && r.ReferenceKind == "reference"));
+        Assert.Equal(1, references.Count(r => r.SymbolName == "#create_temp" && r.ReferenceKind == "reference"));
+    }
+
+    [Fact]
     public void Extract_SQL_TempTablesRespectSemicolonlessSetAndDeclareBoundaries()
     {
         // issue #753: temp establishment must flush across semicolon-less top-level `SET` /
@@ -5864,6 +5904,28 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "#while_temp" && r.ReferenceKind == "reference" && r.Line == 4);
         Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 1);
         Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 3);
+    }
+
+    [Fact]
+    public void Extract_SQL_BareDollarIdentifiersStayWholeOnSourceAndTargetPaths()
+    {
+        // issue #726: PostgreSQL bare identifiers may contain `$`, and source/target exact-name
+        // queries must keep the whole identifier instead of truncating to the prefix before `$`.
+        // issue #726: PostgreSQL の bare identifier は `$` を含められるため、source/target の
+        // exact-name は `$` より前で切らずに識別子全体を保持する必要がある。
+        const string content = """
+            SELECT * FROM my$table;
+            INSERT INTO my$table (id) VALUES (1);
+            UPDATE my$table SET id = 2;
+            DELETE FROM my$table;
+            TRUNCATE TABLE my$table;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(5, references.Count(r => r.SymbolName == "my$table" && r.ReferenceKind == "reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "my" && r.ReferenceKind == "reference");
     }
 
     [Fact]

@@ -200,7 +200,7 @@ public static class ReferenceExtractor
     private const string SqlDoubleQuotedIdentifierPattern = "\"(?:\"\"|[^\"\\r\\n])+\"";
     private const string SqlQuotedIdentifierPattern =
         @"(?:\[[^\[\]\r\n]+\]|`[^`\r\n]+`|" + SqlDoubleQuotedIdentifierPattern + @")";
-    private const string SqlBareIdentifierPattern = @"(?:##?\w+|\w+)";
+    private const string SqlBareIdentifierPattern = @"(?:##?\w+|[A-Za-z_][A-Za-z0-9_$]*)";
     private const string SqlTempIdentifierPattern =
         @"(?:\[(?:##?\w+)\]|`(?:##?\w+)`|" + "\"(?:##?\\w+)\"" + @"|##?\w+)";
     private const string SqlQualifiedIdentifierNoCapturePattern =
@@ -240,6 +240,9 @@ public static class ReferenceExtractor
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SqlDeleteUsingListContinuationPrefixRegex = new(
         @"(?<![\w$])DELETE\b[\s\S]*\bUSING\b[\s\S]*,\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlTargetReferencePrefixRegex = new(
+        $@"(?<![\w$])(?:INSERT(?:\s+{SqlTopTargetModifierPattern})?\s+INTO|UPDATE\b(?:\s+(?:{SqlTopTargetModifierPattern}|ONLY\b))*|DELETE\b(?:\s+{SqlTopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?|TRUNCATE\s+TABLE(?:\s+ONLY\b)?|CREATE(?:\s+(?:TEMP|TEMPORARY))?\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?)\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // SQL mutation targets such as `INSERT INTO tbl (...)` / `UPDATE tbl`.
     // `INSERT INTO tbl (` is a table reference, not a function call; we later suppress the generic
@@ -1522,6 +1525,7 @@ public static class ReferenceExtractor
             return false;
 
         return CanSqlStatementEstablishTempObject(statement)
+            || SqlTargetReferencePrefixRegex.IsMatch(statement)
             || SqlSelectIntoTempPrefixRegex.IsMatch(statement)
             || SqlDeleteUsingPrefixRegex.IsMatch(statement)
             || SqlDeleteUsingListContinuationPrefixRegex.IsMatch(statement)
