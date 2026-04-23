@@ -3,6 +3,7 @@ using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
+[Collection("SQLite pool sensitive")]
 public class DbDebugTests
 {
     private static string CaptureStderr(Action action)

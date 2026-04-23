@@ -21,7 +21,6 @@ public static class QueryCommandRunner
     internal const int ExactZeroHintProbeLimit = 1;
     internal const int ExactZeroHintSampleLimit = 5;
     private const string HotspotsGroupedByNameKind = "name_kind";
-    private const string CSharpEnumMemberUnusedGraphReason = "C# enum members are currently excluded from unused analysis, and enum declarations may still be false positives.";
     private static readonly HashSet<string> ValueTakingOptions =
     [
         "--db",
@@ -2052,7 +2051,6 @@ public static class QueryCommandRunner
 
             bool? graphSupported = options.Lang != null ? ReferenceExtractor.SupportsLanguage(options.Lang) : null;
             var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(options.Lang, graphSupported);
-            var graphSupportOverride = BuildUnusedEnumMemberGraphSupportOverride(reader, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             if (options.CountOnly)
             {
                 var countSummary = reader.CountUnusedSymbols(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
@@ -2063,18 +2061,16 @@ public static class QueryCommandRunner
                         ["count"] = countSummary.Count,
                         ["files"] = countSummary.FileCount,
                         ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(new Dictionary<string, int>(), jsonOptions),
-                        ["graph_supported"] = graphSupportOverride?.GraphSupported ?? graphSupported,
-                        ["graph_support_reason"] = graphSupportOverride?.GraphSupportReason ?? graphSupportReason,
+                        ["graph_supported"] = graphSupported,
+                        ["graph_support_reason"] = graphSupportReason,
                         ["graph_table_available"] = reader._hasReferencesTable,
                         ["degraded"] = !reader._hasReferencesTable
                     };
-                    AddGraphSupportOverrideFields(payload, graphSupportOverride);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
                 {
                     Console.WriteLine($"{countSummary.Count}");
-                    WriteGraphSupportOverrideHint(graphSupportOverride);
                     WriteDegradedGraphZeroResult(reader, "unused", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
                 return CommandExitCodes.Success;
@@ -2090,8 +2086,7 @@ public static class QueryCommandRunner
                         graphSupported,
                         graphSupportReason,
                         reader._hasReferencesTable,
-                        jsonOptions,
-                        graphSupportOverride));
+                        jsonOptions));
                 }
                 else
                 {
@@ -2099,7 +2094,6 @@ public static class QueryCommandRunner
                     WriteZeroResultHints(options, reader);
                     WriteKindHint(options.Kind, reader);
                     WriteLangHint(options.Lang, reader);
-                    WriteGraphSupportOverrideHint(graphSupportOverride);
                     WriteDegradedGraphZeroResult(reader, "symbols", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
                 return options.Json ? CommandExitCodes.Success : CommandExitCodes.NotFound;
@@ -2107,7 +2101,7 @@ public static class QueryCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(BuildUnusedJsonPayload(results, graphSupported, graphSupportReason, reader._hasReferencesTable, jsonOptions, graphSupportOverride));
+                Console.WriteLine(BuildUnusedJsonPayload(results, graphSupported, graphSupportReason, reader._hasReferencesTable, jsonOptions));
             }
             else
             {
@@ -2132,7 +2126,6 @@ public static class QueryCommandRunner
                     .Where(bucketCounts.ContainsKey)
                     .Select(bucket => $"{GetUnusedBucketHeading(bucket)}: {bucketCounts[bucket]}");
                 Console.Error.WriteLine($"({results.Count} returned potentially unused symbols; returned buckets: {string.Join(", ", summaryBuckets)})");
-                WriteGraphSupportOverrideHint(graphSupportOverride);
             }
             return CommandExitCodes.Success;
         });
@@ -2160,18 +2153,17 @@ public static class QueryCommandRunner
         return ordered;
     }
 
-    private static string BuildUnusedJsonPayload(IEnumerable<UnusedSymbolResult> results, bool? graphSupported, string? graphSupportReason, bool hasReferencesTable, JsonSerializerOptions jsonOptions, GraphSupportOverride? graphSupportOverride = null)
+    private static string BuildUnusedJsonPayload(IEnumerable<UnusedSymbolResult> results, bool? graphSupported, string? graphSupportReason, bool hasReferencesTable, JsonSerializerOptions jsonOptions)
     {
         var resultList = results as IReadOnlyCollection<UnusedSymbolResult> ?? results.ToArray();
         var payload = new JsonObject
         {
             ["count"] = resultList.Count,
-            ["graph_supported"] = graphSupportOverride?.GraphSupported ?? graphSupported,
-            ["graph_support_reason"] = graphSupportOverride?.GraphSupportReason ?? graphSupportReason,
+            ["graph_supported"] = graphSupported,
+            ["graph_support_reason"] = graphSupportReason,
             ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(BuildUnusedBucketCounts(resultList), jsonOptions),
             ["symbols"] = JsonSerializer.SerializeToNode(resultList, jsonOptions)
         };
-        AddGraphSupportOverrideFields(payload, graphSupportOverride);
 
         if (!hasReferencesTable)
         {
@@ -3355,29 +3347,6 @@ public static class QueryCommandRunner
             return;
 
         Console.Error.WriteLine($"Note: {graphSupportOverride.GraphSupportReason}");
-    }
-
-    private static GraphSupportOverride? BuildUnusedEnumMemberGraphSupportOverride(
-        DbReader reader,
-        string? lang,
-        string? kind,
-        IReadOnlyList<string> pathPatterns,
-        IReadOnlyList<string> excludePaths,
-        bool excludeTests)
-    {
-        if (lang != null && !string.Equals(lang, "csharp", StringComparison.Ordinal))
-            return null;
-        if (kind != null && !string.Equals(kind, "enum", StringComparison.Ordinal))
-            return null;
-        if (!reader.HasFilteredCSharpEnumSymbols(kind, lang, pathPatterns, excludePaths, excludeTests))
-            return null;
-
-        return new GraphSupportOverride(
-            "csharp",
-            GraphSupported: true,
-            CSharpEnumMemberUnusedGraphReason,
-            UnsupportedSymbolKind: "enum_member",
-            GraphDegraded: true);
     }
 
     private sealed record GraphSupportOverride(

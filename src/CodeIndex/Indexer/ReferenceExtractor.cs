@@ -398,6 +398,21 @@ public static class ReferenceExtractor
     private static readonly Regex JavaDotClassArgRegex = new(
         @"(?<![\w$.])(?<arg>[A-Za-z_][\w.]*)\s*(?:\[\s*\])*\s*\.class\b",
         RegexOptions.Compiled);
+    // C# type tests / pattern cases (`o is Base`, `o as Base`, `case ILogger x:`).
+    // `is` / `as` / `case` の型位置 (`o is Base`, `o as Base`, `case ILogger x:`)。
+    private static readonly Regex CSharpTypeTestRegex = new(
+        $@"(?<![\w$])(?:is|as|case)\s+(?<type>(?:global::)?(?:{CSharpIdentifierPattern}\s*(?:(?:\.|::)\s*{CSharpIdentifierPattern})*)(?:\s*<[^)\];{{}}]+>)?(?:\s*\[[^\]\n]*\])*)",
+        RegexOptions.Compiled);
+    // C# XML-doc cross-reference (`<see cref="Base.Do"/>`, `<seealso cref="ILogger.Log"/>`).
+    // C# XML doc の `<see cref="Base.Do"/>` / `<seealso cref="ILogger.Log"/>`。
+    private static readonly Regex CSharpDocCrefRegex = new(
+        @"<(?:see|seealso)\s+cref\s*=\s*""(?<cref>[^""]+)""",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // Java type test (`instanceof Foo`).
+    // Java の型テスト (`instanceof Foo`)。
+    private static readonly Regex JavaInstanceofRegex = new(
+        @"(?<![\w$])instanceof\s+(?<type>[A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*(?:\s*<[^)\];{}]+>)?(?:\s*\[\s*\])*)",
+        RegexOptions.Compiled);
 
     // Java primitive type names that can precede `.class` (e.g. `int.class`, `void.class`).
     // Skipped from reference rows because they are language-level keywords, not indexed types.
@@ -626,6 +641,20 @@ public static class ReferenceExtractor
             var lineNumber = i + 1;
             var originalLine = lines[i];
             var preparedLine = preparedLines[i];
+            if (language == "csharp"
+                && originalLine.IndexOf("cref=\"", StringComparison.OrdinalIgnoreCase) >= 0
+                && IsCSharpXmlDocCommentLine(originalLine))
+            {
+                var docContainer = FindDocumentedContainer(containerCandidates, lineNumber);
+                EmitCSharpDocCrefReferences(
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    originalLine.Trim(),
+                    lineNumber,
+                    docContainer);
+            }
             if (string.IsNullOrWhiteSpace(preparedLine))
                 continue;
             var csharpAttrRangesOnLine = csharpAttrRanges?[i];
@@ -753,6 +782,39 @@ public static class ReferenceExtractor
                     var argGroup = match.Groups["arg"];
                     AddTypeReferenceSegments(references, seen, fileId, argGroup.Value, argGroup.Index, context, lineNumber, container, language);
                 }
+            }
+
+            // Type-position references without an introducing keyword-call: base lists,
+            // declaration types, generic constraints, throws clauses, type tests, and
+            // XML-doc crefs. These are dependency edges for `references` / `impact`, but
+            // not invocation edges for default `callers` / `callees`. See issue #256.
+            // キーワード呼び出しの外にある型位置参照（継承リスト、宣言型、generic 制約、
+            // throws、型テスト、XML doc cref）。`references` / `impact` では依存として扱うが、
+            // 既定の `callers` / `callees` では呼び出しエッジではない。issue #256 参照。
+            if (language == "csharp")
+            {
+                EmitCSharpTypePositionReferences(
+                    preparedLine,
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall,
+                    container);
+            }
+            else if (language == "java")
+            {
+                EmitJavaTypePositionReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall,
+                    container);
             }
 
             var sqlSuppressedCallIndices = language is "sql" ? new HashSet<int>() : null;
@@ -1683,7 +1745,24 @@ public static class ReferenceExtractor
             return true;
         if (language == "csharp" && CSharpBuiltInTypeNames.Contains(segment))
             return true;
+        if (IsLikelyGenericTypeParameter(segment))
+            return true;
         return false;
+    }
+
+    private static bool IsLikelyGenericTypeParameter(string segment)
+    {
+        if (segment.Length == 1)
+            return char.IsUpper(segment[0]);
+        if (segment.Length < 2 || segment[0] != 'T' || !char.IsUpper(segment[1]))
+            return false;
+        for (int i = 2; i < segment.Length; i++)
+        {
+            if (!(char.IsLetterOrDigit(segment[i]) || segment[i] == '_'))
+                return false;
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -1801,6 +1880,634 @@ public static class ReferenceExtractor
         }
     }
 
+    private static void EmitCSharpTypePositionReferences(
+        string preparedLine,
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        SymbolRecord? container)
+    {
+        TryEmitCSharpBaseListReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitCSharpWhereConstraintReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitDeclarationTypeReferences("csharp", preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+
+        foreach (Match match in CSharpTypeTestRegex.Matches(preparedLine))
+        {
+            var typeGroup = match.Groups["type"];
+            AddTypeExpressionSegments(
+                references,
+                seen,
+                fileId,
+                typeGroup.Value,
+                typeGroup.Index,
+                context,
+                lineNumber,
+                resolveContainerForColumn(typeGroup.Index),
+                "csharp");
+        }
+    }
+
+    private static void EmitJavaTypePositionReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        SymbolRecord? container)
+    {
+        TryEmitJavaKeywordTypeListReferences(preparedLine, "extends", references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        TryEmitJavaKeywordTypeListReferences(preparedLine, "implements", references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitJavaThrowsReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitDeclarationTypeReferences("java", preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+
+        foreach (Match match in JavaInstanceofRegex.Matches(preparedLine))
+        {
+            var typeGroup = match.Groups["type"];
+            AddTypeExpressionSegments(
+                references,
+                seen,
+                fileId,
+                typeGroup.Value,
+                typeGroup.Index,
+                context,
+                lineNumber,
+                resolveContainerForColumn(typeGroup.Index),
+                "java");
+        }
+    }
+
+    private static void EmitCSharpDocCrefReferences(
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        foreach (Match match in CSharpDocCrefRegex.Matches(originalLine))
+        {
+            var crefGroup = match.Groups["cref"];
+            var normalized = NormalizeCSharpDocCref(crefGroup.Value);
+            if (normalized.Length == 0)
+                continue;
+            AddTypeExpressionSegments(
+                references,
+                seen,
+                fileId,
+                normalized,
+                crefGroup.Index,
+                context,
+                lineNumber,
+                container,
+                "csharp");
+        }
+    }
+
+    private static void TryEmitCSharpBaseListReferences(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var trimmed = line.TrimStart();
+        if (!(trimmed.Contains(" class ", StringComparison.Ordinal)
+              || trimmed.Contains(" struct ", StringComparison.Ordinal)
+              || trimmed.Contains(" interface ", StringComparison.Ordinal)
+              || trimmed.StartsWith("class ", StringComparison.Ordinal)
+              || trimmed.StartsWith("struct ", StringComparison.Ordinal)
+              || trimmed.StartsWith("interface ", StringComparison.Ordinal)
+              || trimmed.Contains(" record ", StringComparison.Ordinal)
+              || trimmed.StartsWith("record ", StringComparison.Ordinal)))
+        {
+            return;
+        }
+
+        var colonIndex = FindSignatureColonIndex(line);
+        if (colonIndex < 0)
+            return;
+
+        var baseList = line.Substring(colonIndex + 1);
+        var whereMatch = CSharpWhereClauseRegex.Match(baseList);
+        if (whereMatch.Success)
+            baseList = baseList.Substring(0, whereMatch.Index);
+        baseList = TrimTrailingTypeListTerminator(baseList);
+        foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(baseList))
+        {
+            var rawSegment = baseList.Substring(segmentStart, segmentLength).Trim();
+            if (rawSegment.Length == 0 || rawSegment.Contains('('))
+                continue;
+            var absoluteStart = colonIndex + 1 + segmentStart + CountLeadingWhitespace(baseList, segmentStart, segmentLength);
+            AddTypeExpressionSegments(
+                references,
+                seen,
+                fileId,
+                rawSegment,
+                absoluteStart,
+                context,
+                lineNumber,
+                resolveContainerForColumn(absoluteStart),
+                "csharp");
+        }
+    }
+
+    private static void EmitCSharpWhereConstraintReferences(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (Match match in CSharpWhereClauseRegex.Matches(line))
+        {
+            int listStart = match.Index + match.Length;
+            var remaining = line.Substring(listStart);
+            int nextWhere = CSharpWhereClauseRegex.Match(remaining).Success ? CSharpWhereClauseRegex.Match(remaining).Index : -1;
+            int end = FindTypeListTerminator(remaining, allowArrow: true);
+            if (nextWhere >= 0 && (end < 0 || nextWhere < end))
+                end = nextWhere;
+            if (end < 0)
+                end = remaining.Length;
+            var constraintList = remaining.Substring(0, end);
+            foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(constraintList))
+            {
+                var rawSegment = constraintList.Substring(segmentStart, segmentLength).Trim();
+                if (rawSegment.Length == 0 || rawSegment.Contains('('))
+                    continue;
+                var absoluteStart = listStart + segmentStart + CountLeadingWhitespace(constraintList, segmentStart, segmentLength);
+                AddTypeExpressionSegments(
+                    references,
+                    seen,
+                    fileId,
+                    rawSegment,
+                    absoluteStart,
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn(absoluteStart),
+                    "csharp");
+            }
+        }
+    }
+
+    private static void TryEmitJavaKeywordTypeListReferences(
+        string line,
+        string keyword,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        int keywordIndex = FindTopLevelKeyword(line, keyword);
+        if (keywordIndex < 0)
+            return;
+
+        int listStart = keywordIndex + keyword.Length;
+        while (listStart < line.Length && char.IsWhiteSpace(line[listStart]))
+            listStart++;
+
+        int listEnd = FindJavaTypeListTerminator(line, listStart);
+        if (listEnd < 0)
+            listEnd = line.Length;
+        var typeList = line.Substring(listStart, listEnd - listStart);
+        foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(typeList))
+        {
+            var rawSegment = typeList.Substring(segmentStart, segmentLength).Trim();
+            if (rawSegment.Length == 0)
+                continue;
+            var absoluteStart = listStart + segmentStart + CountLeadingWhitespace(typeList, segmentStart, segmentLength);
+            AddTypeExpressionSegments(
+                references,
+                seen,
+                fileId,
+                rawSegment,
+                absoluteStart,
+                context,
+                lineNumber,
+                resolveContainerForColumn(absoluteStart),
+                "java");
+        }
+    }
+
+    private static void EmitJavaThrowsReferences(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        int keywordIndex = FindTopLevelKeyword(line, "throws");
+        if (keywordIndex < 0)
+            return;
+
+        int listStart = keywordIndex + "throws".Length;
+        while (listStart < line.Length && char.IsWhiteSpace(line[listStart]))
+            listStart++;
+        int listEnd = FindTypeListTerminator(line.Substring(listStart), allowArrow: false);
+        if (listEnd < 0)
+            listEnd = line.Length - listStart;
+        var typeList = line.Substring(listStart, listEnd);
+        foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(typeList))
+        {
+            var rawSegment = typeList.Substring(segmentStart, segmentLength).Trim();
+            if (rawSegment.Length == 0)
+                continue;
+            var absoluteStart = listStart + segmentStart + CountLeadingWhitespace(typeList, segmentStart, segmentLength);
+            AddTypeExpressionSegments(
+                references,
+                seen,
+                fileId,
+                rawSegment,
+                absoluteStart,
+                context,
+                lineNumber,
+                resolveContainerForColumn(absoluteStart),
+                "java");
+        }
+    }
+
+    private static void EmitDeclarationTypeReferences(
+        string language,
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        if (TryFindCallableParameterList(line, language, out var callableNameStart, out var paramStart, out var paramEnd))
+        {
+            if (TryGetCallableReturnTypeSpan(line, callableNameStart, language, out var typeStart, out var typeLength))
+            {
+                AddTypeExpressionSegments(
+                    references,
+                    seen,
+                    fileId,
+                    line.Substring(typeStart, typeLength),
+                    typeStart,
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn(typeStart),
+                    language);
+            }
+
+            EmitParameterTypeReferences(
+                language,
+                line,
+                paramStart,
+                paramEnd,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn);
+        }
+
+        if (TryGetSimpleDeclarationTypeSpan(line, language, out var declarationTypeStart, out var declarationTypeLength))
+        {
+            AddTypeExpressionSegments(
+                references,
+                seen,
+                fileId,
+                line.Substring(declarationTypeStart, declarationTypeLength),
+                declarationTypeStart,
+                context,
+                lineNumber,
+                resolveContainerForColumn(declarationTypeStart),
+                language);
+        }
+    }
+
+    private static bool TryFindCallableParameterList(
+        string line,
+        string language,
+        out int callableNameStart,
+        out int paramStart,
+        out int paramEnd)
+    {
+        callableNameStart = -1;
+        paramStart = -1;
+        paramEnd = -1;
+
+        if (IsDefinitelyNotTypeDeclarationLine(line, language))
+            return false;
+
+        int openParen = FindFirstTopLevelChar(line, '(');
+        if (openParen <= 0)
+            return false;
+        if (!TryFindCallableName(line, openParen, language, out callableNameStart))
+            return false;
+
+        int closeParen = FindMatchingChar(line, openParen, '(', ')');
+        if (closeParen < 0)
+            return false;
+
+        paramStart = openParen + 1;
+        paramEnd = closeParen;
+        return true;
+    }
+
+    private static bool TryFindCallableName(string line, int openParen, string language, out int nameStart)
+    {
+        nameStart = -1;
+        int i = openParen - 1;
+        while (i >= 0 && char.IsWhiteSpace(line[i]))
+            i--;
+        if (i < 0)
+            return false;
+
+        if (line[i] == '>')
+        {
+            int depth = 1;
+            i--;
+            while (i >= 0 && depth > 0)
+            {
+                if (line[i] == '>')
+                    depth++;
+                else if (line[i] == '<')
+                    depth--;
+                i--;
+            }
+            while (i >= 0 && char.IsWhiteSpace(line[i]))
+                i--;
+        }
+
+        if (i < 0 || !IsTypeExpressionIdentifierPart(language, line[i]))
+            return false;
+        int end = i + 1;
+        while (i >= 0 && IsTypeExpressionIdentifierPart(language, line[i]))
+            i--;
+        nameStart = i + 1;
+
+        var name = line.Substring(nameStart, end - nameStart);
+        if (IsIgnoredCallName(language, name))
+            return false;
+        return true;
+    }
+
+    private static bool TryGetCallableReturnTypeSpan(string line, int callableNameStart, string language, out int typeStart, out int typeLength)
+    {
+        typeStart = -1;
+        typeLength = 0;
+        var prefix = line.Substring(0, callableNameStart);
+        if (prefix.IndexOf('=') >= 0 || prefix.Contains("=>", StringComparison.Ordinal))
+            return false;
+
+        var tokens = GetTopLevelTokenSpans(prefix);
+        if (tokens.Count == 0)
+            return false;
+
+        for (int i = tokens.Count - 1; i >= 0; i--)
+        {
+            var token = prefix.Substring(tokens[i].Start, tokens[i].Length);
+            if (IsCallablePrefixModifier(language, token) || token.StartsWith("[", StringComparison.Ordinal) || token.StartsWith("@", StringComparison.Ordinal))
+                continue;
+            if (!HasWhitespaceGap(prefix, tokens[i].Start + tokens[i].Length))
+                return false;
+            typeStart = tokens[i].Start;
+            typeLength = tokens[i].Length;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static void EmitParameterTypeReferences(
+        string language,
+        string line,
+        int paramStart,
+        int paramEnd,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        if (paramEnd <= paramStart)
+            return;
+
+        var parameterList = line.Substring(paramStart, paramEnd - paramStart);
+        foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(parameterList))
+        {
+            var fragment = parameterList.Substring(segmentStart, segmentLength);
+            if (!TryGetParameterTypeRelativeSpan(fragment, language, out var typeRelativeStart, out var typeRelativeLength))
+                continue;
+
+            int absoluteStart = paramStart + segmentStart + typeRelativeStart;
+            AddTypeExpressionSegments(
+                references,
+                seen,
+                fileId,
+                fragment.Substring(typeRelativeStart, typeRelativeLength),
+                absoluteStart,
+                context,
+                lineNumber,
+                resolveContainerForColumn(absoluteStart),
+                language);
+        }
+    }
+
+    private static bool TryGetParameterTypeRelativeSpan(string parameterFragment, string language, out int typeStart, out int typeLength)
+    {
+        typeStart = -1;
+        typeLength = 0;
+
+        int end = FindTopLevelAssignmentIndex(parameterFragment);
+        if (end < 0)
+            end = parameterFragment.Length;
+        var candidate = parameterFragment.Substring(0, end);
+        var tokens = GetTopLevelTokenSpans(candidate);
+        if (tokens.Count < 2)
+            return false;
+
+        int first = 0;
+        while (first < tokens.Count)
+        {
+            var token = candidate.Substring(tokens[first].Start, tokens[first].Length);
+            if (token.StartsWith("[", StringComparison.Ordinal) || token.StartsWith("@", StringComparison.Ordinal) || IsParameterModifier(language, token))
+            {
+                first++;
+                continue;
+            }
+
+            break;
+        }
+
+        if (first >= tokens.Count - 1)
+            return false;
+
+        typeStart = tokens[first].Start;
+        int lastTypeToken = tokens.Count - 2;
+        while (lastTypeToken >= first)
+        {
+            var token = candidate.Substring(tokens[lastTypeToken].Start, tokens[lastTypeToken].Length);
+            if (IsParameterModifier(language, token))
+            {
+                lastTypeToken--;
+                continue;
+            }
+
+            break;
+        }
+
+        if (lastTypeToken < first)
+            return false;
+        typeLength = tokens[lastTypeToken].Start + tokens[lastTypeToken].Length - typeStart;
+        return true;
+    }
+
+    private static bool TryGetSimpleDeclarationTypeSpan(string line, string language, out int typeStart, out int typeLength)
+    {
+        typeStart = -1;
+        typeLength = 0;
+
+        if (IsDefinitelyNotTypeDeclarationLine(line, language))
+            return false;
+
+        int firstParen = FindFirstTopLevelChar(line, '(');
+        int firstTerminator = FindFirstTopLevelChar(line, ';');
+        int firstBrace = FindFirstTopLevelChar(line, '{');
+        int firstEquals = FindFirstTopLevelChar(line, '=');
+        int firstComma = FindFirstTopLevelChar(line, ',');
+        int boundary = int.MaxValue;
+        if (firstTerminator >= 0) boundary = Math.Min(boundary, firstTerminator);
+        if (firstBrace >= 0) boundary = Math.Min(boundary, firstBrace);
+        if (firstEquals >= 0) boundary = Math.Min(boundary, firstEquals);
+        if (firstComma >= 0) boundary = Math.Min(boundary, firstComma);
+        if (boundary == int.MaxValue)
+            return false;
+        if (firstParen >= 0 && firstParen < boundary)
+            return false;
+
+        var head = line.Substring(0, boundary);
+        var tokens = GetTopLevelTokenSpans(head);
+        if (tokens.Count < 2)
+            return false;
+
+        int first = 0;
+        while (first < tokens.Count)
+        {
+            var token = head.Substring(tokens[first].Start, tokens[first].Length);
+            if (token.StartsWith("[", StringComparison.Ordinal) || token.StartsWith("@", StringComparison.Ordinal) || IsDeclarationModifier(language, token))
+            {
+                first++;
+                continue;
+            }
+
+            break;
+        }
+
+        if (first >= tokens.Count - 1)
+            return false;
+
+        var declaredNameToken = head.Substring(tokens[^1].Start, tokens[^1].Length);
+        if (!IsSimpleDeclarationIdentifier(language, declaredNameToken))
+            return false;
+
+        typeStart = tokens[first].Start;
+        int lastTypeToken = tokens.Count - 2;
+        typeLength = tokens[lastTypeToken].Start + tokens[lastTypeToken].Length - typeStart;
+        return true;
+    }
+
+    private static bool IsDefinitelyNotTypeDeclarationLine(string line, string language)
+    {
+        var trimmed = line.TrimStart();
+        if (trimmed.Length == 0)
+            return true;
+        if (trimmed.StartsWith("using ", StringComparison.Ordinal)
+            || trimmed.StartsWith("namespace ", StringComparison.Ordinal)
+            || trimmed.StartsWith("package ", StringComparison.Ordinal)
+            || trimmed.StartsWith("import ", StringComparison.Ordinal)
+            || trimmed.StartsWith("return ", StringComparison.Ordinal)
+            || trimmed.StartsWith("throw ", StringComparison.Ordinal)
+            || trimmed.StartsWith("if ", StringComparison.Ordinal)
+            || trimmed.StartsWith("if(", StringComparison.Ordinal)
+            || trimmed.StartsWith("switch ", StringComparison.Ordinal)
+            || trimmed.StartsWith("switch(", StringComparison.Ordinal)
+            || trimmed.StartsWith("while ", StringComparison.Ordinal)
+            || trimmed.StartsWith("while(", StringComparison.Ordinal)
+            || trimmed.StartsWith("for ", StringComparison.Ordinal)
+            || trimmed.StartsWith("for(", StringComparison.Ordinal)
+            || trimmed.StartsWith("foreach ", StringComparison.Ordinal)
+            || trimmed.StartsWith("foreach(", StringComparison.Ordinal)
+            || trimmed.StartsWith("catch ", StringComparison.Ordinal)
+            || trimmed.StartsWith("catch(", StringComparison.Ordinal)
+            || trimmed.StartsWith("lock ", StringComparison.Ordinal)
+            || trimmed.StartsWith("lock(", StringComparison.Ordinal)
+            || trimmed.StartsWith("case ", StringComparison.Ordinal)
+            || trimmed.StartsWith("else", StringComparison.Ordinal)
+            || trimmed.StartsWith("do", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return trimmed.StartsWith("class ", StringComparison.Ordinal)
+            || trimmed.StartsWith("struct ", StringComparison.Ordinal)
+            || trimmed.StartsWith("interface ", StringComparison.Ordinal)
+            || trimmed.StartsWith("record ", StringComparison.Ordinal)
+            || (language == "java" && trimmed.StartsWith("enum ", StringComparison.Ordinal));
+    }
+
+    private static void AddTypeExpressionSegments(
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string expression,
+        int expressionStartInLine,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        string language)
+    {
+        for (int i = 0; i < expression.Length; i++)
+        {
+            char c = expression[i];
+            if (language == "java" && c == '@')
+            {
+                i = SkipJavaAnnotation(expression, i);
+                continue;
+            }
+
+            if (!IsTypeExpressionIdentifierStart(language, c))
+                continue;
+
+            int segmentStart = i;
+            while (i < expression.Length && IsTypeExpressionIdentifierPart(language, expression[i]))
+                i++;
+
+            var segment = expression.Substring(segmentStart, i - segmentStart);
+            if (language == "csharp")
+                segment = NormalizeCSharpIdentifier(segment);
+
+            if (i + 1 < expression.Length && expression[i] == ':' && expression[i + 1] == ':')
+            {
+                i++;
+                continue;
+            }
+
+            AddTypeReferenceSegment(references, seen, fileId, segment, expressionStartInLine + segmentStart, context, lineNumber, container, language);
+            i--;
+        }
+    }
+
     private static int SkipBalanced(string line, int start, char open, char close)
     {
         int depth = 0;
@@ -1821,8 +2528,421 @@ public static class ReferenceExtractor
         return i;
     }
 
+    private static int SkipJavaAnnotation(string text, int start)
+    {
+        int i = start + 1;
+        while (i < text.Length && (IsJavaIdentifierPart(text[i]) || text[i] == '.'))
+            i++;
+        if (i < text.Length && text[i] == '(')
+        {
+            int close = FindMatchingChar(text, i, '(', ')');
+            if (close >= 0)
+                return close;
+        }
+
+        return i - 1;
+    }
+
+    private static int FindMatchingChar(string text, int openIndex, char open, char close)
+    {
+        int depth = 0;
+        for (int i = openIndex; i < text.Length; i++)
+        {
+            if (text[i] == open)
+                depth++;
+            else if (text[i] == close)
+            {
+                depth--;
+                if (depth == 0)
+                    return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int FindFirstTopLevelChar(string text, char target)
+    {
+        int angleDepth = 0;
+        int parenDepth = 0;
+        int squareDepth = 0;
+        int braceDepth = 0;
+        for (int i = 0; i < text.Length; i++)
+        {
+            if (text[i] == target && angleDepth == 0 && parenDepth == 0 && squareDepth == 0 && braceDepth == 0)
+                return i;
+
+            switch (text[i])
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0) angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0) parenDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0) squareDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0) braceDepth--;
+                    break;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int FindTopLevelAssignmentIndex(string text)
+    {
+        int angleDepth = 0;
+        int parenDepth = 0;
+        int squareDepth = 0;
+        int braceDepth = 0;
+        for (int i = 0; i < text.Length; i++)
+        {
+            switch (text[i])
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0) angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0) parenDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0) squareDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0) braceDepth--;
+                    break;
+                case '=' when angleDepth == 0 && parenDepth == 0 && squareDepth == 0 && braceDepth == 0:
+                    if (i + 1 >= text.Length || text[i + 1] != '>')
+                        return i;
+                    break;
+            }
+        }
+
+        return -1;
+    }
+
+    private static List<(int Start, int Length)> GetTopLevelTokenSpans(string text)
+    {
+        var tokens = new List<(int Start, int Length)>();
+        int angleDepth = 0;
+        int parenDepth = 0;
+        int squareDepth = 0;
+        int braceDepth = 0;
+        int tokenStart = -1;
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            switch (c)
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0) angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0) parenDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0) squareDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0) braceDepth--;
+                    break;
+            }
+
+            bool topLevelWhitespace = char.IsWhiteSpace(c) && angleDepth == 0 && parenDepth == 0 && squareDepth == 0 && braceDepth == 0;
+            if (topLevelWhitespace)
+            {
+                if (tokenStart >= 0)
+                {
+                    tokens.Add((tokenStart, i - tokenStart));
+                    tokenStart = -1;
+                }
+                continue;
+            }
+
+            if (tokenStart < 0)
+                tokenStart = i;
+        }
+
+        if (tokenStart >= 0)
+            tokens.Add((tokenStart, text.Length - tokenStart));
+        return tokens;
+    }
+
+    private static List<(int Start, int Length)> SplitTopLevelCommaSpans(string text)
+    {
+        var spans = new List<(int Start, int Length)>();
+        int angleDepth = 0;
+        int parenDepth = 0;
+        int squareDepth = 0;
+        int braceDepth = 0;
+        int start = 0;
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            switch (text[i])
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0) angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0) parenDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0) squareDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0) braceDepth--;
+                    break;
+                case ',' when angleDepth == 0 && parenDepth == 0 && squareDepth == 0 && braceDepth == 0:
+                    spans.Add((start, i - start));
+                    start = i + 1;
+                    break;
+            }
+        }
+
+        spans.Add((start, text.Length - start));
+        return spans;
+    }
+
+    private static int CountLeadingWhitespace(string text, int start, int length)
+    {
+        int count = 0;
+        while (count < length && char.IsWhiteSpace(text[start + count]))
+            count++;
+        return count;
+    }
+
+    private static int FindTypeListTerminator(string text, bool allowArrow)
+    {
+        int brace = FindFirstTopLevelChar(text, '{');
+        int semi = FindFirstTopLevelChar(text, ';');
+        int end = -1;
+        if (brace >= 0) end = brace;
+        if (semi >= 0 && (end < 0 || semi < end)) end = semi;
+        if (allowArrow)
+        {
+            int arrow = text.IndexOf("=>", StringComparison.Ordinal);
+            if (arrow >= 0 && (end < 0 || arrow < end))
+                end = arrow;
+        }
+        return end;
+    }
+
+    private static string TrimTrailingTypeListTerminator(string text)
+    {
+        int end = FindTypeListTerminator(text, allowArrow: true);
+        return end >= 0 ? text.Substring(0, end) : text;
+    }
+
+    private static int FindJavaTypeListTerminator(string text, int start)
+    {
+        int angleDepth = 0;
+        int parenDepth = 0;
+        for (int i = start; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (c == '<')
+                angleDepth++;
+            else if (c == '>')
+            {
+                if (angleDepth > 0) angleDepth--;
+            }
+            else if (c == '(')
+                parenDepth++;
+            else if (c == ')')
+            {
+                if (parenDepth > 0) parenDepth--;
+            }
+            else if (angleDepth == 0 && parenDepth == 0)
+            {
+                if (c == '{' || c == ';')
+                    return i;
+                if (IsJavaBaseListTerminatorKeyword(text, i, start, "implements")
+                    || IsJavaBaseListTerminatorKeyword(text, i, start, "permits")
+                    || IsJavaBaseListTerminatorKeyword(text, i, start, "throws"))
+                {
+                    return i;
+                }
+            }
+        }
+
+        return -1;
+    }
+
+    private static int FindTopLevelKeyword(string text, string keyword)
+    {
+        int angleDepth = 0;
+        int parenDepth = 0;
+        int squareDepth = 0;
+        int braceDepth = 0;
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            switch (c)
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0) angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0) parenDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0) squareDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0) braceDepth--;
+                    break;
+            }
+
+            if (angleDepth != 0 || parenDepth != 0 || squareDepth != 0 || braceDepth != 0)
+                continue;
+            if (i > 0 && IsJavaIdentifierPart(text[i - 1]))
+                continue;
+            if (i + keyword.Length > text.Length || string.CompareOrdinal(text, i, keyword, 0, keyword.Length) != 0)
+                continue;
+            int after = i + keyword.Length;
+            if (after < text.Length && IsJavaIdentifierPart(text[after]))
+                continue;
+            return i;
+        }
+
+        return -1;
+    }
+
+    private static bool IsCallablePrefixModifier(string language, string token) =>
+        language == "csharp"
+            ? token is "public" or "private" or "protected" or "internal" or "file" or "static" or "readonly" or "required" or "volatile" or "const"
+                or "unsafe" or "new" or "sealed" or "abstract" or "virtual" or "override" or "extern" or "partial" or "async" or "ref" or "scoped"
+            : token is "public" or "private" or "protected" or "static" or "final" or "abstract" or "synchronized" or "native" or "strictfp" or "default";
+
+    private static bool IsParameterModifier(string language, string token) =>
+        language == "csharp"
+            ? token is "ref" or "out" or "in" or "params" or "this" or "scoped" or "readonly"
+            : token is "final";
+
+    private static bool IsDeclarationModifier(string language, string token) =>
+        language == "csharp"
+            ? token is "public" or "private" or "protected" or "internal" or "file" or "static" or "readonly" or "required" or "volatile" or "const"
+                or "unsafe" or "new" or "sealed" or "abstract" or "virtual" or "override" or "extern" or "partial" or "async" or "ref" or "scoped" or "event"
+            : token is "public" or "private" or "protected" or "static" or "final" or "abstract" or "volatile" or "transient" or "synchronized" or "native" or "strictfp";
+
+    private static bool IsSimpleDeclarationIdentifier(string language, string token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return false;
+        if (!IsTypeExpressionIdentifierStart(language, token[0]))
+            return false;
+        for (int i = 1; i < token.Length; i++)
+        {
+            if (!IsTypeExpressionIdentifierPart(language, token[i]))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool HasWhitespaceGap(string text, int start)
+    {
+        if (start >= text.Length)
+            return false;
+        for (int i = start; i < text.Length; i++)
+        {
+            if (!char.IsWhiteSpace(text[i]))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static string NormalizeCSharpDocCref(string cref)
+    {
+        var text = cref.Trim();
+        if (text.Length >= 2 && char.IsLetter(text[0]) && text[1] == ':')
+            text = text.Substring(2);
+        int paren = text.IndexOf('(');
+        if (paren >= 0)
+            text = text.Substring(0, paren);
+        int brace = text.IndexOf('{');
+        if (brace >= 0)
+            text = text.Substring(0, brace);
+        return text.Trim();
+    }
+
     private static bool IsCSharpIdentifierStart(char c) =>
         c == '_' || c == '@' || char.IsLetter(c);
+
+    private static bool IsJavaIdentifierStart(char c) =>
+        c == '_' || c == '$' || char.IsLetter(c);
+
+    private static bool IsTypeExpressionIdentifierStart(string language, char c) =>
+        language == "csharp" ? IsCSharpIdentifierStart(c) : IsJavaIdentifierStart(c);
+
+    private static bool IsTypeExpressionIdentifierPart(string language, char c) =>
+        language == "csharp" ? IsCSharpIdentifierPart(c) : IsJavaIdentifierPart(c);
 
     private readonly record struct CSharpLineColumn(int Line, int Column);
     private readonly record struct CSharpRecursivePatternValueNameRecord(string Name, int Offset, bool IsCasePattern, int ArrowIndex = -1);
@@ -5255,6 +6375,37 @@ public static class ReferenceExtractor
         }
 
         return null;
+    }
+
+    private static SymbolRecord? FindDocumentedContainer(IReadOnlyList<SymbolRecord> candidates, int lineNumber)
+    {
+        SymbolRecord? best = null;
+        foreach (var candidate in candidates)
+        {
+            if (candidate.StartLine <= lineNumber)
+                continue;
+
+            if (best == null
+                || candidate.StartLine < best.StartLine
+                || (candidate.StartLine == best.StartLine
+                    && ((candidate.BodyEndLine ?? candidate.EndLine) - (candidate.BodyStartLine ?? candidate.StartLine))
+                       < ((best.BodyEndLine ?? best.EndLine) - (best.BodyStartLine ?? best.StartLine))))
+            {
+                best = candidate;
+            }
+        }
+
+        return best ?? FindInnermostContainer(candidates, lineNumber);
+    }
+
+    private static bool IsCSharpXmlDocCommentLine(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+            return false;
+
+        var trimmed = line.TrimStart();
+        return trimmed.StartsWith("///", StringComparison.Ordinal)
+            && (trimmed.Length == 3 || trimmed[3] != '/');
     }
 
     private static SymbolRecord? FindInnermostSameLineCSharpContainer(

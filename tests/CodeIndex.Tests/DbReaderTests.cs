@@ -2798,7 +2798,7 @@ public class DbReaderTests : IDisposable
         var dependency = Assert.Single(dependencies);
         Assert.Equal("src/Caller.cs", dependency.SourcePath);
         Assert.Equal("src/Foo.cs", dependency.TargetPath);
-        Assert.Equal(1, dependency.ReferenceCount);
+        Assert.Equal(2, dependency.ReferenceCount);
         Assert.DoesNotContain("foo.py", dependency.TargetPath, StringComparison.Ordinal);
     }
 
@@ -4998,8 +4998,8 @@ public class DbReaderTests : IDisposable
 
         Assert.Equal("file_dependency_hints", analysis.ImpactMode);
         var edge = Assert.Single(analysis.FileImpacts);
-        Assert.Equal(3, edge.ReferenceCount);
-        Assert.Equal("ExecuteFolderDiffAsync", edge.Symbols);
+        Assert.Equal(4, edge.ReferenceCount);
+        Assert.Equal("ExecuteFolderDiffAsync,FolderDiffService", edge.Symbols);
     }
 
     [Fact]
@@ -6840,6 +6840,123 @@ public class DbReaderTests : IDisposable
         Assert.Empty(unused);
         Assert.Equal(0, count.Count);
         Assert.Equal(0, count.FileCount);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_CSharpEnumMembersAreIncludedWhenUnreferenced()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/unused_enum_members_fixture.cs",
+            Lang = "csharp",
+            Size = 180,
+            Lines = 8,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "Color",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 4,
+                Signature = "public enum Color",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "Red",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "Red,",
+                ContainerKind = "enum",
+                ContainerName = "Color",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "Blue",
+                Line = 4,
+                StartLine = 4,
+                EndLine = 4,
+                Signature = "Blue",
+                ContainerKind = "enum",
+                ContainerName = "Color",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "TrulyUnused",
+                Line = 6,
+                StartLine = 6,
+                EndLine = 8,
+                Signature = "public enum TrulyUnused",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "Green",
+                Line = 8,
+                StartLine = 8,
+                EndLine = 8,
+                Signature = "Green",
+                ContainerKind = "enum",
+                ContainerName = "TrulyUnused",
+            },
+        ]);
+        _writer.InsertReferences(
+        [
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Color",
+                ReferenceKind = "type_reference",
+                Line = 10,
+                Column = 12,
+                Context = "public Color Shade => Color.Red;",
+            },
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Red",
+                ReferenceKind = "call",
+                Line = 10,
+                Column = 30,
+                Context = "public Color Shade => Color.Red;",
+            },
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Blue",
+                ReferenceKind = "call",
+                Line = 11,
+                Column = 30,
+                Context = "public Color Next => Color.Blue;",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "enum", lang: "csharp",
+            pathPatterns: ["unused_enum_members_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+        var count = _reader.CountUnusedSymbols(kind: "enum", lang: "csharp",
+            pathPatterns: ["unused_enum_members_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        Assert.Contains(unused, symbol => symbol.Name == "TrulyUnused");
+        Assert.Contains(unused, symbol => symbol.Name == "Green");
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "Color");
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "Red");
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "Blue");
+        Assert.Equal(2, count.Count);
+        Assert.Equal(1, count.FileCount);
     }
 
     [Fact]

@@ -12,6 +12,7 @@ namespace CodeIndex.Tests;
 /// 注: 実際の GitHub API 呼び出しはここではテストしない（実トークンと
 /// ネットワークアクセスが必要）。トークン解決ロジックのみをカバーする。
 /// </summary>
+[Collection("SQLite pool sensitive")]
 public class GitHubIssueReporterTests : IDisposable
 {
     // Save original env vars to restore after each test
