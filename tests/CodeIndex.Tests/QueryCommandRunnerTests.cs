@@ -15223,6 +15223,110 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpUsingStaticInheritedProtectedNestedTypePatternStaysVisible()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_using_static_inherited_protected_nested_type_pattern_visible");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Defs.cs", "csharp",
+                """
+                namespace Probe;
+
+                public enum Color
+                {
+                    Red
+                }
+
+                public class Base
+                {
+                    protected class Red {}
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Use.cs", "csharp",
+                """
+                using static Probe.Color;
+
+                namespace Probe;
+
+                class Derived : Base
+                {
+                    bool Match(object value) => value is Red;
+
+                    void ProbeType()
+                    {
+                        _ = typeof(Red);
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            var rows = ParseJsonLines(stdout).Select(doc => doc.RootElement).ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, rows.Count);
+            Assert.Contains(rows, row => row.GetProperty("context").GetString()!.Contains("value is Red", StringComparison.Ordinal));
+            Assert.Contains(rows, row => row.GetProperty("context").GetString()!.Contains("typeof(Red)", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_CSharpUsingStaticInheritedConstantOnlyPatternStaysSuppressed()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_using_static_inherited_constant_only_pattern_suppressed");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Defs.cs", "csharp",
+                """
+                namespace Probe;
+
+                public enum Color
+                {
+                    Red
+                }
+
+                public class Base {}
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Use.cs", "csharp",
+                """
+                using static Probe.Color;
+
+                namespace Probe;
+
+                class Derived : Base
+                {
+                    bool Match(object value) => value is Red;
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpGlobalQualifiedUsingAliasNameDoesNotCreateReference()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_global_alias_name_invalid");

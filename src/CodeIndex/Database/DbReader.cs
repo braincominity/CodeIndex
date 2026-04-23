@@ -39,7 +39,9 @@ public partial class DbReader
     private readonly Dictionary<string, List<CSharpUsingAliasScope>> _csharpUsingAliasScopesByPath = new(StringComparer.Ordinal);
     private readonly Dictionary<string, HashSet<string>> _csharpConstantPatternContainersByMemberName = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<CSharpTypeNamespaceCandidate>> _csharpTypeNamespacesByName = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, HashSet<string>> _csharpTypeContainingTypesByName = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, List<CSharpContainingTypeCandidate>> _csharpTypeContainingTypesByName = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, HashSet<string>> _csharpInheritedContainingTypesByQualifiedName = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, CSharpContainingTypeScope?> _csharpContainingTypeScopeByQualifiedName = new(StringComparer.Ordinal);
     private HashSet<string>? _csharpGlobalUsingStaticTargets;
     private HashSet<string>? _csharpGlobalUsingNamespaces;
     private HashSet<string>? _csharpGlobalUsingAliases;
@@ -96,11 +98,12 @@ public partial class DbReader
     private const int CSharpUsingStaticReferenceFilterChunkSize = 64;
     private const int CSharpUsingStaticReferenceFilterMaxRawLimit = 65536;
     private sealed record CSharpNamespaceScope(string QualifiedName, int ScopeStartLine, int ScopeEndLine);
-    private sealed record CSharpContainingTypeScope(string QualifiedName, int ScopeStartLine, int ScopeEndLine);
+    private sealed record CSharpContainingTypeScope(string Path, string QualifiedName, string? Visibility, string? Signature, int DeclarationLine, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpUsingStaticScope(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpUsingNamespaceScope(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpUsingAliasScope(string AliasName, int Line, int ScopeStartLine, int ScopeEndLine, bool TargetsType);
     private sealed record CSharpTypeNamespaceCandidate(string QualifiedName, string Path, bool IsFileLocal);
+    private sealed record CSharpContainingTypeCandidate(string QualifiedName, bool AccessibleFromDerivedType);
     private sealed record SearchReferenceRawRow(string Path, string? Lang, string SymbolName, string ReferenceKind, int Line, int Column, string Context, string? ContainerKind, string? ContainerName);
 
     /// <summary>
@@ -945,11 +948,24 @@ public partial class DbReader
             }
         }
 
-        var activeContainingTypes = GetActiveCSharpContainingTypes(path, lineNumber);
-        foreach (var activeContainingType in activeContainingTypes)
+        var activeContainingTypeScopes = GetActiveCSharpContainingTypeScopes(path, lineNumber);
+        foreach (var activeContainingTypeScope in activeContainingTypeScopes)
         {
-            if (candidateContainingTypes.Contains(activeContainingType))
+            if (candidateContainingTypes.Any(candidate => string.Equals(candidate.QualifiedName, activeContainingTypeScope.QualifiedName, StringComparison.Ordinal)))
                 return true;
+
+            if (!candidateContainingTypes.Any(candidate => candidate.AccessibleFromDerivedType))
+                continue;
+
+            var inheritedContainingTypes = GetInheritedCSharpContainingTypes(activeContainingTypeScope);
+            foreach (var candidate in candidateContainingTypes)
+            {
+                if (!candidate.AccessibleFromDerivedType)
+                    continue;
+                if (!inheritedContainingTypes.Contains(candidate.QualifiedName))
+                    continue;
+                return true;
+            }
         }
 
         return false;
@@ -994,7 +1010,7 @@ public partial class DbReader
         return activeNamespaces;
     }
 
-    private HashSet<string> GetActiveCSharpContainingTypes(string path, int lineNumber)
+    private List<CSharpContainingTypeScope> GetActiveCSharpContainingTypeScopes(string path, int lineNumber)
     {
         if (!_csharpContainingTypeScopesByPath.TryGetValue(path, out var containingTypeScopes))
         {
@@ -1002,14 +1018,85 @@ public partial class DbReader
             _csharpContainingTypeScopesByPath[path] = containingTypeScopes;
         }
 
-        var activeContainingTypes = new HashSet<string>(StringComparer.Ordinal);
+        var activeContainingTypes = new List<CSharpContainingTypeScope>();
         foreach (var scope in containingTypeScopes)
         {
             if (lineNumber >= scope.ScopeStartLine && lineNumber <= scope.ScopeEndLine)
-                activeContainingTypes.Add(scope.QualifiedName);
+                activeContainingTypes.Add(scope);
         }
 
         return activeContainingTypes;
+    }
+
+    private HashSet<string> GetInheritedCSharpContainingTypes(CSharpContainingTypeScope containingTypeScope)
+    {
+        if (_csharpInheritedContainingTypesByQualifiedName.TryGetValue(containingTypeScope.QualifiedName, out var cached))
+            return cached;
+
+        var inheritedContainingTypes = new HashSet<string>(StringComparer.Ordinal);
+        var visited = new HashSet<string>(StringComparer.Ordinal)
+        {
+            containingTypeScope.QualifiedName,
+        };
+        CollectInheritedCSharpContainingTypes(containingTypeScope, inheritedContainingTypes, visited);
+        _csharpInheritedContainingTypesByQualifiedName[containingTypeScope.QualifiedName] = inheritedContainingTypes;
+        return inheritedContainingTypes;
+    }
+
+    private void CollectInheritedCSharpContainingTypes(CSharpContainingTypeScope containingTypeScope, HashSet<string> inheritedContainingTypes, HashSet<string> visited)
+    {
+        var directBaseQualifiedName = ResolveDirectCSharpBaseContainingType(containingTypeScope);
+        if (string.IsNullOrWhiteSpace(directBaseQualifiedName) || !visited.Add(directBaseQualifiedName))
+            return;
+
+        inheritedContainingTypes.Add(directBaseQualifiedName);
+        var directBaseScope = GetCSharpContainingTypeScope(directBaseQualifiedName);
+        if (directBaseScope != null)
+            CollectInheritedCSharpContainingTypes(directBaseScope, inheritedContainingTypes, visited);
+    }
+
+    private CSharpContainingTypeScope? GetCSharpContainingTypeScope(string qualifiedName)
+    {
+        if (_csharpContainingTypeScopeByQualifiedName.TryGetValue(qualifiedName, out var cached))
+            return cached;
+
+        var lastDot = qualifiedName.LastIndexOf('.');
+        var shortName = lastDot >= 0 ? qualifiedName[(lastDot + 1)..] : qualifiedName;
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT f.path, s.name, s.container_name, s.container_qualified_name, s.visibility, s.signature, s.body_start_line, s.body_end_line, s.start_line, s.end_line
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.lang = 'csharp'
+              AND s.name = @symbolName COLLATE NOCASE
+              AND s.kind IN ('class', 'struct', 'interface')";
+        cmd.Parameters.AddWithValue("@symbolName", shortName);
+
+        CSharpContainingTypeScope? resolved = null;
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var scope = CreateCSharpContainingTypeScope(
+                reader.GetString(0),
+                GetNullableString(reader, 1),
+                GetNullableString(reader, 2),
+                GetNullableString(reader, 3),
+                GetNullableString(reader, 4),
+                GetNullableString(reader, 5),
+                reader.IsDBNull(6) ? null : reader.GetInt32(6),
+                reader.IsDBNull(7) ? null : reader.GetInt32(7),
+                reader.IsDBNull(8) ? null : reader.GetInt32(8),
+                reader.IsDBNull(9) ? null : reader.GetInt32(9));
+            if (scope == null)
+                continue;
+            if (!string.Equals(scope.QualifiedName, qualifiedName, StringComparison.Ordinal))
+                continue;
+            resolved = scope;
+            break;
+        }
+
+        _csharpContainingTypeScopeByQualifiedName[qualifiedName] = resolved;
+        return resolved;
     }
 
     private bool IsKnownCSharpTypeQualifiedName(string qualifiedName)
@@ -1034,7 +1121,7 @@ public partial class DbReader
         }
 
         var containingTypes = GetCSharpTypeContainingTypesByName(shortName);
-        if (containingTypes.Contains(containerQualifiedName))
+        if (containingTypes.Any(candidate => string.Equals(candidate.QualifiedName, containerQualifiedName, StringComparison.Ordinal)))
         {
             return true;
         }
@@ -1252,7 +1339,7 @@ public partial class DbReader
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = @"
-            SELECT s.name, s.container_name, s.container_qualified_name, s.body_start_line, s.body_end_line, s.start_line, s.end_line
+            SELECT s.name, s.container_name, s.container_qualified_name, s.visibility, s.signature, s.body_start_line, s.body_end_line, s.start_line, s.end_line
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE f.path = @path
@@ -1265,29 +1352,292 @@ public partial class DbReader
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
-            var name = GetNullableString(reader, 0);
-            if (string.IsNullOrWhiteSpace(name))
+            var scope = CreateCSharpContainingTypeScope(
+                path,
+                GetNullableString(reader, 0),
+                GetNullableString(reader, 1),
+                GetNullableString(reader, 2),
+                GetNullableString(reader, 3),
+                GetNullableString(reader, 4),
+                reader.IsDBNull(5) ? null : reader.GetInt32(5),
+                reader.IsDBNull(6) ? null : reader.GetInt32(6),
+                reader.IsDBNull(7) ? null : reader.GetInt32(7),
+                reader.IsDBNull(8) ? null : reader.GetInt32(8));
+            if (scope == null)
                 continue;
 
-            var containerQualifiedName = GetNullableString(reader, 2);
-            var containerName = GetNullableString(reader, 1);
-            var qualifiedName = CombineDbQualifiedName(
-                NormalizeDbCSharpQualifiedName(containerQualifiedName ?? containerName ?? string.Empty),
-                NormalizeDbCSharpQualifiedName(name));
-            if (string.IsNullOrWhiteSpace(qualifiedName))
-                continue;
-
-            var startLine = reader.IsDBNull(3) ? (reader.IsDBNull(5) ? 0 : reader.GetInt32(5)) : reader.GetInt32(3);
-            var endLine = reader.IsDBNull(4)
-                ? (reader.IsDBNull(6) ? startLine : reader.GetInt32(6))
-                : reader.GetInt32(4);
-            if (startLine <= 0 || endLine < startLine)
-                continue;
-
-            scopes.Add(new CSharpContainingTypeScope(qualifiedName, startLine, endLine));
+            scopes.Add(scope);
+            _csharpContainingTypeScopeByQualifiedName.TryAdd(scope.QualifiedName, scope);
         }
 
         return scopes;
+    }
+
+    private static CSharpContainingTypeScope? CreateCSharpContainingTypeScope(
+        string path,
+        string? name,
+        string? containerName,
+        string? containerQualifiedName,
+        string? visibility,
+        string? signature,
+        int? bodyStartLine,
+        int? bodyEndLine,
+        int? startLine,
+        int? endLine)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return null;
+
+        var qualifiedName = CombineDbQualifiedName(
+            NormalizeDbCSharpQualifiedName(containerQualifiedName ?? containerName ?? string.Empty),
+            NormalizeDbCSharpQualifiedName(name));
+        if (string.IsNullOrWhiteSpace(qualifiedName))
+            return null;
+
+        var resolvedStartLine = bodyStartLine ?? startLine ?? 0;
+        var resolvedEndLine = bodyEndLine ?? endLine ?? resolvedStartLine;
+        var declarationLine = startLine ?? resolvedStartLine;
+        if (resolvedStartLine <= 0 || resolvedEndLine < resolvedStartLine || declarationLine <= 0)
+            return null;
+
+        return new CSharpContainingTypeScope(path, qualifiedName, visibility, signature, declarationLine, resolvedStartLine, resolvedEndLine);
+    }
+
+    private string? ResolveDirectCSharpBaseContainingType(CSharpContainingTypeScope containingTypeScope)
+    {
+        var baseTypeReference = ParseCSharpBaseTypeReference(containingTypeScope.Signature);
+        if (string.IsNullOrWhiteSpace(baseTypeReference))
+            return null;
+
+        return ResolveScopedCSharpContainingTypeQualifiedName(
+            containingTypeScope.Path,
+            containingTypeScope.DeclarationLine,
+            baseTypeReference);
+    }
+
+    private string? ResolveScopedCSharpContainingTypeQualifiedName(string path, int lineNumber, string typeReference)
+    {
+        var normalizedReference = NormalizeCSharpBaseTypeReference(typeReference);
+        if (string.IsNullOrWhiteSpace(normalizedReference))
+            return null;
+
+        var shortName = GetLastQualifiedSegment(normalizedReference);
+        var candidateContainingTypes = GetCSharpTypeContainingTypesByName(shortName);
+        var candidateNamespaces = GetCSharpTypeNamespacesByName(shortName);
+        if (candidateContainingTypes.Count == 0 && candidateNamespaces.Count == 0)
+            return normalizedReference;
+
+        var lastDot = normalizedReference.LastIndexOf('.');
+        if (lastDot >= 0)
+        {
+            var qualifiedPrefix = NormalizeDbCSharpQualifiedName(normalizedReference[..lastDot]);
+            if (!string.IsNullOrWhiteSpace(qualifiedPrefix))
+            {
+                var exactContainingType = candidateContainingTypes.FirstOrDefault(candidate =>
+                    string.Equals(candidate.QualifiedName, qualifiedPrefix, StringComparison.Ordinal));
+                if (exactContainingType != null)
+                    return CombineDbQualifiedName(qualifiedPrefix, shortName);
+
+                var exactNamespace = candidateNamespaces.FirstOrDefault(candidate =>
+                    string.Equals(candidate.QualifiedName, qualifiedPrefix, StringComparison.Ordinal));
+                if (exactNamespace != null)
+                    return CombineDbQualifiedName(qualifiedPrefix, shortName);
+            }
+        }
+
+        foreach (var activeContainingTypeScope in GetActiveCSharpContainingTypeScopes(path, lineNumber))
+        {
+            var exactContainingType = candidateContainingTypes.FirstOrDefault(candidate =>
+                string.Equals(candidate.QualifiedName, activeContainingTypeScope.QualifiedName, StringComparison.Ordinal));
+            if (exactContainingType != null)
+                return CombineDbQualifiedName(activeContainingTypeScope.QualifiedName, shortName);
+        }
+
+        foreach (var activeNamespace in GetActiveCSharpTypeNamespaces(path, lineNumber))
+        {
+            var exactNamespace = candidateNamespaces.FirstOrDefault(candidate =>
+                string.Equals(candidate.QualifiedName, activeNamespace, StringComparison.Ordinal));
+            if (exactNamespace != null)
+                return CombineDbQualifiedName(activeNamespace, shortName);
+        }
+
+        return normalizedReference;
+    }
+
+    private static string? ParseCSharpBaseTypeReference(string? signature)
+    {
+        if (string.IsNullOrWhiteSpace(signature))
+            return null;
+
+        var text = signature.TrimEnd();
+        if (text.EndsWith("{", StringComparison.Ordinal))
+            text = text[..^1].TrimEnd();
+
+        var colonIndex = FindCSharpBaseListColonIndex(text);
+        if (colonIndex < 0)
+            return null;
+
+        var baseList = text[(colonIndex + 1)..];
+        var whereIndex = baseList.IndexOf(" where ", StringComparison.Ordinal);
+        if (whereIndex >= 0)
+            baseList = baseList[..whereIndex];
+
+        var firstEntry = TakeFirstCSharpBaseListEntry(baseList).Trim();
+        return firstEntry.Length == 0 ? null : firstEntry;
+    }
+
+    private static int FindCSharpBaseListColonIndex(string signature)
+    {
+        var angleDepth = 0;
+        var parenDepth = 0;
+        var squareDepth = 0;
+        for (var i = 0; i < signature.Length; i++)
+        {
+            switch (signature[i])
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0)
+                        squareDepth--;
+                    break;
+                case ':':
+                    if (angleDepth == 0 && parenDepth == 0 && squareDepth == 0)
+                        return i;
+                    break;
+            }
+        }
+
+        return -1;
+    }
+
+    private static string TakeFirstCSharpBaseListEntry(string baseList)
+    {
+        var angleDepth = 0;
+        var parenDepth = 0;
+        var squareDepth = 0;
+        for (var i = 0; i < baseList.Length; i++)
+        {
+            switch (baseList[i])
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0)
+                        squareDepth--;
+                    break;
+                case ',':
+                    if (angleDepth == 0 && parenDepth == 0 && squareDepth == 0)
+                        return baseList[..i];
+                    break;
+            }
+        }
+
+        return baseList;
+    }
+
+    private static string NormalizeCSharpBaseTypeReference(string typeReference)
+    {
+        if (string.IsNullOrWhiteSpace(typeReference))
+            return string.Empty;
+
+        var builder = new System.Text.StringBuilder(typeReference.Length);
+        var angleDepth = 0;
+        var parenDepth = 0;
+        var squareDepth = 0;
+        for (var i = 0; i < typeReference.Length; i++)
+        {
+            var ch = typeReference[i];
+            switch (ch)
+            {
+                case '<':
+                    angleDepth++;
+                    continue;
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    continue;
+                case '(':
+                    if (angleDepth == 0 && squareDepth == 0)
+                        return NormalizeDbCSharpQualifiedName(builder.ToString()) ?? string.Empty;
+                    parenDepth++;
+                    continue;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    continue;
+                case '[':
+                    if (angleDepth == 0 && parenDepth == 0)
+                        squareDepth++;
+                    continue;
+                case ']':
+                    if (squareDepth > 0)
+                        squareDepth--;
+                    continue;
+            }
+
+            if (angleDepth == 0 && parenDepth == 0 && squareDepth == 0)
+                builder.Append(ch);
+        }
+
+        return NormalizeDbCSharpQualifiedName(builder.ToString()) ?? string.Empty;
+    }
+
+    private static bool IsNestedCSharpTypeAccessibleFromDerivedType(string? visibility, string? signature)
+    {
+        if (!string.IsNullOrWhiteSpace(visibility))
+            return !string.Equals(visibility, "private", StringComparison.OrdinalIgnoreCase);
+
+        if (string.IsNullOrWhiteSpace(signature))
+            return false;
+
+        var normalizedSignature = signature.TrimStart();
+        return normalizedSignature.StartsWith("public ", StringComparison.Ordinal)
+            || normalizedSignature.StartsWith("protected ", StringComparison.Ordinal)
+            || normalizedSignature.StartsWith("internal ", StringComparison.Ordinal)
+            || normalizedSignature.StartsWith("private protected ", StringComparison.Ordinal)
+            || normalizedSignature.StartsWith("protected internal ", StringComparison.Ordinal);
+    }
+
+    private static string GetLastQualifiedSegment(string qualifiedName)
+    {
+        if (string.IsNullOrWhiteSpace(qualifiedName))
+            return string.Empty;
+
+        var lastDot = qualifiedName.LastIndexOf('.');
+        var lastColon = qualifiedName.LastIndexOf("::", StringComparison.Ordinal);
+        var split = Math.Max(lastDot, lastColon);
+        return split < 0 ? qualifiedName : qualifiedName[(split + (split == lastColon ? 2 : 1))..];
     }
 
     private List<CSharpUsingStaticScope> LoadCSharpUsingStaticScopes(string path)
@@ -1817,14 +2167,14 @@ public partial class DbReader
         return namespaces;
     }
 
-    private HashSet<string> GetCSharpTypeContainingTypesByName(string symbolName)
+    private List<CSharpContainingTypeCandidate> GetCSharpTypeContainingTypesByName(string symbolName)
     {
         if (_csharpTypeContainingTypesByName.TryGetValue(symbolName, out var cached))
             return cached;
 
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = @"
-            SELECT DISTINCT s.container_kind, s.container_name, s.container_qualified_name
+            SELECT DISTINCT s.container_kind, s.container_name, s.container_qualified_name, s.visibility, s.signature
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE f.lang = 'csharp'
@@ -1832,7 +2182,7 @@ public partial class DbReader
               AND s.kind IN ('class', 'struct', 'interface', 'enum', 'delegate')";
         cmd.Parameters.AddWithValue("@symbolName", symbolName);
 
-        var containingTypes = new HashSet<string>(StringComparer.Ordinal);
+        var containingTypes = new List<CSharpContainingTypeCandidate>();
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
@@ -1844,7 +2194,11 @@ public partial class DbReader
             var containerName = GetNullableString(reader, 1);
             var qualifiedContainer = NormalizeDbCSharpQualifiedName(containerQualifiedName ?? containerName ?? string.Empty);
             if (!string.IsNullOrWhiteSpace(qualifiedContainer))
-                containingTypes.Add(qualifiedContainer);
+            {
+                containingTypes.Add(new CSharpContainingTypeCandidate(
+                    qualifiedContainer,
+                    IsNestedCSharpTypeAccessibleFromDerivedType(GetNullableString(reader, 3), GetNullableString(reader, 4))));
+            }
         }
 
         _csharpTypeContainingTypesByName[symbolName] = containingTypes;
