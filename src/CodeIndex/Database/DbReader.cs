@@ -864,6 +864,7 @@ public partial class DbReader
             result.SymbolName,
             result.ReferenceKind,
             result.Line,
+            result.Column,
             contextForFilter);
     }
 
@@ -875,10 +876,11 @@ public partial class DbReader
             row.SymbolName,
             row.ReferenceKind,
             row.Line,
+            row.Column,
             row.Context);
     }
 
-    private bool ShouldSuppressCSharpUsingStaticConstantPatternReference(string path, string? lang, string symbolName, string referenceKind, int lineNumber, string contextForFilter)
+    private bool ShouldSuppressCSharpUsingStaticConstantPatternReference(string path, string? lang, string symbolName, string referenceKind, int lineNumber, int columnNumber, string contextForFilter)
     {
         if (!string.Equals(lang, "csharp", StringComparison.Ordinal)
             || !string.Equals(referenceKind, "type_reference", StringComparison.Ordinal)
@@ -893,7 +895,7 @@ public partial class DbReader
             return false;
         }
 
-        if (!IsCSharpUsingStaticConstantPatternContext(contextForFilter, symbolName))
+        if (!IsCSharpUsingStaticConstantPatternContext(contextForFilter, symbolName, columnNumber))
             return false;
 
         var activeTargets = GetActiveCSharpUsingStaticTargets(path, lineNumber);
@@ -1360,13 +1362,12 @@ public partial class DbReader
         return true;
     }
 
-    private static bool IsCSharpUsingStaticConstantPatternContext(string context, string symbolName)
+    private static bool IsCSharpUsingStaticConstantPatternContext(string context, string symbolName, int columnNumber)
     {
         if (string.IsNullOrWhiteSpace(context))
             return false;
 
-        var symbolColumn = context.IndexOf(symbolName, StringComparison.Ordinal);
-        if (symbolColumn < 0)
+        if (!TryFindCSharpReferenceTokenStart(context, symbolName, columnNumber, out var symbolColumn))
             return false;
 
         var cursor = symbolColumn;
@@ -1479,6 +1480,46 @@ public partial class DbReader
             cursor--;
 
         return true;
+    }
+
+    private static bool TryFindCSharpReferenceTokenStart(string text, string token, int preferredColumn, out int matchIndex)
+    {
+        matchIndex = -1;
+        if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(token))
+            return false;
+
+        var preferredIndex = Math.Max(0, preferredColumn - 1);
+        var searchStart = 0;
+        while (searchStart < text.Length)
+        {
+            var candidate = text.IndexOf(token, searchStart, StringComparison.Ordinal);
+            if (candidate < 0)
+                break;
+
+            searchStart = candidate + token.Length;
+            if (!IsCSharpTokenBoundary(text, candidate - 1) || !IsCSharpTokenBoundary(text, candidate + token.Length))
+                continue;
+
+            if (candidate <= preferredIndex)
+            {
+                matchIndex = candidate;
+                continue;
+            }
+
+            if (matchIndex < 0)
+                matchIndex = candidate;
+            break;
+        }
+
+        return matchIndex >= 0;
+    }
+
+    private static bool IsCSharpTokenBoundary(string text, int index)
+    {
+        if (index < 0 || index >= text.Length)
+            return true;
+
+        return !char.IsLetterOrDigit(text[index]) && text[index] != '_';
     }
 
     private static bool TryConsumeTrailingCSharpToken(string text, ref int cursor, string token)
