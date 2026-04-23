@@ -3000,16 +3000,23 @@ public partial class DbReader
                     (tf.target_lang != 'sql' AND tf.symbol_name = snc.symbol_name)
                  OR (tf.target_lang = 'sql' AND (
                         (tf.symbol_segment_count = snc.symbol_segment_count AND tf.symbol_name = snc.symbol_name COLLATE NOCASE)
-                     OR (snc.symbol_segment_count = 1
+                     OR (sql_segment_count(snc.raw_symbol_name) = 1
                          AND snc.allow_leaf_fallback = 1
                          AND tf.symbol_segment_count > 1
-                         AND sql_leaf_name(tf.symbol_name) = snc.symbol_name COLLATE NOCASE
+                         AND sql_leaf_name(tf.symbol_name) = snc.raw_symbol_name COLLATE NOCASE
                          AND NOT EXISTS (
                                 SELECT 1
                                 FROM target_files tf_exact
                                 WHERE tf_exact.target_lang = tf.target_lang
                                   AND tf_exact.symbol_segment_count = 1
                                   AND tf_exact.symbol_name = snc.symbol_name COLLATE NOCASE
+                            )
+                         AND NOT EXISTS (
+                                SELECT 1
+                                FROM target_files tf_resolved
+                                WHERE tf_resolved.target_lang = tf.target_lang
+                                  AND tf_resolved.symbol_segment_count = snc.symbol_segment_count
+                                  AND tf_resolved.symbol_name = snc.symbol_name COLLATE NOCASE
                             ))
                  ))
                 )";
@@ -3067,6 +3074,7 @@ public partial class DbReader
                        " + BuildLogicalReferenceNameExpr("source_lang", "symbol_name", "context", "container_name", "column_number") + @" AS symbol_name,
                        " + BuildLogicalReferenceSegmentCountExpr("source_lang", "symbol_name", "context", "container_name", "column_number") + @" AS symbol_segment_count,
                        " + BuildLogicalReferenceLeafFallbackAllowedExpr("source_lang", "symbol_name", "context", "container_name", "column_number") + @" AS allow_leaf_fallback,
+                       symbol_name AS raw_symbol_name,
                        line, column_number, logical_reference_kind,
                        0 AS is_attribute_alias,
                        CASE WHEN logical_reference_kind IN ('attribute', 'annotation') THEN 1 ELSE 0 END AS is_metadata
@@ -3086,6 +3094,7 @@ public partial class DbReader
                        symbol_name || 'Attribute' AS symbol_name,
                        1 AS symbol_segment_count,
                        0 AS allow_leaf_fallback,
+                       symbol_name || 'Attribute' AS raw_symbol_name,
                        line, column_number, logical_reference_kind,
                        1 AS is_attribute_alias,
                        1 AS is_metadata
@@ -3109,11 +3118,12 @@ public partial class DbReader
                        symbol_name,
                        symbol_segment_count,
                        allow_leaf_fallback,
+                       raw_symbol_name,
                        is_attribute_alias,
                        is_metadata,
                        COUNT(*) AS ref_count
                 FROM logical_references
-                GROUP BY source_file_id, source_path, source_lang, symbol_name, symbol_segment_count, allow_leaf_fallback, is_attribute_alias, is_metadata
+                GROUP BY source_file_id, source_path, source_lang, symbol_name, symbol_segment_count, allow_leaf_fallback, raw_symbol_name, is_attribute_alias, is_metadata
             ),
             target_files AS (
                 -- Collapse per-symbol rows to one per (target_path, target_lang, symbol_name)
@@ -3237,7 +3247,7 @@ public partial class DbReader
             edges AS (
                 SELECT snc.source_path,
                        tf.target_path,
-                       snc.symbol_name,
+                       tf.symbol_name,
                        snc.ref_count
                 FROM source_name_counts snc
                 JOIN target_files tf

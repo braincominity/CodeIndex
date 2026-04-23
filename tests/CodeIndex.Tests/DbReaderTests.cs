@@ -2821,6 +2821,51 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlBareCalls_AlignAggregateReadersWithLeafFallback()
+    {
+        InsertIndexedFile("src/sql_bare_call_caller.sql", "sql",
+            """
+            CREATE PROCEDURE sales.host
+            AS
+            BEGIN
+                EXEC fn_Target;
+            END
+            GO
+            """);
+        InsertIndexedFile("src/sql_bare_call_target.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.fn_Target
+            AS
+            BEGIN
+                SELECT 1;
+            END
+            GO
+            """);
+
+        var caller = Assert.Single(_reader.GetCallers("fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_bare_call_"]));
+        Assert.Equal("sales.host", caller.CallerName);
+        Assert.Equal(1, caller.ReferenceCount);
+
+        var dependencies = _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_bare_call_"], excludePathPatterns: null, excludeTests: false);
+        var dependency = Assert.Single(dependencies);
+        Assert.Equal("src/sql_bare_call_caller.sql", dependency.SourcePath);
+        Assert.Equal("src/sql_bare_call_target.sql", dependency.TargetPath);
+        Assert.Equal(1, dependency.ReferenceCount);
+
+        var hotspot = Assert.Single(
+            _reader.GetSymbolHotspots(10, "function", "sql", ["sql_bare_call_"], null, false),
+            item => item.Symbol.Name == "dbo.fn_Target");
+        Assert.Equal(1, hotspot.ReferenceCount);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "function", lang: "sql",
+            pathPatterns: ["sql_bare_call_"], excludePathPatterns: null, excludeTests: false);
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "dbo.fn_Target");
+        Assert.Contains(unused, symbol => symbol.Name == "sales.host");
+        Assert.Equal((1, 1), _reader.CountUnusedSymbols(kind: "function", lang: "sql",
+            pathPatterns: ["sql_bare_call_"], excludePathPatterns: null, excludeTests: false));
+    }
+
+    [Fact]
     public void SqlQualifiedNames_DownstreamReadersDoNotPromoteUnqualifiedRowsFromLaterTokens()
     {
         InsertIndexedFile("src/sql_unqualified_row_targets.sql", "sql",

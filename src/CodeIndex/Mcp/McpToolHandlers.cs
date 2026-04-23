@@ -453,7 +453,6 @@ public partial class McpServer
             };
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
-            AddSqlGraphContractSignal(payload, reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests));
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);

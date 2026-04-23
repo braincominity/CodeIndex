@@ -2158,6 +2158,42 @@ public class McpServerTests : IDisposable
         Assert.Contains("public void Run()", response["result"]!["structuredContent"]!["results"]![0]!["content"]!.GetValue<string>());
     }
 
+    [Fact]
+    public void ToolsCall_Definition_DoesNotReportSqlGraphContractDegraded()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_definition_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+            DowngradeSqlGraphContractRows(dbPath);
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var definitionRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"fn_Target","lang":"sql","exact":true}}}""")!;
+            var definitionResponse = server.HandleMessage(definitionRequest)!;
+            var definitionStructured = definitionResponse["result"]!["structuredContent"]!;
+
+            Assert.Equal(1, definitionStructured["count"]!.GetValue<int>());
+            Assert.Null(definitionStructured["sql_graph_contract_ready"]);
+            Assert.Null(definitionStructured["sqlGraphContractReady"]);
+            Assert.Null(definitionStructured["degraded"]);
+            Assert.Null(definitionStructured["sql_graph_contract_degraded_reason"]);
+            Assert.Null(definitionStructured["sqlGraphContractDegradedReason"]);
+
+            var callersRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"callers","arguments":{"query":"dbo.fn_Target","lang":"sql","exact":true}}}""")!;
+            var callersResponse = server.HandleMessage(callersRequest)!;
+            var callersStructured = callersResponse["result"]!["structuredContent"]!;
+
+            Assert.False(callersStructured["sql_graph_contract_ready"]!.GetValue<bool>());
+            Assert.False(callersStructured["sqlGraphContractReady"]!.GetValue<bool>());
+            Assert.NotNull(callersStructured["sql_graph_contract_degraded_reason"]);
+            Assert.NotNull(callersStructured["sqlGraphContractDegradedReason"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("definition", """{"query":"nonexistent_xyz_123"}""")]
     [InlineData("symbols", """{"query":"nonexistent_xyz_123"}""")]
@@ -5438,6 +5474,57 @@ public class McpServerTests : IDisposable
 
         SqliteConnection.ClearAllPools();
         return dbPath;
+    }
+
+    private static string CreateSqlGraphContractFixtureDb(string projectRoot)
+    {
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/target.sql",
+            "sql",
+            """
+            CREATE FUNCTION dbo.fn_Target()
+            RETURNS INT
+            AS
+            BEGIN
+                RETURN 1;
+            END;
+            GO
+            """);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/caller.sql",
+            "sql",
+            """
+            CREATE PROCEDURE dbo.usp_Caller
+            AS
+            BEGIN
+                SELECT dbo.fn_Target();
+            END;
+            GO
+            """);
+
+        using var db = new DbContext(dbPath);
+        var writer = new DbWriter(db.Connection);
+        writer.MarkGraphReady();
+        writer.MarkSqlGraphContractReady();
+        return dbPath;
+    }
+
+    private static void DowngradeSqlGraphContractRows(string dbPath)
+    {
+        using var db = new DbContext(dbPath);
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = """
+            UPDATE symbol_references
+            SET symbol_name = 'fn_Target',
+                symbol_name_folded = 'fn_target',
+                column_number = 1
+            WHERE symbol_name = 'dbo.fn_Target';
+            DELETE FROM codeindex_meta WHERE key = 'sql_graph_contract_version';
+            """;
+        cmd.ExecuteNonQuery();
     }
 
     public void Dispose()

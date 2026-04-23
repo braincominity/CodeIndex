@@ -1108,6 +1108,7 @@ public partial class DbReader
             logical_references AS (
                 SELECT sr.file_id,
                        rf.lang,
+                       sr.symbol_name AS raw_symbol_name,
                        " + BuildLogicalReferenceNameExpr("rf.lang", "sr.symbol_name", "sr.context", "sr.container_name", "sr.column_number") + @" AS symbol_name,
                        " + BuildLogicalReferenceSegmentCountExpr("rf.lang", "sr.symbol_name", "sr.context", "sr.container_name", "sr.column_number") + @" AS symbol_segment_count,
                        " + BuildLogicalReferenceLeafFallbackAllowedExpr("rf.lang", "sr.symbol_name", "sr.context", "sr.container_name", "sr.column_number") + @" AS allow_leaf_fallback,
@@ -1117,7 +1118,7 @@ public partial class DbReader
                 FROM symbol_references sr
                 JOIN files rf ON rf.id = sr.file_id
                 WHERE sr.reference_kind IN " + CallGraphReferenceKindsSql + @"
-                GROUP BY rf.lang, sr.file_id, symbol_name, symbol_segment_count, allow_leaf_fallback, sr.line, sr.column_number, logical_reference_kind
+                GROUP BY rf.lang, sr.file_id, raw_symbol_name, symbol_name, symbol_segment_count, allow_leaf_fallback, sr.line, sr.column_number, logical_reference_kind
             ),
             global_exact_reference_counts AS (
                 SELECT lang,
@@ -1129,12 +1130,13 @@ public partial class DbReader
             ),
             global_leaf_reference_counts AS (
                 SELECT lang,
-                       symbol_name,
+                       raw_symbol_name,
+                       symbol_name AS resolved_symbol_name,
+                       symbol_segment_count AS resolved_symbol_segment_count,
                        COUNT(*) AS ref_count
                 FROM logical_references
-                WHERE symbol_segment_count = 1
-                  AND allow_leaf_fallback = 1
-                GROUP BY lang, symbol_name
+                WHERE allow_leaf_fallback = 1
+                GROUP BY lang, raw_symbol_name, resolved_symbol_name, resolved_symbol_segment_count
             ),
             file_target_cardinality AS (
                 SELECT lang,
@@ -1165,12 +1167,13 @@ public partial class DbReader
             file_reference_counts_leaf AS (
                 SELECT lang,
                        file_id,
-                       symbol_name,
+                       raw_symbol_name,
+                       symbol_name AS resolved_symbol_name,
+                       symbol_segment_count AS resolved_symbol_segment_count,
                        COUNT(*) AS ref_count
                 FROM logical_references
-                WHERE symbol_segment_count = 1
-                  AND allow_leaf_fallback = 1
-                GROUP BY lang, file_id, symbol_name
+                WHERE allow_leaf_fallback = 1
+                GROUP BY lang, file_id, raw_symbol_name, resolved_symbol_name, resolved_symbol_segment_count
             ),
             conservative_reference_counts AS (
                 SELECT ctf.logical_target_key,
@@ -1198,13 +1201,20 @@ public partial class DbReader
                  AND frc_leaf.file_id = ctf.file_id
                  AND ctf.lang = 'sql'
                  AND sql_segment_count(ctf.name) > 1
-                 AND frc_leaf.symbol_name = sql_leaf_name(ctf.name) COLLATE NOCASE
+                 AND frc_leaf.raw_symbol_name = sql_leaf_name(ctf.name) COLLATE NOCASE
+                 AND NOT EXISTS (
+                        SELECT 1
+                        FROM filtered_candidates fc_resolved
+                        WHERE fc_resolved.lang = ctf.lang
+                          AND sql_segment_count(fc_resolved.name) = frc_leaf.resolved_symbol_segment_count
+                          AND sql_normalize_name(fc_resolved.name) = frc_leaf.resolved_symbol_name COLLATE NOCASE
+                    )
                  AND NOT EXISTS (
                         SELECT 1
                         FROM filtered_candidates fc_exact
                         WHERE fc_exact.lang = ctf.lang
                           AND sql_segment_count(fc_exact.name) = 1
-                          AND sql_normalize_name(fc_exact.name) = frc_leaf.symbol_name COLLATE NOCASE
+                          AND sql_normalize_name(fc_exact.name) = frc_leaf.raw_symbol_name COLLATE NOCASE
                     )
                 GROUP BY ctf.logical_target_key, ctf.name, ctf.kind
             ),
@@ -1232,13 +1242,20 @@ public partial class DbReader
                   ON glrc.lang = gr.lang
                  AND gr.lang = 'sql'
                  AND sql_segment_count(gr.name) > 1
-                 AND glrc.symbol_name = sql_leaf_name(gr.name) COLLATE NOCASE
+                 AND glrc.raw_symbol_name = sql_leaf_name(gr.name) COLLATE NOCASE
+                 AND NOT EXISTS (
+                        SELECT 1
+                        FROM filtered_candidates fc_resolved
+                        WHERE fc_resolved.lang = gr.lang
+                          AND sql_segment_count(fc_resolved.name) = glrc.resolved_symbol_segment_count
+                          AND sql_normalize_name(fc_resolved.name) = glrc.resolved_symbol_name COLLATE NOCASE
+                    )
                  AND NOT EXISTS (
                         SELECT 1
                         FROM filtered_candidates fc_exact
                         WHERE fc_exact.lang = gr.lang
                           AND sql_segment_count(fc_exact.name) = 1
-                          AND sql_normalize_name(fc_exact.name) = glrc.symbol_name COLLATE NOCASE
+                          AND sql_normalize_name(fc_exact.name) = glrc.raw_symbol_name COLLATE NOCASE
                     )
                 LEFT JOIN conservative_reference_counts crc
                   ON crc.logical_target_key = gr.logical_target_key
@@ -1702,9 +1719,17 @@ public partial class DbReader
                          OR (f.lang = 'sql' AND rf.lang = 'sql' AND (
                                 (sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_segment_count(s.name)
                                  AND sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_normalize_name(s.name) COLLATE NOCASE)
-                             OR (sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = 1
-                                 AND sql_allow_leaf_fallback_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = 1
-                                 AND sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_leaf_name(s.name) COLLATE NOCASE)
+                         OR (sql_segment_count(sr.symbol_name) = 1
+                             AND sql_allow_leaf_fallback_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = 1
+                             AND sr.symbol_name = sql_leaf_name(s.name) COLLATE NOCASE
+                             AND NOT EXISTS (
+                                    SELECT 1
+                                    FROM symbols s_exact
+                                    JOIN files f_exact ON f_exact.id = s_exact.file_id
+                                    WHERE f_exact.lang = 'sql'
+                                      AND sql_segment_count(s_exact.name) = sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number)
+                                      AND sql_normalize_name(s_exact.name) = sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) COLLATE NOCASE
+                                ))
                          ))
                   )";
 
@@ -1836,9 +1861,17 @@ public partial class DbReader
                      OR (f.lang = 'sql' AND rf.lang = 'sql' AND (
                             (sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_segment_count(s.name)
                              AND sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_normalize_name(s.name) COLLATE NOCASE)
-                         OR (sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = 1
+                         OR (sql_segment_count(sr.symbol_name) = 1
                              AND sql_allow_leaf_fallback_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = 1
-                             AND sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_leaf_name(s.name) COLLATE NOCASE)
+                             AND sr.symbol_name = sql_leaf_name(s.name) COLLATE NOCASE
+                             AND NOT EXISTS (
+                                    SELECT 1
+                                    FROM symbols s_exact
+                                    JOIN files f_exact ON f_exact.id = s_exact.file_id
+                                    WHERE f_exact.lang = 'sql'
+                                      AND sql_segment_count(s_exact.name) = sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number)
+                                      AND sql_normalize_name(s_exact.name) = sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) COLLATE NOCASE
+                                ))
                      ))
               )";
 

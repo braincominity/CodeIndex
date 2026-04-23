@@ -119,7 +119,7 @@ internal static class SqlNameResolver
                 return match.NormalizedName;
             }
 
-            return QualifyLeafNameFromContainer(normalizedSymbolName, containerName);
+            return QualifyLeafNameFromContainerCore(normalizedSymbolName, containerName);
         }
 
         return ResolveReferenceName(symbolName, context, containerName);
@@ -154,7 +154,7 @@ internal static class SqlNameResolver
                 return match.SegmentCount;
             }
 
-            return GetSegmentCount(QualifyLeafNameFromContainer(normalizedSymbolName, containerName));
+            return GetSegmentCount(QualifyLeafNameFromContainerCore(normalizedSymbolName, containerName));
         }
 
         return GetSegmentCount(ResolveReferenceName(symbolName, context, containerName));
@@ -353,7 +353,7 @@ internal static class SqlNameResolver
         }
     }
 
-    private static string QualifyLeafNameFromContainer(string normalizedSymbolName, string? containerName)
+    private static string QualifyLeafNameFromContainerCore(string normalizedSymbolName, string? containerName)
     {
         if (normalizedSymbolName.Length == 0 || HasQualifier(normalizedSymbolName))
             return normalizedSymbolName;
