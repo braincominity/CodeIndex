@@ -8324,6 +8324,25 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_DetectsSameLineAnnotatedMethodsWhenAnnotationArgumentsContainBraceLiterals()
+    {
+        var content = """
+            public class Demo {
+                @SuppressWarnings({"unchecked"}) public int first() { return 1; } int second() { return 2; }
+            }
+
+            public class Solo {
+                @SuppressWarnings({"rawtypes"}) public int only() { return 3; }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first" && s.ContainerKind == "class" && s.ContainerName == "Demo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second" && s.ContainerKind == "class" && s.ContainerName == "Demo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "only" && s.ContainerKind == "class" && s.ContainerName == "Solo");
+    }
+
+    [Fact]
     public void Extract_Java_HandlesSameLineSiblingMethodsInsideEnumBody()
     {
         var content = """

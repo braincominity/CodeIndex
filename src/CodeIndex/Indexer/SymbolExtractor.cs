@@ -9993,6 +9993,9 @@ public static class SymbolExtractor
         var mode = JavaScanMode.Normal;
         var depth = 0;
         var opened = false;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var angleDepth = 0;
         var column = Math.Max(0, startColumn);
 
         while (column < line.Length)
@@ -10001,6 +10004,57 @@ public static class SymbolExtractor
                 continue;
 
             var ch = line[column];
+            if (!opened)
+            {
+                if (ch == '(')
+                {
+                    parenDepth++;
+                    column++;
+                    continue;
+                }
+
+                if (ch == ')' && parenDepth > 0)
+                {
+                    parenDepth--;
+                    column++;
+                    continue;
+                }
+
+                if (ch == '[')
+                {
+                    bracketDepth++;
+                    column++;
+                    continue;
+                }
+
+                if (ch == ']' && bracketDepth > 0)
+                {
+                    bracketDepth--;
+                    column++;
+                    continue;
+                }
+
+                if (ch == '<')
+                {
+                    angleDepth++;
+                    column++;
+                    continue;
+                }
+
+                if (ch == '>' && angleDepth > 0)
+                {
+                    angleDepth--;
+                    column++;
+                    continue;
+                }
+
+                if (parenDepth > 0 || bracketDepth > 0 || angleDepth > 0)
+                {
+                    column++;
+                    continue;
+                }
+            }
+
             if (ch == '{')
             {
                 depth++;
