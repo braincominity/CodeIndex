@@ -105,11 +105,15 @@ internal static class SqlNameResolver
             return normalizedSymbolName;
 
         var leafName = GetLeafName(symbolName);
-        if (leafName.Length > 0
-            && TryGetQualifiedNameAtColumn(context, columnNumber, out var match)
-            && string.Equals(GetLeafName(match.NormalizedName), leafName, StringComparison.OrdinalIgnoreCase))
+        if (leafName.Length > 0 && columnNumber.HasValue && columnNumber.Value > 0)
         {
-            return match.NormalizedName;
+            if (TryGetQualifiedNameAtColumn(context, columnNumber, out var match)
+                && string.Equals(GetLeafName(match.NormalizedName), leafName, StringComparison.OrdinalIgnoreCase))
+            {
+                return match.NormalizedName;
+            }
+
+            return QualifyLeafNameFromContainer(normalizedSymbolName, containerName);
         }
 
         return ResolveReferenceName(symbolName, context, containerName);
@@ -302,6 +306,22 @@ internal static class SqlNameResolver
 
             i = Math.Max(i, match.EndIndexExclusive - 1);
         }
+    }
+
+    private static string QualifyLeafNameFromContainer(string normalizedSymbolName, string? containerName)
+    {
+        if (normalizedSymbolName.Length == 0 || HasQualifier(normalizedSymbolName))
+            return normalizedSymbolName;
+
+        var normalizedContainerName = NormalizeQualifiedName(containerName);
+        if (normalizedContainerName.Length == 0)
+            return normalizedSymbolName;
+
+        var lastDot = normalizedContainerName.LastIndexOf('.');
+        if (lastDot <= 0)
+            return normalizedSymbolName;
+
+        return normalizedContainerName[..(lastDot + 1)] + normalizedSymbolName;
     }
 
     private static void AppendNormalizedSegment(List<string> segments, StringBuilder current)

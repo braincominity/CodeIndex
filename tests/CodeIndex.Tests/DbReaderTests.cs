@@ -2821,6 +2821,91 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_DownstreamReadersDoNotPromoteUnqualifiedRowsFromLaterTokens()
+    {
+        InsertIndexedFile("src/sql_unqualified_row_targets.sql", "sql",
+            """
+            CREATE FUNCTION dbo.fn_Target()
+            RETURNS INT
+            AS
+            BEGIN
+                RETURN 1;
+            END
+            GO
+
+            CREATE FUNCTION sales.fn_Target()
+            RETURNS INT
+            AS
+            BEGIN
+                RETURN 2;
+            END
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_unqualified_row_comment.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.CommentCaller
+            AS
+            BEGIN
+                EXEC fn_Target; -- sales.fn_Target
+            END
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_unqualified_row_string.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.StringCaller
+            AS
+            BEGIN
+                EXEC fn_Target; SELECT 'sales.fn_Target';
+            END
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_unqualified_row_mixed_calls.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.MixedCaller
+            AS
+            BEGIN
+                EXEC fn_Target; EXEC sales.fn_Target;
+            END
+            GO
+            """);
+
+        var commentDependency = Assert.Single(
+            _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_unqualified_row_comment.sql"], excludePathPatterns: null, excludeTests: false));
+        Assert.Equal("src/sql_unqualified_row_comment.sql", commentDependency.SourcePath);
+        Assert.Equal("src/sql_unqualified_row_targets.sql", commentDependency.TargetPath);
+        Assert.Equal(1, commentDependency.ReferenceCount);
+        Assert.Equal("dbo.fn_Target", commentDependency.Symbols);
+
+        var stringDependency = Assert.Single(
+            _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_unqualified_row_string.sql"], excludePathPatterns: null, excludeTests: false));
+        Assert.Equal("src/sql_unqualified_row_string.sql", stringDependency.SourcePath);
+        Assert.Equal("src/sql_unqualified_row_targets.sql", stringDependency.TargetPath);
+        Assert.Equal(1, stringDependency.ReferenceCount);
+        Assert.Equal("dbo.fn_Target", stringDependency.Symbols);
+
+        var mixedDependency = Assert.Single(
+            _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_unqualified_row_mixed_calls.sql"], excludePathPatterns: null, excludeTests: false));
+        Assert.Equal("src/sql_unqualified_row_mixed_calls.sql", mixedDependency.SourcePath);
+        Assert.Equal("src/sql_unqualified_row_targets.sql", mixedDependency.TargetPath);
+        Assert.Equal(2, mixedDependency.ReferenceCount);
+        Assert.Equal("dbo.fn_Target,sales.fn_Target", mixedDependency.Symbols);
+
+        var hotspots = _reader.GetSymbolHotspots(10, "function", "sql", ["sql_unqualified_row"], null, false);
+        var dboHotspot = Assert.Single(hotspots, item => item.Symbol.Name == "dbo.fn_Target");
+        var salesHotspot = Assert.Single(hotspots, item => item.Symbol.Name == "sales.fn_Target");
+        Assert.Equal(3, dboHotspot.ReferenceCount);
+        Assert.Equal(1, salesHotspot.ReferenceCount);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "function", lang: "sql",
+            pathPatterns: ["sql_unqualified_row"], excludePathPatterns: null, excludeTests: false);
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "dbo.fn_Target");
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "sales.fn_Target");
+    }
+
+    [Fact]
     public void SqlQualifiedNames_AlignDepsEdges()
     {
         InsertIndexedFile("src/sql_deps_target.sql", "sql",
