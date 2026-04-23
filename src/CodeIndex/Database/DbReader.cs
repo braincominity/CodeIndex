@@ -696,7 +696,7 @@ public partial class DbReader
         if (!_hasReferencesTable)
             return new List<ReferenceResult>();
 
-        if (!ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind))
+        if (!ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind, exact))
             return SearchReferencesCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, maxLineWidth);
 
         var rawLimit = Math.Max(limit, CSharpUsingStaticReferenceFilterChunkSize);
@@ -884,7 +884,9 @@ public partial class DbReader
             GetNullableString(reader, 8));
     }
 
-    private static bool ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(string? lang, string? referenceKind) =>
+    private static bool ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(string? lang, string? referenceKind, bool exact) =>
+        exact
+        &&
         (lang == null || string.Equals(lang, "csharp", StringComparison.Ordinal))
         && (referenceKind == null || string.Equals(referenceKind, "type_reference", StringComparison.Ordinal));
 
@@ -2472,7 +2474,7 @@ public partial class DbReader
 
     public int CountSearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
-        if (ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind))
+        if (ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind, exact))
             return SearchReferences(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact).Count;
 
         if (!_hasReferencesTable) return 0;
@@ -2543,7 +2545,7 @@ public partial class DbReader
 
     public QueryCountResult CountSearchReferencesTotal(string? query = null, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
-        if (ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind))
+        if (ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind, exact))
             return CountSearchReferencesTotalWithUsingStaticFilter(query, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact);
 
         if (!_hasReferencesTable)

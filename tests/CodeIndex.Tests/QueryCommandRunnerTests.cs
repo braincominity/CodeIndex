@@ -20840,4 +20840,51 @@ public class QueryCommandRunnerTests
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
+
+    [Fact]
+    public void RunReferences_FuzzyJson_CSharpUsingStaticConstantPattern_RemainsSearchable()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_using_static_fuzzy_constant_pattern_searchable");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Defs.cs", "csharp",
+                """
+                namespace Probe;
+
+                public enum Color
+                {
+                    Red,
+                    Blue
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Use.cs", "csharp",
+                """
+                using static Probe.Color;
+
+                namespace Probe;
+
+                class Demo
+                {
+                    bool Match(object value) => value is Red or Blue;
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Re", "--db", dbPath, "--json", "--lang", "csharp"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("Red", document.RootElement.GetProperty("symbol_name").GetString());
+            Assert.Equal("type_reference", document.RootElement.GetProperty("reference_kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
 }

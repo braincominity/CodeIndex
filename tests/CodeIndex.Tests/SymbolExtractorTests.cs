@@ -12832,6 +12832,36 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_SameLineCompactConstructors_StayIndexedWithoutRecordHeaderLeak()
+    {
+        const string content = """
+            public record R(int x) {
+                @Deprecated public R { if (x < 0) throw new IllegalArgumentException(); }
+            }
+
+            public record Inline(int x) { public Inline { if (x < 0) throw new IllegalArgumentException(); } }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var annotatedCtor = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "R"));
+        Assert.Equal("class", annotatedCtor.ContainerKind);
+        Assert.Equal("R", annotatedCtor.ContainerName);
+        Assert.Equal("public R { if (x < 0) throw new IllegalArgumentException(); }", annotatedCtor.Signature);
+        Assert.True(string.IsNullOrEmpty(annotatedCtor.ReturnType));
+        Assert.NotNull(annotatedCtor.BodyStartLine);
+        Assert.NotNull(annotatedCtor.BodyEndLine);
+
+        var inlineCtor = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Inline"));
+        Assert.Equal("class", inlineCtor.ContainerKind);
+        Assert.Equal("Inline", inlineCtor.ContainerName);
+        Assert.Equal("public Inline { if (x < 0) throw new IllegalArgumentException(); }", inlineCtor.Signature);
+        Assert.True(string.IsNullOrEmpty(inlineCtor.ReturnType));
+        Assert.NotNull(inlineCtor.BodyStartLine);
+        Assert.NotNull(inlineCtor.BodyEndLine);
+    }
+
+    [Fact]
     public void Extract_Java_EnumAnonymousMemberBodyMethods_StayNestedUnderMemberBodies()
     {
         const string content = """

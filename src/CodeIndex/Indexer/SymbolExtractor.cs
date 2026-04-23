@@ -244,7 +244,7 @@ public static class SymbolExtractor
     private static readonly Regex CSharpEnumMemberRegex = new(@"^\s*(?<name>@?[_\p{L}]\w*)\s*(?:=\s*(?:-?\d|0x|@?[_\p{L}]\w*(?:\s*\|\s*@?[_\p{L}]\w*)*)[^""']*)?,?\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpEnumMemberNameRegex = new(@"^\s*(?<name>@?[_\p{L}]\w*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex JavaCompactConstructorRegex = new(
-        @"^\s*(?:(?<visibility>public|private|protected)\s+)?(?<name>\w+)\s*(?:\{)?\s*$",
+        @"^\s*(?:(?<visibility>public|private|protected)\s+)?(?<name>\w+)\s*(?=\{)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpSameLinePropertyStatementStartRegex = new(
         $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?:ref(?:\s+readonly)?)\s+)?(?:{CSharpTypePattern})\s+(?:{CSharpExplicitInterfaceQualifierPattern}\.)?{CSharpIdentifierPattern}\s*(?:\{{|=>\s*)",
@@ -3311,19 +3311,31 @@ public static class SymbolExtractor
                     if (TryMatchJavaDeclarationSegment(JavaCompactConstructorRegex, segment, out var match, out var javaLeadingAnnotationOffset)
                         && match.Groups["name"].Value == recordSymbol.Name)
                     {
-                        var absoluteStartColumn = segmentStart + (javaLeadingAnnotationOffset > 0 ? 0 : match.Index);
+                        var absoluteStartColumn = segmentStart + javaLeadingAnnotationOffset + match.Index;
                         var visibility = TryGetGroup(match, "visibility");
                         var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(rawLines, i, BodyStyle.Brace, "java", absoluteStartColumn);
                         var sameLineEndColumn = bodyEndLine == i + 1
                             ? FindSameLineBraceEndColumn(line, absoluteStartColumn, "java", "function")
                             : -1;
-                        if (!symbols.Any(symbol =>
+                        var existingSymbols = symbols
+                            .Where(symbol =>
                                 symbol.FileId == fileId
                                 && symbol.Kind == "function"
                                 && symbol.Name == recordSymbol.Name
                                 && symbol.StartLine == i + 1
-                                && symbol.ContainerKind == "class"
-                                && symbol.ContainerName == recordSymbol.Name))
+                                && (symbol.ContainerName == null || symbol.ContainerName == recordSymbol.Name)
+                                && (symbol.ContainerKind == null || symbol.ContainerKind == "class"))
+                            .ToList();
+                        foreach (var existingSymbol in existingSymbols)
+                        {
+                            if (LooksLikeJavaCompactConstructorSymbol(existingSymbol, recordSymbol.Name))
+                                continue;
+                            symbols.Remove(existingSymbol);
+                        }
+
+                        if (!symbols.Any(symbol => LooksLikeJavaCompactConstructorSymbol(symbol, recordSymbol.Name)
+                                && symbol.FileId == fileId
+                                && symbol.StartLine == i + 1))
                         {
                             symbols.Add(new SymbolRecord
                             {
@@ -3363,6 +3375,33 @@ public static class SymbolExtractor
                 }
             }
         }
+    }
+
+    private static bool LooksLikeJavaCompactConstructorSymbol(SymbolRecord symbol, string recordName)
+    {
+        if (symbol.Kind != "function"
+            || symbol.Name != recordName
+            || symbol.ContainerKind != "class"
+            || symbol.ContainerName != recordName)
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(symbol.ReturnType))
+            return false;
+
+        var signature = symbol.Signature?.TrimStart();
+        if (string.IsNullOrWhiteSpace(signature))
+            return false;
+
+        if (signature.Contains(" record ", StringComparison.Ordinal)
+            || signature.StartsWith("record ", StringComparison.Ordinal)
+            || signature.StartsWith("@", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return signature.Contains($"{recordName} {{", StringComparison.Ordinal);
     }
 
     private static bool IsJavaRecordSymbol(string[] rawLines, SymbolRecord symbol)
