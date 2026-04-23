@@ -73,7 +73,8 @@ public static class SymbolExtractor
         @"(?:" + CSharpTypeTokenCharsPattern + @"+(?:" + CSharpTupleGroupPattern + CSharpTypeTokenCharsPattern + @"*)*|" + CSharpTupleGroupPattern + CSharpTypeTokenCharsPattern + @"*)";
     private const string CSharpTypePattern =
         @"(?:(?:global::)?(?:" + CSharpTypeSegmentPattern + @")(?:\s+(?:" + CSharpTypeSegmentPattern + @"))*" + CSharpTupleSuffixPattern + @")";
-    private const string CSharpMethodTypeParameterListPattern = @"(?:<(?:[^<>]|<[^<>]*>)*>\s*)?";
+    private const string CSharpMethodTypeParameterListPattern =
+        @"(?:<(?:(?>[^<>]+)|<(?<CSharpMethodTypeParameterDepth>)|>(?<-CSharpMethodTypeParameterDepth>))*(?(CSharpMethodTypeParameterDepth)(?!))>\s*)?";
     // `delegate` is a non-type keyword only when it is NOT followed by `*` — `delegate*<...>` is a valid return type.
     // `delegate` は `*` を伴わないときだけ非型キーワード扱い。`delegate*<...>` は戻り値型として有効。
     private const string CSharpNonTypeKeywordPattern = @"(?:(?:public|private|protected|internal|static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|required|ref)\b|delegate\b(?!\s*\*))";

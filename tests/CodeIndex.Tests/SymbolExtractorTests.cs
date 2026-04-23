@@ -6201,7 +6201,7 @@ public class SymbolExtractorTests
 
             public interface IFoo
             {
-                void Run<[GenAttr<int>] T>(T value);
+                void Run<[GenAttr<System.Collections.Generic.List<int>>] T>(T value);
             }
 
             public class Tagged : IFoo
@@ -6209,7 +6209,9 @@ public class SymbolExtractorTests
                 public void M<[GenAttr<int>] U>(U u) { }
                 public void N<[GenAttr<int>, GenAttr<string>] U>(U u) { }
                 public void P<[GenAttr<(int, int)>] U>(U u) { }
-                void IFoo.Run<[GenAttr<int>] T>(T value) { }
+                public void Q<[GenAttr<System.Collections.Generic.List<int>>] U>(U u) { }
+                public void R<[GenAttr<System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<int>>>] U>(U u) { }
+                void IFoo.Run<[GenAttr<System.Collections.Generic.List<int>>] T>(T value) { }
             }
             """;
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
@@ -6218,6 +6220,8 @@ public class SymbolExtractorTests
         Assert.Contains("M", methodNames);
         Assert.Contains("N", methodNames);
         Assert.Contains("P", methodNames);
+        Assert.Contains("Q", methodNames);
+        Assert.Contains("R", methodNames);
 
         var m = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "M"));
         Assert.Equal("class", m.ContainerKind);
@@ -6230,10 +6234,16 @@ public class SymbolExtractorTests
         var p = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "P"));
         Assert.Equal("public void P<[GenAttr<(int, int)>] U>(U u) { }", p.Signature);
 
+        var q = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Q"));
+        Assert.Equal("public void Q<[GenAttr<System.Collections.Generic.List<int>>] U>(U u) { }", q.Signature);
+
+        var r = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "R"));
+        Assert.Equal("public void R<[GenAttr<System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<int>>>] U>(U u) { }", r.Signature);
+
         var runDeclarations = symbols.Where(s => s.Kind == "function" && s.Name == "Run").ToList();
         Assert.Equal(2, runDeclarations.Count);
-        Assert.Contains(runDeclarations, s => s.ContainerKind == "interface" && s.ContainerName == "IFoo" && s.Signature == "void Run<[GenAttr<int>] T>(T value);");
-        Assert.Contains(runDeclarations, s => s.ContainerKind == "class" && s.ContainerName == "Tagged" && s.Signature == "void IFoo.Run<[GenAttr<int>] T>(T value) { }");
+        Assert.Contains(runDeclarations, s => s.ContainerKind == "interface" && s.ContainerName == "IFoo" && s.Signature == "void Run<[GenAttr<System.Collections.Generic.List<int>>] T>(T value);");
+        Assert.Contains(runDeclarations, s => s.ContainerKind == "class" && s.ContainerName == "Tagged" && s.Signature == "void IFoo.Run<[GenAttr<System.Collections.Generic.List<int>>] T>(T value) { }");
     }
 
     [Fact]
