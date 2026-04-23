@@ -589,6 +589,10 @@ public static class ReferenceExtractor
         var csharpQualifiedTypePatternLookup = BuildCSharpQualifiedTypePatternLookup(language, symbols);
         var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols);
         var csharpUsingStatics = BuildCSharpUsingStatics(language, symbols);
+        var csharpNamespaceScopes = BuildCSharpNamespaceScopes(language, symbols, lines.Length);
+        var csharpContainingTypeScopes = BuildCSharpContainingTypeScopes(language, symbols);
+        var csharpTopLevelTypeNamespacesByName = BuildCSharpTopLevelTypeNamespacesByName(language, symbols);
+        var csharpNestedTypeContainersByName = BuildCSharpNestedTypeContainersByName(language, symbols);
         var csharpKnownTypeNames = BuildCSharpKnownTypeNames(language, symbols);
         var csharpValueReceiverNames = BuildCSharpValueReceiverNamesByContainingType(language, symbols);
         var csharpFunctionValueReceiverNames = BuildCSharpValueReceiverNamesByFunctionStartLine(
@@ -597,6 +601,14 @@ public static class ReferenceExtractor
             structuralLines,
             csharpKnownTypeNames,
             csharpUsingAliases);
+        bool HasActiveSameFileCSharpTypeCandidate(string typeExpression, int lineNumber)
+            => HasActiveCSharpSameFileTypeCandidate(
+                typeExpression,
+                lineNumber,
+                csharpNamespaceScopes,
+                csharpContainingTypeScopes,
+                csharpTopLevelTypeNamespacesByName,
+                csharpNestedTypeContainersByName);
 
         var references = new List<ReferenceRecord>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -763,6 +775,7 @@ public static class ReferenceExtractor
                     csharpQualifiedTypePatternLookup,
                     csharpUsingAliases,
                     csharpUsingStatics,
+                    HasActiveSameFileCSharpTypeCandidate,
                     references,
                     seen,
                     fileId,
@@ -1350,6 +1363,7 @@ public static class ReferenceExtractor
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
         IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -1376,6 +1390,7 @@ public static class ReferenceExtractor
                     csharpQualifiedTypePatternLookup,
                     csharpUsingAliases,
                     csharpUsingStatics,
+                    hasActiveSameFileCSharpTypeCandidate,
                     (logicalTypeExpression, logicalTypeIndex) => AddTypeExpressionSegments(
                         references,
                         seen,
@@ -1396,7 +1411,8 @@ public static class ReferenceExtractor
                     lineNumber,
                     csharpQualifiedConstantPatternMemberLookup,
                     csharpUsingAliases,
-                    csharpUsingStatics)
+                    csharpUsingStatics,
+                    hasActiveSameFileCSharpTypeCandidate)
                 || IsCSharpLogicalConstantPatternAtCursor(
                     preparedLine,
                     typeGroup.Value,
@@ -1405,7 +1421,8 @@ public static class ReferenceExtractor
                     csharpQualifiedConstantPatternMemberLookup,
                     csharpQualifiedTypePatternLookup,
                     csharpUsingAliases,
-                    csharpUsingStatics))
+                    csharpUsingStatics,
+                    hasActiveSameFileCSharpTypeCandidate))
             {
                 continue;
             }
@@ -1428,6 +1445,7 @@ public static class ReferenceExtractor
             csharpQualifiedTypePatternLookup,
             csharpUsingAliases,
             csharpUsingStatics,
+            hasActiveSameFileCSharpTypeCandidate,
             references,
             seen,
             fileId,
@@ -1442,6 +1460,7 @@ public static class ReferenceExtractor
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
         IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -1472,6 +1491,7 @@ public static class ReferenceExtractor
                     csharpQualifiedTypePatternLookup,
                     csharpUsingAliases,
                     csharpUsingStatics,
+                    hasActiveSameFileCSharpTypeCandidate,
                     (logicalTypeExpression, logicalTypeIndex) => AddTypeExpressionSegments(
                         references,
                         seen,
@@ -1494,6 +1514,7 @@ public static class ReferenceExtractor
                     csharpQualifiedTypePatternLookup,
                     csharpUsingAliases,
                     csharpUsingStatics,
+                    hasActiveSameFileCSharpTypeCandidate,
                     lineNumber))
                 continue;
 
@@ -2549,6 +2570,8 @@ public static class ReferenceExtractor
 
     private readonly record struct CSharpLineColumn(int Line, int Column);
     private readonly record struct CSharpRecursivePatternValueNameRecord(string Name, int Offset, bool IsCasePattern, int ArrowIndex = -1);
+    private sealed record CSharpNamespaceScope(string QualifiedName, int ScopeStartLine, int ScopeEndLine);
+    private sealed record CSharpContainingTypeScope(string QualifiedName, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpUsingAliasRecord(string AliasName, string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpUsingStaticRecord(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpCastTypeShape(IReadOnlyList<string> IdentifierSegments, string? SimpleQualifiedName, bool HasTypeOnlySyntax, bool AllIdentifiersTypeLike);
@@ -2656,6 +2679,139 @@ public static class ReferenceExtractor
 
         imports.Sort(static (left, right) => left.Line.CompareTo(right.Line));
         return imports;
+    }
+
+    private static List<CSharpNamespaceScope> BuildCSharpNamespaceScopes(string language, IReadOnlyList<SymbolRecord> symbols, int totalLineCount)
+    {
+        var scopes = new List<CSharpNamespaceScope>();
+        if (language != "csharp")
+            return scopes;
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "namespace" || string.IsNullOrWhiteSpace(symbol.Name))
+                continue;
+
+            var startLine = symbol.BodyStartLine ?? symbol.StartLine;
+            var endLine = symbol.BodyEndLine ?? symbol.EndLine;
+            if (!string.IsNullOrWhiteSpace(symbol.Signature)
+                && symbol.Signature.TrimEnd().EndsWith(';'))
+            {
+                endLine = Math.Max(endLine, totalLineCount);
+            }
+
+            if (startLine <= 0 || endLine < startLine)
+                continue;
+
+            var qualifiedName = TryNormalizeCSharpQualifiedName(symbol.Name) ?? string.Empty;
+            scopes.Add(new CSharpNamespaceScope(qualifiedName, startLine, endLine));
+        }
+
+        return scopes;
+    }
+
+    private static List<CSharpContainingTypeScope> BuildCSharpContainingTypeScopes(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        var scopes = new List<CSharpContainingTypeScope>();
+        if (language != "csharp")
+            return scopes;
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is not ("class" or "struct" or "interface")
+                || string.IsNullOrWhiteSpace(symbol.Name))
+            {
+                continue;
+            }
+
+            var startLine = symbol.BodyStartLine ?? symbol.StartLine;
+            var endLine = symbol.BodyEndLine ?? symbol.EndLine;
+            if (startLine <= 0 || endLine < startLine)
+                continue;
+
+            var qualifiedName = CombineQualifiedName(symbol.ContainerQualifiedName, NormalizeCSharpIdentifier(symbol.Name));
+            if (string.IsNullOrWhiteSpace(qualifiedName))
+                qualifiedName = NormalizeCSharpIdentifier(symbol.Name);
+            if (string.IsNullOrWhiteSpace(qualifiedName))
+                continue;
+
+            scopes.Add(new CSharpContainingTypeScope(qualifiedName!, startLine, endLine));
+        }
+
+        return scopes;
+    }
+
+    private static Dictionary<string, HashSet<string>> BuildCSharpTopLevelTypeNamespacesByName(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        var lookup = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        if (language != "csharp")
+            return lookup;
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is not ("class" or "struct" or "interface" or "enum" or "delegate")
+                || string.IsNullOrWhiteSpace(symbol.Name))
+            {
+                continue;
+            }
+
+            if (symbol.ContainerKind is not (null or "namespace"))
+                continue;
+
+            var name = NormalizeCSharpIdentifier(symbol.Name);
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            if (!lookup.TryGetValue(name, out var namespaces))
+            {
+                namespaces = new HashSet<string>(StringComparer.Ordinal);
+                lookup[name] = namespaces;
+            }
+
+            var qualifiedNamespace = symbol.ContainerQualifiedName;
+            if (string.IsNullOrWhiteSpace(qualifiedNamespace) && symbol.ContainerKind == "namespace")
+                qualifiedNamespace = symbol.ContainerName;
+            namespaces.Add(TryNormalizeCSharpQualifiedName(qualifiedNamespace ?? string.Empty) ?? string.Empty);
+        }
+
+        return lookup;
+    }
+
+    private static Dictionary<string, HashSet<string>> BuildCSharpNestedTypeContainersByName(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        var lookup = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        if (language != "csharp")
+            return lookup;
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is not ("class" or "struct" or "interface" or "enum" or "delegate")
+                || string.IsNullOrWhiteSpace(symbol.Name))
+            {
+                continue;
+            }
+
+            if (symbol.ContainerKind is not ("class" or "struct" or "interface"))
+                continue;
+
+            var name = NormalizeCSharpIdentifier(symbol.Name);
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            if (!lookup.TryGetValue(name, out var containingTypes))
+            {
+                containingTypes = new HashSet<string>(StringComparer.Ordinal);
+                lookup[name] = containingTypes;
+            }
+
+            var qualifiedContainer = !string.IsNullOrWhiteSpace(symbol.ContainerQualifiedName)
+                ? symbol.ContainerQualifiedName
+                : NormalizeCSharpIdentifier(symbol.ContainerName ?? string.Empty);
+            if (!string.IsNullOrWhiteSpace(qualifiedContainer))
+                containingTypes.Add(qualifiedContainer!);
+        }
+
+        return lookup;
     }
 
     private static HashSet<string> BuildCSharpKnownTypeNames(string language, IReadOnlyList<SymbolRecord> symbols)
@@ -3182,6 +3338,7 @@ public static class ReferenceExtractor
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
         IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
         int lineNumber)
     {
         if (IsCSharpNonTypePatternExpression(typeExpression))
@@ -3197,7 +3354,8 @@ public static class ReferenceExtractor
                     lineNumber,
                     csharpQualifiedConstantPatternMemberLookup,
                     csharpUsingAliases,
-                    csharpUsingStatics),
+                    csharpUsingStatics,
+                    hasActiveSameFileCSharpTypeCandidate),
             '{' or '(' or '[' => true,
             _ => IsCSharpCaseTypePatternIdentifier(
                 preparedLine,
@@ -3207,6 +3365,7 @@ public static class ReferenceExtractor
                 csharpQualifiedTypePatternLookup,
                 csharpUsingAliases,
                 csharpUsingStatics,
+                hasActiveSameFileCSharpTypeCandidate,
                 lineNumber)
         };
     }
@@ -3219,6 +3378,7 @@ public static class ReferenceExtractor
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
         IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
         int lineNumber)
     {
         int tokenCursor = cursor;
@@ -3236,7 +3396,8 @@ public static class ReferenceExtractor
                     lineNumber,
                     csharpQualifiedConstantPatternMemberLookup,
                     csharpUsingAliases,
-                    csharpUsingStatics),
+                    csharpUsingStatics,
+                    hasActiveSameFileCSharpTypeCandidate),
             "or" or "and" => !IsCSharpLogicalConstantPatternHead(
                 preparedLine,
                 typeExpression,
@@ -3245,7 +3406,8 @@ public static class ReferenceExtractor
                 csharpQualifiedConstantPatternMemberLookup,
                 csharpQualifiedTypePatternLookup,
                 csharpUsingAliases,
-                csharpUsingStatics),
+                csharpUsingStatics,
+                hasActiveSameFileCSharpTypeCandidate),
             _ => true,
         };
     }
@@ -3260,6 +3422,7 @@ public static class ReferenceExtractor
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
         IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
         Action<string, int> emitTypeExpression)
     {
         var currentTypeExpression = initialTypeExpression;
@@ -3278,7 +3441,8 @@ public static class ReferenceExtractor
                     csharpQualifiedConstantPatternMemberLookup,
                     csharpQualifiedTypePatternLookup,
                     csharpUsingAliases,
-                    csharpUsingStatics))
+                    csharpUsingStatics,
+                    hasActiveSameFileCSharpTypeCandidate))
             {
                 emitTypeExpression(currentTypeExpression, currentTypeIndex);
                 emittedAny = true;
@@ -3305,7 +3469,8 @@ public static class ReferenceExtractor
                 lineNumber,
                 csharpQualifiedConstantPatternMemberLookup,
                 csharpUsingAliases,
-                csharpUsingStatics))
+                csharpUsingStatics,
+                hasActiveSameFileCSharpTypeCandidate))
         {
             emitTypeExpression(currentTypeExpression, currentTypeIndex);
             emittedAny = true;
@@ -3322,7 +3487,8 @@ public static class ReferenceExtractor
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
-        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics)
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
     {
         int tokenCursor = cursor;
         if (!TryConsumeCSharpIdentifier(preparedLine, ref tokenCursor, out var start, out var end))
@@ -3340,7 +3506,8 @@ public static class ReferenceExtractor
             csharpQualifiedConstantPatternMemberLookup,
             csharpQualifiedTypePatternLookup,
             csharpUsingAliases,
-            csharpUsingStatics);
+            csharpUsingStatics,
+            hasActiveSameFileCSharpTypeCandidate);
     }
 
     private static bool TryConsumeCSharpLogicalPatternKeyword(
@@ -3369,14 +3536,16 @@ public static class ReferenceExtractor
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
-        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics)
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
     {
         if (IsCSharpConstantPatternMemberHead(
                 typeExpression,
                 lineNumber,
                 csharpQualifiedConstantPatternMemberLookup,
                 csharpUsingAliases,
-                csharpUsingStatics))
+                csharpUsingStatics,
+                hasActiveSameFileCSharpTypeCandidate))
         {
             return true;
         }
@@ -3501,7 +3670,8 @@ public static class ReferenceExtractor
         int lineNumber,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
-        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics)
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
     {
         return IsCSharpQualifiedConstantPatternMemberHead(
                 typeExpression,
@@ -3512,14 +3682,16 @@ public static class ReferenceExtractor
                 typeExpression,
                 lineNumber,
                 csharpQualifiedConstantPatternMemberLookup,
-                csharpUsingStatics);
+                csharpUsingStatics,
+                hasActiveSameFileCSharpTypeCandidate);
     }
 
     private static bool IsCSharpUsingStaticConstantPatternMemberHead(
         string typeExpression,
         int lineNumber,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
-        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics)
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
     {
         if (csharpUsingStatics.Count == 0)
             return false;
@@ -3535,6 +3707,8 @@ public static class ReferenceExtractor
 
         var member = parsed.Segments[0];
         var memberName = NormalizeCSharpIdentifier(trimmed.Substring(member.Start, member.End - member.Start));
+        if (hasActiveSameFileCSharpTypeCandidate(memberName, lineNumber))
+            return false;
         if (!csharpQualifiedConstantPatternMemberLookup.TryGetValue(memberName, out var targets))
             return false;
 
@@ -3545,6 +3719,61 @@ public static class ReferenceExtractor
                 : target.ContainerName;
             if (HasActiveCSharpUsingStaticTarget(qualifiedContainer, lineNumber, csharpUsingStatics))
                 return true;
+        }
+
+        return false;
+    }
+
+    private static bool HasActiveCSharpSameFileTypeCandidate(
+        string typeExpression,
+        int lineNumber,
+        IReadOnlyList<CSharpNamespaceScope> csharpNamespaceScopes,
+        IReadOnlyList<CSharpContainingTypeScope> csharpContainingTypeScopes,
+        IReadOnlyDictionary<string, HashSet<string>> csharpTopLevelTypeNamespacesByName,
+        IReadOnlyDictionary<string, HashSet<string>> csharpNestedTypeContainersByName)
+    {
+        if (!TryReadCSharpQualifiedAccess(typeExpression.Trim(), 0, out var parsed)
+            || parsed.LastSeparatorWasDot
+            || parsed.Segments.Count != 1)
+        {
+            return false;
+        }
+
+        var member = parsed.Segments[0];
+        var memberName = NormalizeCSharpIdentifier(typeExpression.Trim().Substring(member.Start, member.End - member.Start));
+        if (memberName.Length == 0)
+            return false;
+
+        if (csharpTopLevelTypeNamespacesByName.TryGetValue(memberName, out var namespaces))
+        {
+            var activeNamespaces = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var scope in csharpNamespaceScopes)
+            {
+                if (lineNumber >= scope.ScopeStartLine && lineNumber <= scope.ScopeEndLine)
+                    activeNamespaces.Add(scope.QualifiedName);
+            }
+
+            if (activeNamespaces.Count == 0)
+                activeNamespaces.Add(string.Empty);
+
+            foreach (var activeNamespace in activeNamespaces)
+            {
+                if (namespaces.Contains(activeNamespace))
+                    return true;
+            }
+        }
+
+        if (!csharpNestedTypeContainersByName.TryGetValue(memberName, out var containingTypes))
+            return false;
+
+        foreach (var scope in csharpContainingTypeScopes)
+        {
+            if (lineNumber >= scope.ScopeStartLine
+                && lineNumber <= scope.ScopeEndLine
+                && containingTypes.Contains(scope.QualifiedName))
+            {
+                return true;
+            }
         }
 
         return false;

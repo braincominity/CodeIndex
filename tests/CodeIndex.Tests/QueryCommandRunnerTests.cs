@@ -14612,6 +14612,57 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpUsingStaticNestedSameNameTypePatternStaysVisible()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_using_static_nested_same_name_type_pattern_visible");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "cases.cs"),
+                """
+                using static Probe.Color;
+
+                namespace Probe;
+
+                enum Color
+                {
+                    Red
+                }
+
+                class Outer
+                {
+                    class Red {}
+
+                    bool Match(object value) => value is Red;
+
+                    void Run()
+                    {
+                        _ = typeof(Red);
+                    }
+                }
+                """);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
+
+            var rows = ParseJsonLines(stdout).Select(doc => doc.RootElement).ToList();
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, rows.Count);
+            Assert.Contains(rows, row => row.GetProperty("context").GetString()!.Contains("value is Red", StringComparison.Ordinal));
+            Assert.Contains(rows, row => row.GetProperty("context").GetString()!.Contains("typeof(Red)", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpGlobalQualifiedUsingAliasNameDoesNotCreateReference()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_global_alias_name_invalid");
