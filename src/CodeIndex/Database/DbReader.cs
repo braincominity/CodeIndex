@@ -38,6 +38,8 @@ public partial class DbReader
     private readonly Dictionary<string, HashSet<string>> _csharpConstantPatternContainersByMemberName = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, HashSet<string>> _csharpTypeNamespacesByName = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, HashSet<string>> _csharpTypeContainingTypesByName = new(StringComparer.OrdinalIgnoreCase);
+    private HashSet<string>? _csharpGlobalUsingStaticTargets;
+    private HashSet<string>? _csharpGlobalUsingNamespaces;
     internal readonly bool _hasReferencesTable;
     internal readonly bool _hasIssuesTable;
     internal readonly bool _hasChunksTable;
@@ -94,6 +96,7 @@ public partial class DbReader
     private sealed record CSharpContainingTypeScope(string QualifiedName, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpUsingStaticScope(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpUsingNamespaceScope(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
+    private sealed record SearchReferenceRawRow(string Path, string? Lang, string SymbolName, string ReferenceKind, int Line, int Column, string Context, string? ContainerKind, string? ContainerName);
 
     /// <summary>
     /// Visibility ranking: public symbols first, then protected, internal, private, unknown last.
@@ -708,7 +711,34 @@ public partial class DbReader
 
     private List<ReferenceResult> SearchReferencesCore(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int maxLineWidth)
     {
-        using var cmd = _conn.CreateCommand();
+        using var cmd = CreateSearchReferencesCommand(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact);
+        var results = new List<ReferenceResult>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var row = ReadSearchReferenceRawRow(reader);
+            var clampedContext = LineWidthFormatter.ClampLine(row.Context, maxLineWidth, row.Column, query?.Length ?? 1);
+            results.Add(new ReferenceResult
+            {
+                Path = row.Path,
+                Lang = row.Lang,
+                SymbolName = row.SymbolName,
+                ReferenceKind = row.ReferenceKind,
+                Line = row.Line,
+                Column = row.Column,
+                RawContext = row.Context,
+                Context = clampedContext.Text,
+                ContextTruncated = clampedContext.Truncated,
+                ContainerKind = row.ContainerKind,
+                ContainerName = row.ContainerName,
+            });
+        }
+        return results;
+    }
+
+    private SqliteCommand CreateSearchReferencesCommand(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact)
+    {
+        var cmd = _conn.CreateCommand();
         var sql = referenceKind == null
             ? $@"
             WITH logical_references AS (
@@ -733,32 +763,11 @@ public partial class DbReader
             sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
         var referencesSuffixAlias = ComputeCSharpAttributeSuffixAlias(query, lang, referenceKind);
-        // When the alias fires without an explicit `lang` / `--kind` scope we still need
-        // to keep it from bleeding into non-C# rows or non-attribute rows. The SQL guard
-        // clamps the alias disjunct to `f.lang = 'csharp' AND r.reference_kind = 'attribute'`
-        // so unscoped `references FooAttribute` only picks up real C# attribute sites.
-        // alias が `--lang` / `--kind` スコープなしで発火するときも、C# 以外の行や
-        // attribute 以外の行を拾わないように、SQL 側で `f.lang = 'csharp' AND
-        // r.reference_kind = 'attribute'` に限定する。
         var referencesAliasScope = referencesSuffixAlias != null
             ? " AND f.lang = 'csharp' AND r.reference_kind = 'attribute'"
             : string.Empty;
         if (query != null)
         {
-            // --exact: Unicode-aware equality when FoldReady (#86), else ASCII COLLATE NOCASE.
-            // Fold path: r.symbol_name_folded = @qFolded (indexed), query pre-folded in .NET.
-            // Fallback: r.symbol_name = @q COLLATE NOCASE (indexed by idx_symbol_refs_name_nocase).
-            // When the query ends with C# attribute suffix `Attribute`, also OR against the
-            // suffix-stripped alias so `references FooAttribute --exact` reaches the idiomatic
-            // `[Foo]` reference site stored with `symbol_name = "Foo"`. In substring mode we
-            // still LIKE-match `%FooAttribute%` and add only the exact stripped alias to avoid
-            // overmatching unrelated names (e.g. `FooAuditLog`) that share the stripped prefix.
-            // The alias disjunct is scoped to C# attribute rows to avoid false positives.
-            // --exact: FoldReady なら Unicode 折り畳み経路、未 ready なら ASCII NOCASE へ fallback。
-            // C# の `Attribute` suffix が付いたクエリは、suffix を外した別名とも照合する。
-            // 部分一致モードでは `%FooAttribute%` をそのまま使い、別名側は exact 照合だけを OR
-            // することで `FooAuditLog` など無関係な名前を巻き込まないようにする。
-            // 別名節は C# の attribute 行に限定し、誤一致を避ける。
             if (exact && _foldReady)
                 sql += referencesSuffixAlias != null
                     ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{referencesAliasScope}))"
@@ -801,13 +810,6 @@ public partial class DbReader
             cmd.Parameters.AddWithValue("@query", queryParam);
             if (referencesSuffixAlias != null)
             {
-                // Exact-match alias value is used both in --exact paths (folded / NOCASE)
-                // and in the substring path (COLLATE NOCASE exact OR to bypass LIKE noise).
-                // In the folded --exact branch the alias is pre-folded; the substring branch
-                // uses the raw stripped form because the OR clause is a literal `=` comparison.
-                // exact 用の別名値は --exact 経路（folded / NOCASE）と部分一致経路（LIKE ノイズを
-                // 避けるための COLLATE NOCASE の等値 OR）の両方で使う。folded 経路だけは事前に
-                // 折りたたみ、部分一致経路は生の stripped 形をそのまま使う。
                 var aliasParam = exact && _foldReady
                     ? NameFold.Fold(referencesSuffixAlias) ?? referencesSuffixAlias
                     : referencesSuffixAlias;
@@ -829,30 +831,21 @@ public partial class DbReader
             cmd.Parameters.AddWithValue("@lang", lang);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         cmd.Parameters.AddWithValue("@limit", limit);
+        return cmd;
+    }
 
-        var results = new List<ReferenceResult>();
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
-        {
-            var column = reader.GetInt32(5);
-            var context = reader.GetString(6);
-            var clampedContext = LineWidthFormatter.ClampLine(context, maxLineWidth, column, query?.Length ?? 1);
-            results.Add(new ReferenceResult
-            {
-                Path = reader.GetString(0),
-                Lang = GetNullableString(reader, 1),
-                SymbolName = reader.GetString(2),
-                ReferenceKind = reader.GetString(3),
-                Line = reader.GetInt32(4),
-                Column = column,
-                RawContext = context,
-                Context = clampedContext.Text,
-                ContextTruncated = clampedContext.Truncated,
-                ContainerKind = GetNullableString(reader, 7),
-                ContainerName = GetNullableString(reader, 8),
-            });
-        }
-        return results;
+    private static SearchReferenceRawRow ReadSearchReferenceRawRow(SqliteDataReader reader)
+    {
+        return new SearchReferenceRawRow(
+            reader.GetString(0),
+            GetNullableString(reader, 1),
+            reader.GetString(2),
+            reader.GetString(3),
+            reader.GetInt32(4),
+            reader.GetInt32(5),
+            reader.GetString(6),
+            GetNullableString(reader, 7),
+            GetNullableString(reader, 8));
     }
 
     private static bool ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(string? lang, string? referenceKind) =>
@@ -864,15 +857,37 @@ public partial class DbReader
         var contextForFilter = string.IsNullOrWhiteSpace(result.RawContext)
             ? result.Context
             : result.RawContext;
-        if (!string.Equals(result.Lang, "csharp", StringComparison.Ordinal)
-            || !string.Equals(result.ReferenceKind, "type_reference", StringComparison.Ordinal)
-            || string.IsNullOrWhiteSpace(result.SymbolName)
+        return ShouldSuppressCSharpUsingStaticConstantPatternReference(
+            result.Path,
+            result.Lang,
+            result.SymbolName,
+            result.ReferenceKind,
+            result.Line,
+            contextForFilter);
+    }
+
+    private bool ShouldSuppressCSharpUsingStaticConstantPatternReference(SearchReferenceRawRow row)
+    {
+        return ShouldSuppressCSharpUsingStaticConstantPatternReference(
+            row.Path,
+            row.Lang,
+            row.SymbolName,
+            row.ReferenceKind,
+            row.Line,
+            row.Context);
+    }
+
+    private bool ShouldSuppressCSharpUsingStaticConstantPatternReference(string path, string? lang, string symbolName, string referenceKind, int lineNumber, string contextForFilter)
+    {
+        if (!string.Equals(lang, "csharp", StringComparison.Ordinal)
+            || !string.Equals(referenceKind, "type_reference", StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(symbolName)
             || string.IsNullOrWhiteSpace(contextForFilter)
-            || result.SymbolName.IndexOf('.') >= 0
-            || result.SymbolName.IndexOf(':') >= 0
-            || result.SymbolName.IndexOf('<') >= 0
-            || result.SymbolName.IndexOf('[') >= 0
-            || result.SymbolName.IndexOf(' ') >= 0)
+            || symbolName.IndexOf('.') >= 0
+            || symbolName.IndexOf(':') >= 0
+            || symbolName.IndexOf('<') >= 0
+            || symbolName.IndexOf('[') >= 0
+            || symbolName.IndexOf(' ') >= 0)
         {
             return false;
         }
@@ -884,15 +899,15 @@ public partial class DbReader
             return false;
         }
 
-        var activeTargets = GetActiveCSharpUsingStaticTargets(result.Path, result.Line);
+        var activeTargets = GetActiveCSharpUsingStaticTargets(path, lineNumber);
         if (activeTargets.Count == 0)
             return false;
 
-        var matchingContainers = GetCSharpConstantPatternContainersByMemberName(result.SymbolName);
+        var matchingContainers = GetCSharpConstantPatternContainersByMemberName(symbolName);
         if (matchingContainers.Count == 0)
             return false;
 
-        if (HasScopedCSharpTypeCandidate(result.Path, result.Line, result.SymbolName))
+        if (HasScopedCSharpTypeCandidate(path, lineNumber, symbolName))
             return false;
 
         foreach (var target in activeTargets)
@@ -961,6 +976,9 @@ public partial class DbReader
             activeNamespaces.Add(scope.TargetQualifiedName);
         }
 
+        foreach (var globalNamespace in GetGlobalCSharpUsingNamespaces())
+            activeNamespaces.Add(globalNamespace);
+
         return activeNamespaces;
     }
 
@@ -982,7 +1000,7 @@ public partial class DbReader
         return activeContainingTypes;
     }
 
-    private List<string> GetActiveCSharpUsingStaticTargets(string path, int lineNumber)
+    private HashSet<string> GetActiveCSharpUsingStaticTargets(string path, int lineNumber)
     {
         if (!_csharpUsingStaticScopesByPath.TryGetValue(path, out var scopes))
         {
@@ -990,7 +1008,7 @@ public partial class DbReader
             _csharpUsingStaticScopesByPath[path] = scopes;
         }
 
-        var activeTargets = new List<string>();
+        var activeTargets = new HashSet<string>(StringComparer.Ordinal);
         foreach (var scope in scopes)
         {
             if (scope.Line > lineNumber)
@@ -999,6 +1017,9 @@ public partial class DbReader
                 continue;
             activeTargets.Add(scope.TargetQualifiedName);
         }
+
+        foreach (var globalTarget in GetGlobalCSharpUsingStaticTargets())
+            activeTargets.Add(globalTarget);
 
         return activeTargets;
     }
@@ -1089,13 +1110,11 @@ public partial class DbReader
         var scopes = new List<CSharpUsingNamespaceScope>();
         foreach (var import in imports)
         {
-            var match = CSharpUsingNamespaceImportRegex.Match(import.Signature);
-            if (!match.Success)
+            if (!TryParseCSharpUsingNamespaceImport(import.Signature, out var target, out var isGlobal)
+                || isGlobal)
+            {
                 continue;
-
-            var target = NormalizeDbCSharpQualifiedName(match.Groups["target"].Value);
-            if (string.IsNullOrWhiteSpace(target))
-                continue;
+            }
 
             var scopeStartLine = 1;
             var scopeEndLine = int.MaxValue;
@@ -1208,13 +1227,11 @@ public partial class DbReader
         var scopes = new List<CSharpUsingStaticScope>();
         foreach (var import in imports)
         {
-            var match = CSharpUsingStaticImportRegex.Match(import.Signature);
-            if (!match.Success)
+            if (!TryParseCSharpUsingStaticImport(import.Signature, out var target, out var isGlobal)
+                || isGlobal)
+            {
                 continue;
-
-            var target = NormalizeDbCSharpQualifiedName(match.Groups["target"].Value);
-            if (string.IsNullOrWhiteSpace(target))
-                continue;
+            }
 
             var scopeStartLine = 1;
             var scopeEndLine = int.MaxValue;
@@ -1237,6 +1254,107 @@ public partial class DbReader
         }
 
         return scopes;
+    }
+
+    private HashSet<string> GetGlobalCSharpUsingStaticTargets()
+    {
+        if (_csharpGlobalUsingStaticTargets != null)
+            return _csharpGlobalUsingStaticTargets;
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.signature
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.lang = 'csharp'
+              AND s.kind = 'import'";
+
+        var targets = new HashSet<string>(StringComparer.Ordinal);
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            if (reader.IsDBNull(0))
+                continue;
+            if (TryParseCSharpUsingStaticImport(reader.GetString(0), out var target, out var isGlobal)
+                && isGlobal)
+            {
+                targets.Add(target!);
+            }
+        }
+
+        _csharpGlobalUsingStaticTargets = targets;
+        return _csharpGlobalUsingStaticTargets;
+    }
+
+    private HashSet<string> GetGlobalCSharpUsingNamespaces()
+    {
+        if (_csharpGlobalUsingNamespaces != null)
+            return _csharpGlobalUsingNamespaces;
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.signature
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.lang = 'csharp'
+              AND s.kind = 'import'";
+
+        var namespaces = new HashSet<string>(StringComparer.Ordinal);
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            if (reader.IsDBNull(0))
+                continue;
+            if (TryParseCSharpUsingNamespaceImport(reader.GetString(0), out var target, out var isGlobal)
+                && isGlobal)
+            {
+                namespaces.Add(target!);
+            }
+        }
+
+        _csharpGlobalUsingNamespaces = namespaces;
+        return _csharpGlobalUsingNamespaces;
+    }
+
+    private static bool TryParseCSharpUsingStaticImport(string signature, out string? target, out bool isGlobal)
+    {
+        target = null;
+        isGlobal = false;
+        if (string.IsNullOrWhiteSpace(signature))
+            return false;
+
+        var match = CSharpUsingStaticImportRegex.Match(signature);
+        if (!match.Success)
+            return false;
+
+        target = NormalizeDbCSharpQualifiedName(match.Groups["target"].Value);
+        if (string.IsNullOrWhiteSpace(target))
+            return false;
+
+        isGlobal = signature.TrimStart().StartsWith("global using static ", StringComparison.Ordinal);
+        return true;
+    }
+
+    private static bool TryParseCSharpUsingNamespaceImport(string signature, out string? target, out bool isGlobal)
+    {
+        target = null;
+        isGlobal = false;
+        if (string.IsNullOrWhiteSpace(signature)
+            || signature.IndexOf('=') >= 0)
+        {
+            return false;
+        }
+
+        var match = CSharpUsingNamespaceImportRegex.Match(signature);
+        if (!match.Success)
+            return false;
+
+        target = NormalizeDbCSharpQualifiedName(match.Groups["target"].Value);
+        if (string.IsNullOrWhiteSpace(target))
+            return false;
+
+        isGlobal = signature.TrimStart().StartsWith("global using ", StringComparison.Ordinal);
+        return true;
     }
 
     private HashSet<string> GetCSharpTypeNamespacesByName(string symbolName)
@@ -1386,19 +1504,30 @@ public partial class DbReader
         if (!_hasReferencesTable)
             return new QueryCountResult(0, 0);
 
-        var filtered = SearchReferencesCore(
-                query,
-                int.MaxValue,
-                lang,
-                referenceKind,
-                pathPatterns,
-                excludePathPatterns,
-                excludeTests,
-                exact,
-                LineWidthFormatter.DefaultMaxLineWidth)
-            .Where(result => !ShouldSuppressCSharpUsingStaticConstantPatternReference(result))
-            .ToList();
-        return new QueryCountResult(filtered.Count, filtered.Select(result => result.Path).Distinct().Count());
+        using var cmd = CreateSearchReferencesCommand(
+            query,
+            int.MaxValue,
+            lang,
+            referenceKind,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            exact);
+        using var reader = cmd.ExecuteTrackedReader();
+
+        int count = 0;
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        while (reader.TrackedRead())
+        {
+            var row = ReadSearchReferenceRawRow(reader);
+            if (ShouldSuppressCSharpUsingStaticConstantPatternReference(row))
+                continue;
+
+            count++;
+            paths.Add(row.Path);
+        }
+
+        return new QueryCountResult(count, paths.Count);
     }
 
     public int CountSearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)

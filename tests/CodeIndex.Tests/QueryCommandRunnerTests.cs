@@ -14513,6 +14513,169 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpGlobalUsingStaticConstantPatternsDoNotLeakAcrossFiles()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_global_using_static_constant_pattern_cross_file");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Defs.cs", "csharp",
+                """
+                namespace Probe;
+
+                public enum Color
+                {
+                    Red,
+                    Blue
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/GlobalUsings.cs", "csharp",
+                """
+                global using static Probe.Color;
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Use.cs", "csharp",
+                """
+                namespace Probe;
+
+                class Demo
+                {
+                    bool Match(object value) => value is Red or Blue;
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (redExitCode, redStdout, redStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            using var redDocument = ParseJsonOutput(redStdout);
+
+            var (redCountExitCode, redCountStdout, redCountStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--count"],
+                _jsonOptions));
+            using var redCountDocument = ParseJsonOutput(redCountStdout);
+
+            Assert.Equal(CommandExitCodes.NotFound, redExitCode);
+            Assert.Equal(string.Empty, redStderr);
+            Assert.Equal(0, redDocument.RootElement.GetProperty("count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.Success, redCountExitCode);
+            Assert.Equal(string.Empty, redCountStderr);
+            Assert.Equal(0, redCountDocument.RootElement.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_CSharpGlobalUsingNamespaceSameNameTypePatternStaysVisible()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_global_using_namespace_same_name_type_pattern_visible");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Defs.cs", "csharp",
+                """
+                namespace Probe;
+
+                public enum Color
+                {
+                    Red
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/GlobalUsings.cs", "csharp",
+                """
+                global using RealTypes;
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/RealRed.cs", "csharp",
+                """
+                namespace RealTypes;
+
+                public class Red {}
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Use.cs", "csharp",
+                """
+                using static Probe.Color;
+
+                namespace Probe;
+
+                class Demo
+                {
+                    bool Match(object value) => value is Red;
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            var row = Assert.Single(ParseJsonLines(stdout)).RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("Red", row.GetProperty("symbol_name").GetString());
+            Assert.Equal("type_reference", row.GetProperty("reference_kind").GetString());
+            Assert.Contains("value is Red", row.GetProperty("context").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_CSharpUsingAliasDoesNotRescueUnqualifiedTypePattern()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_using_alias_does_not_rescue_unqualified_type_pattern");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Defs.cs", "csharp",
+                """
+                namespace Probe;
+
+                public enum Color
+                {
+                    Red
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Shadow.cs", "csharp",
+                """
+                namespace Shadow;
+
+                public class Red {}
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Use.cs", "csharp",
+                """
+                using static Probe.Color;
+                using Shadow = Probe;
+
+                namespace Real;
+
+                class Demo
+                {
+                    bool Match(object value) => value is Red;
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            using var document = ParseJsonOutput(stdout);
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpUsingStaticConstantPatternsStaySuppressedWhenContextClamped()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_using_static_constant_pattern_clamped");
