@@ -3184,6 +3184,46 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedUppercaseConstantBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<object> items)
+                {
+                    const int READY = 1;
+                    return Sink.Pick(from Status in items
+                                     orderby (READY)
+                                     select(Status.Ready),
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedTerminalSelectAfterGenericClose_PreservesOnlyTrailingReference()
     {
         const string content = """
