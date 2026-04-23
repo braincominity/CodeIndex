@@ -98,7 +98,7 @@ public partial class DbReader
     private const int CSharpUsingStaticReferenceFilterChunkSize = 64;
     private const int CSharpUsingStaticReferenceFilterMaxRawLimit = 65536;
     private sealed record CSharpNamespaceScope(string QualifiedName, int ScopeStartLine, int ScopeEndLine);
-    private sealed record CSharpContainingTypeScope(string Path, string QualifiedName, string? Visibility, string? Signature, int DeclarationLine, int ScopeStartLine, int ScopeEndLine);
+    private sealed record CSharpContainingTypeScope(string Path, string Kind, string QualifiedName, string? Visibility, string? Signature, int DeclarationLine, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpUsingStaticScope(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpUsingNamespaceScope(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpUsingAliasScope(string AliasName, int Line, int ScopeStartLine, int ScopeEndLine, bool TargetsType);
@@ -1045,14 +1045,12 @@ public partial class DbReader
 
     private void CollectInheritedCSharpContainingTypes(CSharpContainingTypeScope containingTypeScope, HashSet<string> inheritedContainingTypes, HashSet<string> visited)
     {
-        var directBaseQualifiedName = ResolveDirectCSharpBaseContainingType(containingTypeScope);
-        if (string.IsNullOrWhiteSpace(directBaseQualifiedName) || !visited.Add(directBaseQualifiedName))
+        var directBaseScope = ResolveDirectCSharpBaseContainingTypeScope(containingTypeScope);
+        if (directBaseScope == null || !visited.Add(directBaseScope.QualifiedName))
             return;
 
-        inheritedContainingTypes.Add(directBaseQualifiedName);
-        var directBaseScope = GetCSharpContainingTypeScope(directBaseQualifiedName);
-        if (directBaseScope != null)
-            CollectInheritedCSharpContainingTypes(directBaseScope, inheritedContainingTypes, visited);
+        inheritedContainingTypes.Add(directBaseScope.QualifiedName);
+        CollectInheritedCSharpContainingTypes(directBaseScope, inheritedContainingTypes, visited);
     }
 
     private CSharpContainingTypeScope? GetCSharpContainingTypeScope(string qualifiedName)
@@ -1064,7 +1062,7 @@ public partial class DbReader
         var shortName = lastDot >= 0 ? qualifiedName[(lastDot + 1)..] : qualifiedName;
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = @"
-            SELECT f.path, s.name, s.container_name, s.container_qualified_name, s.visibility, s.signature, s.body_start_line, s.body_end_line, s.start_line, s.end_line
+            SELECT f.path, s.kind, s.name, s.container_name, s.container_qualified_name, s.visibility, s.signature, s.body_start_line, s.body_end_line, s.start_line, s.end_line
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE f.lang = 'csharp'
@@ -1083,10 +1081,11 @@ public partial class DbReader
                 GetNullableString(reader, 3),
                 GetNullableString(reader, 4),
                 GetNullableString(reader, 5),
-                reader.IsDBNull(6) ? null : reader.GetInt32(6),
+                GetNullableString(reader, 6),
                 reader.IsDBNull(7) ? null : reader.GetInt32(7),
                 reader.IsDBNull(8) ? null : reader.GetInt32(8),
-                reader.IsDBNull(9) ? null : reader.GetInt32(9));
+                reader.IsDBNull(9) ? null : reader.GetInt32(9),
+                reader.IsDBNull(10) ? null : reader.GetInt32(10));
             if (scope == null)
                 continue;
             if (!string.Equals(scope.QualifiedName, qualifiedName, StringComparison.Ordinal))
@@ -1339,7 +1338,7 @@ public partial class DbReader
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = @"
-            SELECT s.name, s.container_name, s.container_qualified_name, s.visibility, s.signature, s.body_start_line, s.body_end_line, s.start_line, s.end_line
+            SELECT s.kind, s.name, s.container_name, s.container_qualified_name, s.visibility, s.signature, s.body_start_line, s.body_end_line, s.start_line, s.end_line
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE f.path = @path
@@ -1359,10 +1358,11 @@ public partial class DbReader
                 GetNullableString(reader, 2),
                 GetNullableString(reader, 3),
                 GetNullableString(reader, 4),
-                reader.IsDBNull(5) ? null : reader.GetInt32(5),
+                GetNullableString(reader, 5),
                 reader.IsDBNull(6) ? null : reader.GetInt32(6),
                 reader.IsDBNull(7) ? null : reader.GetInt32(7),
-                reader.IsDBNull(8) ? null : reader.GetInt32(8));
+                reader.IsDBNull(8) ? null : reader.GetInt32(8),
+                reader.IsDBNull(9) ? null : reader.GetInt32(9));
             if (scope == null)
                 continue;
 
@@ -1375,6 +1375,7 @@ public partial class DbReader
 
     private static CSharpContainingTypeScope? CreateCSharpContainingTypeScope(
         string path,
+        string? kind,
         string? name,
         string? containerName,
         string? containerQualifiedName,
@@ -1385,7 +1386,7 @@ public partial class DbReader
         int? startLine,
         int? endLine)
     {
-        if (string.IsNullOrWhiteSpace(name))
+        if (string.IsNullOrWhiteSpace(kind) || string.IsNullOrWhiteSpace(name))
             return null;
 
         var qualifiedName = CombineDbQualifiedName(
@@ -1400,19 +1401,30 @@ public partial class DbReader
         if (resolvedStartLine <= 0 || resolvedEndLine < resolvedStartLine || declarationLine <= 0)
             return null;
 
-        return new CSharpContainingTypeScope(path, qualifiedName, visibility, signature, declarationLine, resolvedStartLine, resolvedEndLine);
+        return new CSharpContainingTypeScope(path, kind, qualifiedName, visibility, signature, declarationLine, resolvedStartLine, resolvedEndLine);
     }
 
-    private string? ResolveDirectCSharpBaseContainingType(CSharpContainingTypeScope containingTypeScope)
+    private CSharpContainingTypeScope? ResolveDirectCSharpBaseContainingTypeScope(CSharpContainingTypeScope containingTypeScope)
     {
+        if (!string.Equals(containingTypeScope.Kind, "class", StringComparison.Ordinal))
+            return null;
+
         var baseTypeReference = ParseCSharpBaseTypeReference(containingTypeScope.Signature);
         if (string.IsNullOrWhiteSpace(baseTypeReference))
             return null;
 
-        return ResolveScopedCSharpContainingTypeQualifiedName(
+        var directBaseQualifiedName = ResolveScopedCSharpContainingTypeQualifiedName(
             containingTypeScope.Path,
             containingTypeScope.DeclarationLine,
             baseTypeReference);
+        if (string.IsNullOrWhiteSpace(directBaseQualifiedName))
+            return null;
+
+        var directBaseScope = GetCSharpContainingTypeScope(directBaseQualifiedName);
+        if (directBaseScope == null || !string.Equals(directBaseScope.Kind, "class", StringComparison.Ordinal))
+            return null;
+
+        return directBaseScope;
     }
 
     private string? ResolveScopedCSharpContainingTypeQualifiedName(string path, int lineNumber, string typeReference)
@@ -1954,7 +1966,8 @@ public partial class DbReader
 
         var cursor = symbolColumn;
         cursor = SkipCSharpTriviaBackward(context, cursor);
-        return IsCSharpUsingStaticConstantPatternAnchor(context, ref cursor);
+        return IsCSharpUsingStaticConstantPatternAnchor(context, ref cursor)
+            || IsCSharpUsingStaticConstantTypeKeywordAnchor(context, ref cursor);
     }
 
     private static bool IsCSharpUsingStaticConstantPatternAnchor(string text, ref int cursor)
@@ -1984,6 +1997,19 @@ public partial class DbReader
             if (TryConsumeTrailingCSharpToken(text, ref cursor, "not"))
                 cursor = SkipCSharpTriviaBackward(text, cursor);
         }
+    }
+
+    private static bool IsCSharpUsingStaticConstantTypeKeywordAnchor(string text, ref int cursor)
+    {
+        cursor = SkipCSharpTriviaBackward(text, cursor);
+        if (cursor <= 0 || text[cursor - 1] != '(')
+            return false;
+
+        cursor--;
+        cursor = SkipCSharpTriviaBackward(text, cursor);
+        return TryConsumeTrailingCSharpToken(text, ref cursor, "typeof")
+            || TryConsumeTrailingCSharpToken(text, ref cursor, "sizeof")
+            || TryConsumeTrailingCSharpToken(text, ref cursor, "default");
     }
 
     private static int SkipCSharpTriviaBackward(string text, int cursor)
