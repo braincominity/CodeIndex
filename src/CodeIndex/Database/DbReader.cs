@@ -2626,7 +2626,7 @@ public partial class DbReader
                   AND r.reference_kind IN {CallGraphReferenceKindsSql}
                   AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}"
             : @"
-            SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
+            SELECT f.path, f.lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, r.symbol_name,
                    r.reference_kind, MIN(r.line) AS first_line, COUNT(*) AS reference_count
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id

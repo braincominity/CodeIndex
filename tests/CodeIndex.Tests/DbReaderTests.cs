@@ -1444,6 +1444,34 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetCallers_CSharpTopLevelStatementCallWithExplicitKindSurfacesSyntheticTopLevelCaller()
+    {
+        InsertIndexedFile("src/Program.cs", "csharp",
+            """
+            using System;
+
+            Console.WriteLine("boot");
+
+            void Run()
+            {
+                Console.WriteLine("inside");
+            }
+
+            Run();
+            """);
+
+        var callers = _reader.GetCallers("Run", lang: "csharp", referenceKind: "call", exact: true, pathPatterns: ["Program.cs"]);
+
+        var caller = Assert.Single(callers);
+        Assert.Equal("src/Program.cs", caller.Path);
+        Assert.Equal("function", caller.CallerKind);
+        Assert.Equal("<top-level>", caller.CallerName);
+        Assert.Equal("Run", caller.CalleeName);
+        Assert.Equal("call", caller.ReferenceKind);
+        Assert.Equal(1, caller.ReferenceCount);
+    }
+
+    [Fact]
     public void GetCallees_ReturnsReferencedSymbolsForCaller()
     {
         InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return authenticate(user, password)\n");
