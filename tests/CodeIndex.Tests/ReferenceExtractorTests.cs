@@ -5363,7 +5363,7 @@ public class ReferenceExtractorTests
             SELECT * FROM ONLY public.users;
             UPDATE ONLY public.users SET active = true;
             SELECT * FROM LATERAL fn_users(42);
-            MERGE TOP (5) INTO audit_log AS t
+            MERGE TOP (5) audit_log AS t
             USING staging_log AS s
             ON t.id = s.id
             WHEN MATCHED THEN
@@ -5455,12 +5455,19 @@ public class ReferenceExtractorTests
             ON t.id = s.id
             WHEN MATCHED THEN
                 UPDATE SET action = s.action;
+            MERGE audit_log_archive AS t
+            USING staging_archive AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action;
             """;
 
         var symbols = SymbolExtractor.Extract(1, "sql", content);
         var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
 
+        Assert.Contains(references, r => r.SymbolName == "audit_log_archive" && r.ReferenceKind == "reference");
         Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "staging_archive" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "btree");
         Assert.DoesNotContain(references, r => r.SymbolName == "lower");
     }

@@ -10872,7 +10872,7 @@ public class QueryCommandRunnerTests
                 SELECT * FROM ONLY public.users;
                 UPDATE ONLY public.users SET active = true;
                 SELECT * FROM LATERAL fn_users(42);
-                MERGE TOP (5) INTO audit_log AS t USING staging_log AS s ON t.id = s.id WHEN MATCHED THEN UPDATE SET action = s.action;
+                MERGE TOP (5) audit_log AS t USING staging_log AS s ON t.id = s.id WHEN MATCHED THEN UPDATE SET action = s.action;
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
@@ -11108,14 +11108,23 @@ public class QueryCommandRunnerTests
                 ON t.id = s.id
                 WHEN MATCHED THEN
                     UPDATE SET action = s.action;
+                MERGE audit_log_archive AS t
+                USING staging_archive AS s
+                ON t.id = s.id
+                WHEN MATCHED THEN
+                    UPDATE SET action = s.action;
                 """);
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
             var (stagingExitCode, stagingStdout, stagingStderr) = RunBuiltCli(["references", "staging_log", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (archiveTargetExitCode, archiveTargetStdout, archiveTargetStderr) = RunBuiltCli(["references", "audit_log_archive", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
+            var (archiveSourceExitCode, archiveSourceStdout, archiveSourceStderr) = RunBuiltCli(["references", "staging_archive", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (btreeExitCode, btreeStdout, btreeStderr) = RunBuiltCli(["references", "btree", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
             var (lowerExitCode, lowerStdout, lowerStderr) = RunBuiltCli(["references", "lower", "--db", dbPath, "--json", "--lang", "sql", "--exact-name"]);
 
             var stagingRows = ParseJsonLines(stagingStdout);
+            var archiveTargetRows = ParseJsonLines(archiveTargetStdout);
+            var archiveSourceRows = ParseJsonLines(archiveSourceStdout);
             using var btreeDocument = ParseJsonOutput(btreeStdout);
             using var lowerDocument = ParseJsonOutput(lowerStdout);
 
@@ -11127,6 +11136,18 @@ public class QueryCommandRunnerTests
             var stagingRow = Assert.Single(stagingRows);
             Assert.Equal("staging_log", stagingRow.RootElement.GetProperty("symbol_name").GetString());
             Assert.Equal("reference", stagingRow.RootElement.GetProperty("reference_kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, archiveTargetExitCode);
+            Assert.Equal(string.Empty, archiveTargetStderr);
+            var archiveTargetRow = Assert.Single(archiveTargetRows);
+            Assert.Equal("audit_log_archive", archiveTargetRow.RootElement.GetProperty("symbol_name").GetString());
+            Assert.Equal("reference", archiveTargetRow.RootElement.GetProperty("reference_kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, archiveSourceExitCode);
+            Assert.Equal(string.Empty, archiveSourceStderr);
+            var archiveSourceRow = Assert.Single(archiveSourceRows);
+            Assert.Equal("staging_archive", archiveSourceRow.RootElement.GetProperty("symbol_name").GetString());
+            Assert.Equal("reference", archiveSourceRow.RootElement.GetProperty("reference_kind").GetString());
 
             Assert.Equal(CommandExitCodes.NotFound, btreeExitCode);
             Assert.Equal(string.Empty, btreeStderr);
