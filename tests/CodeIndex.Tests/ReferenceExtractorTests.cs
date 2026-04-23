@@ -5384,6 +5384,47 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_TruncateTargetsHandleOnlyAndMultipleTargets()
+    {
+        // issues #684 / #711: `TRUNCATE TABLE` should skip `ONLY` and keep all comma-separated
+        // targets instead of emitting phantom `ONLY` or dropping later targets.
+        // issues #684 / #711: `TRUNCATE TABLE` は `ONLY` を飛ばし、comma-separated target を
+        // すべて保持するべきであり、phantom `ONLY` や後続 target の欠落を出してはいけない。
+        const string content = """
+            TRUNCATE TABLE ONLY public.users;
+            TRUNCATE TABLE audit_log, archived_log;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "archived_log" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ONLY");
+    }
+
+    [Fact]
+    public void Extract_SQL_DeleteUsingCapturesSourceReferences()
+    {
+        // issue #712: PostgreSQL `DELETE ... USING` keeps the target on `DELETE FROM`, but the
+        // joined source list after `USING` must also stay visible as SQL `reference` edges.
+        // issue #712: PostgreSQL の `DELETE ... USING` は `DELETE FROM` 側 target だけでなく、
+        // `USING` 後の source list も SQL `reference` edge として保持するべき。
+        const string content = """
+            DELETE FROM audit_log USING staging_log, archived_log
+            WHERE audit_log.id = staging_log.id;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "archived_log" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_SQL_MergeUsingDoesNotTreatOtherUsingClausesAsSources()
     {
         // issue #695: `USING` should stay on the SQL source path only for `MERGE ... USING <source>`,
