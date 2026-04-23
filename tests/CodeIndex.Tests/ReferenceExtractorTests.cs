@@ -5425,6 +5425,53 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_TempTablesRespectSameLineStatementOrder()
+    {
+        // issue #679: statement-order temp gating must also work when multiple SQL statements share
+        // one physical line.
+        // issue #679: 複数 statement が同一行に並ぶ場合でも、temp gating は statement 順で評価されるべき。
+        const string content = """
+            SELECT id INTO #inline_temp FROM users; SELECT * FROM #inline_temp;
+            SELECT * FROM #forward_temp; SELECT id INTO #forward_temp FROM users;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#inline_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(1, references.Count(r => r.SymbolName == "#forward_temp" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_MergeUpdateSetDoesNotEmitSetAsTargetReference()
+    {
+        // issue #660: `MERGE ... WHEN MATCHED THEN UPDATE SET ...` must not emit `SET` as a table
+        // reference, while ordinary `UPDATE target SET ...` and quoted `[SET]` targets still work.
+        // issue #660: `MERGE ... WHEN MATCHED THEN UPDATE SET ...` から `SET` をテーブル参照として
+        // 出してはならない。通常の `UPDATE target SET ...` と quoted `[SET]` target は維持する。
+        const string content = """
+            MERGE INTO audit_log AS t
+            USING staging_log AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action;
+
+            UPDATE audit_log SET action = 'done';
+            UPDATE [SET] SET action = 'quoted';
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "SET" && r.ReferenceKind == "reference" && r.Line == 5);
+        Assert.Equal(2, references.Count(r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "SET" && r.ReferenceKind == "reference" && r.Line == 8);
+    }
+
+    [Fact]
     public void Extract_SQL_HashCommentsDoNotLeakAsTempObjects()
     {
         // issue #653: after restoring temp-table support, MySQL-style `# comment` tails that begin

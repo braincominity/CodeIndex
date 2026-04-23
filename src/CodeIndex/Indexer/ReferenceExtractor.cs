@@ -746,96 +746,127 @@ public static class ReferenceExtractor
                 var sqlLineFragment = PrepareSqlLineForIdentifierScan(structuralLines[i], out var sqlLineEndedByLineComment);
                 if (!string.IsNullOrWhiteSpace(sqlLineFragment))
                 {
-                    var sqlScanLine = CombineSqlStatementPrefix(sqlStatementPrefix!, sqlLineFragment, out var sqlLineOffset);
-                    foreach (Match match in SqlProcCallRegex.Matches(sqlScanLine))
+                    var sqlCombinedLine = CombineSqlStatementPrefix(sqlStatementPrefix!, sqlLineFragment, out var sqlLineOffset);
+                    int sqlStatementStart = 0;
+
+                    while (true)
                     {
-                        var nameGroup = match.Groups["name"];
-                        if (nameGroup.Index < sqlLineOffset)
-                            continue;
-                        NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
-                        nameIndex -= sqlLineOffset;
+                        int terminatorIndex = FindSqlStatementTerminator(sqlCombinedLine, sqlStatementStart);
+                        int statementEnd = terminatorIndex >= 0 ? terminatorIndex + 1 : sqlCombinedLine.Length;
+                        var sqlStatement = sqlCombinedLine[sqlStatementStart..statementEnd];
+                        int sqlStatementLineOffset = Math.Max(0, sqlLineOffset - sqlStatementStart);
 
-                        // Bracketed / backtick-quoted identifiers are explicitly quoted to allow reserved
-                        // words (`[ORDER]`, `[USER]`, `[AS]`, `[IMMEDIATE]`, `` `order` ``) as real object
-                        // names. Skip the keyword ignore list so a legitimate `EXEC [ORDER]` or
-                        // `` CALL `order` `` is not silently dropped.
-                        // 角括弧 / バッククォート付き識別子は予約語を識別子として使うための引用形。
-                        // `[ORDER]` / `` `order` `` のような正当な名前を落とさないため keyword ignore list をスキップする。
-                        if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
-                            continue;
-                        if (definitionNames != null && definitionNames.Contains(resolvedName))
-                            continue;
-
-                        var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
-                        AddChainReference(
-                            references, seen, fileId, resolvedName, nameIndex + 1,
-                            "call", context, lineNumber, sqlCallContainer);
-                    }
-
-                    foreach (Match match in SqlSourceReferenceRegex.Matches(sqlScanLine))
-                    {
-                        var nameGroup = match.Groups["name"];
-                        if (nameGroup.Index < sqlLineOffset)
-                            continue;
-                        var followedByOpenParen = IsFollowedByOpenParen(sqlScanLine, nameGroup.Index + nameGroup.Length);
-                        NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
-                        nameIndex -= sqlLineOffset;
-                        if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
-                            continue;
-                        if (followedByOpenParen)
+                        if (!string.IsNullOrWhiteSpace(sqlStatement))
                         {
-                            var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
-                            AddChainReference(
-                                references, seen, fileId, resolvedName, nameIndex + 1,
-                                "call", context, lineNumber, sqlCallContainer);
-                            if (!wasQuoted)
-                                sqlSuppressedCallIndices?.Add(GetSqlCallLikeSuppressionIndex(sqlScanLine, nameGroup.Index) - sqlLineOffset);
-                            continue;
+                            foreach (Match match in SqlProcCallRegex.Matches(sqlStatement))
+                            {
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+                                NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+
+                                // Bracketed / backtick-quoted identifiers are explicitly quoted to allow reserved
+                                // words (`[ORDER]`, `[USER]`, `[AS]`, `[IMMEDIATE]`, `` `order` ``) as real object
+                                // names. Skip the keyword ignore list so a legitimate `EXEC [ORDER]` or
+                                // `` CALL `order` `` is not silently dropped.
+                                // 角括弧 / バッククォート付き識別子は予約語を識別子として使うための引用形。
+                                // `[ORDER]` / `` `order` `` のような正当な名前を落とさないため keyword ignore list をスキップする。
+                                if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                    continue;
+                                if (definitionNames != null && definitionNames.Contains(resolvedName))
+                                    continue;
+
+                                var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
+                                AddChainReference(
+                                    references, seen, fileId, resolvedName, nameColumn + 1,
+                                    "call", context, lineNumber, sqlCallContainer);
+                            }
+
+                            foreach (Match match in SqlSourceReferenceRegex.Matches(sqlStatement))
+                            {
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+                                var followedByOpenParen = IsFollowedByOpenParen(sqlStatement, nameGroup.Index + nameGroup.Length);
+                                NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+                                if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                    continue;
+                                if (followedByOpenParen)
+                                {
+                                    var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
+                                    AddChainReference(
+                                        references, seen, fileId, resolvedName, nameColumn + 1,
+                                        "call", context, lineNumber, sqlCallContainer);
+                                    if (!wasQuoted)
+                                    {
+                                        sqlSuppressedCallIndices?.Add(
+                                            GetSqlCallLikeSuppressionIndex(sqlStatement, nameGroup.Index) + sqlStatementStart - sqlLineOffset);
+                                    }
+                                    continue;
+                                }
+                                if (resolvedName.StartsWith("#", StringComparison.Ordinal)
+                                    && (sqlEstablishedTempObjectNames == null || !sqlEstablishedTempObjectNames.Contains(resolvedName)))
+                                    continue;
+
+                                var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
+                                AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                            }
+
+                            foreach (Match match in SqlSelectIntoTempTargetStatementRegex.Matches(sqlStatement))
+                            {
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+                                NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+                                if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                    continue;
+
+                                var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
+                                AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                            }
+
+                            foreach (Match match in SqlTargetReferenceRegex.Matches(sqlStatement))
+                            {
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+                                NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+                                if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                    continue;
+                                if (!wasQuoted
+                                    && string.Equals(resolvedName, "SET", StringComparison.OrdinalIgnoreCase)
+                                    && match.Value.StartsWith("UPDATE", StringComparison.OrdinalIgnoreCase))
+                                    continue;
+
+                                var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
+                                AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                                if (IsFollowedByOpenParen(sqlStatement, nameGroup.Index + nameGroup.Length))
+                                {
+                                    sqlSuppressedCallIndices?.Add(
+                                        GetSqlCallLikeSuppressionIndex(sqlStatement, nameGroup.Index) + sqlStatementStart - sqlLineOffset);
+                                }
+                            }
                         }
-                        if (resolvedName.StartsWith("#", StringComparison.Ordinal)
-                            && (sqlEstablishedTempObjectNames == null || !sqlEstablishedTempObjectNames.Contains(resolvedName)))
-                            continue;
 
-                        var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
-                        AddReference(references, seen, fileId, resolvedName, nameIndex, "reference", context, lineNumber, sqlReferenceContainer);
+                        if (terminatorIndex < 0)
+                            break;
+
+                        CollectSqlTempObjectNamesFromStatement(sqlStatement, sqlEstablishedTempObjectNames!);
+                        sqlStatementStart = terminatorIndex + 1;
+                        while (sqlStatementStart < sqlCombinedLine.Length && char.IsWhiteSpace(sqlCombinedLine[sqlStatementStart]))
+                            sqlStatementStart++;
                     }
 
-                    foreach (Match match in SqlSelectIntoTempTargetStatementRegex.Matches(sqlScanLine))
-                    {
-                        var nameGroup = match.Groups["name"];
-                        if (nameGroup.Index < sqlLineOffset)
-                            continue;
-                        NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
-                        nameIndex -= sqlLineOffset;
-                        if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
-                            continue;
-
-                        var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
-                        AddReference(references, seen, fileId, resolvedName, nameIndex, "reference", context, lineNumber, sqlReferenceContainer);
-                    }
-
-                    foreach (Match match in SqlTargetReferenceRegex.Matches(sqlScanLine))
-                    {
-                        var nameGroup = match.Groups["name"];
-                        if (nameGroup.Index < sqlLineOffset)
-                            continue;
-                        NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
-                        nameIndex -= sqlLineOffset;
-                        if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
-                            continue;
-
-                        var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
-                        AddReference(references, seen, fileId, resolvedName, nameIndex, "reference", context, lineNumber, sqlReferenceContainer);
-                        if (IsFollowedByOpenParen(sqlScanLine, nameGroup.Index + nameGroup.Length))
-                            sqlSuppressedCallIndices?.Add(GetSqlCallLikeSuppressionIndex(sqlScanLine, nameGroup.Index) - sqlLineOffset);
-                    }
+                    sqlStatementPrefix = AdvanceSqlStatementPrefix(sqlCombinedLine, sqlStatementStart, sqlLineEndedByLineComment);
                 }
-
-                sqlStatementPrefix = AdvanceSqlStatementPrefix(
-                    sqlStatementPrefix!,
-                    sqlLineFragment,
-                    sqlLineEndedByLineComment,
-                    sqlEstablishedTempObjectNames!);
+                else if (sqlLineEndedByLineComment)
+                {
+                    sqlStatementPrefix = string.Empty;
+                }
             }
 
             // C# / Java parenless initializers: `new T { ... }` / `new T<U> { ... }` /
@@ -1193,32 +1224,10 @@ public static class ReferenceExtractor
     }
 
     private static string AdvanceSqlStatementPrefix(
-        string prefix,
-        string line,
-        bool lineEndedByLineComment,
-        HashSet<string> establishedTempObjectNames)
+        string combined,
+        int statementStart,
+        bool lineEndedByLineComment)
     {
-        if (string.IsNullOrWhiteSpace(line))
-            return prefix;
-
-        var combined = CombineSqlStatementPrefix(prefix, line, out _);
-        int statementStart = 0;
-
-        while (true)
-        {
-            int terminatorIndex = FindSqlStatementTerminator(combined, statementStart);
-            if (terminatorIndex < 0)
-                break;
-
-            CollectSqlTempObjectNamesFromStatement(
-                combined[statementStart..(terminatorIndex + 1)],
-                establishedTempObjectNames);
-            statementStart = terminatorIndex + 1;
-
-            while (statementStart < combined.Length && char.IsWhiteSpace(combined[statementStart]))
-                statementStart++;
-        }
-
         if (lineEndedByLineComment)
             return string.Empty;
 
