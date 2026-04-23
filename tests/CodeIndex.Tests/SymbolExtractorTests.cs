@@ -8990,6 +8990,33 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_ContextualKeywordReturnTypeIdentifiers_AreNotRejectedBySuffixGuard()
+    {
+        var content = """
+            namespace Demo;
+
+            public class await {}
+            public class yield {}
+
+            public class Uses
+            {
+                public await MakeAwait() => new await();
+                public yield MakeYield() => new yield();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "await");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "yield");
+
+        var awaitMethod = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "MakeAwait"));
+        Assert.Equal("await", awaitMethod.ReturnType);
+
+        var yieldMethod = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "MakeYield"));
+        Assert.Equal("yield", yieldMethod.ReturnType);
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsMultiLineFieldDeclaration()
     {
         // Plain field whose type occupies one line and whose name / initializer spill

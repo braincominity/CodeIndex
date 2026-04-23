@@ -9823,7 +9823,7 @@ public static class SymbolExtractor
         }
 
         var lastToken = trimmed[tokenStart..];
-        return lastToken is "as" or "is" or "await" or "return" or "throw" or "yield" or "new";
+        return lastToken is "as" or "is" or "return" or "throw" or "new";
     }
 
     private static int FindNextSameLineBraceStatementStart(string matchLine, int startIndex, string? lang)
