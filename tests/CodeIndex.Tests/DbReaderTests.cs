@@ -3609,6 +3609,45 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_ExactCalleesNormalizeBracketedCallerNames()
+    {
+        InsertIndexedFile("src/sql_exact_bracketed_callee_targets.sql", "sql",
+            """
+            CREATE PROCEDURE [dbo].[fn_Target]
+            AS
+            BEGIN
+                SELECT 1;
+            END
+            GO
+
+            CREATE PROCEDURE [sales].[fn_Target]
+            AS
+            BEGIN
+                EXEC [sales].[fn_Target];
+                EXEC fn_Target;
+            END
+            GO
+            """);
+
+        var normalizedCallee = Assert.Single(
+            _reader.GetCallees("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_exact_bracketed_callee"]));
+        Assert.Equal("[sales].[fn_Target]", normalizedCallee.CallerName);
+        Assert.Equal("fn_Target", normalizedCallee.CalleeName);
+        Assert.Equal(2, normalizedCallee.ReferenceCount);
+        Assert.Equal(1, _reader.CountCallees("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_exact_bracketed_callee"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCalleesTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_exact_bracketed_callee"]));
+
+        var bracketedCallee = Assert.Single(
+            _reader.GetCallees("[sales].[fn_Target]", lang: "sql", exact: true, pathPatterns: ["sql_exact_bracketed_callee"]));
+        Assert.Equal("[sales].[fn_Target]", bracketedCallee.CallerName);
+        Assert.Equal("fn_Target", bracketedCallee.CalleeName);
+
+        Assert.DoesNotContain(
+            _reader.GetCallees("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_exact_bracketed_callee"]),
+            item => item.CallerName == "[sales].[fn_Target]");
+    }
+
+    [Fact]
     public void SqlQualifiedNames_WhitespaceAroundDotsStillResolvesDefinitionsAndSameLineCalls()
     {
         InsertIndexedFile("src/sql_spaced_qualified_names.sql", "sql",

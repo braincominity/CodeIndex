@@ -6845,6 +6845,59 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunCallees_ExactJson_NormalizesBracketedSqlCallerNames()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callees_sql_exact_bracketed");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/sql_exact_bracketed_callee_targets.sql",
+                "sql",
+                """
+                CREATE PROCEDURE [dbo].[fn_Target]
+                AS
+                BEGIN
+                    SELECT 1;
+                END
+                GO
+
+                CREATE PROCEDURE [sales].[fn_Target]
+                AS
+                BEGIN
+                    EXEC [sales].[fn_Target];
+                    EXEC fn_Target;
+                END
+                GO
+                """);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+                writer.MarkSqlGraphContractReady();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                ["sales.fn_Target", "--db", dbPath, "--json", "--lang", "sql", "--exact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("[sales].[fn_Target]", json.GetProperty("caller_name").GetString());
+            Assert.Equal("fn_Target", json.GetProperty("callee_name").GetString());
+            Assert.Equal(2, json.GetProperty("reference_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunDeps_Json_StaleSqlGraphContractIncludesDegradedState()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_sql_graph_contract");

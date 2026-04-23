@@ -1376,7 +1376,12 @@ public partial class DbReader
         else
             sql += NonInvocationReferenceKindsExclusion;
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
-        if (exact && _foldReady)
+        var useSqlQualifiedContainerMatch = SqlNameResolver.HasQualifier(query);
+        if (exact && useSqlQualifiedContainerMatch && _foldReady)
+            sql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name_folded(r.container_name) = @aliasQueryNormalizedFolded) OR ((f.lang != 'sql') AND r.container_name_folded = @query))";
+        else if (exact && useSqlQualifiedContainerMatch)
+            sql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name(r.container_name) = @aliasQueryNormalized COLLATE NOCASE) OR ((f.lang != 'sql') AND r.container_name = @query COLLATE NOCASE))";
+        else if (exact && _foldReady)
             sql += allowSqlLeafFallback
                 ? " AND (r.container_name_folded = @query OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))"
                 : " AND r.container_name_folded = @query";
@@ -1416,6 +1421,9 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@query", calleesQueryParam);
         cmd.Parameters.AddWithValue("@aliasQuery", query);
         cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
+        cmd.Parameters.AddWithValue("@aliasQueryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
+        cmd.Parameters.AddWithValue("@aliasQueryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
+        cmd.Parameters.AddWithValue("@aliasQuerySegmentCount", SqlNameResolver.GetSegmentCount(query));
         cmd.Parameters.AddWithValue("@preferExactCase", exact ? 1 : 0);
         cmd.Parameters.AddWithValue("@rawQuery", exact ? query : string.Empty);
         cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
@@ -1467,7 +1475,12 @@ public partial class DbReader
         else
             groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
-        if (exact && _foldReady)
+        var useSqlQualifiedContainerMatch = SqlNameResolver.HasQualifier(query);
+        if (exact && useSqlQualifiedContainerMatch && _foldReady)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name_folded(r.container_name) = @aliasQueryNormalizedFolded) OR ((f.lang != 'sql') AND r.container_name_folded = @query))";
+        else if (exact && useSqlQualifiedContainerMatch)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name(r.container_name) = @aliasQueryNormalized COLLATE NOCASE) OR ((f.lang != 'sql') AND r.container_name = @query COLLATE NOCASE))";
+        else if (exact && _foldReady)
             groupedSql += allowSqlLeafFallback
                 ? " AND (r.container_name_folded = @query OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))"
                 : " AND r.container_name_folded = @query";
@@ -1493,6 +1506,9 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@query", value);
         cmd.Parameters.AddWithValue("@aliasQuery", query);
         cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
+        cmd.Parameters.AddWithValue("@aliasQueryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
+        cmd.Parameters.AddWithValue("@aliasQueryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
+        cmd.Parameters.AddWithValue("@aliasQuerySegmentCount", SqlNameResolver.GetSegmentCount(query));
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
@@ -1528,7 +1544,12 @@ public partial class DbReader
         else
             groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
-        if (exact && _foldReady)
+        var useSqlQualifiedContainerMatch = SqlNameResolver.HasQualifier(query);
+        if (exact && useSqlQualifiedContainerMatch && _foldReady)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name_folded(r.container_name) = @aliasQueryNormalizedFolded) OR ((f.lang != 'sql') AND r.container_name_folded = @query))";
+        else if (exact && useSqlQualifiedContainerMatch)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name(r.container_name) = @aliasQueryNormalized COLLATE NOCASE) OR ((f.lang != 'sql') AND r.container_name = @query COLLATE NOCASE))";
+        else if (exact && _foldReady)
             groupedSql += allowSqlLeafFallback
                 ? " AND (r.container_name_folded = @query OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))"
                 : " AND r.container_name_folded = @query";
@@ -1554,6 +1575,9 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@query", value);
         cmd.Parameters.AddWithValue("@aliasQuery", query);
         cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
+        cmd.Parameters.AddWithValue("@aliasQueryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
+        cmd.Parameters.AddWithValue("@aliasQueryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
+        cmd.Parameters.AddWithValue("@aliasQuerySegmentCount", SqlNameResolver.GetSegmentCount(query));
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
