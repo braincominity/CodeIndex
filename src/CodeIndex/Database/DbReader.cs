@@ -23,6 +23,7 @@ public partial class DbReader
 {
     private static readonly Regex ImpactSignatureIdentifierRegex = new(@"[\p{L}_][\p{L}\p{Nd}_]*", RegexOptions.Compiled);
     private static readonly Regex CSharpUsingStaticImportRegex = new(@"^\s*(?:global\s+)?using\s+static\s+(?<target>[^;]+)", RegexOptions.Compiled);
+    private static readonly Regex CSharpUsingNamespaceImportRegex = new(@"^\s*(?:global\s+)?using\s+(?!static\b)(?<target>[^;=]+)", RegexOptions.Compiled);
     private readonly SqliteConnection _conn;
     private readonly bool _isReadOnly;
     private readonly HashSet<string> _fileColumns;
@@ -31,7 +32,10 @@ public partial class DbReader
     private readonly HashSet<string> _referenceIndexes;
     private readonly HashSet<string> _indexedHotspotFamilyLanguages;
     private readonly Dictionary<string, List<CSharpUsingStaticScope>> _csharpUsingStaticScopesByPath = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<CSharpNamespaceScope>> _csharpNamespaceScopesByPath = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<CSharpUsingNamespaceScope>> _csharpUsingNamespaceScopesByPath = new(StringComparer.Ordinal);
     private readonly Dictionary<string, HashSet<string>> _csharpConstantPatternContainersByMemberName = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, HashSet<string>> _csharpTypeNamespacesByName = new(StringComparer.OrdinalIgnoreCase);
     internal readonly bool _hasReferencesTable;
     internal readonly bool _hasIssuesTable;
     internal readonly bool _hasChunksTable;
@@ -84,7 +88,9 @@ public partial class DbReader
         " AND r.reference_kind != 'type_reference'";
     private const int CSharpUsingStaticReferenceFilterChunkSize = 64;
     private const int CSharpUsingStaticReferenceFilterMaxRawLimit = 65536;
+    private sealed record CSharpNamespaceScope(string QualifiedName, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpUsingStaticScope(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
+    private sealed record CSharpUsingNamespaceScope(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
 
     /// <summary>
     /// Visibility ranking: public symbols first, then protected, internal, private, unknown last.
@@ -879,6 +885,9 @@ public partial class DbReader
         if (matchingContainers.Count == 0)
             return false;
 
+        if (HasScopedCSharpTypeCandidate(result.Path, result.Line, result.SymbolName))
+            return false;
+
         foreach (var target in activeTargets)
         {
             if (matchingContainers.Contains(target))
@@ -886,6 +895,58 @@ public partial class DbReader
         }
 
         return false;
+    }
+
+    private bool HasScopedCSharpTypeCandidate(string path, int lineNumber, string symbolName)
+    {
+        var candidateNamespaces = GetCSharpTypeNamespacesByName(symbolName);
+        if (candidateNamespaces.Count == 0)
+            return false;
+
+        var activeNamespaces = GetActiveCSharpTypeNamespaces(path, lineNumber);
+        foreach (var activeNamespace in activeNamespaces)
+        {
+            if (candidateNamespaces.Contains(activeNamespace))
+                return true;
+        }
+
+        return false;
+    }
+
+    private HashSet<string> GetActiveCSharpTypeNamespaces(string path, int lineNumber)
+    {
+        if (!_csharpNamespaceScopesByPath.TryGetValue(path, out var namespaceScopes))
+        {
+            namespaceScopes = LoadCSharpNamespaceScopes(path);
+            _csharpNamespaceScopesByPath[path] = namespaceScopes;
+        }
+
+        if (!_csharpUsingNamespaceScopesByPath.TryGetValue(path, out var usingNamespaceScopes))
+        {
+            usingNamespaceScopes = LoadCSharpUsingNamespaceScopes(path);
+            _csharpUsingNamespaceScopesByPath[path] = usingNamespaceScopes;
+        }
+
+        var activeNamespaces = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var scope in namespaceScopes)
+        {
+            if (lineNumber >= scope.ScopeStartLine && lineNumber <= scope.ScopeEndLine)
+                activeNamespaces.Add(scope.QualifiedName);
+        }
+
+        if (activeNamespaces.Count == 0)
+            activeNamespaces.Add(string.Empty);
+
+        foreach (var scope in usingNamespaceScopes)
+        {
+            if (scope.Line > lineNumber)
+                continue;
+            if (lineNumber < scope.ScopeStartLine || lineNumber > scope.ScopeEndLine)
+                continue;
+            activeNamespaces.Add(scope.TargetQualifiedName);
+        }
+
+        return activeNamespaces;
     }
 
     private List<string> GetActiveCSharpUsingStaticTargets(string path, int lineNumber)
@@ -909,11 +970,51 @@ public partial class DbReader
         return activeTargets;
     }
 
-    private List<CSharpUsingStaticScope> LoadCSharpUsingStaticScopes(string path)
+    private List<CSharpNamespaceScope> LoadCSharpNamespaceScopes(string path)
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = @"
-            SELECT s.kind, s.line, s.body_start_line, s.body_end_line, s.end_line, s.signature
+            SELECT s.line, s.body_start_line, s.body_end_line, s.end_line, s.name, s.signature, f.lines
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.path = @path
+              AND f.lang = 'csharp'
+              AND s.kind = 'namespace'
+            ORDER BY s.line";
+        cmd.Parameters.AddWithValue("@path", path);
+
+        var scopes = new List<CSharpNamespaceScope>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var line = reader.GetInt32(0);
+            var startLine = reader.IsDBNull(1) ? line : reader.GetInt32(1);
+            var endLine = reader.IsDBNull(2)
+                ? (reader.IsDBNull(3) ? line : reader.GetInt32(3))
+                : reader.GetInt32(2);
+            var signature = GetNullableString(reader, 5);
+            if (!string.IsNullOrWhiteSpace(signature)
+                && signature.TrimEnd().EndsWith(';')
+                && !reader.IsDBNull(6))
+            {
+                endLine = Math.Max(endLine, reader.GetInt32(6));
+            }
+
+            if (startLine <= 0 || endLine < startLine)
+                continue;
+
+            var qualifiedName = NormalizeDbCSharpQualifiedName(reader.GetString(4)) ?? string.Empty;
+            scopes.Add(new CSharpNamespaceScope(qualifiedName, startLine, endLine));
+        }
+
+        return scopes;
+    }
+
+    private List<CSharpUsingNamespaceScope> LoadCSharpUsingNamespaceScopes(string path)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.kind, s.line, s.body_start_line, s.body_end_line, s.end_line, s.signature, f.lines
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE f.path = @path
@@ -935,6 +1036,91 @@ public partial class DbReader
                 var endLine = reader.IsDBNull(3)
                     ? (reader.IsDBNull(4) ? line : reader.GetInt32(4))
                     : reader.GetInt32(3);
+                var signature = GetNullableString(reader, 5);
+                if (!string.IsNullOrWhiteSpace(signature)
+                    && signature.TrimEnd().EndsWith(';')
+                    && !reader.IsDBNull(6))
+                {
+                    endLine = Math.Max(endLine, reader.GetInt32(6));
+                }
+
+                if (startLine > 0 && endLine >= startLine)
+                    namespaceScopes.Add((startLine, endLine));
+                continue;
+            }
+
+            if (!reader.IsDBNull(5))
+                imports.Add((line, reader.GetString(5)));
+        }
+
+        var scopes = new List<CSharpUsingNamespaceScope>();
+        foreach (var import in imports)
+        {
+            var match = CSharpUsingNamespaceImportRegex.Match(import.Signature);
+            if (!match.Success)
+                continue;
+
+            var target = NormalizeDbCSharpQualifiedName(match.Groups["target"].Value);
+            if (string.IsNullOrWhiteSpace(target))
+                continue;
+
+            var scopeStartLine = 1;
+            var scopeEndLine = int.MaxValue;
+            var scopeWidth = int.MaxValue;
+            foreach (var (startLine, endLine) in namespaceScopes)
+            {
+                if (import.Line < startLine || import.Line > endLine)
+                    continue;
+
+                var width = endLine - startLine;
+                if (width > scopeWidth)
+                    continue;
+
+                scopeStartLine = startLine;
+                scopeEndLine = endLine;
+                scopeWidth = width;
+            }
+
+            scopes.Add(new CSharpUsingNamespaceScope(target!, import.Line, scopeStartLine, scopeEndLine));
+        }
+
+        return scopes;
+    }
+
+    private List<CSharpUsingStaticScope> LoadCSharpUsingStaticScopes(string path)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.kind, s.line, s.body_start_line, s.body_end_line, s.end_line, s.signature, f.lines
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.path = @path
+              AND f.lang = 'csharp'
+              AND (s.kind = 'import' OR s.kind = 'namespace')
+            ORDER BY s.line";
+        cmd.Parameters.AddWithValue("@path", path);
+
+        var namespaceScopes = new List<(int StartLine, int EndLine)>();
+        var imports = new List<(int Line, string Signature)>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var kind = reader.GetString(0);
+            var line = reader.GetInt32(1);
+            if (kind == "namespace")
+            {
+                var startLine = reader.IsDBNull(2) ? line : reader.GetInt32(2);
+                var endLine = reader.IsDBNull(3)
+                    ? (reader.IsDBNull(4) ? line : reader.GetInt32(4))
+                    : reader.GetInt32(3);
+                var signature = GetNullableString(reader, 5);
+                if (!string.IsNullOrWhiteSpace(signature)
+                    && signature.TrimEnd().EndsWith(';')
+                    && !reader.IsDBNull(6))
+                {
+                    endLine = Math.Max(endLine, reader.GetInt32(6));
+                }
+
                 if (startLine > 0 && endLine >= startLine)
                     namespaceScopes.Add((startLine, endLine));
                 continue;
@@ -976,6 +1162,46 @@ public partial class DbReader
         }
 
         return scopes;
+    }
+
+    private HashSet<string> GetCSharpTypeNamespacesByName(string symbolName)
+    {
+        if (_csharpTypeNamespacesByName.TryGetValue(symbolName, out var cached))
+            return cached;
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT DISTINCT s.container_kind, s.container_name, s.container_qualified_name
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.lang = 'csharp'
+              AND s.name = @symbolName COLLATE NOCASE
+              AND s.kind IN ('class', 'struct', 'interface', 'enum', 'delegate')";
+        cmd.Parameters.AddWithValue("@symbolName", symbolName);
+
+        var namespaces = new HashSet<string>(StringComparer.Ordinal);
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var containerKind = GetNullableString(reader, 0);
+            if (string.Equals(containerKind, "namespace", StringComparison.Ordinal))
+            {
+                var qualifiedNamespace = GetNullableString(reader, 2);
+                var fallbackNamespace = GetNullableString(reader, 1);
+                namespaces.Add(
+                    NormalizeDbCSharpQualifiedName(qualifiedNamespace ?? fallbackNamespace ?? string.Empty)
+                    ?? string.Empty);
+                continue;
+            }
+
+            if (containerKind == null)
+            {
+                namespaces.Add(string.Empty);
+            }
+        }
+
+        _csharpTypeNamespacesByName[symbolName] = namespaces;
+        return namespaces;
     }
 
     private HashSet<string> GetCSharpConstantPatternContainersByMemberName(string symbolName)
