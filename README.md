@@ -596,7 +596,7 @@ The database reflects the working tree at the time of the last index. After swit
 | Svelte | `.svelte` | -- |
 | Terraform | `.tf` | -- |
 
-JavaScript/TypeScript symbol extraction also surfaces barrel re-exports such as `export * from`, `export * as ns from`, `export { foo as bar } from`, and TypeScript `export type { User } from`, including commented and multiline named re-export clauses. These re-exports preserve both the exported property surface and the source-module `import` rows. It also surfaces direct CommonJS named exports like `module.exports.foo = function () {}` / `exports.baz = value` and exported object-literal alias/shorthand properties such as `module.exports = { foo: inner }` / `module.exports = { foo, bar }`.
+JavaScript/TypeScript symbol extraction also surfaces barrel re-exports such as `export * from`, `export * as ns from`, `export { foo as bar } from`, and TypeScript `export type { User } from`, including commented forms, multiline named re-export clauses, and multiline `export *` / `export * as ns` layouts. These re-exports preserve both the exported property surface and the source-module `import` rows. It also surfaces direct CommonJS named exports like `module.exports.foo = function () {}` / `exports.baz = value`, including same-line and multiline parenthesized wrappers, and exported object-literal alias/shorthand properties such as `module.exports = { foo: inner }` / `module.exports = { foo, bar }`.
 
 Modern Node module layouts are indexed without renaming files: `.cjs` / `.mjs` are treated as JavaScript, and `.cts` / `.mts` (including declaration variants such as `.d.cts` / `.d.mts`) are treated as TypeScript.
 

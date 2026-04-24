@@ -81,6 +81,22 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DetectsMultilineStarReExportSurfaceSymbols()
+    {
+        var content = """
+            export *
+            from './util';
+            export * /* from './bogus-star' */ as ns
+            from './ns';
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./util");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./ns");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "ns");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DetectsNamedReExportWhenExportAndSpecifierListAreSplitAcrossLines()
     {
         var content = """
@@ -889,6 +905,23 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsParenthesizedSameLineCommonJsNamedExportAssignments()
+    {
+        var content = """
+            module.exports.foo = (function () { return 1; });
+            module.exports.bar = (async function () { return 2; });
+            module.exports.baz = (() => 3);
+            exports.qux = (42);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "baz");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "qux");
     }
 
     [Fact]
