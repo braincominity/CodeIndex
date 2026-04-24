@@ -871,6 +871,27 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DetectsParenthesizedMultilineCommonJsNamedExportAssignments()
+    {
+        var content = """
+            module.exports.foo =
+              (
+                async () => 1
+              );
+            module.exports.bar =
+              (
+                function () {
+                  return 2;
+                }
+              );
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DetectsExportedObjectLiteralAliasProperties()
     {
         var content = """

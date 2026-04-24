@@ -5391,13 +5391,18 @@ public static class SymbolExtractor
                 ? Math.Max(0, sameLineRhsColumn)
                 : 0;
 
-            while (column < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[column]))
-                column++;
-
-            if (column >= sanitizedLine.Length)
+            if (!TryAdvanceJavaScriptTypeScriptAssignedRhsCursor(sanitizedLines, ref lineIndex, ref column))
                 continue;
 
-            rhs = sanitizedLine[column..].TrimEnd();
+            while (sanitizedLines[lineIndex][column] == '('
+                && HasOnlyJavaScriptTypeScriptAssignedRhsWrapperParensToLineEnd(sanitizedLines[lineIndex], column))
+            {
+                column++;
+                if (!TryAdvanceJavaScriptTypeScriptAssignedRhsCursor(sanitizedLines, ref lineIndex, ref column))
+                    return false;
+            }
+
+            rhs = sanitizedLines[lineIndex][column..].TrimEnd();
             rhsStartLineIndex = lineIndex;
             rhsStartColumn = column;
 
@@ -5418,6 +5423,38 @@ public static class SymbolExtractor
         }
 
         return false;
+    }
+
+    private static bool TryAdvanceJavaScriptTypeScriptAssignedRhsCursor(string[] sanitizedLines, ref int lineIndex, ref int column)
+    {
+        while (lineIndex < sanitizedLines.Length)
+        {
+            var sanitizedLine = sanitizedLines[lineIndex];
+            while (column < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[column]))
+                column++;
+
+            if (column < sanitizedLine.Length)
+                return true;
+
+            lineIndex++;
+            column = 0;
+        }
+
+        return false;
+    }
+
+    private static bool HasOnlyJavaScriptTypeScriptAssignedRhsWrapperParensToLineEnd(string sanitizedLine, int startColumn)
+    {
+        for (int column = Math.Max(0, startColumn); column < sanitizedLine.Length; column++)
+        {
+            var ch = sanitizedLine[column];
+            if (char.IsWhiteSpace(ch) || ch == '(')
+                continue;
+
+            return false;
+        }
+
+        return true;
     }
 
     private static bool TrySkipJavaScriptTypeScriptNonIdentifierObjectLiteralKey(string sanitizedLine, ref int index)
