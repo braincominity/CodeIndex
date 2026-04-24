@@ -1198,11 +1198,14 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.GetFileDependencies(limit, lang, pathPatterns, excludePaths, excludeTests, reverse);
-            var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByPaths(
-                reader,
-                reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
-                results.SelectMany(result => new[] { result.SourcePath, result.TargetPath }),
-                lang);
+            var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
+            var sqlGraphSignal = results.Count == 0
+                ? baseSqlGraphSignal
+                : QueryCommandRunner.NarrowSqlGraphContractSignalByPaths(
+                    reader,
+                    baseSqlGraphSignal,
+                    results.SelectMany(result => new[] { result.SourcePath, result.TargetPath }),
+                    lang);
             var payload = new JsonObject
             {
                 ["count"] = results.Count,
@@ -1336,10 +1339,13 @@ public partial class McpServer
         {
             var results = reader.GetSymbolHotspots(limit, kind, lang, pathPatterns, excludePaths, excludeTests);
             var hotspotSignal = reader.GetHotspotFamilySignal(lang);
-            var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
-                reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
-                results.Select(result => result.Symbol.Lang),
-                lang);
+            var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
+            var sqlGraphSignal = results.Count == 0
+                ? baseSqlGraphSignal
+                : QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
+                    baseSqlGraphSignal,
+                    results.Select(result => result.Symbol.Lang),
+                    lang);
             var items = results.Select(r => new
             {
                 name = r.Symbol.Name,
@@ -1388,10 +1394,13 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.GetUnusedSymbols(limit, kind, lang, pathPatterns, excludePaths, excludeTests);
-            var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
-                reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
-                results.Select(result => result.Lang),
-                lang);
+            var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
+            var sqlGraphSignal = results.Count == 0
+                ? baseSqlGraphSignal
+                : QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
+                    baseSqlGraphSignal,
+                    results.Select(result => result.Lang),
+                    lang);
             var bucketCounts = results
                 .GroupBy(result => result.UnusedBucket, StringComparer.Ordinal)
                 .OrderBy(group => Array.IndexOf(new[] { "likely_unused_private", "maybe_unused_nonpublic", "public_or_exported_no_refs", "reflection_or_config_suspect" }, group.Key))

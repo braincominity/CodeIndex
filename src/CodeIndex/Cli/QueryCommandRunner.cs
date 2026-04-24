@@ -1866,11 +1866,14 @@ public static class QueryCommandRunner
         {
             var reverse = cmdArgs.Any(a => a == "--reverse");
             var results = reader.GetFileDependencies(options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, reverse);
-            var sqlGraphSignal = NarrowSqlGraphContractSignalByPaths(
-                reader,
-                reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
-                results.SelectMany(result => new[] { result.SourcePath, result.TargetPath }),
-                options.Lang);
+            var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var sqlGraphSignal = results.Count == 0
+                ? baseSqlGraphSignal
+                : NarrowSqlGraphContractSignalByPaths(
+                    reader,
+                    baseSqlGraphSignal,
+                    results.SelectMany(result => new[] { result.SourcePath, result.TargetPath }),
+                    options.Lang);
             if (results.Count == 0)
             {
                 if (options.Json && !reader._hasReferencesTable)
@@ -1933,7 +1936,9 @@ public static class QueryCommandRunner
             if (groupByName)
             {
                 var groupedResults = reader.GetGroupedSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
-                var effectiveSqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, groupedResults.Select(result => result.Symbol.Lang), options.Lang);
+                var effectiveSqlGraphSignal = groupedResults.Count == 0
+                    ? baseSqlGraphSignal
+                    : NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, groupedResults.Select(result => result.Symbol.Lang), options.Lang);
                 if (groupedResults.Count == 0)
                 {
                     if (options.CountOnly)
@@ -2033,7 +2038,9 @@ public static class QueryCommandRunner
             }
 
             var results = reader.GetSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
-            var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Symbol.Lang), options.Lang);
+            var sqlGraphSignal = results.Count == 0
+                ? baseSqlGraphSignal
+                : NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Symbol.Lang), options.Lang);
             var hotspotSignal = reader.GetHotspotFamilySignal(options.Lang);
             if (results.Count == 0)
             {
@@ -2199,10 +2206,13 @@ public static class QueryCommandRunner
             }
 
             var results = reader.GetUnusedSymbols(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
-            var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(
-                reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
-                results.Select(result => result.Lang),
-                options.Lang);
+            var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var sqlGraphSignal = results.Count == 0
+                ? baseSqlGraphSignal
+                : NarrowSqlGraphContractSignalByLanguages(
+                    baseSqlGraphSignal,
+                    results.Select(result => result.Lang),
+                    options.Lang);
             if (results.Count == 0)
             {
                 if (options.Json)

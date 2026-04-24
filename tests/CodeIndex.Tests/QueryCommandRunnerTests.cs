@@ -6990,6 +6990,90 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunDeps_ZeroJson_StaleSqlGraphContractIncludesDegradedStateWhenSqlScopeIsEmpty()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_zero_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractZeroResultFixtureDb(projectRoot);
+            DowngradeSqlGraphContractVersion(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
+            Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunHotspots_ZeroJson_StaleSqlGraphContractIncludesDegradedStateWhenSqlScopeIsEmpty()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_zero_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractZeroResultFixtureDb(projectRoot);
+            DowngradeSqlGraphContractVersion(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
+            Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_ZeroJson_StaleSqlGraphContractIncludesDegradedStateWhenSqlScopeIsEmpty()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_zero_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractZeroResultFixtureDb(projectRoot);
+            DowngradeSqlGraphContractVersion(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--kind", "interface"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
+            Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunCallees_JsonResults_StaleSqlGraphContractIncludesDegradedState()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callees_sql_graph_contract_results");
@@ -22782,6 +22866,39 @@ public class QueryCommandRunnerTests
         return dbPath;
     }
 
+    private static string CreateSqlGraphContractZeroResultFixtureDb(string projectRoot)
+    {
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/a.cs",
+            "csharp",
+            """
+            public class C
+            {
+                public void M() { }
+            }
+            """);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/b.sql",
+            "sql",
+            """
+            CREATE PROCEDURE dbo.Target
+            AS
+            BEGIN
+                SELECT 1;
+            END;
+            GO
+            """);
+
+        using var db = new DbContext(dbPath);
+        var writer = new DbWriter(db.Connection);
+        writer.MarkGraphReady();
+        writer.MarkSqlGraphContractReady();
+        return dbPath;
+    }
+
     private static void DowngradeSqlGraphContractRows(string dbPath)
     {
         using var db = new DbContext(dbPath);
@@ -22809,6 +22926,14 @@ public class QueryCommandRunnerTests
             WHERE symbol_name = 'dbo.Target';
             DELETE FROM codeindex_meta WHERE key = 'sql_graph_contract_version';
             """;
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void DowngradeSqlGraphContractVersion(string dbPath)
+    {
+        using var db = new DbContext(dbPath);
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = 'sql_graph_contract_version';";
         cmd.ExecuteNonQuery();
     }
 
