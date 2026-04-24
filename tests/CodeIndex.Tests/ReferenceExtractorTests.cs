@@ -5589,6 +5589,30 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_DeleteUsingTempSourcesWithAliasesAfterComma_AreNotTreatedAsComments()
+    {
+        // issue #792: `DELETE ... USING #a AS alias, #b AS alias` must keep later temp sources on the
+        // temp-table path instead of treating the comma tail as a MySQL `# comment`.
+        // issue #792: `DELETE ... USING #a AS alias, #b AS alias` は、comma 後続を MySQL `# comment`
+        // と誤認せず、後続の temp source を temp-table 経路に残す必要がある。
+        const string content = """
+            CREATE TABLE #staging_a (id int);
+            CREATE TABLE #staging_b (id int);
+            DELETE FROM audit_log USING #staging_a AS a, #staging_b AS b
+            WHERE audit_log.id = a.id;
+            DELETE FROM audit_log USING #staging_a a, #staging_b b
+            WHERE audit_log.id = a.id;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#staging_a" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#staging_b" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_SQL_MergeUsingDoesNotTreatOtherUsingClausesAsSources()
     {
         // issue #695: `USING` should stay on the SQL source path only for `MERGE ... USING <source>`,

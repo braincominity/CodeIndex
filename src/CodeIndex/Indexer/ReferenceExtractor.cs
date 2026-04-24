@@ -341,8 +341,8 @@ public static class ReferenceExtractor
     private static readonly Regex SqlCreateTempRoutineRegex = new(
         $@"(?<![\w$])CREATE(?:\s+OR\s+(?:REPLACE|ALTER))?(?:\s+(?:TEMP|TEMPORARY))?\s+(?:PROC(?:EDURE)?|FUNCTION)\b(?:\s+IF\s+NOT\s+EXISTS)?\s+(?<name>{SqlTempIdentifierPattern})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex SqlTrailingOnlyQualifiedIdentifierRegex = new(
-        $@"(?:(?:ONLY)\b\s+)?{SqlQualifiedIdentifierNoCapturePattern}\s*$",
+    private static readonly Regex SqlTrailingTempIdentifierRegex = new(
+        $@"^(?:{SqlTempIdentifierPattern})(?:\s+(?:AS\s+)?(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SqlMergeTargetHintContinuationPrefixRegex = new(
         $@"(?<![\w$])MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?\s+{SqlQualifiedIdentifierNoCapturePattern}\s+WITH\s*\((?:[^()]|\([^()]*\))*$",
@@ -11411,11 +11411,15 @@ public static class ReferenceExtractor
         while (probe >= 0 && line[probe] == ',')
         {
             var priorListItem = line[..probe];
-            var listMatch = SqlTrailingOnlyQualifiedIdentifierRegex.Match(priorListItem);
+            int sourceStart = priorListItem.LastIndexOf('#');
+            if (sourceStart < 0)
+                return true;
+
+            var listMatch = SqlTrailingTempIdentifierRegex.Match(priorListItem[sourceStart..]);
             if (!listMatch.Success)
                 return true;
 
-            probe = listMatch.Index - 1;
+            probe = sourceStart - 1;
             while (probe >= 0 && char.IsWhiteSpace(line[probe]))
                 probe--;
         }
