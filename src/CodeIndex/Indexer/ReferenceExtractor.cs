@@ -11412,7 +11412,7 @@ public static class ReferenceExtractor
         while (probe >= 0 && line[probe] == ',')
         {
             var priorListItem = line[..probe];
-            int sourceStart = priorListItem.LastIndexOf(',');
+            int sourceStart = FindLastSqlCommaOutsideQuotedIdentifiers(priorListItem);
             if (sourceStart >= 0)
                 sourceStart++;
             else
@@ -11509,6 +11509,43 @@ public static class ReferenceExtractor
             && !string.Equals(token, "PROCEDURE", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(token, "PROC", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(token, "FUNCTION", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int FindLastSqlCommaOutsideQuotedIdentifiers(string text)
+    {
+        int lastComma = -1;
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (c == '"')
+            {
+                int closing = FindClosingSqlDoubleQuote(text, i + 1);
+                if (closing < 0)
+                    break;
+                i = closing;
+                continue;
+            }
+            if (c == '`')
+            {
+                int closing = text.IndexOf('`', i + 1);
+                if (closing < 0)
+                    break;
+                i = closing;
+                continue;
+            }
+            if (c == '[')
+            {
+                int closing = text.IndexOf(']', i + 1);
+                if (closing < 0)
+                    break;
+                i = closing;
+                continue;
+            }
+            if (c == ',')
+                lastComma = i;
+        }
+
+        return lastComma;
     }
 
     private static string ReplaceRegexMatchesWithSpaces(Regex regex, string input)

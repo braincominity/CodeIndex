@@ -5613,6 +5613,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_DeleteUsingQuotedIdentifierWithCommaAfterComma_AreNotTreatedAsComments()
+    {
+        // issue #792: `DELETE ... USING [schema,table], #b` must keep later temp sources on the
+        // temp-table path even when the previous list item contains a comma inside a quoted identifier.
+        // issue #792: `DELETE ... USING [schema,table], #b` は、直前の list item の quoted identifier 内に
+        // comma があっても、後続の temp source を temp-table 経路に残す必要がある。
+        const string content = """
+            CREATE TABLE #staging_b (id int);
+            DELETE FROM audit_log USING [schema,table], #staging_b AS b
+            WHERE audit_log.id = b.id;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "#staging_b" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_SQL_DeleteUsingMixedTableAndTempSourcesAfterComma_AreNotTreatedAsComments()
     {
         // issue #792: `DELETE ... USING reusing_data, #temp` must keep the temp source after the
