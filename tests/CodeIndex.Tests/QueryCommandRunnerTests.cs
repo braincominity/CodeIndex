@@ -1421,6 +1421,133 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_JsonKeepsCsharpTypeAliasPatternReference()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_csharp_type_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Defs.cs",
+                "csharp",
+                """
+                using Red = RealTypes.Red;
+                using static Probe.Color;
+
+                namespace Probe;
+
+                enum Color { Red, Blue }
+                class Demo
+                {
+                    bool Match(object value) => value is Red;
+                    void ProbeType() { _ = typeof(Red); }
+                }
+
+                namespace RealTypes;
+                class Red {}
+                """);
+
+            using (var db = new DbContext(dbPath))
+            {
+                var countCmd = db.Connection.CreateCommand();
+                countCmd.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE symbol_name = 'Red'";
+                Assert.Equal(2L, (long)countCmd.ExecuteScalar()!);
+            }
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+
+            var references = ParseJsonLines(stdout).Select(line => line.RootElement).ToList();
+            Assert.Equal(2, references.Count);
+            Assert.Contains(references, reference =>
+                reference.GetProperty("symbol_name").GetString() == "Red"
+                && reference.GetProperty("reference_kind").GetString() == "type_reference"
+                && reference.GetProperty("container_name").GetString() == "Match");
+            Assert.Contains(references, reference =>
+                reference.GetProperty("symbol_name").GetString() == "Red"
+                && reference.GetProperty("reference_kind").GetString() == "type_reference"
+                && reference.GetProperty("container_name").GetString() == "ProbeType");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_JsonKeepsGlobalCsharpTypeAliasPatternReference()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_csharp_global_type_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/GlobalUsings.cs",
+                "csharp",
+                """
+                global using Red = RealTypes.Red;
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Use.cs",
+                "csharp",
+                """
+                using static Probe.Color;
+
+                namespace Probe;
+
+                enum Color { Red, Blue }
+                class Demo
+                {
+                    bool Match(object value) => value is Red;
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/RealRed.cs",
+                "csharp",
+                """
+                namespace RealTypes;
+                class Red {}
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+
+            var references = ParseJsonLines(stdout).Select(line => line.RootElement).ToList();
+            Assert.Single(references);
+            Assert.Equal("Red", references[0].GetProperty("symbol_name").GetString());
+            Assert.Equal("type_reference", references[0].GetProperty("reference_kind").GetString());
+            Assert.Equal("Match", references[0].GetProperty("container_name").GetString());
+
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal(string.Empty, countStderr);
+            var countJson = ParseJsonOutput(countStdout).RootElement;
+            Assert.Equal(1, countJson.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_JsonClampsLongSingleLineContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_long_line");
