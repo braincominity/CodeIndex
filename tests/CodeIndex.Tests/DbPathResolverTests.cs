@@ -76,6 +76,18 @@ public class DbPathResolverTests
     }
 
     [Fact]
+    public void TryResolveWritableMutationDbPath_RelativeReadOnlyUri_ReturnsWorkingDirectoryPath()
+    {
+        var fileName = $"cdidx_db_path_resolver_{Guid.NewGuid():N}.db";
+        var readOnlyUri = $"file:{fileName}?mode=ro";
+
+        var resolved = DbPathResolver.TryResolveWritableMutationDbPath(readOnlyUri, out var writableDbPath);
+
+        Assert.True(resolved);
+        Assert.Equal(Path.GetFullPath(fileName), writableDbPath);
+    }
+
+    [Fact]
     public void ResolveProjectRootForQuery_PrefersStoredIndexedProjectRootMetadata()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_meta_root");

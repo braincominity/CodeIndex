@@ -65,8 +65,24 @@ public static class DbPathResolver
             // Strip query params (?immutable=1 etc.) before URI parsing so LocalPath is clean.
             var qIdx = dbPath.IndexOf('?');
             var trimmed = qIdx >= 0 ? dbPath[..qIdx] : dbPath;
+            if (!trimmed.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
+            {
+                var relativePath = Uri.UnescapeDataString(trimmed["file:".Length..]);
+                return string.IsNullOrWhiteSpace(relativePath)
+                    ? dbPath
+                    : Path.GetFullPath(relativePath);
+            }
+
             var uri = new Uri(trimmed);
-            return uri.IsFile ? uri.LocalPath : dbPath;
+            if (!uri.IsFile)
+                return dbPath;
+
+            var localPath = uri.LocalPath;
+            return string.IsNullOrWhiteSpace(localPath)
+                ? dbPath
+                : Path.IsPathRooted(localPath)
+                    ? localPath
+                    : Path.GetFullPath(localPath);
         }
         catch
         {
