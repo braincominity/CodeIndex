@@ -6865,6 +6865,42 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
     }
 
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JsTemplateHoleLineContinuationString_DoesNotCloseHoleEarlyOrLeakPhantoms(string language)
+    {
+        // Regression for issue #433: a JS/TS single/double-quoted string inside a
+        // template-literal hole may legally continue onto the next physical line via
+        // trailing `\`. The hole scanner must stay inside that string on the next line;
+        // otherwise a leading `}` closes the hole early, string text leaks as phantom
+        // references, and the real call after the string is dropped.
+        // issue #433 回帰: テンプレートホール内の JS/TS 単/二重引用符文字列は、行末の `\`
+        // により次行へ継続できる。継続行でも hole scanner は文字列内のままである必要が
+        // あり、そうでないと先頭の `}` で hole を早閉じし、文字列内テキストが phantom
+        // 参照として漏れ、本物の `runTask()` が落ちる。
+        const string content = """
+            function caller() {
+                const branch = `before ${"line1\
+            } fake_in_string() line2" + runTask()} after`;
+                realCall();
+                return branch;
+            }
+
+            function runTask() {}
+            function realCall() {}
+            function fake_in_string() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, language, content);
+        var references = ReferenceExtractor.Extract(1, language, content, symbols);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "caller");
+        Assert.Contains(references, r => r.SymbolName == "runTask" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fake_in_string");
+    }
+
     [Fact]
     public void Extract_PythonNestedFStringInnerHoleStringLiteralWithBrace_PreservesInnerCall()
     {
