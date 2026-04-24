@@ -1507,6 +1507,22 @@ public static class ReferenceExtractor
             }
         }
 
+        if (language == "csharp")
+        {
+            EmitCSharpSwitchExpressionTypePatternReferences(
+                lines,
+                preparedLines,
+                containerCandidates,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpQualifiedTypePatternLookup,
+                csharpUsingAliases,
+                csharpUsingStatics,
+                HasActiveSameFileCSharpTypeCandidate,
+                references,
+                seen,
+                fileId);
+        }
+
         return references;
     }
 
@@ -2249,6 +2265,163 @@ public static class ReferenceExtractor
                 resolveContainerForColumn(typeGroup.Index),
                 "csharp");
         }
+    }
+
+    private static void EmitCSharpSwitchExpressionTypePatternReferences(
+        IReadOnlyList<string> lines,
+        IReadOnlyList<string> preparedLines,
+        IReadOnlyList<SymbolRecord> containerCandidates,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId)
+    {
+        if (preparedLines.Count == 0)
+            return;
+
+        var preparedContent = string.Join("\n", preparedLines);
+        for (var searchIndex = 0; searchIndex < preparedContent.Length;)
+        {
+            var arrowIndex = preparedContent.IndexOf("=>", searchIndex, StringComparison.Ordinal);
+            if (arrowIndex < 0)
+                break;
+
+            searchIndex = arrowIndex + 2;
+            if (IsPotentialCSharpLambdaArrow(preparedContent, arrowIndex))
+                continue;
+
+            if (!TryFindCSharpSwitchExpressionArmStartOffset(preparedContent, arrowIndex, out var armStartOffset)
+                || armStartOffset >= arrowIndex)
+            {
+                continue;
+            }
+
+            var armText = preparedContent[armStartOffset..arrowIndex];
+            var cursor = SkipWhitespaceForward(armText, 0);
+            if (TryConsumeCSharpPatternKeyword(armText, ref cursor, "not"))
+                cursor = SkipWhitespace(armText, cursor);
+
+            var typeMatch = CSharpTypeExpressionAtCursorRegex.Match(armText, cursor);
+            if (!typeMatch.Success)
+                continue;
+
+            var typeGroup = typeMatch.Groups["type"];
+            var currentTypeExpression = typeGroup.Value;
+            var currentTypeIndex = typeGroup.Index;
+            var currentContinuationIndex = SkipWhitespace(armText, typeGroup.Index + typeGroup.Length);
+
+            while (TryConsumeCSharpLogicalPatternKeyword(armText, currentContinuationIndex, out var nextHeadCursor))
+            {
+                if (!IsCSharpLogicalConstantPatternHead(
+                        armText,
+                        currentTypeExpression,
+                        nextHeadCursor,
+                        GetLineNumberFromOffset(preparedContent, armStartOffset + currentTypeIndex, 1),
+                        csharpQualifiedConstantPatternMemberLookup,
+                        csharpQualifiedTypePatternLookup,
+                        csharpUsingAliases,
+                        csharpUsingStatics,
+                        hasActiveSameFileCSharpTypeCandidate))
+                {
+                    EmitCSharpSwitchExpressionArmTypePatternReference(
+                        lines,
+                        preparedLines,
+                        preparedContent,
+                        containerCandidates,
+                        references,
+                        seen,
+                        fileId,
+                        currentTypeExpression,
+                        armStartOffset + currentTypeIndex);
+                }
+
+                var nextTypeCursor = nextHeadCursor;
+                if (TryConsumeCSharpPatternKeyword(armText, ref nextTypeCursor, "not"))
+                    nextTypeCursor = SkipWhitespace(armText, nextTypeCursor);
+
+                var nextMatch = CSharpTypeExpressionAtCursorRegex.Match(armText, nextTypeCursor);
+                if (!nextMatch.Success)
+                {
+                    currentTypeExpression = string.Empty;
+                    break;
+                }
+
+                var nextTypeGroup = nextMatch.Groups["type"];
+                currentTypeExpression = nextTypeGroup.Value;
+                currentTypeIndex = nextTypeGroup.Index;
+                currentContinuationIndex = SkipWhitespace(armText, nextTypeGroup.Index + nextTypeGroup.Length);
+            }
+
+            if (currentTypeExpression.Length == 0)
+                continue;
+
+            var lineNumber = GetLineNumberFromOffset(preparedContent, armStartOffset + currentTypeIndex, 1);
+            if (IsCSharpNonTypePatternExpression(currentTypeExpression)
+                || IsCSharpConstantPatternMemberHead(
+                    currentTypeExpression,
+                    lineNumber,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpUsingAliases,
+                    csharpUsingStatics,
+                    hasActiveSameFileCSharpTypeCandidate))
+            {
+                continue;
+            }
+
+            EmitCSharpSwitchExpressionArmTypePatternReference(
+                lines,
+                preparedLines,
+                preparedContent,
+                containerCandidates,
+                references,
+                seen,
+                fileId,
+                currentTypeExpression,
+                armStartOffset + currentTypeIndex);
+        }
+    }
+
+    private static void EmitCSharpSwitchExpressionArmTypePatternReference(
+        IReadOnlyList<string> lines,
+        IReadOnlyList<string> preparedLines,
+        string preparedContent,
+        IReadOnlyList<SymbolRecord> containerCandidates,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string typeExpression,
+        int absoluteTypeOffset)
+    {
+        var position = GetLineColumnFromOffset(preparedContent, absoluteTypeOffset, 1);
+        var lineIndex = position.Line - 1;
+        if (lineIndex < 0 || lineIndex >= lines.Count)
+            return;
+
+        var context = lines[lineIndex].Trim();
+        if (context.Length == 0)
+            return;
+
+        var container = FindInnermostSameLineCSharpContainer(
+                            containerCandidates,
+                            preparedLines[lineIndex],
+                            position.Line,
+                            position.Column)
+                        ?? FindInnermostContainer(containerCandidates, position.Line);
+
+        AddTypeExpressionSegments(
+            references,
+            seen,
+            fileId,
+            typeExpression,
+            position.Column,
+            context,
+            position.Line,
+            container,
+            "csharp");
     }
 
     private static void EmitJavaTypePositionReferences(

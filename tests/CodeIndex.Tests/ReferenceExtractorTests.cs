@@ -8081,6 +8081,48 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpSwitchExpressionTypePatterns_EmitEveryGenuineTypeHead()
+    {
+        // issue #732: switch-expression arm heads should follow the same type-vs-constant
+        // discrimination as `case` labels so modern C# pattern arms remain visible to
+        // references/inspect without reclassifying constant-member arms as types.
+        // issue #732: switch 式 arm head も `case` ラベルと同じ type-vs-constant 判定を通し、
+        // modern C# pattern arm を references/inspect から見えるようにしつつ定数 member arm を
+        // 型依存へ誤分類しない。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+            class Shape {}
+            enum Color { Red }
+
+            class Demo
+            {
+                int Match(object value) => value switch
+                {
+                    Point => 1,
+                    Point or Shape => 2,
+                    Color.Red => 3,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+        var shapeRefs = references.Where(r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference").ToList();
+
+        Assert.Equal(2, pointRefs.Count);
+        Assert.Single(shapeRefs);
+        Assert.All(pointRefs, r => Assert.Equal("Match", r.ContainerName));
+        Assert.All(shapeRefs, r => Assert.Equal("Match", r.ContainerName));
+        Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Color" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+    }
+
+    [Fact]
     public void Extract_CsharpVerbatimPatternTypeNames_DoNotCollapseIntoBarePatternTokens()
     {
         // issue #677: `@not` / `@default` are legal type names, so the non-type pattern
