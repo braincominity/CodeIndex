@@ -5488,6 +5488,57 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_ConstField_TupleReturnTypes()
+    {
+        // Closes #346: const fields with tuple / named-tuple / nullable-tuple /
+        // generic-over-tuple / global::-qualified / tuple-array return types were silently
+        // dropped because the const row's returnType char class had no `(`, `)`, `\s`, and no
+        // tuple alternative. The method row at the next priority was already immunized by
+        // the post-#349 CSharpNonTypeKeywordPattern / CSharpTypePattern consolidation, so no
+        // phantom `function const` row was emitted — the symbols simply vanished. Switching
+        // the const returnType to the shared CSharpTypePattern token restores capture for all
+        // of these shapes and preserves baselines (`public const int Plain = 42;`,
+        // `new public const int HiddenConst = 2;`).
+        // Closes #346: tuple / 名前付き tuple / nullable tuple / generic-over-tuple /
+        // `global::` 修飾 / tuple-array を戻り値型とする const フィールドは、const 行の
+        // returnType 文字クラスに `(` / `)` / `\s` も tuple 代替もなかったため、サイレントに
+        // drop されていた。method 行は #349 以後の CSharpNonTypeKeywordPattern /
+        // CSharpTypePattern 統合で既にこの後方参照経路を塞いでいるため、phantom `function const`
+        // 行は出ずに単に消えていた。const の returnType を共有トークン CSharpTypePattern に
+        // 差し替えることで、以下のすべての形を捕捉し、既存の baseline（`public const int Plain = 42;`
+        // / `new public const int HiddenConst = 2;`）も維持する。
+        var content = """
+            namespace ConstTuple;
+
+            public class Cfg
+            {
+                public const (int, int) Pair = (1, 2);
+                public const (int a, int b) NamedPair = (1, 2);
+                public const (int, int)? MaybePair = null;
+                public const (int, int)[] PairArray = null;
+                public const global::System.Int32 Qualified = 7;
+                public const int Plain = 42;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Pair" && s.Visibility == "public" && s.ReturnType == "(int, int)");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "NamedPair" && s.Visibility == "public" && s.ReturnType == "(int a, int b)");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MaybePair" && s.Visibility == "public" && s.ReturnType == "(int, int)?");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "PairArray" && s.Visibility == "public" && s.ReturnType == "(int, int)[]");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Qualified" && s.Visibility == "public" && s.ReturnType == "global::System.Int32");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Plain" && s.Visibility == "public" && s.ReturnType == "int");
+
+        // The method row must not emit a phantom `function const` row for any of the tuple
+        // shapes above. `const` itself as a name would only appear via the post-#349 backtrack
+        // the issue describes. Assert the negative so any regression of that phantom is caught.
+        // tuple 形に対して method 行が phantom `function const` 行を発行していないことを
+        // 明示的に確認する。`const` 自体が name として現れるのは #349 以後は起きないはずの
+        // 後方参照経路のみなので、将来その regression が起きたらここで検出できる。
+        Assert.DoesNotContain(symbols, s => s.Name == "const");
+    }
+
+    [Fact]
     public void Extract_CSharp_PlainField_FreeModifierOrder()
     {
         // Closes #355: plain fields (kind `property`) and multi-line field headers must also

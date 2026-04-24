@@ -387,10 +387,22 @@ public static class SymbolExtractor
             // Const field — must come before class/method patterns to avoid misclassification.
             // Modifier order is free: visibility may appear anywhere in the modifier sequence,
             // so `new public const` and `public new const` are both captured. Closes #355.
+            // returnType uses the shared CSharpTypePattern (same token the method / property /
+            // indexer / delegate / event rows already use) so tuple / named-tuple /
+            // nullable-tuple / generic-over-tuple / global::-qualified / tuple-array const field
+            // types are captured instead of silently dropped. The legacy hand-rolled char class
+            // had no `(`, `)`, or `\s`, so `public const (int, int) Pair = (1, 2);` failed the
+            // returnType group and fell through every subsequent row. Closes #346.
             // const フィールド — クラス/メソッドパターンより前に配置し誤分類を防ぐ。
             // 修飾子順序は自由で、visibility は修飾子列の任意位置に現れてよい（例: `new public const` /
             // `public new const`）。Closes #355.
-            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:new|static)\s+)*const\s+(?<returnType>[\w@?.<>\[\],:]+)\s+(?<name>{CSharpIdentifierPattern})\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            // returnType は method / property / indexer / delegate / event 行で既に使っている共有
+            // トークン CSharpTypePattern を使う。これにより tuple / 名前付き tuple / nullable tuple /
+            // generic-over-tuple / `global::` 修飾 / tuple-array を戻り値型とする const フィールドを
+            // 取りこぼさない。従来の手書き文字クラスには `(` / `)` / `\s` が無く、
+            // `public const (int, int) Pair = (1, 2);` は returnType 群で失敗し、以降のどの行にも
+            // マッチしなかった。Closes #346.
+            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:new|static)\s+)*const\s+(?<returnType>{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             // Static readonly field / static readonly フィールド
             // Modifier order is free: `static` and `readonly` may appear in any order, and `new`
             // (member hiding) may appear anywhere in the modifier sequence. Visibility is also
