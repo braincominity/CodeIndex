@@ -7452,6 +7452,154 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JsNoParenConstructor_CapturesInstantiateReference()
+    {
+        // issue #295: JavaScript allows zero-arg constructor calls without `()`
+        // (`new Foo;`, `new Date;`, `new Demo.Provider;`, `cond ? new Demo.Helper : other`). The generic CallRegex only
+        // sees names that reach `(`, so these forms previously vanished from the
+        // reference table and downstream graph queries under-counted instantiations.
+        // issue #295: JavaScript では引数なしコンストラクタ呼び出しで `()` を省略できる
+        // (`new Foo;`, `new Date;`, `new Demo.Provider;`, `cond ? new Demo.Helper : other`)。従来の汎用 CallRegex は
+        // `(` まで届く名前しか拾えないため、これらの instantiate が参照テーブルから欠落していた。
+        const string content = """
+            class Foo {}
+
+            function run(Demo) {
+                const a = new Foo;
+                const b = new Date;
+                const c = new Demo.Provider;
+                const d = ready ? new Demo.Helper : c;
+                return [a, b, c, d];
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Foo" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "Date" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "Provider" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "Helper" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+    }
+
+    [Fact]
+    public void Extract_TsNoParenConstructorWithTypeArgs_CapturesInstantiateReference()
+    {
+        // issue #295 follow-up: TypeScript keeps the same no-paren `new` form even when
+        // a single generic argument list is present (`new Box<number>;`). The dedicated
+        // JS/TS path must keep accepting the one-level `<...>` segment already supported
+        // by the shared `CallRegex` / initializer regex family.
+        // issue #295 補足: TypeScript では generic 引数付きでも no-paren `new`
+        // (`new Box<number>;`) が現れる。専用 JS/TS 経路でも既存 regex 群と同じ
+        // 1 段の `<...>` を受け入れて instantiate を落とさないことを確認する。
+        const string content = """
+            class Box<T> {}
+
+            function run() {
+                const value = new Box<number>;
+                return value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Box" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+    }
+
+    [Fact]
+    public void Extract_JsNoParenConstructor_NextLineMemberContinuation_DoesNotEmitPhantomInstantiate()
+    {
+        // issue #859: the no-paren `new` fix for #295 must stay suppressed when the next
+        // physical line continues the expression (`new Foo\n.bar()`), otherwise the graph
+        // regresses by inventing a standalone `instantiate Foo` edge.
+        // issue #859: #295 の no-paren `new` 修正は、次の物理行で式が継続する
+        // (`new Foo\n.bar()`) 場合に suppress を維持しないと phantom `instantiate Foo`
+        // を発生させてグラフを壊してしまう。
+        const string content = """
+            class Foo {
+                bar() {
+                    return 1;
+                }
+            }
+
+            function run() {
+                const value = new Foo
+                    .bar();
+                return value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "Foo" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "bar" && r.ReferenceKind == "call" && r.ContainerName == "run");
+    }
+
+    [Fact]
+    public void Extract_JsNoParenConstructor_NextLineIndexContinuation_DoesNotEmitPhantomInstantiate()
+    {
+        // issue #859: bracket continuations such as `new Foo\n[0]` are still the same
+        // expression and must not be promoted into a terminated no-paren constructor site.
+        // issue #859: `new Foo\n[0]` のような添字継続も同じ式の続きなので、
+        // 終端済み no-paren constructor として昇格させてはいけない。
+        const string content = """
+            class Foo {
+                constructor() {
+                    this[0] = 1;
+                }
+            }
+
+            function run() {
+                const value = new Foo
+                    [0];
+                return value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "Foo" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+    }
+
+    [Fact]
+    public void Extract_JsNoParenConstructor_NextLineCallContinuation_DoesNotEmitPhantomInstantiate()
+    {
+        // issue #859: the dedicated no-paren path must also stay off when the next line
+        // begins with `(`, because `new Foo\n(arg)` is a continued call expression rather
+        // than the statement-like zero-argument form fixed in #295.
+        // issue #859: 次行が `(` で始まる場合も専用 no-paren 経路は抑止されるべきで、
+        // `new Foo\n(arg)` は #295 が対象にした statement-like な zero-arg 形式ではない。
+        const string content = """
+            function Foo(value) {
+                return value;
+            }
+
+            function run(arg) {
+                const value = new Foo
+                    (arg);
+                return value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "Foo" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+    }
+
+    [Fact]
     public void Extract_CsharpNameofTypeofDefault_CapturesArgumentAsTypeReference()
     {
         // issue #253: nameof/typeof/sizeof/default arguments are first-class compile-time
