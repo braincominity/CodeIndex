@@ -12167,6 +12167,7 @@ public class SymbolExtractorTests
         Assert.Equal("public partial class Child { }", child.Signature);
         Assert.Equal("class", child.ContainerKind);
         Assert.Equal("Wrapped", child.ContainerName);
+        Assert.Equal(0, child.SameLineSignatureOccurrenceIndex);
 
         Assert.DoesNotContain(symbols, s =>
             s.Kind == "class"
