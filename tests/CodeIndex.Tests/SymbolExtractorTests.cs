@@ -66,7 +66,7 @@ public class SymbolExtractorTests
             export * from './util';
             export { foo, bar } from './other'; // trailing comment
             export { default as Helper } from './helper';
-            export * as ns from './ns';
+            export * /* from './bogus-star' */ as ns from './ns';
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
@@ -85,7 +85,7 @@ public class SymbolExtractorTests
     {
         var content = """
             export {
-              foo,
+              foo, // from './bogus'
               bar,
             } from './other';
             export { default as Helper } from './helper'; // trailing comment
@@ -857,6 +857,25 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "answer" && s.ContainerKind == "object" && s.ContainerName == "default");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "inner" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DoesNotTreatExportedObjectLiteralSpreadsAsProperties()
+    {
+        var content = """
+            const rest = source;
+            const defaults = source;
+            const answer = 42;
+            module.exports = { ...rest, actual: 1, config: { ...rest } };
+            export default { ...defaults, answer };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "actual" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "config" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "answer" && s.ContainerKind == "object" && s.ContainerName == "default");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "rest" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "defaults" && s.ContainerKind == "object" && s.ContainerName == "default");
     }
 
     [Fact]

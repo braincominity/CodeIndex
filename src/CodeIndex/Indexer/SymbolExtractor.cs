@@ -382,10 +382,6 @@ public static class SymbolExtractor
         @"^\s*export\s+(?:type\s+)?\{\s*(?<specifiers>[^}]+)\s*\}\s+from\s+(?<module>['""][^'""]+['""])\s*;?\s*$",
         RegexOptions.Compiled);
 
-    private static readonly Regex JavaScriptTypeScriptReExportModuleRegex = new(
-        @"\bfrom\s+(?<module>['""][^'""]+['""])",
-        RegexOptions.Compiled);
-
     private static readonly Regex JavaScriptTypeScriptCommonJsNamedExportAssignmentRegex = new(
         $@"^\s*(?:module\.exports|exports)\.(?<name>{JavaScriptTypeScriptIdentifierPattern})(?:\s*:\s*[^=]+?)?\s*=\s*(?<rhs>.+)$",
         RegexOptions.Compiled);
@@ -4877,7 +4873,7 @@ public static class SymbolExtractor
             {
                 var startColumn = Math.Max(0, sanitizedLine.IndexOf("export", StringComparison.Ordinal));
                 var signature = rawLines[i].Trim();
-                if (!TryExtractJavaScriptTypeScriptReExportModuleName(signature, out var moduleName))
+                if (!TryExtractJavaScriptTypeScriptReExportModuleName(rawLines, sanitizedLines, i, i, waitForClosedSpecifierList: false, out var moduleName))
                     continue;
 
                 AddSymbolRecord(
@@ -4933,7 +4929,7 @@ public static class SymbolExtractor
                 continue;
             }
 
-            if (!TryExtractJavaScriptTypeScriptReExportModuleName(signatureText, out var namedModuleName))
+            if (!TryExtractJavaScriptTypeScriptReExportModuleName(rawLines, sanitizedLines, i, endLineIndex, waitForClosedSpecifierList: true, out var namedModuleName))
             {
                 i = endLineIndex;
                 continue;
@@ -5215,6 +5211,13 @@ public static class SymbolExtractor
                             break;
 
                         var remainingLine = sanitizedLine[scanColumn..];
+                        if (remainingLine.StartsWith("...", StringComparison.Ordinal))
+                        {
+                            scanColumn += 3;
+                            skippingPropertyValue = true;
+                            continue;
+                        }
+
                         var propertyMatch = JavaScriptTypeScriptExportedObjectLiteralPropertyRegex.Match(remainingLine);
                         if (propertyMatch.Success)
                         {
@@ -5337,17 +5340,121 @@ public static class SymbolExtractor
         return moduleName;
     }
 
-    private static bool TryExtractJavaScriptTypeScriptReExportModuleName(string signature, out string moduleName)
+    private static bool TryExtractJavaScriptTypeScriptReExportModuleName(
+        string[] rawLines,
+        string[] sanitizedLines,
+        int startLineIndex,
+        int endLineIndex,
+        bool waitForClosedSpecifierList,
+        out string moduleName)
     {
-        var match = JavaScriptTypeScriptReExportModuleRegex.Match(signature);
-        if (!match.Success)
+        moduleName = string.Empty;
+        var braceDepth = 0;
+        var sawOpeningBrace = !waitForClosedSpecifierList;
+
+        for (int lineIndex = startLineIndex; lineIndex <= endLineIndex; lineIndex++)
         {
-            moduleName = string.Empty;
+            var sanitizedLine = sanitizedLines[lineIndex];
+            for (int column = 0; column < sanitizedLine.Length; column++)
+            {
+                var ch = sanitizedLine[column];
+                if (waitForClosedSpecifierList)
+                {
+                    if (ch == '{')
+                    {
+                        braceDepth++;
+                        sawOpeningBrace = true;
+                        continue;
+                    }
+
+                    if (!sawOpeningBrace)
+                        continue;
+
+                    if (ch == '}' && braceDepth > 0)
+                    {
+                        braceDepth--;
+                        continue;
+                    }
+
+                    if (braceDepth > 0)
+                        continue;
+                }
+
+                if (!IsJavaScriptTypeScriptKeywordAt(sanitizedLine, column, "from"))
+                    continue;
+
+                if (!TryFindJavaScriptTypeScriptReExportModuleQuote(rawLines, sanitizedLines, lineIndex, endLineIndex, column + "from".Length, out var quoteLineIndex, out var quoteColumn))
+                    return false;
+
+                var rawLine = rawLines[quoteLineIndex];
+                var quoteChar = rawLine[quoteColumn];
+                var closeQuoteColumn = rawLine.IndexOf(quoteChar, quoteColumn + 1);
+                if (closeQuoteColumn <= quoteColumn)
+                    return false;
+
+                moduleName = TrimJavaScriptTypeScriptQuotedModuleName(rawLine[quoteColumn..(closeQuoteColumn + 1)]);
+                return moduleName.Length > 0;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryFindJavaScriptTypeScriptReExportModuleQuote(
+        string[] rawLines,
+        string[] sanitizedLines,
+        int startLineIndex,
+        int endLineIndex,
+        int startColumn,
+        out int quoteLineIndex,
+        out int quoteColumn)
+    {
+        quoteLineIndex = -1;
+        quoteColumn = -1;
+
+        for (int lineIndex = startLineIndex; lineIndex <= endLineIndex; lineIndex++)
+        {
+            var sanitizedLine = sanitizedLines[lineIndex];
+            var column = lineIndex == startLineIndex ? startColumn : 0;
+            for (; column < sanitizedLine.Length; column++)
+            {
+                var ch = sanitizedLine[column];
+                if (char.IsWhiteSpace(ch))
+                    continue;
+
+                if (ch is '\'' or '"')
+                {
+                    quoteLineIndex = lineIndex;
+                    quoteColumn = column;
+                    return column < rawLines[lineIndex].Length;
+                }
+
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsJavaScriptTypeScriptKeywordAt(string text, int index, string keyword)
+    {
+        if (index < 0
+            || index + keyword.Length > text.Length
+            || !text.AsSpan(index, keyword.Length).SequenceEqual(keyword.AsSpan()))
+        {
             return false;
         }
 
-        moduleName = TrimJavaScriptTypeScriptQuotedModuleName(match.Groups["module"].Value);
-        return moduleName.Length > 0;
+        var before = index > 0 ? text[index - 1] : '\0';
+        if (char.IsLetterOrDigit(before) || before is '_' or '$')
+            return false;
+
+        var afterIndex = index + keyword.Length;
+        if (afterIndex >= text.Length)
+            return true;
+
+        var after = text[afterIndex];
+        return !(char.IsLetterOrDigit(after) || after is '_' or '$');
     }
 
     private static IEnumerable<string> ParseJavaScriptTypeScriptReExportedNames(string specifierList)
