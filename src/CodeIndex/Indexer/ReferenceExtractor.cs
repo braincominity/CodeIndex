@@ -771,6 +771,8 @@ public static class ReferenceExtractor
             var lineNumber = i + 1;
             var originalLine = lines[i];
             var preparedLine = preparedLines[i];
+            var csharpAttrRangesOnLine = csharpAttrRanges?[i];
+            var csharpAttrTopLevelOnLine = csharpAttrTopLevelRanges?[i];
             if (language == "csharp"
                 && !(csharpLinesInsideMultilineStringContent?[i] ?? false)
                 && TryGetCSharpXmlDocCommentSpan(
@@ -784,14 +786,17 @@ public static class ReferenceExtractor
                 if (csharpDocCommentText.IndexOf("cref=\"", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     var innermostContainer = FindInnermostContainer(containerCandidates, lineNumber);
+                    var sameLineDeclarationStartColumn = GetCSharpSameLineDocumentedDeclarationStartColumn(
+                        originalLine,
+                        csharpDocCommentEndExclusive,
+                        nextCsharpDelimitedDocComment);
                     var docContainer = FindDocumentedContainer(
                         containerCandidates,
                         structuralLines[i],
+                        preparedLine,
+                        csharpAttrRangesOnLine,
                         lineNumber,
-                        GetCSharpSameLineDocumentedDeclarationStartColumn(
-                            originalLine,
-                            csharpDocCommentEndExclusive,
-                            nextCsharpDelimitedDocComment));
+                        sameLineDeclarationStartColumn);
                     if (docContainer != null
                         && (docContainer.StartLine == lineNumber
                             || CanAttachCSharpXmlDocCommentToNextDeclaration(
@@ -817,8 +822,6 @@ public static class ReferenceExtractor
             }
             if (string.IsNullOrWhiteSpace(preparedLine))
                 continue;
-            var csharpAttrRangesOnLine = csharpAttrRanges?[i];
-            var csharpAttrTopLevelOnLine = csharpAttrTopLevelRanges?[i];
 
             var context = originalLine.Trim();
             if (context.Length == 0)
@@ -7856,9 +7859,46 @@ public static class ReferenceExtractor
         return column < originalLine.Length ? column : -1;
     }
 
+    private static bool HasOnlyCSharpWhitespaceOrAttributesAfterColumn(
+        string preparedLine,
+        List<(int start, int end)>? ranges,
+        int startColumn)
+    {
+        if (startColumn < 0 || startColumn >= preparedLine.Length)
+            return true;
+
+        for (var i = startColumn; i < preparedLine.Length; i++)
+        {
+            if (char.IsWhiteSpace(preparedLine[i]))
+                continue;
+
+            if (ranges != null)
+            {
+                var covered = false;
+                foreach (var (start, end) in ranges)
+                {
+                    if (i >= start && i < end)
+                    {
+                        covered = true;
+                        break;
+                    }
+                }
+
+                if (covered)
+                    continue;
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
     private static SymbolRecord? FindDocumentedContainer(
         IReadOnlyList<SymbolRecord> candidates,
         string structuralLine,
+        string preparedLine,
+        List<(int start, int end)>? csharpAttrRangesOnLine,
         int lineNumber,
         int sameLineDeclarationStartColumn)
     {
@@ -7869,6 +7909,14 @@ public static class ReferenceExtractor
             sameLineDeclarationStartColumn);
         if (sameLineCandidate != null)
             return sameLineCandidate;
+        if (sameLineDeclarationStartColumn >= 0
+            && !HasOnlyCSharpWhitespaceOrAttributesAfterColumn(
+                preparedLine,
+                csharpAttrRangesOnLine,
+                sameLineDeclarationStartColumn))
+        {
+            return null;
+        }
 
         SymbolRecord? best = null;
         foreach (var candidate in candidates)

@@ -8944,6 +8944,50 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatSameLineDelimitedDocCommentBeforeFieldAsLaterMethodDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                /** <summary><see cref="Foo"/></summary> */ string text = "";
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 4);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_TreatsSameLineDelimitedDocCommentBeforeAttributeAsDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                /** <summary><see cref="Foo"/></summary> */ [System.Obsolete]
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols)
+            .Where(r => r.SymbolName == "Foo" && r.ReferenceKind == "type_reference")
+            .ToList();
+
+        var fooReference = Assert.Single(references);
+        Assert.Equal("Run", fooReference.ContainerName);
+        Assert.Equal(4, fooReference.Line);
+    }
+
+    [Fact]
     public void Extract_CsharpDocCref_DoesNotTreatCodeAfterDelimitedDocCloseAsDocComment()
     {
         const string content = """
@@ -8985,7 +9029,7 @@ public class ReferenceExtractorTests
             .Where(r => r.Line == 6 && r.ReferenceKind == "type_reference")
             .ToList();
 
-        Assert.Contains(references, r => r.SymbolName == "Foo" && r.ContainerName == "Run");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Foo");
         Assert.DoesNotContain(references, r => r.SymbolName == "Bar");
     }
 
