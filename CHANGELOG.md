@@ -920,6 +920,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### 変更
 - **リリースワークフローが `install.sh` を公開直後のリリースに対して end-to-end 検証** — `release.yml` の `create-release` ジョブで実際の `install.sh` を走らせ、`cdidx`・`libe_sqlite3.so`・`version.json` が揃うこと、`cdidx --version` がタグ（`v0.0.0` フォールバックではなく）と一致すること、`cdidx index` / `cdidx status` が `DllNotFoundException` を出さずに動くことを検証する。インストールパスのリグレッションが次の Cloud セッションではなくリリースジョブ自体を失敗させるようになった。対象: `.github/workflows/release.yml`。
+
+#### 追加
 - **C# `file delegate` の回帰テストを追加 (#303)** — `Extract_CSharp_FileDelegate_Issue303Repro` を追加し、#303 の再現 fixture (`public delegate`・`file delegate`・素の `delegate`・`unsafe delegate` が同じ namespace に並ぶ構成) が 4 種すべて `delegate` として抽出されることを固定した。実体の修正は #355 / PR #412 で既に反映済み（C# delegate 正規表現の修飾子スロットが順不同化され `file` / `new` を受理）なので、本コミットは #303 の fixture を再現テストとして残し、`file delegate` がふたたび黙って落ちないようにするためのもの。対象: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`。Closes #303。
 
 #### 修正
