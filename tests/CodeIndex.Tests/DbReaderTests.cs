@@ -3361,6 +3361,7 @@ public class DbReaderTests : IDisposable
             CREATE PROCEDURE quoted.caller
             AS
             BEGIN
+                CALL "sales.fn_Target";
                 EXEC "sales.fn_Target";
                 EXECUTE "sales.fn_Target";
             END
@@ -3386,17 +3387,18 @@ public class DbReaderTests : IDisposable
         Assert.Equal("sales.caller", Assert.Single(impact.Callers).CallerName);
 
         var quotedReferences = _reader.SearchReferences("\"sales.fn_Target\"", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]);
-        Assert.Equal(2, quotedReferences.Count);
+        Assert.Equal(3, quotedReferences.Count);
         Assert.All(quotedReferences, reference => Assert.Equal("quoted.caller", reference.ContainerName));
+        Assert.Contains(quotedReferences, reference => reference.Context == "CALL \"sales.fn_Target\";");
         Assert.Contains(quotedReferences, reference => reference.Context == "EXEC \"sales.fn_Target\";");
         Assert.Contains(quotedReferences, reference => reference.Context == "EXECUTE \"sales.fn_Target\";");
-        Assert.Equal(2, _reader.CountSearchReferences("\"sales.fn_Target\"", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
-        Assert.Equal(new QueryCountResult(2, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("\"sales.fn_Target\"", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
+        Assert.Equal(3, _reader.CountSearchReferences("\"sales.fn_Target\"", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
+        Assert.Equal(new QueryCountResult(3, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("\"sales.fn_Target\"", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
 
         var quotedCallers = _reader.GetCallers("\"sales.fn_Target\"", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]);
         var quotedCaller = Assert.Single(quotedCallers);
         Assert.Equal("quoted.caller", quotedCaller.CallerName);
-        Assert.Equal(2, quotedCaller.ReferenceCount);
+        Assert.Equal(3, quotedCaller.ReferenceCount);
         Assert.Equal(1, _reader.CountCallers("\"sales.fn_Target\"", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
         Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountCallersTotal("\"sales.fn_Target\"", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
 
