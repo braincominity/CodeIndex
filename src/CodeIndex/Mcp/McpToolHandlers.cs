@@ -204,13 +204,10 @@ public partial class McpServer
         return arr;
     }
 
-    private static string BuildGraphSummary(string label, int count, string? lang, bool? graphSupported, string? graphSupportReason = null, string? unsupportedSymbolKind = null)
+    private static string BuildGraphSummary(string label, int count, string? lang, bool? graphSupported, string? graphSupportReason = null)
     {
         if (count > 0)
             return $"Found {count} {label}.";
-
-        if (string.Equals(unsupportedSymbolKind, "enum_member", StringComparison.Ordinal))
-            return $"No {label} found. C# enum-member access edges are not indexed yet.";
 
         if (graphSupported == false && lang != null)
             return $"No {label} found. Call-graph queries are not indexed for '{lang}'.";
@@ -218,32 +215,18 @@ public partial class McpServer
         return $"No {label} found.";
     }
 
-    private static (string? GraphLanguage, bool? GraphSupported, string? GraphSupportReason, string? UnsupportedSymbolKind, bool GraphDegraded)
-        ResolveExactEnumMemberGraphSupport(DbReader reader, bool exact, string query, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string> excludePaths, bool excludeTests)
+    private static (string? GraphLanguage, bool? GraphSupported, string? GraphSupportReason)
+        ResolveGraphSupport(DbReader reader, bool exact, string query, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string> excludePaths, bool excludeTests)
     {
-        var hasEnumMemberGap = exact
-            && reader.HasExactUnsupportedCSharpEnumMember(query, lang, pathPatterns, excludePaths, excludeTests);
-        var supportedGraphLanguage = hasEnumMemberGap
+        var graphLanguage = lang ?? (exact
             ? reader.GetExactGraphSupportedDefinitionLanguage(query, lang, pathPatterns, excludePaths, excludeTests)
-            : null;
-        var hasSupportedGraphDefinition = supportedGraphLanguage != null;
-        bool? graphSupported = hasEnumMemberGap
-            ? hasSupportedGraphDefinition
-            : (lang == null ? (bool?)null : ReferenceExtractor.SupportsLanguage(lang));
-        var graphLanguage = hasEnumMemberGap
-            ? supportedGraphLanguage ?? "csharp"
-            : lang;
-        var graphSupportReason = ReferenceExtractor.BuildGraphSupportReasonWithUnsupportedEnumMemberGap(
-            graphLanguage,
-            graphSupported,
-            hasEnumMemberGap,
-            hasSupportedGraphDefinition);
+            : null);
+        var graphSupported = graphLanguage == null ? (bool?)null : ReferenceExtractor.SupportsLanguage(graphLanguage);
+        var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(graphLanguage, graphSupported);
         return (
             GraphLanguage: graphLanguage,
             GraphSupported: graphSupported,
-            GraphSupportReason: graphSupportReason,
-            UnsupportedSymbolKind: hasEnumMemberGap ? "enum_member" : null,
-            GraphDegraded: hasEnumMemberGap);
+            GraphSupportReason: graphSupportReason);
     }
 
     private JsonNode ExecuteSearch(JsonNode? id, JsonNode? args)
@@ -503,14 +486,19 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.SearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth);
-            var exactSignal = reader.GetReferencesExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests);
+            var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
+            var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
+                reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
+                results.Select(result => result.Lang),
+                lang,
+                graphSupport.GraphLanguage);
+            var exactSignal = reader.GetReferencesExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
                 () => reader.CountSearchReferences(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false) > 0,
                 () => reader.CountSearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 () => reader.SearchReferences(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 r => r.SymbolName);
-            var graphSupport = ResolveExactEnumMemberGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var payload = new JsonObject
             {
                 ["query"] = query,
@@ -525,20 +513,16 @@ public partial class McpServer
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
-            if (graphSupport.GraphDegraded)
-            {
-                payload["graphDegraded"] = true;
-                payload["unsupportedSymbolKind"] = "enum_member";
-            }
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
+            AddSqlGraphContractSignal(payload, sqlGraphSignal);
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);
                 AddFreshnessHint(payload, reader);
             }
             return CreateToolResult(id,
-                BuildGraphSummary("references", results.Count, graphSupport.GraphLanguage, graphSupport.GraphSupported, graphSupport.GraphSupportReason, graphSupport.UnsupportedSymbolKind),
+                BuildGraphSummary("references", results.Count, graphSupport.GraphLanguage, graphSupport.GraphSupported, graphSupport.GraphSupportReason),
                 payload);
         });
     }
@@ -565,14 +549,19 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.GetCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
-            var exactSignal = reader.GetCallersExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests);
+            var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
+            var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
+                reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
+                results.Select(result => result.Lang),
+                lang,
+                graphSupport.GraphLanguage);
+            var exactSignal = reader.GetCallersExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
                 () => reader.CountCallers(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false) > 0,
                 () => reader.CountCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 () => reader.GetCallers(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 r => r.CalleeName);
-            var graphSupport = ResolveExactEnumMemberGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var payload = new JsonObject
             {
                 ["query"] = query,
@@ -586,20 +575,16 @@ public partial class McpServer
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
-            if (graphSupport.GraphDegraded)
-            {
-                payload["graphDegraded"] = true;
-                payload["unsupportedSymbolKind"] = "enum_member";
-            }
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
+            AddSqlGraphContractSignal(payload, sqlGraphSignal);
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);
                 AddFreshnessHint(payload, reader);
             }
             return CreateToolResult(id,
-                BuildGraphSummary("callers", results.Count, graphSupport.GraphLanguage, graphSupport.GraphSupported, graphSupport.GraphSupportReason, graphSupport.UnsupportedSymbolKind),
+                BuildGraphSummary("callers", results.Count, graphSupport.GraphLanguage, graphSupport.GraphSupported, graphSupport.GraphSupportReason),
                 payload);
         });
     }
@@ -626,14 +611,19 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.GetCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
-            var exactSignal = reader.GetCalleesExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests);
+            var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
+            var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
+                reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
+                results.Select(result => result.Lang),
+                lang,
+                graphSupport.GraphLanguage);
+            var exactSignal = reader.GetCalleesExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
                 () => reader.CountCallees(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false) > 0,
                 () => reader.CountCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 () => reader.GetCallees(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 r => r.CallerName);
-            var graphSupport = ResolveExactEnumMemberGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var payload = new JsonObject
             {
                 ["query"] = query,
@@ -647,20 +637,16 @@ public partial class McpServer
                 ["count"] = results.Count,
                 ["results"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
-            if (graphSupport.GraphDegraded)
-            {
-                payload["graphDegraded"] = true;
-                payload["unsupportedSymbolKind"] = "enum_member";
-            }
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
+            AddSqlGraphContractSignal(payload, sqlGraphSignal);
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);
                 AddFreshnessHint(payload, reader);
             }
             return CreateToolResult(id,
-                BuildGraphSummary("callees", results.Count, graphSupport.GraphLanguage, graphSupport.GraphSupported, graphSupport.GraphSupportReason, graphSupport.UnsupportedSymbolKind),
+                BuildGraphSummary("callees", results.Count, graphSupport.GraphLanguage, graphSupport.GraphSupported, graphSupport.GraphSupportReason),
                 payload);
         });
     }
@@ -765,9 +751,21 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var analysis = reader.AnalyzeSymbol(query, limit, lang, includeBody, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth);
+            var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignal(
+                reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
+                DbReader.IsSqlLanguage(lang)
+                    || DbReader.IsSqlLanguage(analysis.GraphLanguage)
+                    || DbReader.IsSqlLanguage(analysis.File?.Lang)
+                    || DbReader.ContainsSqlLanguage(analysis.Definitions.Select(definition => definition.Lang))
+                    || DbReader.ContainsSqlLanguage(analysis.References.Select(reference => reference.Lang))
+                    || DbReader.ContainsSqlLanguage(analysis.Callers.Select(caller => caller.Lang))
+                    || DbReader.ContainsSqlLanguage(analysis.Callees.Select(callee => callee.Lang)));
+            analysis.SqlGraphContractReady = sqlGraphSignal.Relevant ? sqlGraphSignal.Ready : null;
+            analysis.SqlGraphContractDegradedReason = sqlGraphSignal.Relevant ? sqlGraphSignal.DegradedReason : null;
             WorkspaceMetadataEnricher.Enrich(analysis, _dbPath, _dbPathExplicit);
             var structured = JsonSerializer.SerializeToNode(analysis, _jsonOptions)!.AsObject();
             AddExactSignalAliases(structured);
+            AddSqlGraphContractSignal(structured, sqlGraphSignal);
             structured.Remove("exactZeroHint");
             AddExactZeroHint(structured, analysis.ExactZeroHint);
             structured["maxLineWidth"] = maxLineWidth;
@@ -792,6 +790,24 @@ public partial class McpServer
         if (signal.DegradedReason != null)
             payload["degraded_reason"] = signal.DegradedReason;
         AddExactSignalAliases(payload);
+    }
+
+    private static void AddSqlGraphContractSignal(JsonObject payload, SqlGraphContractSignal signal)
+    {
+        if (!signal.Relevant)
+            return;
+
+        payload["sql_graph_contract_ready"] = signal.Ready;
+        payload["sqlGraphContractReady"] = signal.Ready;
+        if (!signal.Ready)
+        {
+            payload["degraded"] = true;
+            if (signal.DegradedReason != null)
+            {
+                payload["sql_graph_contract_degraded_reason"] = signal.DegradedReason;
+                payload["sqlGraphContractDegradedReason"] = signal.DegradedReason;
+            }
+        }
     }
 
     private static void AddExactSignalAliases(JsonObject payload)
@@ -825,7 +841,7 @@ public partial class McpServer
 
     private static void RestampHotspotFamilyTrust(
         DbWriter writer,
-        bool allFilesRewritten,
+        IReadOnlySet<string> reusedLanguages,
         IReadOnlyDictionary<string, string?> priorVersions,
         IReadOnlyDictionary<string, string?> priorFingerprints,
         IReadOnlyDictionary<string, string?> currentFingerprints)
@@ -836,9 +852,39 @@ public partial class McpServer
             currentFingerprints.TryGetValue(lang, out var currentFingerprint);
             priorVersions.TryGetValue(lang, out var priorVersion);
             priorFingerprints.TryGetValue(lang, out var priorFingerprint);
-            if (allFilesRewritten || (priorVersion == currentVersion && priorFingerprint == currentFingerprint))
+            if (!reusedLanguages.Contains(lang) || (priorVersion == currentVersion && priorFingerprint == currentFingerprint))
                 writer.MarkHotspotFamilyReady(lang, currentFingerprint);
         }
+    }
+
+    private static Dictionary<string, bool> GetHotspotFamilyTrustMatchesCurrent(
+        IReadOnlyDictionary<string, string?> priorVersions,
+        IReadOnlyDictionary<string, string?> priorFingerprints,
+        IReadOnlyDictionary<string, string?> currentFingerprints)
+    {
+        var currentVersion = DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var values = new Dictionary<string, bool>(StringComparer.Ordinal);
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+        {
+            currentFingerprints.TryGetValue(lang, out var currentFingerprint);
+            priorVersions.TryGetValue(lang, out var priorVersion);
+            priorFingerprints.TryGetValue(lang, out var priorFingerprint);
+            values[lang] = priorVersion == currentVersion && priorFingerprint == currentFingerprint;
+        }
+
+        return values;
+    }
+
+    private static bool AllowReuseWithCurrentHotspotFamilyTrust(
+        string? lang,
+        IReadOnlyDictionary<string, bool> hotspotFamilyTrustMatchesCurrent)
+    {
+        if (!FileIndexer.SupportsHotspotFamilyMarkerLanguage(lang))
+            return true;
+
+        return lang != null
+            && hotspotFamilyTrustMatchesCurrent.TryGetValue(lang, out var matchesCurrent)
+            && matchesCurrent;
     }
 
     private static void AddHotspotFamilySignal(JsonObject payload, HotspotFamilySignal signal)
@@ -865,6 +911,12 @@ public partial class McpServer
             status.GraphSupportedLanguages = ReferenceExtractor.GetSupportedLanguages().OrderBy(l => l).ToList();
             status.Version = _version;
             var structured = JsonSerializer.SerializeToNode(status, _jsonOptions)!.AsObject();
+            structured["hotspotFamilyReady"] = status.HotspotFamilyReady;
+            if (status.HotspotFamilyDegradedReason != null)
+                structured["hotspotFamilyDegradedReason"] = status.HotspotFamilyDegradedReason;
+            structured["sqlGraphContractReady"] = status.SqlGraphContractReady;
+            if (status.SqlGraphContractDegradedReason != null)
+                structured["sqlGraphContractDegradedReason"] = status.SqlGraphContractDegradedReason;
             return CreateToolResult(id, "Database stats returned.", structured);
         });
     }
@@ -1146,11 +1198,20 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.GetFileDependencies(limit, lang, pathPatterns, excludePaths, excludeTests, reverse);
+            var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
+            var sqlGraphSignal = results.Count == 0
+                ? baseSqlGraphSignal
+                : QueryCommandRunner.NarrowSqlGraphContractSignalByPaths(
+                    reader,
+                    baseSqlGraphSignal,
+                    results.SelectMany(result => new[] { result.SourcePath, result.TargetPath }),
+                    lang);
             var payload = new JsonObject
             {
                 ["count"] = results.Count,
                 ["edges"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            AddSqlGraphContractSignal(payload, sqlGraphSignal);
             var summary = results.Count > 0
                 ? $"Found {results.Count} dependency edge(s)."
                 : "No file dependencies found.";
@@ -1176,6 +1237,12 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var analysis = reader.AnalyzeImpact(query, maxDepth, limit, lang, pathPatterns, excludePaths, excludeTests);
+            var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignal(
+                reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
+                DbReader.IsSqlLanguage(lang)
+                    || DbReader.ContainsSqlLanguage(analysis.Definitions.Select(definition => definition.Lang))
+                    || DbReader.ContainsSqlLanguage(analysis.Callers.Select(caller => caller.Lang))
+                    || reader.AnyFilePathHasLanguage(analysis.FileImpacts.SelectMany(impact => new[] { impact.SourcePath, impact.TargetPath }), "sql"));
             var confirmedCount = analysis.Callers.Count;
             var confirmedFileCount = analysis.Callers.Select(r => r.Path).Distinct().Count();
             var hintCount = analysis.FileImpacts.Count;
@@ -1209,6 +1276,7 @@ public partial class McpServer
                 ["definitions"] = JsonSerializer.SerializeToNode(analysis.Definitions, _jsonOptions),
                 ["graph_table_available"] = analysis.GraphTableAvailable,
             };
+            AddSqlGraphContractSignal(payload, sqlGraphSignal);
             if (analysis.ZeroResultReason != null)
                 payload["zero_result_reason"] = analysis.ZeroResultReason;
             if (analysis.Suggestion != null)
@@ -1271,6 +1339,16 @@ public partial class McpServer
         {
             var results = reader.GetSymbolHotspots(limit, kind, lang, pathPatterns, excludePaths, excludeTests);
             var hotspotSignal = reader.GetHotspotFamilySignal(lang);
+            var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
+            var zeroResultSqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignal(
+                baseSqlGraphSignal,
+                reader.ScopeMayIncludeSqlSymbols(kind, lang, pathPatterns, excludePaths, excludeTests));
+            var sqlGraphSignal = results.Count == 0
+                ? zeroResultSqlGraphSignal
+                : QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
+                    baseSqlGraphSignal,
+                    results.Select(result => result.Symbol.Lang),
+                    lang);
             var items = results.Select(r => new
             {
                 name = r.Symbol.Name,
@@ -1287,6 +1365,7 @@ public partial class McpServer
                 ["hotspots"] = JsonSerializer.SerializeToNode(items, _jsonOptions)
             };
             AddHotspotFamilySignal(payload, hotspotSignal);
+            AddSqlGraphContractSignal(payload, sqlGraphSignal);
             var summary = results.Count > 0
                 ? $"Found {results.Count} symbol hotspot(s)."
                 : "No symbol hotspots found.";
@@ -1318,7 +1397,16 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.GetUnusedSymbols(limit, kind, lang, pathPatterns, excludePaths, excludeTests);
-            var hasEnumMemberGap = reader.HasFilteredCSharpEnumSymbols(kind, lang, pathPatterns, excludePaths, excludeTests);
+            var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
+            var zeroResultSqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignal(
+                baseSqlGraphSignal,
+                reader.ScopeMayIncludeSqlSymbols(kind, lang, pathPatterns, excludePaths, excludeTests));
+            var sqlGraphSignal = results.Count == 0
+                ? zeroResultSqlGraphSignal
+                : QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
+                    baseSqlGraphSignal,
+                    results.Select(result => result.Lang),
+                    lang);
             var bucketCounts = results
                 .GroupBy(result => result.UnusedBucket, StringComparer.Ordinal)
                 .OrderBy(group => Array.IndexOf(new[] { "likely_unused_private", "maybe_unused_nonpublic", "public_or_exported_no_refs", "reflection_or_config_suspect" }, group.Key))
@@ -1326,24 +1414,15 @@ public partial class McpServer
             var payload = new JsonObject
             {
                 ["count"] = results.Count,
-                ["graph_supported"] = hasEnumMemberGap ? true : graphSupported,
-                ["graph_support_reason"] = hasEnumMemberGap
-                    ? "Call-graph extraction is indexed for 'csharp', but enum-member access edges are not indexed yet. C# enum members are excluded from unused, and enum declarations may still be false positives until those edges exist."
-                    : graphSupportReason,
+                ["graph_supported"] = graphSupported,
+                ["graph_support_reason"] = graphSupportReason,
                 ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(bucketCounts, _jsonOptions),
                 ["symbols"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
-            if (hasEnumMemberGap)
-            {
-                payload["graph_language"] = "csharp";
-                payload["graph_degraded"] = true;
-                payload["unsupported_symbol_kind"] = "enum_member";
-            }
+            AddSqlGraphContractSignal(payload, sqlGraphSignal);
             var summary = results.Count > 0
                 ? $"Found {results.Count} potentially unused symbol(s) across {bucketCounts.Count} returned bucket(s). Private hits are ranked ahead of exported/config suspects, but not labeled high-confidence from indexed refs alone. Note: name-based matching — same-named symbols in different contexts may mask true unused symbols."
-                : hasEnumMemberGap
-                    ? "No unused symbols found, but C# enum members are excluded from unused and enum declarations may still be false positives until enum-member access edges are indexed."
-                    : "No unused symbols found.";
+                : "No unused symbols found.";
             if (graphSupported == false)
                 summary += $" Warning: '{lang}' does not support reference extraction. Unused results are unavailable for this language.";
             if (!reader._hasReferencesTable)
@@ -1435,6 +1514,8 @@ public partial class McpServer
         var priorFoldVersion = db.GetMetaString("fold_key_version");
         var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
         var priorCSharpSymbolNameContractVersion = db.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey);
+        var priorMetadataTargetCsharp = db.GetMetaString(DbContext.GetMetadataTargetVersionMetaKey("csharp"));
+        var priorSqlGraphContractVersion = db.GetMetaString(DbContext.SqlGraphContractVersionMetaKey);
         var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
         var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
         var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
@@ -1448,7 +1529,9 @@ public partial class McpServer
         if (rebuild)
         {
             db.ClearReadyFlags();
-            new DbWriter(db.Connection).ClearHotspotFamilyReady();
+            var rebuildWriter = new DbWriter(db.Connection);
+            rebuildWriter.ClearHotspotFamilyReady();
+            rebuildWriter.ClearMetadataTargetReady();
             db.DropAll();
         }
 
@@ -1459,6 +1542,12 @@ public partial class McpServer
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
+        var currentSqlGraphContractVersion = DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var sqlGraphContractMatchesCurrent = priorSqlGraphContractVersion == currentSqlGraphContractVersion;
+        var hotspotFamilyTrustMatchesCurrent = GetHotspotFamilyTrustMatchesCurrent(
+            priorHotspotFamilyVersions,
+            priorHotspotFamilyMarkerFingerprints,
+            currentHotspotFamilyMarkerFingerprints);
         var normalizedProjectPath = Path.GetFullPath(projectPath);
         var normalizedPriorIndexedProjectRoot = string.IsNullOrWhiteSpace(priorIndexedProjectRoot)
             ? null
@@ -1489,6 +1578,7 @@ public partial class McpServer
         // 実書き込み直前で readiness をクリア。
         writer.ClearReadyFlags();
         writer.ClearHotspotFamilyReady();
+        writer.ClearMetadataTargetReady();
 
         // Purge stale files / 古いファイルをパージ
         var purged = writer.PurgeStaleFiles(projectPath);
@@ -1501,6 +1591,7 @@ public partial class McpServer
         // Scan and index / スキャン・インデックス
         var files = indexer.ScanFiles();
         int processed = 0, skipped = 0, errors = 0;
+        var reusedHotspotFamilyLanguages = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var filePath in files)
         {
@@ -1511,11 +1602,15 @@ public partial class McpServer
                     record.Path,
                     record.Modified,
                     record.Checksum,
-                    allowReuse: record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent);
+                    allowReuse: (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
+                        && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)
+                        && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
                 if (existingId != null)
                 {
                     skipped++;
                     processed++;
+                    if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(record.Lang) && record.Lang != null)
+                        reusedHotspotFamilyLanguages.Add(record.Lang);
                     continue;
                 }
 
@@ -1549,17 +1644,32 @@ public partial class McpServer
         // throwing, so a partial failure leaves trust degraded and `validate` still surfaces it.
         // MCP index は CLI と同等に file_issues を永続化するため、成功時は graph / issues の両方を stamp する。
         var csharpSymbolNameReadyAfter = !writer.HasAnyFilesWithLanguage("csharp");
+        var csharpMetadataTargetReadyAfter = !writer.HasAnyFilesWithLanguage("csharp");
+        var sqlGraphContractReadyAfter = !writer.HasAnyFilesWithLanguage("sql");
         var foldReadyAfter = false;
         string? foldReadyReason = null;
+        _ = priorMetadataTargetCsharp;
         if (errors == 0)
         {
             writer.MarkGraphReady();
             writer.MarkIssuesReady();
+            writer.MarkSqlGraphContractReady();
             writer.MarkCSharpSymbolNameContractReady();
             csharpSymbolNameReadyAfter = true;
+            if (writer.HasAnyFilesWithLanguage("csharp"))
+            {
+                writer.ResolveCSharpMetadataTargets();
+                writer.MarkMetadataTargetReady("csharp");
+                csharpMetadataTargetReadyAfter = true;
+            }
+            else
+            {
+                csharpMetadataTargetReadyAfter = true;
+            }
+            sqlGraphContractReadyAfter = true;
             RestampHotspotFamilyTrust(
                 writer,
-                skipped == 0,
+                reusedHotspotFamilyLanguages,
                 priorHotspotFamilyVersions,
                 priorHotspotFamilyMarkerFingerprints,
                 currentHotspotFamilyMarkerFingerprints);
@@ -1614,12 +1724,20 @@ public partial class McpServer
                 ["purged"] = purged,
                 ["errors"] = errors
             },
+            ["sql_graph_contract_ready"] = sqlGraphContractReadyAfter,
+            ["sqlGraphContractReady"] = sqlGraphContractReadyAfter,
             ["csharp_symbol_name_ready"] = csharpSymbolNameReadyAfter,
+            ["csharp_metadata_target_ready"] = csharpMetadataTargetReadyAfter,
             // #86 codex review: AI clients use this to tell whether --exact will use the
             // Unicode fold path or silently fall back to ASCII NOCASE. If false after a clean
             ["fold_ready"] = foldReadyAfter,
             ["fold_ready_reason"] = foldReadyReason
         };
+        if (!sqlGraphContractReadyAfter)
+        {
+            var signalReader = new DbReader(writer.Connection);
+            AddSqlGraphContractSignal(structured, signalReader.GetSqlGraphContractSignal());
+        }
         return CreateToolResult(id,
             errors == 0 && !foldReadyAfter
                 ? foldReadyReason switch

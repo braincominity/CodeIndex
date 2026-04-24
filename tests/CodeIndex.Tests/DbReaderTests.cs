@@ -1,3 +1,4 @@
+using System.Text;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
@@ -1169,6 +1170,74 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetExactGraphSupportedDefinitionLanguage_DegradesOnLegacyDbMissingContainerKind()
+    {
+        // Regression for #493: the exact graph-support probe hardcoded `s.container_kind`
+        // instead of going through `GetSymbolColumnSql("container_kind", "''")`, so exact
+        // inspect/references/callers/callees crashed with "no such column" on legacy or
+        // read-only DBs where `container_kind` did not exist and `TryMigrateForRead` could
+        // not add it in place. The probe must degrade gracefully (the preferNonEnumMember
+        // filter becomes a no-op) rather than throw.
+        // #493 回帰: legacy/read-only DB で container_kind 列が欠けていても、exact graph 経路が
+        // クラッシュせず probe が成立する契約を固定する。
+        var legacyPath = Path.Combine(Path.GetTempPath(), $"codeindex_issue493_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(legacyPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/worker.cs", Lang = "csharp", Size = 40, Lines = 4,
+                    Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord
+                    {
+                        FileId = fileId, Kind = "function", Name = "Run", Line = 3,
+                        StartLine = 3, EndLine = 3, Signature = "public void Run()",
+                        Visibility = "public", ContainerKind = "class", ContainerName = "Worker",
+                    },
+                    new SymbolRecord
+                    {
+                        FileId = fileId, Kind = "class", Name = "Worker", Line = 1,
+                        StartLine = 1, EndLine = 4, Signature = "public class Worker",
+                        Visibility = "public",
+                    },
+                ]);
+                writer.MarkGraphReady();
+
+                // Simulate a DB from before container_kind existed (#62-style legacy schema).
+                // container_kind 列追加前の legacy schema を模擬する。
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "ALTER TABLE symbols DROP COLUMN container_kind";
+                cmd.ExecuteNonQuery();
+            }
+
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            using var legacyDb = new DbContext(legacyPath);
+            // Deliberately skip TryMigrateForRead: on a truly read-only mount it cannot add
+            // the column back, which is the scenario the issue reproduces.
+            // 読み取り専用 FS 上で列を再追加できない状況を模擬するため TryMigrateForRead は呼ばない。
+            var reader = new DbReader(legacyDb.Connection);
+
+            // Both preferNonEnumMember=true (first try) and preferNonEnumMember=false (second
+            // try) must execute against the column-missing schema without throwing.
+            // preferNonEnumMember の両分岐が legacy schema で例外を出さずに走りきることを確認する。
+            var lang = reader.GetExactGraphSupportedDefinitionLanguage("Run", null, null, null, false);
+            Assert.Equal("csharp", lang);
+            Assert.True(reader.HasExactGraphSupportedDefinition("Run", null, null, null, false));
+            Assert.Null(reader.GetExactGraphSupportedDefinitionLanguage("DoesNotExist", null, null, null, false));
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (File.Exists(legacyPath)) File.Delete(legacyPath);
+        }
+    }
+
+    [Fact]
     public void SearchSymbols_ExactFallsBackToNocaseWhenFoldKeyVersionMismatches()
     {
         // #86 codex third-pass review: when NameFold.Fold changes and bumps NameFold.Version,
@@ -1410,6 +1479,64 @@ public class DbReaderTests : IDisposable
         Assert.Equal("src/session.py", caller.Path);
         Assert.Equal("login", caller.CallerName);
         Assert.Equal("authenticate", caller.CalleeName);
+        Assert.Equal(1, caller.ReferenceCount);
+    }
+
+    [Fact]
+    public void GetCallers_CSharpTopLevelStatementCallSurfacesSyntheticTopLevelCaller()
+    {
+        InsertIndexedFile("src/Program.cs", "csharp",
+            """
+            using System;
+
+            Console.WriteLine("boot");
+
+            int Add(int a, int b) => a + b;
+            void Run()
+            {
+                Console.WriteLine(Add(1, 2));
+            }
+
+            Run();
+            """);
+
+        var callers = _reader.GetCallers("Run", lang: "csharp", exact: true, pathPatterns: ["Program.cs"]);
+
+        var caller = Assert.Single(callers);
+        Assert.Equal("src/Program.cs", caller.Path);
+        Assert.Equal("function", caller.CallerKind);
+        Assert.Equal("<top-level>", caller.CallerName);
+        Assert.Equal("Run", caller.CalleeName);
+        Assert.Equal(1, caller.ReferenceCount);
+        Assert.Equal(1, _reader.CountCallers("Run", lang: "csharp", exact: true, pathPatterns: ["Program.cs"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCallersTotal("Run", lang: "csharp", exact: true, pathPatterns: ["Program.cs"]));
+    }
+
+    [Fact]
+    public void GetCallers_CSharpTopLevelStatementCallWithExplicitKindSurfacesSyntheticTopLevelCaller()
+    {
+        InsertIndexedFile("src/Program.cs", "csharp",
+            """
+            using System;
+
+            Console.WriteLine("boot");
+
+            void Run()
+            {
+                Console.WriteLine("inside");
+            }
+
+            Run();
+            """);
+
+        var callers = _reader.GetCallers("Run", lang: "csharp", referenceKind: "call", exact: true, pathPatterns: ["Program.cs"]);
+
+        var caller = Assert.Single(callers);
+        Assert.Equal("src/Program.cs", caller.Path);
+        Assert.Equal("function", caller.CallerKind);
+        Assert.Equal("<top-level>", caller.CallerName);
+        Assert.Equal("Run", caller.CalleeName);
+        Assert.Equal("call", caller.ReferenceKind);
         Assert.Equal(1, caller.ReferenceCount);
     }
 
@@ -2540,6 +2667,35 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetTransitiveCallers_CSharpTopLevelStatementCallSurfacesSyntheticTopLevelCallerWithoutRecursing()
+    {
+        InsertIndexedFile("src/Program.cs", "csharp",
+            """
+            using System;
+
+            Console.WriteLine("boot");
+
+            void Run()
+            {
+                Console.WriteLine("inside");
+            }
+
+            Run();
+            """);
+
+        var (results, truncated) = _reader.GetTransitiveCallers("Run", maxDepth: 3, limit: 10, lang: "csharp", pathPatterns: ["Program.cs"]);
+
+        Assert.False(truncated);
+        var caller = Assert.Single(results);
+        Assert.Equal("src/Program.cs", caller.Path);
+        Assert.Equal("function", caller.CallerKind);
+        Assert.Equal("<top-level>", caller.CallerName);
+        Assert.Equal("Run", caller.CalleeName);
+        Assert.Equal(1, caller.Depth);
+        Assert.Equal(1, caller.ReferenceCount);
+    }
+
+    [Fact]
     public void GetDefinitions_ExactMatchesNameEquality()
     {
         var extraFileId = _writer.UpsertFile(new FileRecord
@@ -2763,6 +2919,985 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_AlignGraphReadersHotspotsAndUnused()
+    {
+        InsertIndexedFile("src/sql_name_mismatch_fixture.sql", "sql",
+            """
+            CREATE FUNCTION dbo.fn_GetOrderItems(@orderId INT)
+            RETURNS TABLE
+            AS
+            RETURN (SELECT * FROM dbo.OrderItems WHERE OrderId = @orderId);
+            GO
+
+            CREATE PROCEDURE dbo.usp_GetOrders
+            AS
+            BEGIN
+                SELECT *
+                FROM dbo.Orders o
+                CROSS APPLY dbo.fn_GetOrderItems(o.OrderId) fi;
+            END
+            GO
+            """);
+
+        var bareRefs = _reader.SearchReferences("fn_GetOrderItems", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]);
+        var qualifiedRefs = _reader.SearchReferences("dbo.fn_GetOrderItems", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]);
+        Assert.Equal(12, Assert.Single(bareRefs).Line);
+        Assert.Equal(12, Assert.Single(qualifiedRefs).Line);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.fn_GetOrderItems", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]));
+
+        var bareCaller = Assert.Single(_reader.GetCallers("fn_GetOrderItems", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]));
+        var qualifiedCaller = Assert.Single(_reader.GetCallers("dbo.fn_GetOrderItems", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]));
+        Assert.Equal("dbo.usp_GetOrders", bareCaller.CallerName);
+        Assert.Equal("dbo.usp_GetOrders", qualifiedCaller.CallerName);
+        Assert.Equal(1, _reader.CountCallers("dbo.fn_GetOrderItems", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]));
+
+        var bareCallee = Assert.Single(_reader.GetCallees("usp_GetOrders", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]));
+        var qualifiedCallee = Assert.Single(_reader.GetCallees("dbo.usp_GetOrders", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]));
+        Assert.Equal("fn_GetOrderItems", bareCallee.CalleeName);
+        Assert.Equal("fn_GetOrderItems", qualifiedCallee.CalleeName);
+        Assert.Equal(1, _reader.CountCallees("usp_GetOrders", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]));
+
+        var (bareImpact, bareTruncated) = _reader.GetTransitiveCallers("fn_GetOrderItems", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_name_mismatch_fixture"]);
+        var (qualifiedImpact, qualifiedTruncated) = _reader.GetTransitiveCallers("dbo.fn_GetOrderItems", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_name_mismatch_fixture"]);
+        Assert.False(bareTruncated);
+        Assert.False(qualifiedTruncated);
+        Assert.Equal("dbo.usp_GetOrders", Assert.Single(bareImpact).CallerName);
+        Assert.Equal("dbo.usp_GetOrders", Assert.Single(qualifiedImpact).CallerName);
+
+        var hotspot = Assert.Single(
+            _reader.GetSymbolHotspots(10, "function", "sql", ["sql_name_mismatch_fixture"], null, false),
+            item => item.Symbol.Name == "dbo.fn_GetOrderItems");
+        Assert.Equal(1, hotspot.ReferenceCount);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "function", lang: "sql",
+            pathPatterns: ["sql_name_mismatch_fixture"], excludePathPatterns: null, excludeTests: false);
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "dbo.fn_GetOrderItems");
+        var unusedCount = _reader.CountUnusedSymbols(kind: "function", lang: "sql",
+            pathPatterns: ["sql_name_mismatch_fixture"], excludePathPatterns: null, excludeTests: false);
+        Assert.Equal(1, unusedCount.Count);
+        Assert.Equal(1, unusedCount.FileCount);
+    }
+
+    [Fact]
+    public void SqlBareCalls_AlignAggregateReadersWithLeafFallback()
+    {
+        InsertIndexedFile("src/sql_bare_call_caller.sql", "sql",
+            """
+            CREATE PROCEDURE sales.host
+            AS
+            BEGIN
+                EXEC fn_Target;
+            END
+            GO
+            """);
+        InsertIndexedFile("src/sql_bare_call_target.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.fn_Target
+            AS
+            BEGIN
+                SELECT 1;
+            END
+            GO
+            """);
+
+        var caller = Assert.Single(_reader.GetCallers("fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_bare_call_"]));
+        Assert.Equal("sales.host", caller.CallerName);
+        Assert.Equal(1, caller.ReferenceCount);
+
+        var dependencies = _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_bare_call_"], excludePathPatterns: null, excludeTests: false);
+        var dependency = Assert.Single(dependencies);
+        Assert.Equal("src/sql_bare_call_caller.sql", dependency.SourcePath);
+        Assert.Equal("src/sql_bare_call_target.sql", dependency.TargetPath);
+        Assert.Equal(1, dependency.ReferenceCount);
+
+        var hotspot = Assert.Single(
+            _reader.GetSymbolHotspots(10, "function", "sql", ["sql_bare_call_"], null, false),
+            item => item.Symbol.Name == "dbo.fn_Target");
+        Assert.Equal(1, hotspot.ReferenceCount);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "function", lang: "sql",
+            pathPatterns: ["sql_bare_call_"], excludePathPatterns: null, excludeTests: false);
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "dbo.fn_Target");
+        Assert.Contains(unused, symbol => symbol.Name == "sales.host");
+        var unusedCount = _reader.CountUnusedSymbols(kind: "function", lang: "sql",
+            pathPatterns: ["sql_bare_call_"], excludePathPatterns: null, excludeTests: false);
+        Assert.Equal(1, unusedCount.Count);
+        Assert.Equal(1, unusedCount.FileCount);
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_DownstreamReadersDoNotPromoteUnqualifiedRowsFromLaterTokens()
+    {
+        InsertIndexedFile("src/sql_unqualified_row_targets.sql", "sql",
+            """
+            CREATE FUNCTION dbo.fn_Target()
+            RETURNS INT
+            AS
+            BEGIN
+                RETURN 1;
+            END
+            GO
+
+            CREATE FUNCTION sales.fn_Target()
+            RETURNS INT
+            AS
+            BEGIN
+                RETURN 2;
+            END
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_unqualified_row_comment.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.CommentCaller
+            AS
+            BEGIN
+                EXEC fn_Target; -- sales.fn_Target
+            END
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_unqualified_row_string.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.StringCaller
+            AS
+            BEGIN
+                EXEC fn_Target; SELECT 'sales.fn_Target';
+            END
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_unqualified_row_mixed_calls.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.MixedCaller
+            AS
+            BEGIN
+                EXEC fn_Target; EXEC sales.fn_Target;
+            END
+            GO
+            """);
+
+        var commentDependency = Assert.Single(
+            _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_unqualified_row_comment.sql"], excludePathPatterns: null, excludeTests: false));
+        Assert.Equal("src/sql_unqualified_row_comment.sql", commentDependency.SourcePath);
+        Assert.Equal("src/sql_unqualified_row_targets.sql", commentDependency.TargetPath);
+        Assert.Equal(1, commentDependency.ReferenceCount);
+        Assert.Equal("dbo.fn_Target", commentDependency.Symbols);
+
+        var stringDependency = Assert.Single(
+            _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_unqualified_row_string.sql"], excludePathPatterns: null, excludeTests: false));
+        Assert.Equal("src/sql_unqualified_row_string.sql", stringDependency.SourcePath);
+        Assert.Equal("src/sql_unqualified_row_targets.sql", stringDependency.TargetPath);
+        Assert.Equal(1, stringDependency.ReferenceCount);
+        Assert.Equal("dbo.fn_Target", stringDependency.Symbols);
+
+        var mixedDependency = Assert.Single(
+            _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_unqualified_row_mixed_calls.sql"], excludePathPatterns: null, excludeTests: false));
+        Assert.Equal("src/sql_unqualified_row_mixed_calls.sql", mixedDependency.SourcePath);
+        Assert.Equal("src/sql_unqualified_row_targets.sql", mixedDependency.TargetPath);
+        Assert.Equal(2, mixedDependency.ReferenceCount);
+        Assert.Equal("dbo.fn_Target,sales.fn_Target", mixedDependency.Symbols);
+
+        var hotspots = _reader.GetSymbolHotspots(10, "function", "sql", ["sql_unqualified_row"], null, false);
+        var dboHotspot = Assert.Single(hotspots, item => item.Symbol.Name == "dbo.fn_Target");
+        var salesHotspot = Assert.Single(hotspots, item => item.Symbol.Name == "sales.fn_Target");
+        Assert.Equal(3, dboHotspot.ReferenceCount);
+        Assert.Equal(1, salesHotspot.ReferenceCount);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "function", lang: "sql",
+            pathPatterns: ["sql_unqualified_row"], excludePathPatterns: null, excludeTests: false);
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "dbo.fn_Target");
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "sales.fn_Target");
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_AlignDepsEdges()
+    {
+        InsertIndexedFile("src/sql_deps_target.sql", "sql",
+            """
+            CREATE FUNCTION dbo.fn_GetOrderItems(@orderId INT)
+            RETURNS TABLE
+            AS
+            RETURN (SELECT * FROM dbo.OrderItems WHERE OrderId = @orderId);
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_deps_caller.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.usp_GetOrders
+            AS
+            BEGIN
+                SELECT *
+                FROM dbo.Orders o
+                CROSS APPLY dbo.fn_GetOrderItems(o.OrderId) fi;
+            END
+            GO
+            """);
+
+        var dependency = Assert.Single(
+            _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_deps_caller.sql"], excludePathPatterns: null, excludeTests: false));
+        Assert.Equal("src/sql_deps_caller.sql", dependency.SourcePath);
+        Assert.Equal("src/sql_deps_target.sql", dependency.TargetPath);
+        Assert.Equal(1, dependency.ReferenceCount);
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_SameLineCrossSchemaCallStillReachesReaders()
+    {
+        InsertIndexedFile("src/sql_same_line_cross_schema.sql", "sql",
+            """
+            CREATE PROCEDURE sales.fn_Target AS EXEC dbo.fn_Target;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_cross_schema"]));
+        Assert.Equal(1, reference.Line);
+        Assert.Equal("sales.fn_Target", reference.ContainerName);
+
+        var caller = Assert.Single(
+            _reader.GetCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_cross_schema"]));
+        Assert.Equal("sales.fn_Target", caller.CallerName);
+        Assert.Equal(1, caller.ReferenceCount);
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_SameLineQualifiedCallAfterStringLiteralStillReachesReaders()
+    {
+        InsertIndexedFile("src/sql_same_line_string_literal.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.fn_Target
+            AS
+            SELECT 1;
+            GO
+
+            CREATE PROCEDURE sales.host
+            AS
+            BEGIN
+                SELECT 'prefix'; EXEC dbo.fn_Target;
+            END
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_string_literal"]));
+        Assert.Equal(9, reference.Line);
+        Assert.Equal("sales.host", reference.ContainerName);
+
+        var caller = Assert.Single(
+            _reader.GetCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_string_literal"]));
+        Assert.Equal("sales.host", caller.CallerName);
+        Assert.Equal(1, caller.ReferenceCount);
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_SameLineQualifiedCallAfterInlineBlockCommentStillReachesReaders()
+    {
+        InsertIndexedFile("src/sql_same_line_block_comment.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.fn_Target
+            AS
+            SELECT 1;
+            GO
+
+            CREATE PROCEDURE sales.host
+            AS
+            BEGIN
+                SELECT /*note*/ 1; EXEC dbo.fn_Target;
+            END
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_block_comment"]));
+        Assert.Equal(9, reference.Line);
+        Assert.Equal("sales.host", reference.ContainerName);
+
+        var caller = Assert.Single(
+            _reader.GetCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_block_comment"]));
+        Assert.Equal("sales.host", caller.CallerName);
+        Assert.Equal(1, caller.ReferenceCount);
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_ResolveQuotedDefinitionsFromUnquotedQualifiedQueries()
+    {
+        InsertIndexedFile("src/sql_quoted_definition_target.sql", "sql",
+            """
+            CREATE PROCEDURE [dbo].[fn_Target]
+            AS
+            SELECT 1;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_quoted_definition_caller.sql", "sql",
+            """
+            CREATE PROCEDURE [sales].[fn_Target]
+            AS
+            EXEC [dbo].[fn_Target];
+            GO
+            """);
+
+        var definition = Assert.Single(
+            _reader.GetDefinitions("dbo.fn_Target", limit: 10, lang: "sql", pathPatterns: ["sql_quoted_definition"]));
+        Assert.Equal("[dbo].[fn_Target]", definition.Name);
+
+        var exactDefinition = Assert.Single(
+            _reader.GetDefinitions("dbo.fn_Target", limit: 10, lang: "sql", pathPatterns: ["sql_quoted_definition"], exact: true));
+        Assert.Equal("[dbo].[fn_Target]", exactDefinition.Name);
+
+        var analysis = _reader.AnalyzeSymbol("dbo.fn_Target", limit: 10, lang: "sql", pathPatterns: ["sql_quoted_definition"]);
+        Assert.Equal("[dbo].[fn_Target]", Assert.Single(analysis.Definitions).Name);
+
+        var exactAnalysis = _reader.AnalyzeSymbol("dbo.fn_Target", limit: 10, lang: "sql", pathPatterns: ["sql_quoted_definition"], exact: true);
+        Assert.Equal("[dbo].[fn_Target]", Assert.Single(exactAnalysis.Definitions).Name);
+
+        var impact = _reader.AnalyzeImpact("dbo.fn_Target", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_quoted_definition"]);
+        Assert.Equal(1, impact.DefinitionCount);
+        Assert.Equal("[dbo].[fn_Target]", Assert.Single(impact.Definitions).Name);
+        Assert.Equal("[sales].[fn_Target]", Assert.Single(impact.Callers).CallerName);
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_DoubleQuotedCallsResolveFromUnquotedQualifiedQueries()
+    {
+        InsertIndexedFile("src/sql_double_quoted_target.sql", "sql",
+            """
+            CREATE PROCEDURE "sales"."proc_name"
+            AS
+            SELECT 1;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_double_quoted_caller.sql", "sql",
+            """
+            CREATE PROCEDURE sales.caller
+            AS
+            BEGIN
+                CALL "sales"."proc_name";
+            END
+            GO
+            """);
+
+        var references = _reader.SearchReferences("sales.proc_name", lang: "sql", exact: true, pathPatterns: ["sql_double_quoted"]);
+        var reference = Assert.Single(references);
+        Assert.Equal(4, reference.Line);
+        Assert.Equal("sales.caller", reference.ContainerName);
+
+        var callers = _reader.GetCallers("sales.proc_name", lang: "sql", exact: true, pathPatterns: ["sql_double_quoted"]);
+        var caller = Assert.Single(callers);
+        Assert.Equal("sales.caller", caller.CallerName);
+        Assert.Equal(1, caller.ReferenceCount);
+
+        var impact = _reader.AnalyzeImpact("sales.proc_name", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_double_quoted"]);
+        Assert.Equal("\"sales\".\"proc_name\"", Assert.Single(impact.Definitions).Name);
+        Assert.Equal("sales.caller", Assert.Single(impact.Callers).CallerName);
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_ExactLookups_DoNotConflateQuotedSingleIdentifierDotsWithQualifiedNames()
+    {
+        InsertIndexedFile("src/sql_dotted_identifier_collision.sql", "sql",
+            """
+            CREATE PROCEDURE sales.fn_Target
+            AS
+            SELECT 1;
+            GO
+
+            CREATE PROCEDURE "sales.fn_Target"
+            AS
+            SELECT 2;
+            GO
+            """);
+
+        var qualifiedDefinition = Assert.Single(
+            _reader.GetDefinitions("sales.fn_Target", limit: 10, lang: "sql", pathPatterns: ["sql_dotted_identifier_collision"], exact: true));
+        Assert.Equal("sales.fn_Target", qualifiedDefinition.Name);
+
+        var quotedDefinition = Assert.Single(
+            _reader.GetDefinitions("\"sales.fn_Target\"", limit: 10, lang: "sql", pathPatterns: ["sql_dotted_identifier_collision"], exact: true));
+        Assert.Equal("\"sales.fn_Target\"", quotedDefinition.Name);
+
+        var qualifiedAnalysis = _reader.AnalyzeSymbol("sales.fn_Target", limit: 10, lang: "sql", pathPatterns: ["sql_dotted_identifier_collision"], exact: true);
+        Assert.Equal("sales.fn_Target", Assert.Single(qualifiedAnalysis.Definitions).Name);
+
+        var quotedAnalysis = _reader.AnalyzeSymbol("\"sales.fn_Target\"", limit: 10, lang: "sql", pathPatterns: ["sql_dotted_identifier_collision"], exact: true);
+        Assert.Equal("\"sales.fn_Target\"", Assert.Single(quotedAnalysis.Definitions).Name);
+
+        var qualifiedImpact = _reader.AnalyzeImpact("sales.fn_Target", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_dotted_identifier_collision"]);
+        Assert.Equal(1, qualifiedImpact.DefinitionCount);
+        Assert.Equal("sales.fn_Target", Assert.Single(qualifiedImpact.Definitions).Name);
+
+        var quotedImpact = _reader.AnalyzeImpact("\"sales.fn_Target\"", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_dotted_identifier_collision"]);
+        Assert.Equal(1, quotedImpact.DefinitionCount);
+        Assert.Equal("\"sales.fn_Target\"", Assert.Single(quotedImpact.Definitions).Name);
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_ExactGraphReadersDoNotConflateQuotedSingleIdentifierDotsWithQualifiedNames()
+    {
+        InsertIndexedFile("src/sql_dotted_identifier_graph_targets.sql", "sql",
+            """
+            CREATE PROCEDURE sales.fn_Target
+            AS
+            SELECT 1;
+            GO
+
+            CREATE PROCEDURE "sales.fn_Target"
+            AS
+            SELECT 2;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_dotted_identifier_graph_callers.sql", "sql",
+            """
+            CREATE PROCEDURE sales.caller
+            AS
+            BEGIN
+                EXEC sales.fn_Target;
+            END
+            GO
+
+            CREATE PROCEDURE quoted.caller
+            AS
+            BEGIN
+                CALL "sales.fn_Target";
+            END
+            GO
+            """);
+
+        var references = _reader.SearchReferences("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]);
+        var reference = Assert.Single(references);
+        Assert.Equal("sales.caller", reference.ContainerName);
+        Assert.Equal(4, reference.Line);
+        Assert.Equal(1, _reader.CountSearchReferences("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
+
+        var callers = _reader.GetCallers("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]);
+        var caller = Assert.Single(callers);
+        Assert.Equal("sales.caller", caller.CallerName);
+        Assert.Equal(1, caller.ReferenceCount);
+        Assert.Equal(1, _reader.CountCallers("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountCallersTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
+
+        var impact = _reader.AnalyzeImpact("sales.fn_Target", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_dotted_identifier_graph"]);
+        Assert.Equal("sales.fn_Target", Assert.Single(impact.Definitions).Name);
+        Assert.Equal("sales.caller", Assert.Single(impact.Callers).CallerName);
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_AggregatesDoNotConflateQuotedSingleIdentifierDotsWithQualifiedNames()
+    {
+        InsertIndexedFile("src/sql_dotted_identifier_deps_target.sql", "sql",
+            """
+            CREATE PROCEDURE sales.fn_Target
+            AS
+            SELECT 1;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_dotted_identifier_deps_quoted.sql", "sql",
+            """
+            CREATE PROCEDURE "sales.fn_Target"
+            AS
+            SELECT 2;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_dotted_identifier_deps_caller.sql", "sql",
+            """
+            CREATE PROCEDURE sales.caller
+            AS
+            BEGIN
+                EXEC sales.fn_Target;
+            END
+            GO
+            """);
+
+        var dependency = Assert.Single(
+            _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_dotted_identifier_deps"], excludePathPatterns: null, excludeTests: false));
+        Assert.Equal("src/sql_dotted_identifier_deps_caller.sql", dependency.SourcePath);
+        Assert.Equal("src/sql_dotted_identifier_deps_target.sql", dependency.TargetPath);
+        Assert.Equal(1, dependency.ReferenceCount);
+        Assert.Equal("sales.fn_Target", dependency.Symbols);
+
+        var hotspots = _reader.GetSymbolHotspots(10, "function", "sql", ["sql_dotted_identifier_deps"], null, false);
+        Assert.Equal(1, Assert.Single(hotspots, item => item.Symbol.Name == "sales.fn_Target").ReferenceCount);
+        Assert.DoesNotContain(hotspots, item => item.Symbol.Name == "\"sales.fn_Target\"");
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "function", lang: "sql",
+            pathPatterns: ["sql_dotted_identifier_deps"], excludePathPatterns: null, excludeTests: false);
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "sales.fn_Target");
+        Assert.Contains(unused, symbol => symbol.Name == "\"sales.fn_Target\"");
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_QuotedSingleIdentifierContainersDoNotDonateFakeQualifiersToLeafFallback()
+    {
+        InsertIndexedFile("src/sql_quoted_container_leaf_fallback_schema_target.sql", "sql",
+            """
+            CREATE PROCEDURE sales.fn_Target
+            AS
+            SELECT 1;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_quoted_container_leaf_fallback_quoted_target.sql", "sql",
+            """
+            CREATE PROCEDURE "fn_Target"
+            AS
+            SELECT 2;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_quoted_container_leaf_fallback_caller.sql", "sql",
+            """
+            CREATE PROCEDURE "sales.Caller"
+            AS
+            BEGIN
+                EXEC fn_Target;
+            END
+            GO
+            """);
+
+        Assert.Empty(_reader.GetCallers("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_quoted_container_leaf_fallback"]));
+        Assert.Equal(0, _reader.CountCallers("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_quoted_container_leaf_fallback"]));
+        Assert.Equal(new QueryCountResult(0, 0), _reader.CountCallersTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_quoted_container_leaf_fallback"]));
+
+        var leafCaller = Assert.Single(_reader.GetCallers("fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_quoted_container_leaf_fallback"]));
+        Assert.Equal("\"sales.Caller\"", leafCaller.CallerName);
+        Assert.Equal(1, leafCaller.ReferenceCount);
+
+        var dependency = Assert.Single(
+            _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_quoted_container_leaf_fallback"], excludePathPatterns: null, excludeTests: false));
+        Assert.Equal("src/sql_quoted_container_leaf_fallback_caller.sql", dependency.SourcePath);
+        Assert.Equal("src/sql_quoted_container_leaf_fallback_quoted_target.sql", dependency.TargetPath);
+        Assert.Equal(1, dependency.ReferenceCount);
+        Assert.Equal("fn_Target", dependency.Symbols);
+
+        var hotspots = _reader.GetSymbolHotspots(10, "function", "sql", ["sql_quoted_container_leaf_fallback"], null, false);
+        Assert.Equal(1, Assert.Single(hotspots, item => item.Symbol.Name == "\"fn_Target\"").ReferenceCount);
+        Assert.DoesNotContain(hotspots, item => item.Symbol.Name == "sales.fn_Target");
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "function", lang: "sql",
+            pathPatterns: ["sql_quoted_container_leaf_fallback"], excludePathPatterns: null, excludeTests: false);
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "\"fn_Target\"");
+        Assert.Contains(unused, symbol => symbol.Name == "sales.fn_Target");
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_UnicodeExactGraphReadersPreserveFoldedLeafFallback()
+    {
+        InsertIndexedFile("src/sql_unicode_exact_leaf_fallback.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.Äpfel
+            AS
+            SELECT 1;
+            GO
+
+            CREATE PROCEDURE dbo.Caller
+            AS
+            EXEC dbo.äpfel;
+            GO
+
+            CREATE PROCEDURE dbo.ÄCaller
+            AS
+            EXEC dbo.Äpfel;
+            GO
+            """);
+
+        var references = _reader.SearchReferences("dbo.Äpfel", lang: "sql", exact: true, pathPatterns: ["sql_unicode_exact_leaf_fallback"]);
+        Assert.Equal(2, references.Count);
+        Assert.Contains(references, reference => reference.ContainerName == "dbo.Caller" && reference.Line == 8);
+        Assert.Contains(references, reference => reference.ContainerName == "dbo.ÄCaller" && reference.Line == 13);
+        Assert.Equal(2, _reader.CountSearchReferences("dbo.Äpfel", lang: "sql", exact: true, pathPatterns: ["sql_unicode_exact_leaf_fallback"]));
+
+        var callers = _reader.GetCallers("dbo.Äpfel", lang: "sql", exact: true, pathPatterns: ["sql_unicode_exact_leaf_fallback"]);
+        Assert.Equal(2, callers.Count);
+        Assert.Contains(callers, item => item.CallerName == "dbo.Caller");
+        Assert.Contains(callers, item => item.CallerName == "dbo.ÄCaller");
+        Assert.Equal(2, _reader.CountCallers("dbo.Äpfel", lang: "sql", exact: true, pathPatterns: ["sql_unicode_exact_leaf_fallback"]));
+
+        var callee = Assert.Single(_reader.GetCallees("äcaller", lang: "sql", exact: true, pathPatterns: ["sql_unicode_exact_leaf_fallback"]));
+        Assert.Equal("Äpfel", callee.CalleeName);
+        Assert.Equal(1, _reader.CountCallees("äcaller", lang: "sql", exact: true, pathPatterns: ["sql_unicode_exact_leaf_fallback"]));
+
+        var impact = _reader.AnalyzeImpact("dbo.Äpfel", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_unicode_exact_leaf_fallback"]);
+        Assert.Equal(2, impact.Callers.Count);
+        Assert.Contains(impact.Callers, item => item.CallerName == "dbo.Caller");
+        Assert.Contains(impact.Callers, item => item.CallerName == "dbo.ÄCaller");
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_QualifiedSqlReadersStaySchemaScoped()
+    {
+        InsertIndexedFile("src/sql_schema_scoped_target_dbo.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.fn_Target
+            AS
+            SELECT 1;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_schema_scoped_target_sales.sql", "sql",
+            """
+            CREATE PROCEDURE sales.fn_Target
+            AS
+            SELECT 2;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_schema_scoped_caller.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.Caller
+            AS
+            EXEC dbo.fn_Target;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
+        Assert.Equal("dbo.Caller", reference.ContainerName);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
+
+        var caller = Assert.Single(
+            _reader.GetCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
+        Assert.Equal("dbo.Caller", caller.CallerName);
+        Assert.Equal(1, _reader.CountCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountCallersTotal("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
+
+        var impact = _reader.AnalyzeImpact("dbo.fn_Target", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_schema_scoped"]);
+        Assert.Equal("dbo.Caller", Assert.Single(impact.Callers).CallerName);
+
+        var dependency = Assert.Single(
+            _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_schema_scoped_caller.sql"], excludePathPatterns: null, excludeTests: false));
+        Assert.Equal("src/sql_schema_scoped_caller.sql", dependency.SourcePath);
+        Assert.Equal("src/sql_schema_scoped_target_dbo.sql", dependency.TargetPath);
+        Assert.Equal(1, dependency.ReferenceCount);
+
+        var hotspots = _reader.GetSymbolHotspots(10, "function", "sql", ["sql_schema_scoped"], null, false);
+        var hotspot = Assert.Single(hotspots, item => item.Symbol.Name == "dbo.fn_Target");
+        Assert.Equal(1, hotspot.ReferenceCount);
+        Assert.DoesNotContain(hotspots, item => item.Symbol.Name == "sales.fn_Target");
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "function", lang: "sql",
+            pathPatterns: ["sql_schema_scoped"], excludePathPatterns: null, excludeTests: false);
+        Assert.Contains(unused, symbol => symbol.Name == "sales.fn_Target");
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "dbo.fn_Target");
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_SameLineMultipleQualifiedCallsStayColumnScoped()
+    {
+        InsertIndexedFile("src/sql_same_line_multi_target_dbo.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.fn_Target
+            AS
+            SELECT 1;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_same_line_multi_target_sales.sql", "sql",
+            """
+            CREATE PROCEDURE sales.fn_Target
+            AS
+            SELECT 2;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_same_line_multi_caller.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.Caller
+            AS
+            BEGIN
+                EXEC dbo.fn_Target; EXEC sales.fn_Target;
+            END
+            GO
+            """);
+
+        var dboReference = Assert.Single(
+            _reader.SearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal("dbo.Caller", dboReference.ContainerName);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+
+        var salesReference = Assert.Single(
+            _reader.SearchReferences("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal("dbo.Caller", salesReference.ContainerName);
+        Assert.Equal(1, _reader.CountSearchReferences("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+
+        var dboCaller = Assert.Single(
+            _reader.GetCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal("dbo.Caller", dboCaller.CallerName);
+        Assert.Equal(1, dboCaller.ReferenceCount);
+        Assert.Equal(1, _reader.CountCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountCallersTotal("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+
+        var salesCaller = Assert.Single(
+            _reader.GetCallers("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal("dbo.Caller", salesCaller.CallerName);
+        Assert.Equal(1, salesCaller.ReferenceCount);
+        Assert.Equal(1, _reader.CountCallers("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountCallersTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+
+        var dependencies = _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_same_line_multi"], excludePathPatterns: null, excludeTests: false)
+            .OrderBy(edge => edge.TargetPath, StringComparer.Ordinal)
+            .ToList();
+        Assert.Equal(2, dependencies.Count);
+        Assert.Collection(dependencies,
+            edge =>
+            {
+                Assert.Equal("src/sql_same_line_multi_caller.sql", edge.SourcePath);
+                Assert.Equal("src/sql_same_line_multi_target_dbo.sql", edge.TargetPath);
+                Assert.Equal(1, edge.ReferenceCount);
+            },
+            edge =>
+            {
+                Assert.Equal("src/sql_same_line_multi_caller.sql", edge.SourcePath);
+                Assert.Equal("src/sql_same_line_multi_target_sales.sql", edge.TargetPath);
+                Assert.Equal(1, edge.ReferenceCount);
+            });
+
+        var hotspots = _reader.GetSymbolHotspots(10, "function", "sql", ["sql_same_line_multi"], null, false);
+        Assert.Equal(1, Assert.Single(hotspots, item => item.Symbol.Name == "dbo.fn_Target").ReferenceCount);
+        Assert.Equal(1, Assert.Single(hotspots, item => item.Symbol.Name == "sales.fn_Target").ReferenceCount);
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_ExactCalleesStaySchemaScoped()
+    {
+        InsertIndexedFile("src/sql_callee_schema_scoped.sql", "sql",
+            """
+            CREATE FUNCTION dbo.fn_A()
+            RETURNS INT
+            AS
+            BEGIN
+                RETURN 1;
+            END
+            GO
+
+            CREATE FUNCTION sales.fn_B()
+            RETURNS INT
+            AS
+            BEGIN
+                RETURN 2;
+            END
+            GO
+
+            CREATE PROCEDURE dbo.usp_GetOrders
+            AS
+            BEGIN
+                SELECT dbo.fn_A();
+            END
+            GO
+
+            CREATE PROCEDURE sales.usp_GetOrders
+            AS
+            BEGIN
+                SELECT sales.fn_B();
+            END
+            GO
+            """);
+
+        var callee = Assert.Single(_reader.GetCallees("dbo.usp_GetOrders", lang: "sql", exact: true, pathPatterns: ["sql_callee_schema_scoped"]));
+        Assert.Equal("fn_A", callee.CalleeName);
+        Assert.Equal("dbo.usp_GetOrders", callee.CallerName);
+        Assert.Equal(1, _reader.CountCallees("dbo.usp_GetOrders", lang: "sql", exact: true, pathPatterns: ["sql_callee_schema_scoped"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountCalleesTotal("dbo.usp_GetOrders", lang: "sql", exact: true, pathPatterns: ["sql_callee_schema_scoped"]));
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_NonExactQualifiedReadersStaySchemaScoped()
+    {
+        InsertIndexedFile("src/sql_nonexact_schema_scoped_targets.sql", "sql",
+            """
+            CREATE FUNCTION dbo.fn_Target()
+            RETURNS INT
+            AS
+            BEGIN
+                RETURN 1;
+            END
+            GO
+
+            CREATE FUNCTION sales.fn_Target()
+            RETURNS INT
+            AS
+            BEGIN
+                RETURN 2;
+            END
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_nonexact_schema_scoped_callers.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.Caller
+            AS
+            BEGIN
+                EXEC dbo.fn_Target;
+            END
+            GO
+
+            CREATE PROCEDURE sales.Caller
+            AS
+            BEGIN
+                EXEC sales.fn_Target;
+            END
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("sales.fn_Target", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+        Assert.Equal("sales.Caller", reference.ContainerName);
+        Assert.Equal(1, _reader.CountSearchReferences("sales.fn_Target", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("sales.fn_Target", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+
+        var caller = Assert.Single(
+            _reader.GetCallers("sales.fn_Target", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+        Assert.Equal("sales.Caller", caller.CallerName);
+        Assert.Equal(1, caller.ReferenceCount);
+        Assert.Equal(1, _reader.CountCallers("sales.fn_Target", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountCallersTotal("sales.fn_Target", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+
+        var callee = Assert.Single(
+            _reader.GetCallees("sales.Caller", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+        Assert.Equal("fn_Target", callee.CalleeName);
+        Assert.Equal("sales.Caller", callee.CallerName);
+        Assert.Equal(1, _reader.CountCallees("sales.Caller", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountCalleesTotal("sales.Caller", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_ExactCalleesNormalizeBracketedCallerNames()
+    {
+        InsertIndexedFile("src/sql_exact_bracketed_callee_targets.sql", "sql",
+            """
+            CREATE PROCEDURE [dbo].[fn_Target]
+            AS
+            BEGIN
+                SELECT 1;
+            END
+            GO
+
+            CREATE PROCEDURE [sales].[fn_Target]
+            AS
+            BEGIN
+                EXEC [sales].[fn_Target];
+                EXEC fn_Target;
+            END
+            GO
+            """);
+
+        var normalizedCallee = Assert.Single(
+            _reader.GetCallees("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_exact_bracketed_callee"]));
+        Assert.Equal("[sales].[fn_Target]", normalizedCallee.CallerName);
+        Assert.Equal("fn_Target", normalizedCallee.CalleeName);
+        Assert.Equal(2, normalizedCallee.ReferenceCount);
+        Assert.Equal(1, _reader.CountCallees("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_exact_bracketed_callee"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountCalleesTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_exact_bracketed_callee"]));
+
+        var bracketedCallee = Assert.Single(
+            _reader.GetCallees("[sales].[fn_Target]", lang: "sql", exact: true, pathPatterns: ["sql_exact_bracketed_callee"]));
+        Assert.Equal("[sales].[fn_Target]", bracketedCallee.CallerName);
+        Assert.Equal("fn_Target", bracketedCallee.CalleeName);
+
+        Assert.DoesNotContain(
+            _reader.GetCallees("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_exact_bracketed_callee"]),
+            item => item.CallerName == "[sales].[fn_Target]");
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_WhitespaceAroundDotsStillResolvesDefinitionsAndSameLineCalls()
+    {
+        InsertIndexedFile("src/sql_spaced_qualified_names.sql", "sql",
+            """
+            CREATE PROCEDURE [dbo].[fn_Target]
+            AS
+            SELECT 1;
+            GO
+
+            CREATE PROCEDURE [sales] . [fn_Target] AS EXEC [dbo] . [fn_Target];
+            GO
+            """);
+
+        var definition = Assert.Single(
+            _reader.GetDefinitions("sales.fn_Target", limit: 10, lang: "sql", pathPatterns: ["sql_spaced_qualified_names"], exact: true));
+        Assert.Contains("fn_Target", definition.Name, StringComparison.Ordinal);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_spaced_qualified_names"]));
+        Assert.Contains("fn_Target", reference.ContainerName ?? string.Empty, StringComparison.Ordinal);
+
+        var caller = Assert.Single(
+            _reader.GetCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_spaced_qualified_names"]));
+        Assert.Contains("fn_Target", caller.CallerName ?? string.Empty, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
+    {
+        InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",
+            """
+            CREATE PROCEDURE [dbo].[Äpfel]
+            AS
+            SELECT 1;
+            GO
+
+            CREATE PROCEDURE [dbo].[Caller]
+            AS
+            EXEC [dbo].[äpfel];
+            GO
+            """);
+
+        Assert.Equal(1, _reader.CountSearchSymbols(["dbo.äpfel"], lang: "sql", pathPatterns: ["sql_quoted_unicode_exact_definition"], exact: true));
+
+        var symbol = Assert.Single(_reader.SearchSymbols(["dbo.äpfel"], limit: 10, lang: "sql", pathPatterns: ["sql_quoted_unicode_exact_definition"], exact: true));
+        Assert.Equal("[dbo].[Äpfel]", symbol.Name);
+
+        var definition = Assert.Single(_reader.GetDefinitions("dbo.äpfel", limit: 10, lang: "sql", pathPatterns: ["sql_quoted_unicode_exact_definition"], exact: true));
+        Assert.Equal("[dbo].[Äpfel]", definition.Name);
+
+        var analysis = _reader.AnalyzeSymbol("dbo.äpfel", limit: 10, lang: "sql", pathPatterns: ["sql_quoted_unicode_exact_definition"], exact: true);
+        Assert.Equal("[dbo].[Äpfel]", Assert.Single(analysis.Definitions).Name);
+        Assert.Equal("[dbo].[Caller]", Assert.Single(analysis.Callers).CallerName);
+
+        var impact = _reader.AnalyzeImpact("dbo.äpfel", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_quoted_unicode_exact_definition"]);
+        Assert.Equal(1, impact.DefinitionCount);
+        Assert.Equal("[dbo].[Äpfel]", Assert.Single(impact.Definitions).Name);
+        Assert.Equal("[dbo].[Caller]", Assert.Single(impact.Callers).CallerName);
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_UnqualifiedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
+    {
+        InsertIndexedFile("src/sql_unqualified_unicode_exact_definition.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.Äpfel
+            AS
+            SELECT 1;
+            GO
+
+            CREATE PROCEDURE dbo.Caller
+            AS
+            EXEC dbo.äpfel;
+            GO
+            """);
+
+        Assert.Equal(1, _reader.CountSearchSymbols(["äpfel"], lang: "sql", pathPatterns: ["sql_unqualified_unicode_exact_definition"], exact: true));
+
+        var symbol = Assert.Single(_reader.SearchSymbols(["äpfel"], limit: 10, lang: "sql", pathPatterns: ["sql_unqualified_unicode_exact_definition"], exact: true));
+        Assert.Equal("dbo.Äpfel", symbol.Name);
+
+        var definition = Assert.Single(_reader.GetDefinitions("äpfel", limit: 10, lang: "sql", pathPatterns: ["sql_unqualified_unicode_exact_definition"], exact: true));
+        Assert.Equal("dbo.Äpfel", definition.Name);
+
+        var analysis = _reader.AnalyzeSymbol("äpfel", limit: 10, lang: "sql", pathPatterns: ["sql_unqualified_unicode_exact_definition"], exact: true);
+        Assert.Equal("dbo.Äpfel", Assert.Single(analysis.Definitions).Name);
+        Assert.Equal("dbo.Caller", Assert.Single(analysis.Callers).CallerName);
+    }
+
+    [Fact]
     public void GetFileDependencies_DoesNotJoinSameNameTargetsAcrossLanguages()
     {
         InsertIndexedFile("src/Foo.cs", "csharp",
@@ -2798,7 +3933,7 @@ public class DbReaderTests : IDisposable
         var dependency = Assert.Single(dependencies);
         Assert.Equal("src/Caller.cs", dependency.SourcePath);
         Assert.Equal("src/Foo.cs", dependency.TargetPath);
-        Assert.Equal(1, dependency.ReferenceCount);
+        Assert.Equal(2, dependency.ReferenceCount);
         Assert.DoesNotContain("foo.py", dependency.TargetPath, StringComparison.Ordinal);
     }
 
@@ -3173,6 +4308,1111 @@ public class DbReaderTests : IDisposable
         // あいまいな metadata 参照はどちらの fan-out エッジも出してはならない。
         Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/A/MyAuditAttribute.cs");
         Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/B/MyAuditAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverExcludesNonAttributeImpostor()
+    {
+        // issue #435: a non-attribute class that happens to share the suffix-convention
+        // name (e.g. `class FooAttribute : BaseService`) must not fake ambiguity against
+        // a real `class FooAttribute : Attribute` elsewhere. Before the persisted
+        // `is_metadata_target` resolver, the `signature LIKE '%: %'` heuristic counted
+        // both as plausible candidates and the deps edge was silently dropped. With the
+        // resolver stamped, only the real attribute target is counted, so the edge from
+        // `[Foo]` consumers reaches the real attribute file.
+        // issue #435: `class FooAttribute : BaseService` のような suffix 規約の名前を
+        // 偶然持つ非 attribute class が、別ファイルの本物 `class FooAttribute : Attribute`
+        // との ambiguity を偽装してはならない。永続化された is_metadata_target resolver
+        // 以前は `signature LIKE '%: %'` ヒューリスティックで両方を候補に数えてしまい、
+        // deps エッジが暗黙に落ちていた。resolver stamp 後は本物の attribute target だけが
+        // 候補となり、`[Foo]` 利用側からのエッジが本物の attribute ファイルに届く。
+        InsertIndexedFile("src/RealFooAttribute.cs", "csharp",
+            """
+            using System;
+
+            [AttributeUsage(AttributeTargets.Class)]
+            public sealed class FooAttribute : Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/ImpostorFooAttribute.cs", "csharp",
+            """
+            public class FooAttribute : BaseService
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [Foo]
+            public class Svc
+            {
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        Assert.Contains(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/RealFooAttribute.cs");
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/ImpostorFooAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverHandlesTransitiveAttributeDerivation()
+    {
+        // issue #435: derivation can be transitive — `class FooAttribute : BaseAttr`
+        // where `class BaseAttr : Attribute`. The resolver's fixed-point iteration
+        // must mark FooAttribute as a metadata target. Otherwise the same-name
+        // impostor would re-introduce ambiguity and the metadata edge would drop.
+        // issue #435: 派生は推移的になり得る — `class FooAttribute : BaseAttr` で
+        // `class BaseAttr : Attribute` の場合、resolver の fixed-point iteration が
+        // FooAttribute を metadata target として印付ける必要がある。さもなければ
+        // 同名 impostor が ambiguity を再導入し、metadata エッジが落ちてしまう。
+        InsertIndexedFile("src/BaseAttr.cs", "csharp",
+            """
+            using System;
+
+            public abstract class BaseAttr : Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/RealFooAttribute.cs", "csharp",
+            """
+            public sealed class FooAttribute : BaseAttr
+            {
+            }
+            """);
+        InsertIndexedFile("src/ImpostorFooAttribute.cs", "csharp",
+            """
+            public class FooAttribute : BaseService
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [Foo]
+            public class Svc
+            {
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        Assert.Contains(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/RealFooAttribute.cs");
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/ImpostorFooAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverPreservesAmbiguityWhenMultipleRealAttributes()
+    {
+        // issue #435 invariant: the resolver fix narrows the candidate set, but it
+        // must NOT mask genuine ambiguity. When two REAL attribute classes share the
+        // same name (both transitively derive from Attribute), the metadata edge
+        // must still be dropped — namespace/using disambiguation is out of scope.
+        // issue #435 invariant: resolver は候補集合を絞るが、本物の曖昧さを隠してはならない。
+        // 2 つの本物 attribute class が同名で両方 Attribute 由来なら、従来どおり
+        // metadata エッジは落ちる必要がある（namespace / using 解析はスコープ外）。
+        InsertIndexedFile("src/A/FooAttribute.cs", "csharp",
+            """
+            using System;
+
+            namespace A
+            {
+                public sealed class FooAttribute : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/B/FooAttribute.cs", "csharp",
+            """
+            using System;
+
+            namespace B
+            {
+                public sealed class FooAttribute : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [Foo]
+            public class Svc
+            {
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/A/FooAttribute.cs");
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/B/FooAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverDistinguishesQualifiedBases()
+    {
+        // issue #435 codex review iter 1: a qualified base like `: B.BaseAttr` must
+        // resolve specifically against the B.BaseAttr class, not leak into an unrelated
+        // A.BaseAttr that happens to be a metadata target. Before the fix, the resolver
+        // collapsed the base to its simple head (`BaseAttr`) and treated "any same-name
+        // class is target" as "this qualified reference is target", producing a false
+        // positive metadata target and therefore a spurious deps edge for `[Impostor]`.
+        // issue #435 codex review iter 1: `: B.BaseAttr` のような修飾名基底は、無関係な
+        // `A.BaseAttr`（metadata target）に誤解決してはならない。修正前は simple-name
+        // `BaseAttr` に潰して「どれかが target なら当該修飾参照も target」化していた。
+        InsertIndexedFile("src/A/BaseAttr.cs", "csharp",
+            """
+            using System;
+
+            namespace A
+            {
+                public abstract class BaseAttr : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/B/BaseAttr.cs", "csharp",
+            """
+            namespace B
+            {
+                public class BaseAttr : BaseService
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/ImpostorFooAttribute.cs", "csharp",
+            """
+            namespace B
+            {
+                public class ImpostorFooAttribute : B.BaseAttr
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [ImpostorFoo]
+            public class Svc
+            {
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/ImpostorFooAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverHonorsQualifiedExternalSuffixFallback()
+    {
+        // issue #435 codex review iter 1: when a class derives from a qualified
+        // external base (`: ThirdParty.ValidationAttribute`), the resolver must still
+        // apply the BCL suffix fallback even if an unrelated in-repo class happens to
+        // share the same simple name (`ValidationAttribute`) and is NOT a metadata
+        // target. Pre-fix, the resolver collapsed to the simple name, found the
+        // in-repo non-target, and suppressed the suffix fallback — silently dropping
+        // the metadata edge.
+        // issue #435 codex review iter 1: `: ThirdParty.ValidationAttribute` のように
+        // 外部の修飾基底を継承するとき、repo 内に同名 non-target class がいても
+        // suffix 規約 fallback を殺してはならない。修正前は単純名に潰して in-repo
+        // non-target にぶつかり suffix fallback を潰していた。
+        InsertIndexedFile("src/InRepo/ValidationAttribute.cs", "csharp",
+            """
+            namespace InRepo
+            {
+                public class ValidationAttribute : BaseService
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/MyValidatorAttribute.cs", "csharp",
+            """
+            public class MyValidatorAttribute : ThirdParty.ValidationAttribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyValidator]
+            public class Svc
+            {
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        Assert.Contains(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/MyValidatorAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverHandlesPartialClassBase()
+    {
+        // issue #435 codex review iter 2: legal C# `partial class` can split a single
+        // logical type across multiple declaration sites, each producing its own symbol
+        // row. Only one of the partial declarations carries the real base list
+        // (`: Attribute`). The qualified-base index must accumulate ALL rows sharing the
+        // same FQN so the fixed-point lookup can still find the target-bearing partial,
+        // regardless of which file was indexed first. Before the iter-2 fix, the index
+        // used `Dictionary<string, long>` with `TryAdd`, so whichever partial row was
+        // inserted first won: when the base-less partial was inserted first, the
+        // qualified reference from `FooAttribute : B.BaseAttr` resolved only to that
+        // base-less row, never iterating to the partial that carries `: Attribute`,
+        // and the metadata edge was silently dropped in a file-order dependent way.
+        // issue #435 codex review iter 2: `partial class` は 1 つの論理型が複数行に
+        // 分かれる。修飾名索引が `Dictionary<string, long>` + TryAdd だった旧実装では、
+        // 先に insert された partial 行しか拾われず、`: Attribute` を持つ真の target
+        // partial が別ファイルにあるとファイル順で metadata edge が落ちていた。List で
+        // 候補集合を保持する修正により、fixed-point 反復でどれかが target になれば
+        // qualified 参照も正しく解決される。
+        InsertIndexedFile("src/B/BaseAttr.Core.cs", "csharp",
+            """
+            namespace B
+            {
+                public partial class BaseAttr
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/B/BaseAttr.Marker.cs", "csharp",
+            """
+            using System;
+
+            namespace B
+            {
+                public partial class BaseAttr : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/FooAttribute.cs", "csharp",
+            """
+            public class FooAttribute : B.BaseAttr
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [Foo]
+            public class Svc
+            {
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        Assert.Contains(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/FooAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverPrefersSameNamespaceBaseOverGlobalImpostor()
+    {
+        // issue #435 codex review iter 4: unqualified base names must resolve through
+        // the deriving class's own namespace / nesting chain — NOT through a global
+        // simple-name bucket. Before the iter-4 fix, `namespace B { class FooAttribute
+        // : BaseAttr {} }` could be falsely promoted to `is_metadata_target=1` solely
+        // because an unrelated `namespace A { class BaseAttr : Attribute {} }` existed
+        // elsewhere in the repo, even though B's own `BaseAttr : BaseService` was the
+        // actually reachable base for the unqualified reference. The result was a false
+        // `deps` / `impact` edge from `[Foo] class Svc` to `B.FooAttribute`. The fix
+        // indexes classes under `(enclosing scope, simple name)` and walks the deriving
+        // row's scope chain inside → outside, consulting only the first scope level
+        // that has a same-name row. If no scope level matches, the resolver falls back
+        // to the BCL `Attribute`-suffix heuristic for external bases — the global
+        // simple-name bucket is no longer consulted.
+        // issue #435 codex review iter 4: 非修飾基底は deriving の名前空間 /
+        // 入れ子チェーンのみで解決する。グローバル単純名索引に落とすと、別名前空間に
+        // 同名の本物 Attribute 派生が居るだけで非 Attribute 派生 class が偽の
+        // `is_metadata_target=1` に昇格し、`deps` / `impact` に偽エッジが残る。
+        InsertIndexedFile("src/A/BaseAttr.cs", "csharp",
+            """
+            using System;
+
+            namespace A
+            {
+                public class BaseAttr : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/B/BaseAttr.cs", "csharp",
+            """
+            namespace B
+            {
+                public class BaseService
+                {
+                }
+
+                public class BaseAttr : BaseService
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/B/FooAttribute.cs", "csharp",
+            """
+            namespace B
+            {
+                public class FooAttribute : BaseAttr
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            namespace B
+            {
+                [Foo]
+                public class Svc
+                {
+                }
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/B/FooAttribute.cs");
+
+        // Column-level invariant: the scope-aware resolver must classify each row
+        // against its own scope chain. A.BaseAttr is a real Attribute derivative;
+        // B.BaseAttr (same simple name, different namespace) derives from an unrelated
+        // BaseService and must stay non-target; B.FooAttribute's unqualified `BaseAttr`
+        // must resolve to B.BaseAttr (not A.BaseAttr), so it also stays non-target.
+        // 列レベル不変条件: scope-aware resolver は各行を自身のスコープチェーンで判定する。
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT f.path, s.is_metadata_target
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE s.kind = 'class' AND s.name IN ('BaseAttr', 'FooAttribute')
+            ORDER BY f.path, s.name";
+        var rows = new List<(string Path, long Flag)>();
+        using (var reader = cmd.ExecuteReader())
+        {
+            while (reader.Read())
+                rows.Add((reader.GetString(0), reader.GetInt64(1)));
+        }
+        Assert.Contains(rows, r => r.Path == "src/A/BaseAttr.cs" && r.Flag == 1);
+        Assert.Contains(rows, r => r.Path == "src/B/BaseAttr.cs" && r.Flag == 0);
+        Assert.Contains(rows, r => r.Path == "src/B/FooAttribute.cs" && r.Flag == 0);
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverHandlesImportedNamespaceBase()
+    {
+        // issue #435 codex review iter 5: the iter-4 fix made unqualified base resolution
+        // strictly same-scope only. That regressed the common C# pattern
+        // `using A; namespace B { class FooAttribute : BaseAttr {} }` where `A.BaseAttr :
+        // Attribute` is indexed in a sibling file. The iter-5 fix threads the deriving
+        // file's `using` directives into the resolver so, after a same-scope lookup miss,
+        // `BaseAttr` is probed as `A.BaseAttr` via `using A;` before falling through to
+        // the BCL `Attribute`-suffix convention.
+        // issue #435 codex review iter 5: iter 4 の strict same-scope 限定が
+        // `using A; class FooAttribute : BaseAttr` の一般的 C# パターンで false-negative を
+        // 招いた。iter 5 で `using` 指令を resolver に通し、same-scope 解決失敗後に
+        // `using A;` 経由で `A.BaseAttr` を qualified 索引に引き当てる。
+        InsertIndexedFile("src/A/BaseAttr.cs", "csharp",
+            """
+            using System;
+
+            namespace A
+            {
+                public class BaseAttr : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/B/FooAttribute.cs", "csharp",
+            """
+            using A;
+
+            namespace B
+            {
+                public class FooAttribute : BaseAttr
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/B/Svc.cs", "csharp",
+            """
+            namespace B
+            {
+                [Foo]
+                public class Svc
+                {
+                }
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        // Column-level invariant: FooAttribute must resolve through `using A;` to
+        // `A.BaseAttr : Attribute` even though B has no same-scope `BaseAttr` of its own.
+        // 列レベル不変条件: B 側に `BaseAttr` が無くても `using A;` 経由で解決されること。
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT f.path, s.is_metadata_target
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE s.kind = 'class' AND s.name = 'FooAttribute'";
+        long flag;
+        using (var reader = cmd.ExecuteReader())
+        {
+            Assert.True(reader.Read(), "FooAttribute row must exist");
+            flag = reader.GetInt64(1);
+        }
+        Assert.Equal(1L, flag);
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+        Assert.Contains(dependencies, d => d.SourcePath == "src/B/Svc.cs" && d.TargetPath == "src/B/FooAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverHandlesUsingAliasBase()
+    {
+        // issue #435 codex review iter 5: the alias form of the same regression —
+        // `using AliasAttr = A.BaseAttr; class FooAttribute : AliasAttr {}`. Before iter 5,
+        // the resolver had no knowledge of alias imports and left FooAttribute at
+        // `is_metadata_target=0`, dropping the `[Foo]` → FooAttribute metadata edge.
+        // issue #435 codex review iter 5: alias 形式の同一 regression。
+        // `using AliasAttr = A.BaseAttr;` の alias 索引を resolver に取り込み、
+        // `class FooAttribute : AliasAttr` が qualified 索引上で `A.BaseAttr` に解決される。
+        InsertIndexedFile("src/A/BaseAttr.cs", "csharp",
+            """
+            using System;
+
+            namespace A
+            {
+                public class BaseAttr : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/B/FooAttribute.cs", "csharp",
+            """
+            using AliasAttr = A.BaseAttr;
+
+            namespace B
+            {
+                public class FooAttribute : AliasAttr
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/B/Svc.cs", "csharp",
+            """
+            namespace B
+            {
+                [Foo]
+                public class Svc
+                {
+                }
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.is_metadata_target
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.path = 'src/B/FooAttribute.cs' AND s.kind = 'class' AND s.name = 'FooAttribute'";
+        var flag = cmd.ExecuteScalar();
+        Assert.Equal(1L, Convert.ToInt64(flag));
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+        Assert.Contains(dependencies, d => d.SourcePath == "src/B/Svc.cs" && d.TargetPath == "src/B/FooAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverHandlesVerbatimNamespaceImport()
+    {
+        // issue #435 codex review iter 6: C# verbatim identifiers (`@Foo`) are a source-level
+        // escape for keywords; `using @Foo.@Bar;` is semantically identical to
+        // `using Foo.Bar;`. Before iter 6 the resolver stored the raw `@Foo.@Bar` token in the
+        // per-file import map and never matched the qualified index, leaving
+        // `VerbatimImportAttribute : BaseAttr` as `is_metadata_target=0`.
+        // issue #435 codex review iter 6: verbatim 識別子 `@Foo.@Bar` は非 verbatim 形と等価。
+        // 修正前は import map に生の `@Foo.@Bar` が載り、qualified 索引に当たらず
+        // `VerbatimImportAttribute : BaseAttr` が `is_metadata_target=0` のまま残っていた。
+        InsertIndexedFile("src/Foo/Bar/BaseAttr.cs", "csharp",
+            """
+            using System;
+
+            namespace Foo.Bar
+            {
+                public class BaseAttr : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/V/VerbatimImportAttribute.cs", "csharp",
+            """
+            using @Foo.@Bar;
+
+            namespace V
+            {
+                public class VerbatimImportAttribute : BaseAttr
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/V/Consumer.cs", "csharp",
+            """
+            namespace V
+            {
+                [VerbatimImport]
+                public class Consumer
+                {
+                }
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.is_metadata_target
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.path = 'src/V/VerbatimImportAttribute.cs' AND s.kind = 'class' AND s.name = 'VerbatimImportAttribute'";
+        var flag = cmd.ExecuteScalar();
+        Assert.Equal(1L, Convert.ToInt64(flag));
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+        Assert.Contains(dependencies, d => d.SourcePath == "src/V/Consumer.cs" && d.TargetPath == "src/V/VerbatimImportAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverHandlesVerbatimAliasNameAndTarget()
+    {
+        // issue #435 codex review iter 6: verbatim on both sides of an alias import —
+        // `using @AliasAttr = @Foo.@Bar.BaseAttr;` should parse, be captured as an import
+        // row (the SymbolExtractor regex was too strict to accept the leading `@` on alias
+        // names), and resolve identically to the non-verbatim spelling.
+        // issue #435 codex review iter 6: alias 両辺の verbatim — alias 名にも target にも
+        // `@` が付くケース。旧 SymbolExtractor regex は alias 名の `@` を受けず import 行
+        // 自体が生成されなかったため、resolver に届く前に情報が欠落していた。
+        InsertIndexedFile("src/Foo/Bar/BaseAttr.cs", "csharp",
+            """
+            using System;
+
+            namespace Foo.Bar
+            {
+                public class BaseAttr : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/V/VerbatimAliasAttribute.cs", "csharp",
+            """
+            using @AliasAttr = @Foo.@Bar.BaseAttr;
+
+            namespace V
+            {
+                public class VerbatimAliasAttribute : AliasAttr
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/V/AliasConsumer.cs", "csharp",
+            """
+            namespace V
+            {
+                [VerbatimAlias]
+                public class AliasConsumer
+                {
+                }
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.is_metadata_target
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.path = 'src/V/VerbatimAliasAttribute.cs' AND s.kind = 'class' AND s.name = 'VerbatimAliasAttribute'";
+        var flag = cmd.ExecuteScalar();
+        Assert.Equal(1L, Convert.ToInt64(flag));
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+        Assert.Contains(dependencies, d => d.SourcePath == "src/V/AliasConsumer.cs" && d.TargetPath == "src/V/VerbatimAliasAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverHandlesVerbatimBaseClassDeclaration()
+    {
+        // issue #435 codex review iter 7: the defining side uses a verbatim identifier in
+        // the declaration itself (`public class @BaseAttr : Attribute`). Before iter 7 the
+        // C# class-declaration regex only accepted `\w+` for the name capture, so this file
+        // did not produce a class row at all. The deriving file's `class Verbatim : BaseAttr`
+        // then had no in-repo target to resolve against and stayed `is_metadata_target=0`.
+        // issue #435 codex review iter 7: 宣言側自体が verbatim（`public class @BaseAttr :
+        // Attribute`）のケース。iter 7 以前の C# class 宣言 regex は name キャプチャが `\w+`
+        // のみで、この file は class 行をまったく生成しなかった。その結果 `class Verbatim :
+        // BaseAttr` 側も in-repo target を持てず `is_metadata_target=0` のままだった。
+        InsertIndexedFile("src/V/VerbatimBase.cs", "csharp",
+            """
+            using System;
+
+            namespace Foo.Bar
+            {
+                public class @BaseAttr : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/V/VerbatimBaseTypeAttribute.cs", "csharp",
+            """
+            using Foo.Bar;
+
+            namespace V
+            {
+                public class VerbatimBaseTypeAttribute : BaseAttr
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/V/VerbatimBaseConsumer.cs", "csharp",
+            """
+            namespace V
+            {
+                [VerbatimBaseType]
+                public class VerbatimBaseConsumer
+                {
+                }
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        using (var defnCmd = _db.Connection.CreateCommand())
+        {
+            // Verify the verbatim class declaration is persisted with its canonical name.
+            // 宣言側 verbatim が canonical 名で永続化されていることを確認。
+            defnCmd.CommandText = @"
+                SELECT s.name
+                FROM symbols s
+                JOIN files f ON f.id = s.file_id
+                WHERE f.path = 'src/V/VerbatimBase.cs' AND s.kind = 'class'";
+            var defnName = defnCmd.ExecuteScalar() as string;
+            Assert.Equal("BaseAttr", defnName);
+        }
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.is_metadata_target
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.path = 'src/V/VerbatimBaseTypeAttribute.cs' AND s.kind = 'class' AND s.name = 'VerbatimBaseTypeAttribute'";
+        var flag = cmd.ExecuteScalar();
+        Assert.Equal(1L, Convert.ToInt64(flag));
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+        Assert.Contains(dependencies, d => d.SourcePath == "src/V/VerbatimBaseConsumer.cs" && d.TargetPath == "src/V/VerbatimBaseTypeAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverHandlesGlobalQualifiedVerbatimBase()
+    {
+        // issue #435 codex review iter 7: the consumer writes its base as
+        // `global::@Foo.@Bar.BaseAttr`. iter 6's `StripCSharpVerbatimPrefixes` only handled
+        // `.` boundaries, so after splitting into segments the first segment
+        // `global::@Foo` kept its `@`, the later `global::` trim produced
+        // `@Foo.Bar.BaseAttr`, and the qualified-index lookup missed the canonical key
+        // `Foo.Bar.BaseAttr`. iter 7 teaches the helper about the `::` boundary.
+        // issue #435 codex review iter 7: consumer が基底を `global::@Foo.@Bar.BaseAttr`
+        // と書くケース。iter 6 の `StripCSharpVerbatimPrefixes` は `.` 境界しか扱わず、
+        // 最初のセグメント `global::@Foo` の `@` が残り、後段の `global::` 剥がしを経て
+        // `@Foo.Bar.BaseAttr` になって canonical なキー `Foo.Bar.BaseAttr` と一致しなかった。
+        // iter 7 で helper が `::` 境界も処理するようになった。
+        InsertIndexedFile("src/Foo/Bar/BaseAttr.cs", "csharp",
+            """
+            using System;
+
+            namespace Foo.Bar
+            {
+                public class BaseAttr : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/Q/QualifiedVerbatimNamespaceAttribute.cs", "csharp",
+            """
+            namespace Q
+            {
+                public class QualifiedVerbatimNamespaceAttribute : global::@Foo.@Bar.BaseAttr
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/Q/QualifiedVerbatimConsumer.cs", "csharp",
+            """
+            namespace Q
+            {
+                [QualifiedVerbatimNamespace]
+                public class QualifiedVerbatimConsumer
+                {
+                }
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.is_metadata_target
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.path = 'src/Q/QualifiedVerbatimNamespaceAttribute.cs' AND s.kind = 'class' AND s.name = 'QualifiedVerbatimNamespaceAttribute'";
+        var flag = cmd.ExecuteScalar();
+        Assert.Equal(1L, Convert.ToInt64(flag));
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+        Assert.Contains(dependencies, d => d.SourcePath == "src/Q/QualifiedVerbatimConsumer.cs" && d.TargetPath == "src/Q/QualifiedVerbatimNamespaceAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverHandlesAliasQualifiedBase()
+    {
+        // issue #435 codex review iter 8: `using Alias = A;` followed by
+        // `class FooAttribute : Alias.MetaBase` where `A.MetaBase : Attribute`.
+        // Before the fix, the resolver entered the qualified branch (the base
+        // contains `.`), looked up `Alias.MetaBase` in the qualified index —
+        // which stores the real FQN `A.MetaBase` — found nothing, and fell
+        // through to the BCL `Attribute`-suffix heuristic. `head = "MetaBase"`
+        // does not end with `Attribute`, so the resolver returned false and
+        // the metadata edge from `[Foo]` consumers was silently dropped even
+        // though `MetaBase` is a real in-repo attribute.
+        // issue #435 codex review iter 8: `using Alias = A;` の下で
+        // `class FooAttribute : Alias.MetaBase` のパターン。修正前は resolver が
+        // qualified 分岐に入り、qualified 索引を `Alias.MetaBase` で引いて miss し、
+        // BCL サフィックス規約にフォールバックしたが `MetaBase` は `Attribute` で
+        // 終わらないため false を返し、`[Foo]` consumer の metadata edge が黙って
+        // 落ちていた。
+        InsertIndexedFile("src/A/MetaBase.cs", "csharp",
+            """
+            namespace A
+            {
+                public class MetaBase : System.Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/B/FooAttribute.cs", "csharp",
+            """
+            using Alias = A;
+            namespace B
+            {
+                public class FooAttribute : Alias.MetaBase
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/B/Svc.cs", "csharp",
+            """
+            namespace B
+            {
+                [Foo]
+                public class Svc
+                {
+                }
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.is_metadata_target
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.path = 'src/B/FooAttribute.cs' AND s.kind = 'class' AND s.name = 'FooAttribute'";
+        var flag = cmd.ExecuteScalar();
+        Assert.Equal(1L, Convert.ToInt64(flag));
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+        Assert.Contains(dependencies, d => d.SourcePath == "src/B/Svc.cs" && d.TargetPath == "src/B/FooAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverHandlesAliasNamespacePointingAtSystem()
+    {
+        // issue #435 codex review iter 8: `using Sys = System;` followed by
+        // `class Foo : Sys.Attribute`. After alias expansion the base is
+        // `System.Attribute`, which must trigger the direct-attribute rule
+        // rather than fall through to the qualified-index lookup (which
+        // would miss `System.Attribute` since System is external to the repo).
+        // issue #435 codex review iter 8: `using Sys = System;` + `class Foo :
+        // Sys.Attribute` は alias 展開後に `System.Attribute` となり、修飾索引を
+        // 引く前に直接 Attribute 派生ルールで拾わなければならない。
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            using Sys = System;
+            namespace Svc
+            {
+                public class FooAttribute : Sys.Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/Usage.cs", "csharp",
+            """
+            namespace Svc
+            {
+                [Foo]
+                public class Usage
+                {
+                }
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.is_metadata_target
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.path = 'src/Svc.cs' AND s.kind = 'class' AND s.name = 'FooAttribute'";
+        var flag = cmd.ExecuteScalar();
+        Assert.Equal(1L, Convert.ToInt64(flag));
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+        Assert.Contains(dependencies, d => d.SourcePath == "src/Usage.cs" && d.TargetPath == "src/Svc.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverHandlesAliasColonColonQualifiedBase()
+    {
+        // issue #435 codex review iter 9: C# allows both `Alias.X` (member access)
+        // and `Alias::X` (qualified-alias-member, §7.8) for a using alias that
+        // names a namespace. Iter 8 only taught the qualified branch to split on
+        // `.`, so `class FooAttribute : Alias::MetaBase` under `using Alias = A;`
+        // skipped the alias expansion entirely (the helper's IndexOf('.') returned
+        // -1 and bailed), fell through to the BCL suffix heuristic, and dropped
+        // the `[Foo] -> FooAttribute` metadata edge even though `A.MetaBase :
+        // Attribute` lives in the repo.
+        // issue #435 codex review iter 9: C# では using alias が名前空間を指す場合、
+        // `Alias.X` と `Alias::X` の両方が合法。iter 8 は `.` 区切りしか扱わなかった
+        // ため `using Alias = A;` 配下の `class FooAttribute : Alias::MetaBase` は
+        // alias 展開に入らず（helper の IndexOf('.') が -1 で即 return）、BCL サフィ
+        // ックス規約に落ちて `[Foo] -> FooAttribute` edge が落ちていた。
+        InsertIndexedFile("src/A/MetaBase.cs", "csharp",
+            """
+            namespace A
+            {
+                public class MetaBase : System.Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/B/FooAttribute.cs", "csharp",
+            """
+            using Alias = A;
+            namespace B
+            {
+                public class FooAttribute : Alias::MetaBase
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/B/Svc.cs", "csharp",
+            """
+            namespace B
+            {
+                [Foo]
+                public class Svc
+                {
+                }
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.is_metadata_target
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.path = 'src/B/FooAttribute.cs' AND s.kind = 'class' AND s.name = 'FooAttribute'";
+        var flag = cmd.ExecuteScalar();
+        Assert.Equal(1L, Convert.ToInt64(flag));
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+        Assert.Contains(dependencies, d => d.SourcePath == "src/B/Svc.cs" && d.TargetPath == "src/B/FooAttribute.cs");
+    }
+
+    [Fact]
+    public void ResolveCSharpMetadataTargets_DoesNotMistakeGenericConstraintForBaseList()
+    {
+        // issue #435 codex review iter 1: `class Foo<T> where T : Attribute {}` has no
+        // base list — only a generic constraint. Before the fix, FindBaseListColon
+        // returned the first top-level `:` even when it was the `where` clause's
+        // `T : Attribute`, causing ParseCSharpBaseIdentifiers to read `Attribute` as a
+        // base and wrongly promote the class to `is_metadata_target = 1`.
+        // issue #435 codex review iter 1: `class Foo<T> where T : Attribute {}` は base
+        // list を持たず、generic constraint だけ。修正前は FindBaseListColon が
+        // `where T :` の `:` を採用し、`Attribute` を基底と解釈して target 化していた。
+        InsertIndexedFile("src/NotAnAttributeClass.cs", "csharp",
+            """
+            using System;
+
+            public class NotAnAttributeClass<T> where T : Attribute
+            {
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.is_metadata_target
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.path = 'src/NotAnAttributeClass.cs' AND s.kind = 'class' AND s.name = 'NotAnAttributeClass'";
+        var flag = cmd.ExecuteScalar();
+        Assert.Equal(0L, Convert.ToInt64(flag));
+    }
+
+    [Fact]
+    public void ResolveCSharpMetadataTargets_RespectsBaseListBeforeGenericConstraint()
+    {
+        // Companion to the `where`-only test: a class with both a base list and a
+        // generic constraint (`: BaseAttr where T : IDisposable`) must still pick up
+        // the base list and propagate metadata-target status through the fixed-point
+        // iteration, not stop at the `where` clause before reading the actual base.
+        // `where` only テストの対、base list と generic constraint を両方持つ宣言では
+        // base list を正しく拾って transitive 伝播させる必要がある。
+        InsertIndexedFile("src/BaseAttr.cs", "csharp",
+            """
+            using System;
+
+            public abstract class BaseAttr : Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/GenericAttr.cs", "csharp",
+            """
+            using System;
+
+            public sealed class GenericAttr<T> : BaseAttr where T : IDisposable
+            {
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.is_metadata_target
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.path = 'src/GenericAttr.cs' AND s.kind = 'class' AND s.name = 'GenericAttr'";
+        var flag = cmd.ExecuteScalar();
+        Assert.Equal(1L, Convert.ToInt64(flag));
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetReaderFallsBackToNameSuffixWhenColumnMissing()
+    {
+        // issue #435 codex review iter 1: reader branch (3) — when the entire
+        // `is_metadata_target` column is absent (truly ancient legacy DB that the
+        // current binary is opening read-only), the reader must degrade to the
+        // `name LIKE '%Attribute'` fallback. Pre-fix, branch (2) only required the
+        // `signature` column, so a column-missing DB still ran the signature
+        // heuristic — contradicting the documented 3-way branch.
+        // issue #435 codex review iter 1: reader branch (3) — `is_metadata_target` 列
+        // 自体が無い古い legacy DB では命名規約のみに縮退するべき。修正前は branch (2)
+        // が `signature` 列の有無だけで判定され、column 欠落 DB でも signature
+        // ヒューリスティックに落ちて 3 way 分岐のドキュメントと食い違っていた。
+        InsertIndexedFile("src/RealFooAttribute.cs", "csharp",
+            """
+            using System;
+
+            [AttributeUsage(AttributeTargets.Class)]
+            public sealed class FooAttribute : Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/ImpostorFooAttribute.cs", "csharp",
+            """
+            public class FooAttribute : BaseService
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [Foo]
+            public class Svc
+            {
+            }
+            """);
+
+        // Drop the `is_metadata_target` column to simulate a read-only legacy DB that
+        // the current binary cannot in-place migrate. SQLite supports DROP COLUMN
+        // since 3.35 (we target 3.39+ via Microsoft.Data.Sqlite).
+        // `is_metadata_target` 列を落として、in-place 移行できない古い read-only 相当の
+        // DB を模擬する。DROP COLUMN は SQLite 3.35 以降でサポート。
+        using (var drop = _db.Connection.CreateCommand())
+        {
+            drop.CommandText = "ALTER TABLE symbols DROP COLUMN is_metadata_target";
+            drop.ExecuteNonQuery();
+        }
+
+        var legacyReader = new DbReader(_db.Connection, isReadOnly: true);
+        var dependencies = legacyReader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        // Both FooAttribute files match `name LIKE '%Attribute'`, so without
+        // signature-shape disambiguation the ambiguity suppresses the deps edge.
+        // 命名規約のみでは 2 つの同名 FooAttribute が候補になり、曖昧さでエッジ抑制。
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/RealFooAttribute.cs");
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/ImpostorFooAttribute.cs");
     }
 
     [Fact]
@@ -4235,6 +6475,153 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchReferences_ExactCSharpUsingStaticFilter_PaginatesPastSuppressedRows()
+    {
+        InsertIndexedFile("src/Defs.cs", "csharp",
+            """
+            namespace Probe;
+
+            public enum Color
+            {
+                Red,
+                Blue
+            }
+            """);
+        InsertIndexedFile("src/Use.cs", "csharp",
+            """
+            using static Probe.Color;
+
+            namespace Probe;
+
+            class Demo
+            {
+                object? Match(object value)
+                {
+                    return value is Red ? value : null;
+                }
+            }
+            """);
+
+        const int suppressedReferenceCount = 65_537;
+        const int callReferenceLine = suppressedReferenceCount + 10;
+
+        using (var updateFileCmd = _db.Connection.CreateCommand())
+        {
+            updateFileCmd.CommandText = "UPDATE files SET lines = @lines WHERE path = 'src/Use.cs'";
+            updateFileCmd.Parameters.AddWithValue("@lines", callReferenceLine + 5);
+            updateFileCmd.ExecuteNonQuery();
+        }
+
+        long useFileId;
+        using (var fileIdCmd = _db.Connection.CreateCommand())
+        {
+            fileIdCmd.CommandText = "SELECT id FROM files WHERE path = 'src/Use.cs'";
+            useFileId = (long)fileIdCmd.ExecuteScalar()!;
+        }
+
+        int suppressedReferenceColumn;
+        string suppressedReferenceContext;
+        using (var templateCmd = _db.Connection.CreateCommand())
+        {
+            templateCmd.CommandText = """
+                SELECT r.column_number, r.context
+                FROM symbol_references r
+                JOIN files f ON r.file_id = f.id
+                WHERE f.path = 'src/Use.cs'
+                  AND r.symbol_name = 'Red'
+                  AND r.reference_kind = 'type_reference'
+                LIMIT 1
+                """;
+            using var templateReader = templateCmd.ExecuteReader();
+            Assert.True(templateReader.Read());
+            suppressedReferenceColumn = templateReader.GetInt32(0);
+            suppressedReferenceContext = templateReader.GetString(1);
+        }
+
+        var syntheticReferences = new List<ReferenceRecord>(suppressedReferenceCount + 1);
+        for (int line = 10; line < callReferenceLine; line++)
+        {
+            syntheticReferences.Add(new ReferenceRecord
+            {
+                FileId = useFileId,
+                SymbolName = "Red",
+                ReferenceKind = "type_reference",
+                Line = line,
+                Column = suppressedReferenceColumn,
+                Context = suppressedReferenceContext,
+                ContainerKind = "function",
+                ContainerName = "Match",
+            });
+        }
+
+        syntheticReferences.Add(new ReferenceRecord
+        {
+            FileId = useFileId,
+            SymbolName = "Red",
+            ReferenceKind = "call",
+            Line = callReferenceLine,
+            Column = 9,
+            Context = "        Red();",
+            ContainerKind = "function",
+            ContainerName = "Match",
+        });
+        _writer.InsertReferences(syntheticReferences);
+
+        var result = Assert.Single(_reader.SearchReferences("Red", limit: 1, lang: "csharp", exact: true, pathPatterns: ["src/Use.cs"]));
+        Assert.Equal("call", result.ReferenceKind);
+        Assert.Equal(callReferenceLine, result.Line);
+        Assert.Equal(1, _reader.CountSearchReferences("Red", limit: 1, lang: "csharp", exact: true, pathPatterns: ["src/Use.cs"]));
+    }
+
+    [Fact]
+    public void SearchReferences_ExactSameLineResults_AreOrderedByColumn()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reference_order.py",
+            Lang = "python",
+            Size = 32,
+            Lines = 10,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 10,
+                Content = "def outer():\n    pass\n",
+            }
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Target",
+                ReferenceKind = "call",
+                Line = 5,
+                Column = 20,
+                Context = "target_late() target_early()",
+            },
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Target",
+                ReferenceKind = "call",
+                Line = 5,
+                Column = 5,
+                Context = "target_early() target_late()",
+            },
+        ]);
+
+        var results = _reader.SearchReferences("Target", limit: 2, lang: "python", exact: true, pathPatterns: ["src/reference_order.py"]);
+        Assert.Collection(results,
+            first => Assert.Equal(5, first.Column),
+            second => Assert.Equal(20, second.Column));
+    }
+
+    [Fact]
     public void GraphQueries_DefaultGraphQueriesKeepSubscribeRowsVisible()
     {
         InsertIndexedFile("src/event_publisher.cs", "csharp",
@@ -4998,8 +7385,8 @@ public class DbReaderTests : IDisposable
 
         Assert.Equal("file_dependency_hints", analysis.ImpactMode);
         var edge = Assert.Single(analysis.FileImpacts);
-        Assert.Equal(3, edge.ReferenceCount);
-        Assert.Equal("ExecuteFolderDiffAsync", edge.Symbols);
+        Assert.Equal(4, edge.ReferenceCount);
+        Assert.Equal("ExecuteFolderDiffAsync,FolderDiffService", edge.Symbols);
     }
 
     [Fact]
@@ -5100,6 +7487,63 @@ public class DbReaderTests : IDisposable
         Assert.Equal(1, status.Languages["python"]);
         Assert.Equal(1, status.Languages["javascript"]);
         Assert.Equal(1, status.Languages["markdown"]);
+    }
+
+    [Fact]
+    public void GetStatus_ExposesCSharpMetadataTargetReadyForWorkspaceWithoutCSharpFiles()
+    {
+        // #435 codex review iter 3: README / CLAUDE.md advertise `csharp_metadata_target_ready`
+        // on `status --json`. Before iter 3, `StatusResult` had no such property, so the JSON
+        // silently returned `null` and the contract was violated. A workspace with NO C# files
+        // must still report the flag as `true` because no edge is exposed to degraded fallback.
+        // #435 codex review iter 3: C# ファイルが 0 の workspace では契約上 ready=true を返す。
+        var status = _reader.GetStatus();
+
+        Assert.True(status.CSharpMetadataTargetReady);
+    }
+
+    [Fact]
+    public void GetStatus_ExposesCSharpMetadataTargetReadyFalseWhenContractStampMissing()
+    {
+        // #435 codex review iter 3: a workspace with C# files whose DB is missing the
+        // `metadata_target_version_csharp` stamp must surface as `csharp_metadata_target_ready=false`
+        // so `status --json` and the human `WARN` line can tell AI clients that `deps` / `impact`
+        // metadata-attribute edges are running on the legacy `signature LIKE '%: %'` heuristic
+        // instead of the authoritative persisted column. Before the iter-3 fix the flag never
+        // flowed into `StatusResult` at all, so a degraded DB looked healthy in both paths.
+        // #435 codex review iter 3: C# ファイルがあり、かつ stamp 欠落 / ズレで authoritative
+        // column が信頼できない状態では false を返して AI クライアントに縮退を伝える。
+        InsertIndexedFile("src/Foo.cs", "csharp", "public class Foo { }\n");
+        ClearMetaStamp(DbContext.GetMetadataTargetVersionMetaKey("csharp"));
+        var freshReader = new DbReader(_db.Connection);
+
+        var status = freshReader.GetStatus();
+
+        Assert.False(status.CSharpMetadataTargetReady);
+    }
+
+    [Fact]
+    public void GetStatus_ExposesCSharpMetadataTargetReadyTrueWhenContractStampCurrent()
+    {
+        // Happy path: C# files are indexed and the current-version stamp is present, so the
+        // reader should report the authoritative column is trustworthy. Pins the positive side
+        // of the flag to prevent future regressions that would keep the JSON always false.
+        // C# ファイル + 現行契約 stamp が揃っているときは true を返すという正常系の pin。
+        InsertIndexedFile("src/Bar.cs", "csharp", "public class Bar { }\n");
+        _writer.MarkMetadataTargetReady("csharp");
+        var freshReader = new DbReader(_db.Connection);
+
+        var status = freshReader.GetStatus();
+
+        Assert.True(status.CSharpMetadataTargetReady);
+    }
+
+    private void ClearMetaStamp(string key)
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";
+        cmd.Parameters.AddWithValue("@key", key);
+        cmd.ExecuteNonQuery();
     }
 
     [Fact]
@@ -6843,6 +9287,123 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetUnusedSymbols_CSharpEnumMembersAreIncludedWhenUnreferenced()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/unused_enum_members_fixture.cs",
+            Lang = "csharp",
+            Size = 180,
+            Lines = 8,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "Color",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 4,
+                Signature = "public enum Color",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "Red",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "Red,",
+                ContainerKind = "enum",
+                ContainerName = "Color",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "Blue",
+                Line = 4,
+                StartLine = 4,
+                EndLine = 4,
+                Signature = "Blue",
+                ContainerKind = "enum",
+                ContainerName = "Color",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "TrulyUnused",
+                Line = 6,
+                StartLine = 6,
+                EndLine = 8,
+                Signature = "public enum TrulyUnused",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "Green",
+                Line = 8,
+                StartLine = 8,
+                EndLine = 8,
+                Signature = "Green",
+                ContainerKind = "enum",
+                ContainerName = "TrulyUnused",
+            },
+        ]);
+        _writer.InsertReferences(
+        [
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Color",
+                ReferenceKind = "type_reference",
+                Line = 10,
+                Column = 12,
+                Context = "public Color Shade => Color.Red;",
+            },
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Red",
+                ReferenceKind = "call",
+                Line = 10,
+                Column = 30,
+                Context = "public Color Shade => Color.Red;",
+            },
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Blue",
+                ReferenceKind = "call",
+                Line = 11,
+                Column = 30,
+                Context = "public Color Next => Color.Blue;",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "enum", lang: "csharp",
+            pathPatterns: ["unused_enum_members_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+        var count = _reader.CountUnusedSymbols(kind: "enum", lang: "csharp",
+            pathPatterns: ["unused_enum_members_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        Assert.Contains(unused, symbol => symbol.Name == "TrulyUnused");
+        Assert.Contains(unused, symbol => symbol.Name == "Green");
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "Color");
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "Red");
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "Blue");
+        Assert.Equal(2, count.Count);
+        Assert.Equal(1, count.FileCount);
+    }
+
+    [Fact]
     public void GetUnusedSymbols_IgnoreAttributes_DoNotClassifyAsSuspect()
     {
         var fileId = _writer.UpsertFile(new FileRecord
@@ -7759,5 +10320,117 @@ public class DbReaderTests : IDisposable
 
         var oldSummary = _reader.CountDefinitionsTotal("countdef_only_old", since: since);
         Assert.Equal(0, oldSummary.Count);
+    }
+
+    [Fact]
+    public void EndToEnd_BomBearingFile_StripLineLeadingBomPreserveMidLineZwnbsp()
+    {
+        // End-to-end #183 vertical: real bytes on disk → FileIndexer.BuildRecord →
+        // ChunkSplitter.Split → SymbolExtractor.Extract + ReferenceExtractor.Extract
+        // → DbWriter → DbReader.Search + GetExcerpt + GetDefinitions +
+        // SearchReferences. Pins five invariants at once so the CHANGELOG claim
+        // of covering `search` / `excerpt` / `definition` / `references` surfaces
+        // is actually tested:
+        //   1. Leading BOM at offset 0 is stripped: search + definition find the
+        //      line-1 symbol (`^\s*`-anchored indexing succeeds).
+        //   2. A BOM that immediately follows `\n` is stripped: definition of the
+        //      mid-file symbol is found, and excerpt of the affected line does
+        //      not emit a phantom U+FEFF.
+        //   3. Excerpt of lines never starts with a phantom U+FEFF.
+        //   4. Non-line-leading U+FEFF (intentional ZWNBSP inside a string literal)
+        //      is preserved verbatim — the narrowing iteration of the fix must not
+        //      silently corrupt intentional mid-line ZWNBSP use.
+        //   5. A call-site reference on a BOM-bearing source is captured end-to-end,
+        //      pinning the `references` / `callers` surface through the same
+        //      pipeline rather than claiming coverage via CHANGELOG alone.
+        // Closes #183.
+        // #183 のエンドツーエンド縦串テスト: 実バイトから FileIndexer.BuildRecord →
+        // ChunkSplitter.Split → SymbolExtractor.Extract + ReferenceExtractor.Extract
+        // → DbWriter → DbReader.Search + GetExcerpt + GetDefinitions +
+        // SearchReferences まで通す。CHANGELOG が主張する search / excerpt /
+        // definition / references の全サーフェスが実際にテストされていることを
+        // 保証する 5 つの不変条件を同時に pin する:
+        //   1. オフセット 0 の先頭 BOM は剥がす。1 行目のシンボルが search /
+        //      definition で見つかる (`^\s*` 固定パターンが成立する)。
+        //   2. `\n` の直後の BOM は剥がす。該当 mid-file シンボルが definition で
+        //      見つかり、excerpt に幽霊 U+FEFF を含めない。
+        //   3. excerpt の各行は幽霊 U+FEFF で始まらない。
+        //   4. 行頭以外の U+FEFF (文字列リテラル内の意図的 ZWNBSP) はそのまま保持する。
+        //   5. BOM 付きソース中の call-site 参照がエンドツーエンドで抽出され、
+        //      references / callers 経路を同じパイプラインで pin する。
+        // Closes #183.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_bom_e2e_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var source =
+                "\uFEFFnamespace BomE2E;\n" +
+                "\n" +
+                "\uFEFFpublic class PhraseHolder\n" +
+                "{\n" +
+                "    public const string Phrase = \"A\uFEFFB\";\n" +
+                "    public void Greet() { System.Console.WriteLine(Phrase); }\n" +
+                "}\n";
+            var bytes = Encoding.UTF8.GetBytes(source);
+            var filePath = Path.Combine(tempDir, "bom_e2e.cs");
+            File.WriteAllBytes(filePath, bytes);
+
+            var indexer = new FileIndexer(tempDir);
+            var (record, content, _, _) = indexer.BuildRecordWithRawBytes(filePath);
+
+            // Line-leading BOMs are stripped; mid-line ZWNBSP inside the string literal is preserved.
+            // 行頭 BOM は剥がし、文字列リテラル内の mid-line ZWNBSP は保持されている。
+            Assert.DoesNotContain('\uFEFF', new string(content.Split('\n')[0].ToCharArray()));
+            Assert.Contains("\"A\uFEFFB\"", content);
+
+            var fileId = _writer.UpsertFile(record);
+            _writer.InsertChunks(ChunkSplitter.Split(fileId, content));
+            var symbols = SymbolExtractor.Extract(fileId, "csharp", content);
+            _writer.InsertSymbols(symbols);
+            _writer.InsertReferences(ReferenceExtractor.Extract(fileId, "csharp", content, symbols));
+
+            // 1. search finds the line-1 namespace declaration.
+            // 1. search が 1 行目の namespace 宣言を発見する。
+            var searchResults = _reader.Search("BomE2E");
+            Assert.Contains(searchResults, r => r.Path == record.Path);
+
+            // 2. GetDefinitions resolves both the line-1 namespace and the mid-file class / method.
+            // 2. GetDefinitions が 1 行目の namespace と mid-file の class / method を解決する。
+            var nsDefs = _reader.GetDefinitions("BomE2E");
+            Assert.Contains(nsDefs, d => d.Path == record.Path && d.Name == "BomE2E" && d.Line == 1);
+            var classDefs = _reader.GetDefinitions("PhraseHolder");
+            Assert.Contains(classDefs, d => d.Path == record.Path && d.Name == "PhraseHolder" && d.Line == 3);
+            var methodDefs = _reader.GetDefinitions("Greet");
+            Assert.Contains(methodDefs, d => d.Path == record.Path && d.Name == "Greet");
+
+            // 3. Excerpt of lines 1-3 never has a phantom U+FEFF at line start.
+            // 3. 1〜3 行目の excerpt には、行頭の幽霊 U+FEFF が含まれない。
+            var headExcerpt = _reader.GetExcerpt(record.Path, startLine: 1, endLine: 3);
+            Assert.NotNull(headExcerpt);
+            foreach (var line in headExcerpt!.Content.Split('\n'))
+            {
+                if (line.Length == 0) continue;
+                Assert.NotEqual('\uFEFF', line[0]);
+            }
+            Assert.Contains("namespace BomE2E;", headExcerpt.Content);
+            Assert.Contains("public class PhraseHolder", headExcerpt.Content);
+
+            // 4. Excerpt of the const-string line still carries the intentional mid-line ZWNBSP.
+            // 4. const 文字列行の excerpt には、意図的な mid-line ZWNBSP がそのまま残る。
+            var literalExcerpt = _reader.GetExcerpt(record.Path, startLine: 5, endLine: 5);
+            Assert.NotNull(literalExcerpt);
+            Assert.Contains("\"A\uFEFFB\"", literalExcerpt!.Content);
+
+            // 5. SearchReferences finds the call-site reference on the BOM-bearing file,
+            //    pinning the references / callers surface end-to-end.
+            // 5. SearchReferences が BOM 付きファイルの call-site 参照を発見し、
+            //    references / callers 経路をエンドツーエンドで pin する。
+            var refs = _reader.SearchReferences("WriteLine", lang: "csharp");
+            Assert.Contains(refs, r => r.Path == record.Path);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
     }
 }

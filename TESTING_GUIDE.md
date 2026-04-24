@@ -23,7 +23,7 @@ Use the full suite by default. Use targeted filters only while iterating locally
 - Main test project: `tests/CodeIndex.Tests/CodeIndex.Tests.csproj`
 - Common direct test-only packages: `Microsoft.NET.Test.Sdk`, `xunit`, `xunit.runner.visualstudio`, `coverlet.collector`, `Microsoft.Data.Sqlite`
 - These test-only packages are separate from the production dependency rule in `src/CodeIndex`, which still allows only `Microsoft.Data.Sqlite` at runtime.
-- Test parallelism: disabled at the assembly level. The suite mutates process-global `Console.Out` / `Console.Error`, clears SQLite pools during cleanup, and opens many temporary databases, so serial execution is the stable default.
+- Test parallelism: enabled by default across independent test classes. Tests that touch process-global state such as SQLite pool resets, environment variables, or current-directory overrides must use an explicit non-parallel collection, and tests that swap `Console.Out` / `Console.Error` must lock on `TestConsoleLock.Gate`.
 
 ## Test Layout
 
@@ -81,7 +81,7 @@ Prefer the existing helper before writing new setup code.
 - `RunGit(...)` executes git without shell quoting issues.
 - `DeleteDirectory(path)` retries temp-project cleanup and normalizes attributes. To avoid process-global cross-test interference, it only clears SQLite pools as a Windows-specific retry fallback after a delete failure.
 - `DeleteFile(path)` retries standalone temp-DB cleanup and uses the same Windows-specific SQLite pool release fallback when pooled handles block deletion.
-- Tests that intentionally call `SqliteConnection.ClearAllPools()` are grouped into the non-parallel `SQLite pool sensitive` xUnit collection. Add new pool-resetting tests to that collection instead of letting them run in parallel with unrelated SQLite tests.
+- Tests that intentionally call `SqliteConnection.ClearAllPools()`, mutate process-global environment variables, or override the process current directory are grouped into the non-parallel `SQLite pool sensitive` xUnit collection. Add new tests with those hazards to that collection instead of letting them run in parallel with unrelated classes.
 
 Use these helpers when possible so test behavior stays consistent across files and operating systems.
 
@@ -91,7 +91,7 @@ Any test that swaps `Console.Out` or `Console.Error` must lock on `TestConsoleLo
 
 This prevents parallel console redirection from corrupting captured output and avoids flaky assertions in CLI and console UI tests.
 
-The assembly also disables xUnit test parallelization. Keep the console lock anyway: it documents intent locally and protects helpers if a subset of tests is ever re-enabled for parallel execution.
+Keep the console lock even when a test class already belongs to a non-parallel collection: it documents the process-global console hazard locally and protects shared helper code if the class is ever moved out of that collection later.
 
 ## Writing Tests
 
@@ -173,7 +173,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - メインのテストプロジェクト: `tests/CodeIndex.Tests/CodeIndex.Tests.csproj`
 - 主な直接参照の test-only package: `Microsoft.NET.Test.Sdk`、`xunit`、`xunit.runner.visualstudio`、`coverlet.collector`、`Microsoft.Data.Sqlite`
 - これらの test-only package は `src/CodeIndex` の本番依存ルールとは別であり、runtime 側は引き続き `Microsoft.Data.Sqlite` のみを許容する。
-- テスト並列実行: assembly 単位で無効。スイート全体で `Console.Out` / `Console.Error` の差し替え、SQLite pool のクリア、テンポラリ DB の大量 open/close を行うため、直列実行を既定の安定経路にしている。
+- テスト並列実行: 独立したテストクラス間ではデフォルトで有効です。SQLite pool の解放、環境変数の変更、カレントディレクトリの上書きのような process-global 状態を触るテストは、明示的な non-parallel collection に入れてください。`Console.Out` / `Console.Error` を差し替えるテストは `TestConsoleLock.Gate` で lock してください。
 
 ## テスト構成
 
@@ -231,7 +231,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `RunGit(...)` は shell の quoting 問題に依存せず git を実行します。
 - `DeleteDirectory(path)` は temp project cleanup のリトライと属性正規化を扱います。プロセス全体への干渉を避けるため、SQLite pool の解放は Windows で削除に失敗した場合のリトライ時だけに限定します。
 - `DeleteFile(path)` は standalone な temp DB cleanup をリトライし、pooled handle が削除を妨げる場合は同じ Windows 向け SQLite pool 解放フォールバックを使います。
-- `SqliteConnection.ClearAllPools()` を意図的に呼ぶテストは、xUnit の non-parallel collection `SQLite pool sensitive` にまとめます。新しい pool-reset 系テストも、この collection に入れて無関係な SQLite テストとの並列実行を避けてください。
+- `SqliteConnection.ClearAllPools()` を意図的に呼ぶテスト、process-global な環境変数を変更するテスト、プロセスのカレントディレクトリを上書きするテストは、xUnit の non-parallel collection `SQLite pool sensitive` にまとめます。これらのハザードを持つ新しいテストも、この collection に入れて無関係なクラスとの並列実行を避けてください。
 
 テスト挙動をファイル間・OS間で揃えるため、可能な限りこれらを使ってください。
 
@@ -241,7 +241,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 
 これにより、並列実行時のコンソール出力取り込みの衝突を防ぎ、CLI や console UI テストの flaky な失敗を避けられます。
 
-加えて、assembly 全体で xUnit の並列実行も無効化しています。それでも console lock は残してください。各テストの意図が明確になり、将来一部のテストだけ並列実行を戻す場合の保険にもなります。
+テストクラス自体が non-parallel collection に入っている場合でも、console lock は残してください。process-global な console ハザードを各テストの近くで明示でき、将来そのクラスやヘルパーが collection 外に移った場合の保険にもなります。
 
 ## テストの書き方
 

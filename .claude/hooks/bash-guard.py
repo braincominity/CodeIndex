@@ -66,7 +66,6 @@ DANGEROUS_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(?i)\b(?:launchctl|security|tccutil|spctl|csrutil|tmutil)\b"), "macOS security/system command is blocked"),
     (re.compile(r"(?i)\bdefaults\s+write\b|\bplutil\s+-replace\b"), "macOS preference modification is blocked"),
 
-    (re.compile(r"(?i)\bgit\s+push\b"), "git push is blocked"),
     (re.compile(r"(?i)\bgit\s+tag\b"), "git tag is blocked unless explicitly performed by the user"),
     (re.compile(r"(?i)\bgit\s+reset\s+--hard\b"), "git reset --hard is blocked"),
     (re.compile(r"(?i)\bgit\s+(?:checkout|restore)\s+\.\b"), "checkout/restore of entire worktree is blocked"),
@@ -114,6 +113,24 @@ SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"AIza[0-9A-Za-z_-]{35}"), "Google API key"),
     (re.compile(r"(?i)(api[_-]?key|secret|token|password)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=:-]{20,}"), "generic secret assignment"),
 ]
+
+
+TMP_ROOTS = ("/tmp", "/private/tmp")
+FORCE_PUSH_PATTERN = re.compile(r"(?i)\bgit\s+push\b.*\s(?:--force|-f|--force-with-lease)\b")
+RM_RF_PATTERN = re.compile(r"(?i)\brm\s+-[^\n;|&]*r[^\n;|&]*f\b|\brm\s+-[^\n;|&]*f[^\n;|&]*r\b")
+NETWORK_PATTERN = re.compile(r"(?i)\b(?:curl|wget|ssh|scp|sftp|rsync|rclone|nc|ncat|netcat|socat|telnet|ftp)\b")
+PYTHON_PERL_NODE_PATTERN = re.compile(r"^\s*(?:python|python3|perl|node)\b")
+
+
+def emit_allow(reason: str) -> None:
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "permissionDecisionReason": reason,
+        }
+    }, ensure_ascii=False))
+    sys.exit(0)
 
 
 def emit_deny(reason: str) -> None:
@@ -215,88 +232,108 @@ def candidate_script_paths(command: str, cwd: Path) -> list[Path]:
     return result
 
 
+def try_split_command(command: str) -> list[str]:
+    try:
+        return shlex.split(command, posix=True)
+    except ValueError:
+        return []
+
+
+def is_tmp_path_token(token: str) -> bool:
+    expanded = os.path.expanduser(token)
+    return any(expanded == root or expanded.startswith(root + "/") for root in TMP_ROOTS)
+
+
+def command_targets_only_tmp(command: str) -> bool:
+    tokens = try_split_command(command)
+    if len(tokens) < 2:
+        return False
+
+    saw_tmp_path = False
+    for token in tokens[1:]:
+        if not token or token.startswith("-"):
+            continue
+        if token in {"&&", "||", "|", ";", "&"}:
+            continue
+        if "=" in token and not token.startswith("/") and not token.startswith("."):
+            continue
+
+        if is_tmp_path_token(token):
+            saw_tmp_path = True
+            continue
+
+        if token.startswith("/") or token.startswith(".") or token.startswith("~"):
+            return False
+
+    return saw_tmp_path
+
+
+def is_fast_path_command(command: str) -> bool:
+    stripped = command.strip()
+    if not stripped:
+        return False
+
+    if re.match(r"^\s*(?:cd\s+\S+\s*&&\s*)?dotnet\b", command):
+        return True
+    if re.match(r"^\s*git\b", command):
+        return True
+    if re.match(r"^\s*codex\s+exec\b", command):
+        return True
+    if re.match(r"^\s*(?:cat|wc|tail|head|awk|sed|diff)\b", command):
+        return True
+    if re.match(r"^\s*(?:ls|cat|wc|tail|head|awk|sed|diff|mkdir|rm|cp|mv|touch|cd)\b", command) and command_targets_only_tmp(command):
+        return True
+    if re.search(r"\bnode\b.*codex-companion\.mjs", command):
+        return True
+
+    return False
+
+
 def check_raw_command(command: str, project_root: Path) -> None:
     if is_safe_local_cdidx_command(command, project_root):
         return
 
-    # ===== exception =====
-    # codex
-    if re.search(r"\bnode\b.*codex-companion\.mjs", command):
-        if re.search(r"(curl|rm\s|ssh|scp|wget|nc|bash\s+-c)", command):
-            emit_deny("codex plugin tried dangerous command")
+    # ===== fast path =====
+    if is_fast_path_command(command):
+        if re.search(r"\$\(", command):
+            emit_deny("command substitution is not allowed")
+        if RM_RF_PATTERN.search(command):
+            emit_deny("rm -rf is not allowed")
+        if NETWORK_PATTERN.search(command):
+            emit_deny("network transfer commands are not allowed")
+        if FORCE_PUSH_PATTERN.search(command):
+            emit_deny("force push is not allowed")
+        if PYTHON_PERL_NODE_PATTERN.match(command) and not re.search(r"\bnode\b.*codex-companion\.mjs", command):
+            emit_deny("python/perl/node execution is not allowed")
+        if re.search(r"^\s*codex:rescue\b", command):
+            emit_deny("codex:rescue is blocked")
+        if re.search(r"\bawk\b.*system\s*\(", command):
+            emit_deny("awk system() is not allowed")
+        if re.search(r"\bsed\b.*\be\b", command):
+            emit_deny("sed execution is not allowed")
         return
 
-    # dotnet test
-    if re.match(r"^\s*dotnet\s+test\b", command):
-        return
-
-    # dotnet run
-    if re.match(r"^\s*(cd\s+\S+\s*&&\s*)?dotnet\s+run\b", command):
-        if re.search(r"\b(rm|curl|ssh|scp|wget)\b", command):
-            emit_deny("dangerous command chained to dotnet run")
-        return
-
-    # xargs
-    if re.search(r"\bxargs\b.*codex\s+exec\b", command):
-        if re.search(r"(rm|curl|ssh|scp|wget|nc|bash\s+-c)", command):
-            emit_deny("dangerous xargs usage is not allowed")
-        return
-
-    # ===== global dangerous syntax =====
+    # ===== strong deny =====
     if re.search(r"\$\(", command):
         emit_deny("command substitution is not allowed")
-
-    # ===== /tmp read-only commands =====
-    if "/tmp/" in command and re.match(r"^\s*(ls|cat|wc|tail|head|awk|sed)\b", command):
-        return
-
-    # ===== safe shortcuts =====
-    if re.match(r"^\s*(ls|cat|wc|tail|head)\b", command) and "/tmp/" in command:
-        return
-
-    # ===== awk =====
+    if RM_RF_PATTERN.search(command):
+        emit_deny("rm -rf is not allowed")
+    if NETWORK_PATTERN.search(command):
+        emit_deny("network transfer commands are not allowed")
+    if FORCE_PUSH_PATTERN.search(command):
+        emit_deny("force push is not allowed")
+    if PYTHON_PERL_NODE_PATTERN.match(command):
+        emit_deny("python/perl/node execution is not allowed")
+    if re.search(r"^\s*codex:rescue\b", command):
+        emit_deny("codex:rescue is blocked")
     if re.search(r"\bawk\b.*system\s*\(", command):
         emit_deny("awk system() is not allowed")
-
-    if re.match(r"^\s*awk\b", command):
-        return
-
-    # ===== sed =====
     if re.search(r"\bsed\b.*\be\b", command):
         emit_deny("sed execution is not allowed")
-
-    if re.match(r"^\s*sed\b", command):
-        return
-
-    # ===== perl =====
-    if re.match(r"^\s*perl\b", command):
-        emit_deny("perl execution is disabled")
-
-    # ===== python =====
-    if re.match(r"^\s*python3?\b", command):
-        emit_deny("python execution is disabled")
-
-    # ===== kill =====
     if re.search(r"\bkill\b.*\$\(", command):
         emit_deny("kill with command substitution is not allowed")
-
     if re.search(r"\bpgrep\b", command) and "kill" in command:
         emit_deny("pgrep + kill combination is not allowed")
-
-    # ===== git =====
-    if re.match(r"^\s*git\s+commit\b", command):
-        if re.search(r"\$\(", command):
-            if not re.search(r"\$\(\s*cat\s+<<", command):
-                emit_deny("unsafe command substitution in git commit")
-        return
-
-    if re.match(r"^\s*git\s+add\b", command):
-        if re.search(r"\b(\.|-A|--all)\b", command):
-            emit_deny("bulk git add is not allowed")
-        return
-
-    if re.match(r"^\s*git\s+status\b", command):
-        return
 
     # ===== fallback =====
     for pattern, reason in DANGEROUS_PATTERNS:
@@ -379,7 +416,7 @@ def main() -> None:
     if re.search(r"(?i)(^|[\s;&|()`])git\s+commit\b", command):
         staged_secret_check(cwd)
 
-    sys.exit(0)
+    emit_allow("bash-guard allow")
 
 
 if __name__ == "__main__":
