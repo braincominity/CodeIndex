@@ -10174,6 +10174,90 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_SameLineSemicolonMembersClampRangeAtTopLevelSemicolon()
+    {
+        // Body-less C# members (`void M();`, `event E;`, `delegate D();`) on the same
+        // physical line as the enclosing type's closing `}` must clamp their range at
+        // the in-line `;`. Before this fix, FindCSharpBraceRange only short-circuited
+        // when the entire scan line ended with `;`, so a single-member interface
+        // `interface I { void M(); }` and the property->method order
+        // `interface J { int P { get; } void M(); }` both bled past the `}` into the
+        // next file line, attributing the next type's brace range to M and emitting
+        // wrong end_line / body_start_line / body_end_line. Closes #515.
+        // 同じ物理行に外側型の閉じ `}` がある body-less な C# member
+        // (`void M();`, `event E;`, `delegate D();`) は、行内 `;` の時点で範囲を確定
+        // させなければならない。修正前の FindCSharpBraceRange は scan 行末が `;` で
+        // 終わる場合だけ早期 return していたため、単一メンバー interface
+        // `interface I { void M(); }` や property->method 並びの
+        // `interface J { int P { get; } void M(); }` がいずれも `}` を越えてファイル
+        // 次行に食い込み、次の型の brace 範囲を M に帰属させて end_line /
+        // body_start_line / body_end_line を誤らせていた。Closes #515.
+        var content = string.Join(
+            "\n",
+            "public interface I { void M(); }",
+            "public interface J { int P { get; } void M(); }",
+            "public interface K { void M(); int P { get; } }",
+            "public class L { public int P { get; set; } public event System.EventHandler E; }");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var solitaryMethod = Assert.Single(symbols.Where(s =>
+            s.Kind == "function"
+            && s.Name == "M"
+            && s.ContainerKind == "interface"
+            && s.ContainerName == "I"));
+        Assert.Equal(1, solitaryMethod.Line);
+        Assert.Equal(1, solitaryMethod.StartLine);
+        Assert.Equal(1, solitaryMethod.EndLine);
+        Assert.Null(solitaryMethod.BodyStartLine);
+        Assert.Null(solitaryMethod.BodyEndLine);
+        Assert.Equal("void M();", solitaryMethod.Signature);
+
+        var afterPropertyMethod = Assert.Single(symbols.Where(s =>
+            s.Kind == "function"
+            && s.Name == "M"
+            && s.ContainerKind == "interface"
+            && s.ContainerName == "J"));
+        Assert.Equal(2, afterPropertyMethod.Line);
+        Assert.Equal(2, afterPropertyMethod.StartLine);
+        Assert.Equal(2, afterPropertyMethod.EndLine);
+        Assert.Null(afterPropertyMethod.BodyStartLine);
+        Assert.Null(afterPropertyMethod.BodyEndLine);
+        Assert.Equal("void M();", afterPropertyMethod.Signature);
+
+        // Method-then-property order keeps existing behavior: M still has no body
+        // metadata leak from the trailing property's brace range.
+        // method-then-property 並びでも、後続 property の brace 範囲が M の body
+        // メタデータに混入しないことを確認する。
+        var beforePropertyMethod = Assert.Single(symbols.Where(s =>
+            s.Kind == "function"
+            && s.Name == "M"
+            && s.ContainerKind == "interface"
+            && s.ContainerName == "K"));
+        Assert.Equal(3, beforePropertyMethod.Line);
+        Assert.Equal(3, beforePropertyMethod.StartLine);
+        Assert.Equal(3, beforePropertyMethod.EndLine);
+        Assert.Null(beforePropertyMethod.BodyStartLine);
+        Assert.Null(beforePropertyMethod.BodyEndLine);
+        Assert.Equal("void M();", beforePropertyMethod.Signature);
+
+        // Same fix also locks event range when a property accessor block precedes it
+        // on the same line (the original #473 case is regressed via the same path).
+        // 同じ修正は、property accessor block を先行させた event 並びでも range を
+        // 固定する (#473 元ケースも同じ経路で reg している)。
+        var trailingEvent = Assert.Single(symbols.Where(s =>
+            s.Kind == "event"
+            && s.Name == "E"
+            && s.ContainerKind == "class"
+            && s.ContainerName == "L"));
+        Assert.Equal(4, trailingEvent.Line);
+        Assert.Equal(4, trailingEvent.StartLine);
+        Assert.Equal(4, trailingEvent.EndLine);
+        Assert.Null(trailingEvent.BodyStartLine);
+        Assert.Null(trailingEvent.BodyEndLine);
+        Assert.Equal("public event System.EventHandler E;", trailingEvent.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_GenericSameLineMembersKeepLaterBraceSiblingStartColumns()
     {
         // After earlier generic same-line members collapse whitespace in the per-line
