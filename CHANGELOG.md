@@ -301,6 +301,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Language support summary in status output** — `status` now shows a "Support" line with total detected languages, languages with symbol extraction, and languages with graph queries (e.g. "46 detected, 32 with symbols, 31 with graph"). Graph line also shows the count prefix. Affected: `QueryCommandRunner.cs`.
 - **`--since` filter for `symbols` and `definition` commands** — Both `symbols` and `definition` now accept `--since <datetime>` to filter to recently modified files, matching the existing `files --since` pattern. MCP `symbols` tool also exposes the `since` parameter. Useful for AI agents tracking recent code changes. Affected: `DbSymbolReader.cs`, `QueryCommandRunner.cs`, `McpToolHandlers.cs`, `McpToolDefinitions.cs`.
 - **Consistent `--lang` validation hints on zero-result commands** — `references`, `callers`, and `callees` now show a `WriteLangHint` when `--lang` produces zero results, matching the pattern used by `symbols`, `unused`, and `hotspots`. Affected: `QueryCommandRunner.cs`.
+- **Regression coverage for C# `file delegate` extraction (#303)** — Added a dedicated `Extract_CSharp_FileDelegate_Issue303Repro` regression test that exercises the exact reproducer from #303 — `public delegate`, `file delegate`, plain `delegate`, and `unsafe delegate` declarations coexisting at namespace scope — and asserts each one is captured as a `delegate` symbol. The underlying fix already shipped via #355 / PR #412 (free modifier order on the C# delegate pattern, with `file` and `new` accepted anywhere in the modifier slot), so this commit only pins the #303 fixture so the `file delegate` regression cannot silently come back. Affected: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`. Closes #303.
 
 #### Fixed
 - **Shell completions and help text missing `validate`, `deps`, `unused`, `hotspots`** — Added `validate` and `deps` to the shell completions command list and added usage lines and command descriptions for `validate`, `deps`, `unused`, and `hotspots` in help output. Affected: `ConsoleUi.cs`.
@@ -1105,6 +1106,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### 変更
 - **リリースワークフローが `install.sh` を公開直後のリリースに対して end-to-end 検証** — `release.yml` の `create-release` ジョブで実際の `install.sh` を走らせ、`cdidx`・`libe_sqlite3.so`・`version.json` が揃うこと、`cdidx --version` がタグ（`v0.0.0` フォールバックではなく）と一致すること、`cdidx index` / `cdidx status` が `DllNotFoundException` を出さずに動くことを検証する。インストールパスのリグレッションが次の Cloud セッションではなくリリースジョブ自体を失敗させるようになった。対象: `.github/workflows/release.yml`。
+
+#### 追加
+- **C# `file delegate` の回帰テストを追加 (#303)** — `Extract_CSharp_FileDelegate_Issue303Repro` を追加し、#303 の再現 fixture (`public delegate`・`file delegate`・素の `delegate`・`unsafe delegate` が同じ namespace に並ぶ構成) が 4 種すべて `delegate` として抽出されることを固定した。実体の修正は #355 / PR #412 で既に反映済み（C# delegate 正規表現の修飾子スロットが順不同化され `file` / `new` を受理）なので、本コミットは #303 の fixture を再現テストとして残し、`file delegate` がふたたび黙って落ちないようにするためのもの。対象: `tests/CodeIndex.Tests/SymbolExtractorTests.cs`。Closes #303。
 
 #### 修正
 - **`install.sh` が SQLite ネイティブライブラリと `version.json` も配置するように修正** — リリース tarball には `cdidx`、`libe_sqlite3.so`（macOS では `.dylib`）、`version.json` が含まれているが、従来のインストーラはバイナリのみをコピーしていた。このためワンライナーでのクリーンインストール直後は `cdidx --version` が `v0.0.0` を返し、全コマンドが `DllNotFoundException: Unable to load shared library 'e_sqlite3'` でクラッシュしていた。インストーラが専用サブディレクトリに展開し、バイナリに加えて隣接ランタイム資産（`version.json`、`libe_sqlite3.so`、`libe_sqlite3.dylib`）も `INSTALL_DIR` にコピーするよう修正。対象: `install.sh`。
