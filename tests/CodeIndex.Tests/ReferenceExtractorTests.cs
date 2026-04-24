@@ -5697,13 +5697,14 @@ public class ReferenceExtractorTests
         // issue #942: derived table の後続にある top-level comma-separated source を落とさない。
         const string content = """
             SELECT * FROM (SELECT 1) x, accounts;
-            SELECT * FROM (SELECT 1) AS y, accounts;
+            SELECT * FROM (SELECT 1) x(c1), accounts;
+            SELECT * FROM (SELECT func(subfunc(a)) FROM t) AS y, accounts;
             """;
 
         var symbols = SymbolExtractor.Extract(1, "sql", content);
         var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
 
-        Assert.Equal(2, references.Count(r => r.SymbolName == "accounts" && r.ReferenceKind == "reference"));
+        Assert.Equal(3, references.Count(r => r.SymbolName == "accounts" && r.ReferenceKind == "reference"));
         Assert.DoesNotContain(references, r => r.SymbolName == "x" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "y" && r.ReferenceKind == "reference");
     }
