@@ -13,6 +13,7 @@ public class DbWriter
     private readonly SqliteConnection _conn;
     private const int BatchSize = 500;
     private int _transactionDepth;
+    internal SqliteConnection Connection => _conn;
 
     public DbWriter(SqliteConnection connection)
     {
