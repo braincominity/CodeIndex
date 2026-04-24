@@ -8578,6 +8578,53 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpDocCref_TreatsDelimitedDocCommentsAsDocComments()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                /**
+                 * <summary><see cref="Foo"/></summary>
+                 */
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols)
+            .Where(r => r.Line == 5 && r.ReferenceKind == "type_reference")
+            .ToList();
+
+        Assert.Single(references);
+        Assert.Equal("Foo", references[0].SymbolName);
+        Assert.Equal("Run", references[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatCodeAfterDelimitedDocCloseAsDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                /**
+                 * no cref here
+                 */ string text = "<see cref=\"Foo\"/>";
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 6);
+    }
+
+    [Fact]
     public void Extract_TypeReferenceSegmentColumnMatchesOriginalLine()
     {
         // Column positions must point to the start of each dot-segment in the original line

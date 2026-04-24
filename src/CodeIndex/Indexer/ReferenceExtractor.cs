@@ -749,6 +749,7 @@ public static class ReferenceExtractor
         HashSet<string>? sqlEstablishedTempObjectNames = null;
         string? sqlStatementPrefix = null;
         var sqlIdentifierScanState = default(SqlIdentifierScanState);
+        var csharpInDelimitedDocComment = false;
         if (language == "sql")
         {
             sqlEstablishedTempObjectNames = new HashSet<string>(StringComparer.Ordinal);
@@ -760,9 +761,16 @@ public static class ReferenceExtractor
             var lineNumber = i + 1;
             var originalLine = lines[i];
             var preparedLine = preparedLines[i];
+            var csharpDocCrefIndex = language == "csharp"
+                ? originalLine.IndexOf("cref=\"", StringComparison.OrdinalIgnoreCase)
+                : -1;
             if (language == "csharp"
-                && originalLine.IndexOf("cref=\"", StringComparison.OrdinalIgnoreCase) >= 0
-                && IsCSharpXmlDocCommentLine(originalLine))
+                && csharpDocCrefIndex >= 0
+                && IsCSharpXmlDocCommentLine(
+                    originalLine,
+                    csharpInDelimitedDocComment,
+                    csharpDocCrefIndex,
+                    out var nextCsharpDelimitedDocComment))
             {
                 var docContainer = FindDocumentedContainer(containerCandidates, lineNumber);
                 EmitCSharpDocCrefReferences(
@@ -773,6 +781,15 @@ public static class ReferenceExtractor
                     originalLine.Trim(),
                     lineNumber,
                     docContainer);
+                csharpInDelimitedDocComment = nextCsharpDelimitedDocComment;
+            }
+            else if (language == "csharp")
+            {
+                _ = IsCSharpXmlDocCommentLine(
+                    originalLine,
+                    csharpInDelimitedDocComment,
+                    -1,
+                    out csharpInDelimitedDocComment);
             }
             if (string.IsNullOrWhiteSpace(preparedLine))
                 continue;
@@ -4615,14 +4632,36 @@ public static class ReferenceExtractor
             : aliasTarget + qualifier[firstSegment.Length..];
     }
 
-    private static bool IsCSharpXmlDocCommentLine(string line)
+    private static bool IsCSharpXmlDocCommentLine(
+        string line,
+        bool inDelimitedDocComment,
+        int crefIndex,
+        out bool nextDelimitedDocComment)
     {
+        nextDelimitedDocComment = inDelimitedDocComment;
         if (string.IsNullOrWhiteSpace(line))
+            return inDelimitedDocComment;
+
+        var firstNonWhitespaceIndex = 0;
+        while (firstNonWhitespaceIndex < line.Length && char.IsWhiteSpace(line[firstNonWhitespaceIndex]))
+            firstNonWhitespaceIndex++;
+
+        if (inDelimitedDocComment)
+        {
+            var closeIndex = line.IndexOf("*/", StringComparison.Ordinal);
+            nextDelimitedDocComment = closeIndex < 0;
+            return crefIndex < 0 || closeIndex < 0 || crefIndex < closeIndex;
+        }
+
+        if (line.AsSpan(firstNonWhitespaceIndex).StartsWith("///", StringComparison.Ordinal))
+            return line.Length == firstNonWhitespaceIndex + 3 || line[firstNonWhitespaceIndex + 3] != '/';
+
+        if (!line.AsSpan(firstNonWhitespaceIndex).StartsWith("/**", StringComparison.Ordinal))
             return false;
 
-        var trimmed = line.TrimStart();
-        return trimmed.StartsWith("///", StringComparison.Ordinal)
-            && (trimmed.Length == 3 || trimmed[3] != '/');
+        var closeAfterOpenIndex = line.IndexOf("*/", firstNonWhitespaceIndex + 3, StringComparison.Ordinal);
+        nextDelimitedDocComment = closeAfterOpenIndex < 0;
+        return crefIndex < 0 || closeAfterOpenIndex < 0 || crefIndex < closeAfterOpenIndex;
     }
 
     private static bool HasActiveCSharpUsingStaticTarget(
