@@ -8427,7 +8427,8 @@ public class SymbolExtractorTests
         // ネストした Outer.Inner のコンテナ関係を固定。`Consume` は全体 1 本のみ（別コンテナ
         // 配下や container 未設定の phantom も弾く）かつ、その 1 本は `Inner` 配下に属する
         // `function` である、という二段のガードで brace-init phantom を検出する。
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Outer");
+        Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Outer"));
+        Assert.Single(symbols.Where(s => s.Name == "Inner"));
         Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Inner" && s.ContainerKind == "class" && s.ContainerName == "Outer"));
         Assert.Single(symbols.Where(s => s.Name == "Consume"));
         Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Consume" && s.ContainerKind == "class" && s.ContainerName == "Inner"));
