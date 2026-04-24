@@ -5153,6 +5153,9 @@ public static class SymbolExtractor
             if (JavaScriptTypeScriptNamedReExportRegex.IsMatch(clause))
                 return true;
 
+            if (HasPendingJavaScriptTypeScriptImportAttributes(clause))
+                continue;
+
             if (ContainsJavaScriptTypeScriptKeyword(clause, "from"))
                 break;
         }
@@ -5179,7 +5182,7 @@ public static class SymbolExtractor
             if (!match.Success)
                 continue;
 
-            if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, i, match.Index, sanitizedLine, includeBlockScope: true)
+            if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, i, match.Index, sanitizedLine, includeBlockScope: false)
                 || IsJavaScriptTypeScriptMatchInNamespaceScope(privateScopeColumns, i, match.Index, sanitizedLine))
             {
                 continue;

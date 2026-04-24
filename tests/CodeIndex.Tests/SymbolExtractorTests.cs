@@ -214,6 +214,27 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DetectsNamedReExportSurfaceSymbolsWhenImportAttributeBraceStartsOnNextLine()
+    {
+        var content = """
+            export { foo as bar } from './other' with
+            {
+              type: 'json'
+            };
+            export type { User } from './types' assert
+            {
+              type: 'json'
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./other");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./types");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "User");
+    }
+
+    [Fact]
     public void Extract_JavaScript_StringBraceDoesNotBreakFollowingContainerAssignment()
     {
         var content = """"
@@ -1027,6 +1048,31 @@ public class SymbolExtractorTests
         Assert.Equal(8, bar.EndLine);
         Assert.Equal(6, bar.BodyStartLine);
         Assert.Equal(8, bar.BodyEndLine);
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsConditionalCommonJsNamedExportAssignmentsInTopLevelBlocks()
+    {
+        var content = """
+            if (process.env.FEATURE) {
+              module.exports.enabled = function () {
+                return true;
+              };
+            }
+            if (process.env.FLAG) {
+              exports.flag = 1;
+            }
+            function setup() {
+              module.exports.hidden = function () {
+                return false;
+              };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "enabled");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "flag");
+        Assert.DoesNotContain(symbols, s => s.Name == "hidden");
     }
 
     [Fact]
