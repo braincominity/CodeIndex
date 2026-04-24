@@ -69,7 +69,7 @@ public static class IndexCommandRunner
             return CommandExitCodes.UsageError;
         }
 
-        if (DbPathResolver.UriRequestsReadOnly(dbPath))
+        if (!options.DryRun && DbPathResolver.UriRequestsReadOnly(dbPath))
         {
             return WriteCommandError(
                 options.Json,
@@ -1046,6 +1046,17 @@ public static class IndexCommandRunner
         var hotspotFamilyReadyAfter = hotspotFamilySignalAfter.Ready;
         var hotspotFamilyDegradedReasonAfter = hotspotFamilySignalAfter.DegradedReason;
 
+        var foldOnlyRemediation = BuildFoldOnlyReadinessRemediation(
+            graphTableAvailableAfter,
+            issuesTableAvailableAfter,
+            sqlGraphContractReadyAfter,
+            hotspotFamilyReadyAfter,
+            csharpSymbolNameReadyAfter,
+            foldReadyAfter,
+            foldReadyReasonAfter,
+            projectRoot,
+            resolvedDbPath);
+
         if (options.Json)
         {
             Console.WriteLine(JsonSerializer.Serialize(new
@@ -1075,6 +1086,10 @@ public static class IndexCommandRunner
                 // `--exact` will use the Unicode fold path or fall back to ASCII NOCASE.
                 // #86 codex: AI クライアントが --exact の経路を判断できるよう fold_ready を返す。
                 fold_ready = foldReadyAfter,
+                fold_ready_reason = foldReadyReasonAfter,
+                degraded_reason = foldOnlyRemediation?.DegradedReason,
+                recommended_action = foldOnlyRemediation?.RecommendedAction,
+                alternative_action = foldOnlyRemediation?.AlternativeAction,
                 errors = errorList.Count > 0 ? errorList : null,
                 warnings = warningList.Count > 0 ? warningList : null,
                 elapsed_ms = stopwatch.ElapsedMilliseconds,
@@ -1704,6 +1719,17 @@ public static class IndexCommandRunner
         var hotspotFamilyReadyAfter = hotspotFamilySignalAfter.Ready;
         var hotspotFamilyDegradedReasonAfter = hotspotFamilySignalAfter.DegradedReason;
 
+        var foldOnlyRemediation = BuildFoldOnlyReadinessRemediation(
+            graphTableAvailableAfter,
+            issuesTableAvailableAfter,
+            sqlGraphContractReadyAfter,
+            hotspotFamilyReadyAfter,
+            csharpSymbolNameReadyAfter,
+            foldReadyAfter,
+            foldReadyReasonAfter,
+            projectRoot,
+            resolvedDbPath);
+
         if (options.Json)
         {
             Console.WriteLine(JsonSerializer.Serialize(new
@@ -1733,6 +1759,10 @@ public static class IndexCommandRunner
                 // `--exact` will use the Unicode fold path or fall back to ASCII NOCASE.
                 // #86 codex: AI クライアントが --exact の経路を判断できるよう fold_ready を返す。
                 fold_ready = foldReadyAfter,
+                fold_ready_reason = foldReadyReasonAfter,
+                degraded_reason = foldOnlyRemediation?.DegradedReason,
+                recommended_action = foldOnlyRemediation?.RecommendedAction,
+                alternative_action = foldOnlyRemediation?.AlternativeAction,
                 errors = errorList.Count > 0 ? errorList : null,
                 warnings = warningList.Count > 0 ? warningList : null,
                 elapsed_ms = stopwatch.ElapsedMilliseconds,
@@ -1808,17 +1838,63 @@ public static class IndexCommandRunner
     private static string BuildFoldRebuildCommand(string projectRoot, string resolvedDbPath)
         => $"cdidx index {QuoteCommandArgument(projectRoot)} --db {QuoteCommandArgument(resolvedDbPath)} --rebuild";
 
+    private static FoldOnlyRemediation? BuildFoldOnlyReadinessRemediation(
+        bool graphTableAvailable,
+        bool issuesTableAvailable,
+        bool sqlGraphContractReady,
+        bool hotspotFamilyReady,
+        bool csharpSymbolNameReady,
+        bool foldReady,
+        string? foldReadyReason,
+        string projectRoot,
+        string resolvedDbPath)
+    {
+        if (!IsFoldOnlyReadinessDegraded(
+                graphTableAvailable,
+                issuesTableAvailable,
+                sqlGraphContractReady,
+                hotspotFamilyReady,
+                csharpSymbolNameReady,
+                foldReady))
+        {
+            return null;
+        }
+
+        return new FoldOnlyRemediation(
+            BuildFoldNotReadyExplanation(foldReadyReason),
+            BuildFoldBackfillCommand(resolvedDbPath),
+            BuildFoldRebuildCommand(projectRoot, resolvedDbPath));
+    }
+
+    private static bool IsFoldOnlyReadinessDegraded(
+        bool graphTableAvailable,
+        bool issuesTableAvailable,
+        bool sqlGraphContractReady,
+        bool hotspotFamilyReady,
+        bool csharpSymbolNameReady,
+        bool foldReady)
+        => !foldReady
+           && graphTableAvailable
+           && issuesTableAvailable
+           && sqlGraphContractReady
+           && hotspotFamilyReady
+           && csharpSymbolNameReady;
+
     private static string GetIndexReadinessWarning(bool graphTableAvailable, bool issuesTableAvailable, bool sqlGraphContractReady, bool hotspotFamilyReady, bool csharpSymbolNameReady, bool foldReady, string? foldReadyReason, string projectRoot, string resolvedDbPath)
     {
-        var foldOnlyDegraded = !foldReady
-            && graphTableAvailable
-            && issuesTableAvailable
-            && sqlGraphContractReady
-            && hotspotFamilyReady
-            && csharpSymbolNameReady;
-        if (foldOnlyDegraded)
+        var foldOnlyRemediation = BuildFoldOnlyReadinessRemediation(
+            graphTableAvailable,
+            issuesTableAvailable,
+            sqlGraphContractReady,
+            hotspotFamilyReady,
+            csharpSymbolNameReady,
+            foldReady,
+            foldReadyReason,
+            projectRoot,
+            resolvedDbPath);
+        if (foldOnlyRemediation != null)
         {
-            return $"Index completed with fold-only degraded readiness (fold_ready=false). {BuildFoldNotReadyExplanation(foldReadyReason)} Run `{BuildFoldBackfillCommand(resolvedDbPath)}` to restamp folded-name columns in place, or `{BuildFoldRebuildCommand(projectRoot, resolvedDbPath)}` for a full rebuild.";
+            return $"Index completed with fold-only degraded readiness (fold_ready=false). {foldOnlyRemediation.DegradedReason} Run `{foldOnlyRemediation.RecommendedAction}` to restamp folded-name columns in place, or `{foldOnlyRemediation.AlternativeAction}` for a full rebuild.";
         }
 
         var degradedParts = new List<string>();
@@ -1897,6 +1973,11 @@ public static class IndexCommandRunner
         {
         }
     }
+
+    private sealed record FoldOnlyRemediation(
+        string DegradedReason,
+        string RecommendedAction,
+        string AlternativeAction);
 }
 
 public sealed class IndexCommandOptions
