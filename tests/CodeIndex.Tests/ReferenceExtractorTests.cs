@@ -12377,6 +12377,32 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SqlExecDoubleQuotedSingleIdentifierContainingDot_IsCaptured()
+    {
+        // issue #722: `"sales.fn_Target"` is one quoted identifier whose dot is part of the
+        // identifier, not a schema separator. EXEC / EXECUTE must preserve and normalize it
+        // as one call target while ordinary single-quoted SQL strings remain masked.
+        // issue #722: `"sales.fn_Target"` は dot を含む 1 つの quoted identifier であり、
+        // schema 区切りではない。EXEC / EXECUTE は 1 つの呼び出し対象として保持・正規化し、
+        // 通常の単一引用符 SQL 文字列は引き続き無視する。
+        const string content = """
+            EXEC "sales.fn_Target";
+            EXECUTE "sales.fn_Target";
+            EXEC 'sales.fn_Target';
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRefs = references
+            .Where(r => r.SymbolName == "sales.fn_Target" && r.ReferenceKind == "call")
+            .ToList();
+        Assert.Equal(2, targetRefs.Count);
+        Assert.Contains(targetRefs, r => r.Line == 1 && r.Column == 7);
+        Assert.Contains(targetRefs, r => r.Line == 2 && r.Column == 10);
+    }
+
+    [Fact]
     public void Extract_SqlCallBacktickReservedWord_SurvivesQuoteStripping()
     {
         // A MySQL user may legitimately name a procedure after a reserved word by backtick-quoting
