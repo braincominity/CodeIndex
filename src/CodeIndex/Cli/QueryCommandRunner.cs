@@ -1544,12 +1544,14 @@ public static class QueryCommandRunner
                 ? (DateTime.UtcNow - status.IndexedAt.Value).TotalMinutes < 5 ? "fresh" : "stale"
                 : "unknown";
             var dirty = status.GitIsDirty == true ? ", dirty" : "";
-            var degraded = (!status.GraphTableAvailable
-                            || !status.IssuesTableAvailable
-                            || !status.SqlGraphContractReady
-                            || !status.HotspotFamilyReady
-                            || !status.CSharpSymbolNameReady
-                            || !status.CSharpMetadataTargetReady)
+            if (IsFoldOnlyReadinessDegraded(status))
+            {
+                status.DegradedReason = BuildFoldNotReadyExplanation(status.FoldReadyReason);
+                status.RecommendedAction = BuildFoldBackfillCommand(options.DbPath, options.DbPathExplicit);
+                status.AlternativeAction = BuildFoldRebuildRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit);
+            }
+
+            var degraded = IsStatusDegraded(status)
                 ? ", DEGRADED"
                 : "";
             status.Summary = $"{status.Files} files, {status.Symbols} symbols, {status.References} refs across {status.Languages.Count} languages ({string.Join(", ", topLangs)}); index {freshness}{dirty}{degraded}";
@@ -1614,7 +1616,18 @@ public static class QueryCommandRunner
                 // #86: tell the user when `--exact` is running on the ASCII NOCASE fallback.
                 // #86: --exact が ASCII NOCASE fallback で動いているときは明示する。
                 if (!status.FoldReady)
-                    Console.WriteLine("WARN    : --exact falls back to ASCII COLLATE NOCASE. Non-ASCII casing (e.g. Ä/ä) won't match. Run `cdidx backfill-fold` to upgrade without reparsing files, or `cdidx index . --rebuild` for a full rebuild.");
+                {
+                    if (IsFoldOnlyReadinessDegraded(status) && status.DegradedReason != null && status.RecommendedAction != null && status.AlternativeAction != null)
+                    {
+                        Console.WriteLine($"WARN    : {status.DegradedReason}");
+                        Console.WriteLine($"Hint    : run `{status.RecommendedAction}` to restamp folded-name columns in place.");
+                        Console.WriteLine($"Hint    : or run `{status.AlternativeAction}` for a full rebuild.");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"WARN    : {BuildFoldNotReadyWarning(status.FoldReadyReason, BuildFoldBackfillCommand(options.DbPath, options.DbPathExplicit), BuildFoldRebuildRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit))}");
+                    }
+                }
                 var totalLangs = FileIndexer.GetLanguageExtensions().Values.Distinct().Count();
                 var symbolLangs = SymbolExtractor.GetSupportedLanguages().Count;
                 Console.WriteLine($"Support : {totalLangs} detected, {symbolLangs} with symbols, {status.GraphSupportedLanguages?.Count ?? 0} with graph");
@@ -3182,6 +3195,44 @@ public static class QueryCommandRunner
            && !signal.HasMissingTable
            && signal.DegradedReason?.Contains("csharp_symbol_name_ready=false", StringComparison.OrdinalIgnoreCase) == true;
 
+    private static bool IsStatusDegraded(StatusResult status)
+        => !status.GraphTableAvailable
+           || !status.IssuesTableAvailable
+           || !status.SqlGraphContractReady
+           || !status.HotspotFamilyReady
+           || !status.CSharpSymbolNameReady
+           || !status.CSharpMetadataTargetReady
+           || !status.FoldReady;
+
+    private static bool IsFoldOnlyReadinessDegraded(StatusResult status)
+        => !status.FoldReady
+           && status.GraphTableAvailable
+           && status.IssuesTableAvailable
+           && status.SqlGraphContractReady
+           && status.HotspotFamilyReady
+           && status.CSharpSymbolNameReady
+           && status.CSharpMetadataTargetReady;
+
+    private static string BuildFoldNotReadyExplanation(string? foldReadyReason)
+        => foldReadyReason switch
+        {
+            "missing_fold_backfill" => "--exact falls back to ASCII COLLATE NOCASE because legacy rows without `name_folded` remain.",
+            "stale_fold_key_version" => "--exact falls back to ASCII COLLATE NOCASE because unchanged rows still carry an older fold-key version.",
+            "stale_fold_key_fingerprint" => "--exact falls back to ASCII COLLATE NOCASE because unchanged rows still carry folded keys generated under an older runtime fingerprint.",
+            _ => "--exact falls back to ASCII COLLATE NOCASE because some folded-name rows were not restamped under the current runtime."
+        };
+
+    private static string BuildFoldNotReadyWarning(string? foldReadyReason, string backfillCommand, string rebuildCommand)
+        => $"{BuildFoldNotReadyExplanation(foldReadyReason)} Run `{backfillCommand}` to restamp folded-name columns in place, or `{rebuildCommand}` for a full rebuild.";
+
+    private static string BuildFoldBackfillCommand(string dbPath, bool dbPathExplicit)
+    {
+        if (!dbPathExplicit)
+            return "cdidx backfill-fold";
+
+        return $"cdidx backfill-fold --db {QuoteCommandArgument(ResolveWritableDbPathOrPlaceholder(dbPath))}";
+    }
+
     private static string BuildCSharpCanonicalNameRepairCommand(DbReader reader, QueryCommandOptions options)
     {
         var status = reader.GetStatus();
@@ -3202,25 +3253,36 @@ public static class QueryCommandRunner
     private static string BuildSqlGraphContractRepairCommand(string? projectRoot, string dbPath, bool dbPathExplicit)
         => BuildReindexRepairCommand(projectRoot, dbPath, dbPathExplicit);
 
-    private static string BuildReindexRepairCommand(string? projectRoot, string dbPath, bool dbPathExplicit)
-    {
-        if (!dbPathExplicit)
-            return "cdidx index .";
+    private static string BuildFoldRebuildRepairCommand(string? projectRoot, string dbPath, bool dbPathExplicit)
+        => BuildReindexRepairCommand(projectRoot, dbPath, dbPathExplicit, rebuild: true);
 
-        var resolvedDbPath = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
-            ? dbPath
-            : Path.GetFullPath(dbPath);
+    private static string BuildReindexRepairCommand(string? projectRoot, string dbPath, bool dbPathExplicit, bool rebuild = false)
+    {
+        var rebuildSuffix = rebuild ? " --rebuild" : string.Empty;
+        if (!dbPathExplicit)
+            return $"cdidx index .{rebuildSuffix}";
+
+        var resolvedDbPath = ResolveWritableDbPathOrPlaceholder(dbPath);
         var targetProject = string.IsNullOrWhiteSpace(projectRoot)
             ? "<projectPath>"
             : QuoteCommandArgument(projectRoot);
-        return $"cdidx index {targetProject} --db {QuoteCommandArgument(resolvedDbPath)}";
+        return $"cdidx index {targetProject} --db {QuoteCommandArgument(resolvedDbPath)}{rebuildSuffix}";
     }
+
+    private static string ResolveWritableDbPathOrPlaceholder(string dbPath)
+        => DbPathResolver.TryResolveWritableMutationDbPath(dbPath, out var writableDbPath)
+            ? writableDbPath
+            : "<writable-db-path>";
 
     private static string QuoteCommandArgument(string value)
     {
-        var fullPath = value.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
-            ? value
-            : Path.GetFullPath(value);
+        if (value.Length >= 2 && value[0] == '<' && value[^1] == '>')
+            return value;
+
+        var fullPath = DbPathResolver.NormalizeDbPath(value);
+        if (!fullPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            fullPath = Path.GetFullPath(fullPath);
+
         return fullPath.IndexOfAny([' ', '\t', '"']) >= 0
             ? $"\"{fullPath.Replace("\"", "\\\"", StringComparison.Ordinal)}\""
             : fullPath;

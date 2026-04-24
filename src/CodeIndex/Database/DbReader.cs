@@ -304,6 +304,22 @@ public partial class DbReader
         return TryGetMetaString(conn, "fold_key_fingerprint");
     }
 
+    private string? ResolveFoldReadyReason()
+    {
+        if (_foldReady)
+            return null;
+
+        var storedVersion = ParseFoldVersion(_conn);
+        var storedFingerprint = ParseFoldFingerprint(_conn);
+        if (storedVersion < 0 || string.IsNullOrWhiteSpace(storedFingerprint))
+            return "missing_fold_backfill";
+        if (storedVersion != NameFold.Version)
+            return "stale_fold_key_version";
+        if (!string.Equals(storedFingerprint, NameFold.Fingerprint(), StringComparison.Ordinal))
+            return "stale_fold_key_fingerprint";
+        return "fold_rows_not_restamped";
+    }
+
     private HashSet<string> LoadIndexedHotspotFamilyLanguages()
     {
         var langs = new HashSet<string>(StringComparer.Ordinal);
@@ -1055,7 +1071,9 @@ public partial class DbReader
         exact
         &&
         (lang == null || string.Equals(lang, "csharp", StringComparison.Ordinal))
-        && (referenceKind == null || string.Equals(referenceKind, "type_reference", StringComparison.Ordinal));
+        && (referenceKind == null
+            || string.Equals(referenceKind, "type_reference", StringComparison.Ordinal)
+            || string.Equals(referenceKind, "call", StringComparison.Ordinal));
 
     private bool ShouldSuppressCSharpUsingStaticConstantPatternReference(ReferenceResult result)
     {
@@ -1087,7 +1105,6 @@ public partial class DbReader
     private bool ShouldSuppressCSharpUsingStaticConstantPatternReference(string path, string? lang, string symbolName, string referenceKind, int lineNumber, int columnNumber, string contextForFilter)
     {
         if (!string.Equals(lang, "csharp", StringComparison.Ordinal)
-            || !string.Equals(referenceKind, "type_reference", StringComparison.Ordinal)
             || string.IsNullOrWhiteSpace(symbolName)
             || string.IsNullOrWhiteSpace(contextForFilter)
             || symbolName.IndexOf('.') >= 0
@@ -1099,7 +1116,24 @@ public partial class DbReader
             return false;
         }
 
-        if (!TryBuildCSharpUsingStaticPatternContextWindow(path, lineNumber, contextForFilter, columnNumber, symbolName))
+        var patternContext = contextForFilter;
+        var patternColumn = columnNumber;
+        if (!TryBuildCSharpUsingStaticPatternContextWindow(
+                path,
+                lineNumber,
+                contextForFilter,
+                columnNumber,
+                symbolName,
+                out patternContext,
+                out patternColumn))
+        {
+            return false;
+        }
+
+        if (ShouldSuppressCSharpQualifiedConstantPatternReference(path, lineNumber, symbolName, patternContext, patternColumn))
+            return true;
+
+        if (!string.Equals(referenceKind, "type_reference", StringComparison.Ordinal))
             return false;
 
         var activeTargets = GetActiveCSharpUsingStaticTargets(path, lineNumber);
@@ -1119,6 +1153,24 @@ public partial class DbReader
         foreach (var target in activeTargets)
         {
             if (matchingContainers.Contains(target))
+                return true;
+        }
+
+        return false;
+    }
+
+    private bool ShouldSuppressCSharpQualifiedConstantPatternReference(string path, int lineNumber, string symbolName, string patternContext, int patternColumn)
+    {
+        if (!TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out var qualifier))
+            return false;
+
+        var matchingContainers = GetCSharpConstantPatternContainersByMemberName(symbolName);
+        if (matchingContainers.Count == 0)
+            return false;
+
+        foreach (var candidate in GetScopedCSharpQualifiedPatternQualifierCandidates(path, lineNumber, qualifier))
+        {
+            if (matchingContainers.Contains(candidate))
                 return true;
         }
 
@@ -2236,6 +2288,36 @@ public partial class DbReader
             || IsCSharpUsingStaticConstantTypeKeywordAnchor(context, ref cursor);
     }
 
+    private static bool TryExtractQualifiedCSharpPatternQualifier(string context, string symbolName, int columnNumber, out string qualifier)
+    {
+        qualifier = string.Empty;
+        if (string.IsNullOrWhiteSpace(context)
+            || string.IsNullOrWhiteSpace(symbolName)
+            || !TryFindCSharpReferenceTokenStart(context, symbolName, columnNumber, out var symbolColumn))
+        {
+            return false;
+        }
+
+        var headCursor = symbolColumn + symbolName.Length;
+        if (!SkipCSharpPatternHeadBackward(context, ref headCursor))
+            return false;
+
+        var fullHead = NormalizeDbCSharpQualifiedName(context[headCursor..(symbolColumn + symbolName.Length)]);
+        if (string.IsNullOrWhiteSpace(fullHead))
+            return false;
+
+        var lastDot = fullHead.LastIndexOf('.');
+        if (lastDot < 0)
+            return false;
+
+        var anchorCursor = headCursor;
+        if (!IsCSharpUsingStaticConstantPatternAnchor(context, ref anchorCursor))
+            return false;
+
+        qualifier = fullHead[..lastDot];
+        return !string.IsNullOrWhiteSpace(qualifier);
+    }
+
     private static bool IsCSharpUsingStaticConstantPatternAnchor(string text, ref int cursor)
     {
         cursor = SkipCSharpTriviaBackward(text, cursor);
@@ -2278,18 +2360,32 @@ public partial class DbReader
             || TryConsumeTrailingCSharpToken(text, ref cursor, "default");
     }
 
-    private bool TryBuildCSharpUsingStaticPatternContextWindow(string path, int lineNumber, string contextForFilter, int columnNumber, string symbolName)
+    private bool TryBuildCSharpUsingStaticPatternContextWindow(
+        string path,
+        int lineNumber,
+        string contextForFilter,
+        int columnNumber,
+        string symbolName,
+        out string patternContext,
+        out int patternColumn)
     {
-        var patternContext = contextForFilter;
-        var patternColumn = columnNumber;
+        patternContext = contextForFilter;
+        patternColumn = columnNumber;
         if (!_hasChunksTable
             || string.IsNullOrWhiteSpace(path)
-            || string.IsNullOrWhiteSpace(contextForFilter)
             || string.IsNullOrWhiteSpace(symbolName)
+            || string.IsNullOrWhiteSpace(contextForFilter)
             || lineNumber <= 1
             || columnNumber <= 0)
         {
-            return IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn);
+            return IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn)
+                || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _);
+        }
+
+        if (IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn)
+            || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _))
+        {
+            return true;
         }
 
         var maxLookback = lineNumber - 1;
@@ -2300,7 +2396,8 @@ public partial class DbReader
             if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap, startLine, lineNumber)
                 || !lineMap.TryGetValue(lineNumber, out var currentLine))
             {
-                return IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn);
+                return IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn)
+                    || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _);
             }
 
             var lines = new List<string>();
@@ -2317,14 +2414,47 @@ public partial class DbReader
 
             patternContext = lines.Count <= 1 ? currentLine : string.Join('\n', lines);
             patternColumn = lines.Count <= 1 ? columnNumber : prefixLength + columnNumber;
-            if (IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn))
+            if (IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn)
+                || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _))
+            {
                 return true;
+            }
 
             if (startLine == 1 || lookback >= maxLookback)
                 return false;
 
             lookback = Math.Min(maxLookback, Math.Max(lookback + 1, lookback * 2));
         }
+    }
+
+    private HashSet<string> GetScopedCSharpQualifiedPatternQualifierCandidates(string path, int lineNumber, string qualifier)
+    {
+        var candidates = new HashSet<string>(StringComparer.Ordinal);
+        var normalizedQualifier = NormalizeDbCSharpQualifiedName(ResolveActiveCSharpUsingAliasReference(path, lineNumber, qualifier));
+        if (string.IsNullOrWhiteSpace(normalizedQualifier))
+            return candidates;
+
+        candidates.Add(normalizedQualifier);
+
+        foreach (var activeNamespace in GetActiveCSharpTypeNamespaces(path, lineNumber))
+        {
+            if (string.IsNullOrWhiteSpace(activeNamespace))
+                continue;
+            candidates.Add(activeNamespace + "." + normalizedQualifier);
+        }
+
+        foreach (var activeContainingTypeScope in GetActiveCSharpContainingTypeScopes(path, lineNumber))
+        {
+            candidates.Add(activeContainingTypeScope.QualifiedName + "." + normalizedQualifier);
+
+            var inheritedContainingTypes = GetInheritedCSharpContainingTypes(activeContainingTypeScope);
+            foreach (var inheritedContainingType in inheritedContainingTypes)
+            {
+                candidates.Add(inheritedContainingType + "." + normalizedQualifier);
+            }
+        }
+
+        return candidates;
     }
 
     private static int SkipCSharpTriviaBackward(string text, int cursor)
@@ -2349,10 +2479,40 @@ public partial class DbReader
                 }
             }
 
+            if (TryGetCSharpSingleLineCommentLineStart(text, cursor, out var commentLineStart))
+            {
+                cursor = commentLineStart;
+                continue;
+            }
+
             break;
         }
 
         return cursor;
+    }
+
+    private static bool TryGetCSharpSingleLineCommentLineStart(string text, int cursor, out int commentLineStart)
+    {
+        commentLineStart = -1;
+        if (cursor <= 0)
+            return false;
+
+        var lineStart = text.LastIndexOf('\n', Math.Min(cursor - 1, text.Length - 1));
+        lineStart = lineStart < 0 ? 0 : lineStart + 1;
+
+        var firstNonWhitespace = lineStart;
+        while (firstNonWhitespace < cursor && char.IsWhiteSpace(text[firstNonWhitespace]))
+            firstNonWhitespace++;
+
+        if (firstNonWhitespace + 1 >= cursor
+            || text[firstNonWhitespace] != '/'
+            || text[firstNonWhitespace + 1] != '/')
+        {
+            return false;
+        }
+
+        commentLineStart = lineStart;
+        return true;
     }
 
     private static bool SkipCSharpPatternHeadBackward(string text, ref int cursor)
@@ -4525,6 +4685,7 @@ public partial class DbReader
         var csharpMetadataTargetReady = !hasCSharpFiles || _csharpMetadataTargetReady;
         var sqlGraphContractSignal = GetSqlGraphContractSignal(lang: null);
         var hotspotFamilySignal = GetHotspotFamilySignal(lang: null);
+        var foldReadyReason = ResolveFoldReadyReason();
 
         // Language breakdown / 言語別内訳
         var langs = new Dictionary<string, long>();
@@ -4552,6 +4713,7 @@ public partial class DbReader
             SqlGraphContractReady = sqlGraphContractSignal.Ready,
             SqlGraphContractDegradedReason = sqlGraphContractSignal.DegradedReason,
             FoldReady = _foldReady,
+            FoldReadyReason = foldReadyReason,
         };
     }
 

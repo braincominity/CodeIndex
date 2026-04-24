@@ -31,20 +31,9 @@ public static class IndexCommandRunner
         }
 
         var dbPath = DbPathResolver.ResolveForIndex(options.ProjectPath, options.DbPath);
-        var resolvedDbPath = Path.GetFullPath(DbPathResolver.NormalizeDbPath(dbPath));
         var stopwatch = Stopwatch.StartNew();
         var isUpdateMode = options.Commits.Count > 0 || options.UpdateFiles.Count > 0;
         var mode = options.Rebuild ? "rebuild" : isUpdateMode ? "update" : "incremental";
-
-        if (!options.Json)
-        {
-            ConsoleUi.PrintBanner();
-            Console.WriteLine();
-            Console.WriteLine($"  Project : {Path.GetFullPath(options.ProjectPath)}");
-            Console.WriteLine($"  Output  : {resolvedDbPath}");
-            Console.WriteLine($"  Mode    : {mode}");
-            Console.WriteLine();
-        }
 
         if (!Directory.Exists(options.ProjectPath))
         {
@@ -78,6 +67,29 @@ public static class IndexCommandRunner
                 Console.Error.WriteLine("Hint: drop `--rebuild` for `--commits`/`--files`, or rerun `cdidx index <projectPath> --rebuild` for a full rescan.");
             }
             return CommandExitCodes.UsageError;
+        }
+
+        if (!options.DryRun && DbPathResolver.UriRequestsReadOnly(dbPath))
+        {
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                $"database must be writable for index: {dbPath}",
+                CommandExitCodes.DatabaseError,
+                "Point `--db` at a writable filesystem path, or omit `--db` to use `<projectPath>/.cdidx/codeindex.db`.");
+        }
+
+        dbPath = DbPathResolver.NormalizeDbPath(dbPath);
+        var resolvedDbPath = Path.GetFullPath(dbPath);
+
+        if (!options.Json)
+        {
+            ConsoleUi.PrintBanner();
+            Console.WriteLine();
+            Console.WriteLine($"  Project : {Path.GetFullPath(options.ProjectPath)}");
+            Console.WriteLine($"  Output  : {resolvedDbPath}");
+            Console.WriteLine($"  Mode    : {mode}");
+            Console.WriteLine();
         }
 
         var ignoreCase = GitHelper.ResolveIgnoreCase(options.ProjectPath);
@@ -975,6 +987,12 @@ public static class IndexCommandRunner
             && (priorReadiness & DbContext.FoldReadyFlag) != 0
             && priorFoldVersion == currentFoldVersion
             && priorFoldFingerprint == currentFoldFingerprint;
+        string? foldReadyReasonAfter = foldReadyAfter
+            ? null
+            : GetFoldReadyReason(
+                (priorReadiness & DbContext.FoldReadyFlag) != 0,
+                priorFoldVersion == currentFoldVersion,
+                priorFoldFingerprint == currentFoldFingerprint);
         if (readinessDemoted && errors == 0)
         {
             // Restore each readiness bit independently based on what the DB carried BEFORE
@@ -1056,6 +1074,18 @@ public static class IndexCommandRunner
         var hotspotFamilyReadyAfter = hotspotFamilySignalAfter.Ready;
         var hotspotFamilyDegradedReasonAfter = hotspotFamilySignalAfter.DegradedReason;
 
+        var foldOnlyRemediation = BuildFoldOnlyReadinessRemediation(
+            graphTableAvailableAfter,
+            issuesTableAvailableAfter,
+            sqlGraphContractReadyAfter,
+            hotspotFamilyReadyAfter,
+            csharpSymbolNameReadyAfter,
+            csharpMetadataTargetReadyAfter,
+            foldReadyAfter,
+            foldReadyReasonAfter,
+            projectRoot,
+            resolvedDbPath);
+
         if (options.Json)
         {
             Console.WriteLine(JsonSerializer.Serialize(new
@@ -1086,6 +1116,10 @@ public static class IndexCommandRunner
                 // `--exact` will use the Unicode fold path or fall back to ASCII NOCASE.
                 // #86 codex: AI クライアントが --exact の経路を判断できるよう fold_ready を返す。
                 fold_ready = foldReadyAfter,
+                fold_ready_reason = foldReadyAfter ? null : foldReadyReasonAfter,
+                degraded_reason = foldOnlyRemediation?.DegradedReason,
+                recommended_action = foldOnlyRemediation?.RecommendedAction,
+                alternative_action = foldOnlyRemediation?.AlternativeAction,
                 errors = errorList.Count > 0 ? errorList : null,
                 warnings = warningList.Count > 0 ? warningList : null,
                 elapsed_ms = stopwatch.ElapsedMilliseconds,
@@ -1118,7 +1152,7 @@ public static class IndexCommandRunner
             if (errors > 0)
                 ConsoleUi.PrintWarning($"Some files failed to update. Fix the reported files or permissions, then rerun `cdidx index \"{projectRoot}\"` to restore a fully ready index.");
             if (!graphTableAvailableAfter || !issuesTableAvailableAfter || !sqlGraphContractReadyAfter || !hotspotFamilyReadyAfter || !csharpSymbolNameReadyAfter || !csharpMetadataTargetReadyAfter || !foldReadyAfter)
-                ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, sqlGraphContractReadyAfter, hotspotFamilyReadyAfter, csharpSymbolNameReadyAfter, csharpMetadataTargetReadyAfter, foldReadyAfter, resolvedDbPath));
+                ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, sqlGraphContractReadyAfter, hotspotFamilyReadyAfter, csharpSymbolNameReadyAfter, csharpMetadataTargetReadyAfter, foldReadyAfter, foldReadyReasonAfter, projectRoot, resolvedDbPath));
         }
 
         return CommandExitCodes.Success;
@@ -1649,6 +1683,7 @@ public static class IndexCommandRunner
         var csharpSymbolNameReadyAfter = !writer.HasAnyFilesWithLanguage("csharp");
         var csharpMetadataTargetReadyAfter = !writer.HasAnyFilesWithLanguage("csharp");
         var foldReadyAfter = false;
+        string? foldReadyReasonAfter = null;
         if (errors == 0)
         {
             // Full-scan covers the whole repo, so it may always stamp Graph / Issues on
@@ -1715,10 +1750,8 @@ public static class IndexCommandRunner
                 writer.MarkFoldReady();
                 foldReadyAfter = true;
             }
-            else if (!options.Json)
-            {
-                ConsoleUi.PrintWarning(GetFoldNotReadyWarning(backfillReady, foldVersionMatchesCurrent, foldFingerprintMatchesCurrent));
-            }
+            else
+                foldReadyReasonAfter = GetFoldReadyReason(backfillReady, foldVersionMatchesCurrent, foldFingerprintMatchesCurrent);
 
             // Successful no-op full scans should repair stale / missing explicit-DB roots
             // only after readiness stamps succeed, so an interruption cannot rewrite trust
@@ -1735,6 +1768,18 @@ public static class IndexCommandRunner
         var sqlGraphContractDegradedReasonAfter = sqlGraphContractSignalAfter.DegradedReason;
         var hotspotFamilyReadyAfter = hotspotFamilySignalAfter.Ready;
         var hotspotFamilyDegradedReasonAfter = hotspotFamilySignalAfter.DegradedReason;
+
+        var foldOnlyRemediation = BuildFoldOnlyReadinessRemediation(
+            graphTableAvailableAfter,
+            issuesTableAvailableAfter,
+            sqlGraphContractReadyAfter,
+            hotspotFamilyReadyAfter,
+            csharpSymbolNameReadyAfter,
+            csharpMetadataTargetReadyAfter,
+            foldReadyAfter,
+            foldReadyReasonAfter,
+            projectRoot,
+            resolvedDbPath);
 
         if (options.Json)
         {
@@ -1766,6 +1811,10 @@ public static class IndexCommandRunner
                 // `--exact` will use the Unicode fold path or fall back to ASCII NOCASE.
                 // #86 codex: AI クライアントが --exact の経路を判断できるよう fold_ready を返す。
                 fold_ready = foldReadyAfter,
+                fold_ready_reason = foldReadyAfter ? null : foldReadyReasonAfter,
+                degraded_reason = foldOnlyRemediation?.DegradedReason,
+                recommended_action = foldOnlyRemediation?.RecommendedAction,
+                alternative_action = foldOnlyRemediation?.AlternativeAction,
                 errors = errorList.Count > 0 ? errorList : null,
                 warnings = warningList.Count > 0 ? warningList : null,
                 elapsed_ms = stopwatch.ElapsedMilliseconds,
@@ -1796,7 +1845,7 @@ public static class IndexCommandRunner
             if (errors > 0)
                 ConsoleUi.PrintWarning($"Some files failed to index. Fix the reported files or permissions, then rerun `cdidx index \"{projectRoot}\"` to restore a fully ready index.");
             if (!graphTableAvailableAfter || !issuesTableAvailableAfter || !sqlGraphContractReadyAfter || !hotspotFamilyReadyAfter || !csharpSymbolNameReadyAfter || !csharpMetadataTargetReadyAfter || !foldReadyAfter)
-                ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, sqlGraphContractReadyAfter, hotspotFamilyReadyAfter, csharpSymbolNameReadyAfter, csharpMetadataTargetReadyAfter, foldReadyAfter, resolvedDbPath));
+                ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, sqlGraphContractReadyAfter, hotspotFamilyReadyAfter, csharpSymbolNameReadyAfter, csharpMetadataTargetReadyAfter, foldReadyAfter, foldReadyReasonAfter, projectRoot, resolvedDbPath));
         }
 
         return CommandExitCodes.Success;
@@ -1813,28 +1862,99 @@ public static class IndexCommandRunner
         return string.Equals(left, right, comparison);
     }
 
-    private static string GetFoldNotReadyWarning(bool backfillReady, bool foldVersionMatchesCurrent, bool foldFingerprintMatchesCurrent)
+    private static string GetFoldReadyReason(bool backfillReady, bool foldVersionMatchesCurrent, bool foldFingerprintMatchesCurrent)
     {
         if (!backfillReady)
-        {
-            return "--exact Unicode fold path not stamped: legacy rows without name_folded remain. Run `cdidx backfill-fold` to upgrade without reparsing files, or use `cdidx index . --rebuild` to regenerate the whole DB.";
-        }
+            return "missing_fold_backfill";
 
         if (!foldVersionMatchesCurrent)
-        {
-            return "--exact Unicode fold path not stamped: unchanged rows still carry an older fold-key version. Rewrite or purge those stale rows and rerun `cdidx index .`, run `cdidx backfill-fold`, or use `cdidx index . --rebuild` to regenerate the whole DB.";
-        }
+            return "stale_fold_key_version";
 
         if (!foldFingerprintMatchesCurrent)
-        {
-            return "--exact Unicode fold path not stamped: unchanged rows still carry folded keys generated under an older runtime fingerprint. Rewrite or purge those stale rows and rerun `cdidx index .`, run `cdidx backfill-fold`, or use `cdidx index . --rebuild` to regenerate the whole DB.";
-        }
+            return "stale_fold_key_fingerprint";
 
-        return "--exact Unicode fold path not stamped: some folded keys were not regenerated under the current runtime. Run `cdidx backfill-fold` to rewrite folded keys in place, or use `cdidx index . --rebuild` to regenerate the whole DB.";
+        return "fold_rows_not_restamped";
     }
 
-    private static string GetIndexReadinessWarning(bool graphTableAvailable, bool issuesTableAvailable, bool sqlGraphContractReady, bool hotspotFamilyReady, bool csharpSymbolNameReady, bool csharpMetadataTargetReady, bool foldReady, string resolvedDbPath)
+    private static string BuildFoldNotReadyExplanation(string? foldReadyReason)
+        => foldReadyReason switch
+        {
+            "missing_fold_backfill" => "--exact falls back to ASCII COLLATE NOCASE because legacy rows without `name_folded` remain.",
+            "stale_fold_key_version" => "--exact falls back to ASCII COLLATE NOCASE because unchanged rows still carry an older fold-key version.",
+            "stale_fold_key_fingerprint" => "--exact falls back to ASCII COLLATE NOCASE because unchanged rows still carry folded keys generated under an older runtime fingerprint.",
+            _ => "--exact falls back to ASCII COLLATE NOCASE because some folded-name rows were not restamped under the current runtime."
+        };
+
+    private static string BuildFoldBackfillCommand(string resolvedDbPath)
+        => $"cdidx backfill-fold --db {QuoteCommandArgument(resolvedDbPath)}";
+
+    private static string BuildFoldRebuildCommand(string projectRoot, string resolvedDbPath)
+        => $"cdidx index {QuoteCommandArgument(projectRoot)} --db {QuoteCommandArgument(resolvedDbPath)} --rebuild";
+
+    private static FoldOnlyRemediation? BuildFoldOnlyReadinessRemediation(
+        bool graphTableAvailable,
+        bool issuesTableAvailable,
+        bool sqlGraphContractReady,
+        bool hotspotFamilyReady,
+        bool csharpSymbolNameReady,
+        bool csharpMetadataTargetReady,
+        bool foldReady,
+        string? foldReadyReason,
+        string projectRoot,
+        string resolvedDbPath)
     {
+        if (!IsFoldOnlyReadinessDegraded(
+                graphTableAvailable,
+                issuesTableAvailable,
+                sqlGraphContractReady,
+                hotspotFamilyReady,
+                csharpSymbolNameReady,
+                csharpMetadataTargetReady,
+                foldReady))
+        {
+            return null;
+        }
+
+        return new FoldOnlyRemediation(
+            BuildFoldNotReadyExplanation(foldReadyReason),
+            BuildFoldBackfillCommand(resolvedDbPath),
+            BuildFoldRebuildCommand(projectRoot, resolvedDbPath));
+    }
+
+    private static bool IsFoldOnlyReadinessDegraded(
+        bool graphTableAvailable,
+        bool issuesTableAvailable,
+        bool sqlGraphContractReady,
+        bool hotspotFamilyReady,
+        bool csharpSymbolNameReady,
+        bool csharpMetadataTargetReady,
+        bool foldReady)
+        => !foldReady
+           && graphTableAvailable
+           && issuesTableAvailable
+           && sqlGraphContractReady
+           && hotspotFamilyReady
+           && csharpSymbolNameReady
+           && csharpMetadataTargetReady;
+
+    private static string GetIndexReadinessWarning(bool graphTableAvailable, bool issuesTableAvailable, bool sqlGraphContractReady, bool hotspotFamilyReady, bool csharpSymbolNameReady, bool csharpMetadataTargetReady, bool foldReady, string? foldReadyReason, string projectRoot, string resolvedDbPath)
+    {
+        var foldOnlyRemediation = BuildFoldOnlyReadinessRemediation(
+            graphTableAvailable,
+            issuesTableAvailable,
+            sqlGraphContractReady,
+            hotspotFamilyReady,
+            csharpSymbolNameReady,
+            csharpMetadataTargetReady,
+            foldReady,
+            foldReadyReason,
+            projectRoot,
+            resolvedDbPath);
+        if (foldOnlyRemediation != null)
+        {
+            return $"Index completed with fold-only degraded readiness (fold_ready=false). {foldOnlyRemediation.DegradedReason} Run `{foldOnlyRemediation.RecommendedAction}` to restamp folded-name columns in place, or `{foldOnlyRemediation.AlternativeAction}` for a full rebuild.";
+        }
+
         var degradedParts = new List<string>();
         if (!graphTableAvailable)
             degradedParts.Add("graph_table_available=false");
@@ -1852,6 +1972,17 @@ public static class IndexCommandRunner
             degradedParts.Add("fold_ready=false");
 
         return $"Index completed with degraded readiness ({string.Join(", ", degradedParts)}). Run `cdidx status --db \"{resolvedDbPath}\" --json` to inspect the current DB state.";
+    }
+
+    private static string QuoteCommandArgument(string value)
+    {
+        var fullPath = DbPathResolver.NormalizeDbPath(value);
+        if (!fullPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            fullPath = Path.GetFullPath(fullPath);
+
+        return fullPath.IndexOfAny([' ', '\t', '"']) >= 0
+            ? $"\"{fullPath.Replace("\"", "\\\"", StringComparison.Ordinal)}\""
+            : fullPath;
     }
 
     private static void AddToGitExclude(string projectPath, string dbPath)
@@ -1902,6 +2033,11 @@ public static class IndexCommandRunner
         {
         }
     }
+
+    private sealed record FoldOnlyRemediation(
+        string DegradedReason,
+        string RecommendedAction,
+        string AlternativeAction);
 }
 
 public sealed class IndexCommandOptions
