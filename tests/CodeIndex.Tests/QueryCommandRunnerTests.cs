@@ -18270,6 +18270,98 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpSwitchExpressionLaterArmAfterWhenGuardStaysVisible()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_switch_expression_later_arm_after_when");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "cases.cs"),
+                """
+                namespace Probe;
+
+                class Point {}
+                class Shape {}
+
+                class Demo
+                {
+                    int Match(object value) => value switch
+                    {
+                        Point p when p.GetHashCode() > 0 => 1,
+                        Shape => 2,
+                        _ => 0,
+                    };
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Shape", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
+            var row = Assert.Single(ParseJsonLines(stdout)).RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("Shape", row.GetProperty("symbol_name").GetString());
+            Assert.Equal("type_reference", row.GetProperty("reference_kind").GetString());
+            Assert.Contains("Shape => 2", row.GetProperty("context").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("Point { X: < 0 } => 1,")]
+    [InlineData("Point { X: > 0 } => 1,")]
+    public void RunReferences_ExactJson_CSharpSwitchExpressionLaterArmAfterRelationalPatternStaysVisible(string previousArm)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_switch_expression_later_arm_after_relational");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "cases.cs"),
+                $$"""
+                namespace Probe;
+
+                class Point { public int X { get; init; } }
+                class Shape {}
+
+                class Demo
+                {
+                    int Match(object value) => value switch
+                    {
+                        {{previousArm}}
+                        Shape => 2,
+                        _ => 0,
+                    };
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Shape", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
+            var row = Assert.Single(ParseJsonLines(stdout)).RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("Shape", row.GetProperty("symbol_name").GetString());
+            Assert.Equal("type_reference", row.GetProperty("reference_kind").GetString());
+            Assert.Contains("Shape => 2", row.GetProperty("context").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpCrossFileSameNamespaceTypePatternStaysVisible()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_cross_file_same_namespace_type_pattern_visible");
