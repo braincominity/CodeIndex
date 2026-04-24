@@ -1510,7 +1510,7 @@ public static class QueryCommandRunner
                 ? (DateTime.UtcNow - status.IndexedAt.Value).TotalMinutes < 5 ? "fresh" : "stale"
                 : "unknown";
             var dirty = status.GitIsDirty == true ? ", dirty" : "";
-            var degraded = (!status.GraphTableAvailable || !status.IssuesTableAvailable || !status.CSharpSymbolNameReady) ? ", DEGRADED" : "";
+            var degraded = (!status.GraphTableAvailable || !status.IssuesTableAvailable || !status.CSharpSymbolNameReady || !status.CSharpMetadataTargetReady) ? ", DEGRADED" : "";
             status.Summary = $"{status.Files} files, {status.Symbols} symbols, {status.References} refs across {status.Languages.Count} languages ({string.Join(", ", topLangs)}); index {freshness}{dirty}{degraded}";
 
             if (options.Json)
@@ -1556,6 +1556,13 @@ public static class QueryCommandRunner
                     Console.WriteLine("WARN    : file_issues table missing — validate output is degraded to empty.");
                 if (!status.CSharpSymbolNameReady)
                     Console.WriteLine($"WARN    : C# exact-name for operators / conversion operators / indexers is degraded. Run `{BuildCSharpCanonicalNameRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to upgrade canonical symbol names in place.");
+                // #435: tell the user when deps / impact metadata-attribute edges fall back
+                // to the legacy signature / name-suffix heuristic (impostor classes may be
+                // silently promoted or demoted until the authoritative resolver is re-run).
+                // #435: deps / impact の metadata-attribute edge が legacy heuristic に
+                // 縮退しているときは明示する。
+                if (!status.CSharpMetadataTargetReady)
+                    Console.WriteLine("WARN    : C# deps / impact metadata-attribute edges fall back to the signature / name-suffix heuristic. Run `cdidx index .` to re-stamp authoritative is_metadata_target values.");
                 // #86: tell the user when `--exact` is running on the ASCII NOCASE fallback.
                 // #86: --exact が ASCII NOCASE fallback で動いているときは明示する。
                 if (!status.FoldReady)

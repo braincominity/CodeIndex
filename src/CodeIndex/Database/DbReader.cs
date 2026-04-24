@@ -2475,6 +2475,15 @@ public partial class DbReader
         var freshness = GetWorkspaceFreshness();
         var hasCSharpFiles = ScopeMayIncludeCSharpFiles("csharp", pathPatterns: null, excludePathPatterns: null, excludeTests: false, since: null);
         var csharpSymbolNameReady = !hasCSharpFiles || _csharpSymbolNameContractCurrent;
+        // #435 codex review iter 3: mirror `csharp_symbol_name_ready` — the readiness flag
+        // only applies when the workspace actually contains C# files, and the column +
+        // stamp must match the current contract for the resolver edges to be trusted.
+        // This surfaces the same flag we already emit from the CLI `index` JSON so that
+        // `status --json` and MCP `status` expose a consistent trust signal (README /
+        // CLAUDE.md contract).
+        // #435 codex review iter 3: `csharp_symbol_name_ready` と同じ条件で expose する。
+        // C# ファイルが 0 なら ready=true、そうでなければ列 + stamp の一致を要求する。
+        var csharpMetadataTargetReady = !hasCSharpFiles || _csharpMetadataTargetReady;
 
         // Language breakdown / 言語別内訳
         var langs = new Dictionary<string, long>();
@@ -2496,6 +2505,7 @@ public partial class DbReader
             GraphTableAvailable = _hasReferencesTable,
             IssuesTableAvailable = _hasIssuesTable,
             CSharpSymbolNameReady = csharpSymbolNameReady,
+            CSharpMetadataTargetReady = csharpMetadataTargetReady,
             FoldReady = _foldReady,
         };
     }

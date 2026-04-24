@@ -998,13 +998,14 @@ public static class IndexCommandRunner
             Console.WriteLine($"  Graph   : {(graphTableAvailableAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Issues  : {(issuesTableAvailableAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  C# names: {(csharpSymbolNameReadyAfter ? "ready" : "degraded")}");
+            Console.WriteLine($"  C# meta : {(csharpMetadataTargetReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Fold    : {(foldReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Elapsed : {stopwatch.Elapsed:hh\\:mm\\:ss}");
             Console.WriteLine();
             if (errors > 0)
                 ConsoleUi.PrintWarning($"Some files failed to update. Fix the reported files or permissions, then rerun `cdidx index \"{projectRoot}\"` to restore a fully ready index.");
-            if (!graphTableAvailableAfter || !issuesTableAvailableAfter || !csharpSymbolNameReadyAfter || !foldReadyAfter)
-                ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, csharpSymbolNameReadyAfter, foldReadyAfter, resolvedDbPath));
+            if (!graphTableAvailableAfter || !issuesTableAvailableAfter || !csharpSymbolNameReadyAfter || !csharpMetadataTargetReadyAfter || !foldReadyAfter)
+                ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, csharpSymbolNameReadyAfter, csharpMetadataTargetReadyAfter, foldReadyAfter, resolvedDbPath));
         }
 
         return CommandExitCodes.Success;
@@ -1563,13 +1564,14 @@ public static class IndexCommandRunner
             Console.WriteLine($"  Graph   : {(graphTableAvailableAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Issues  : {(issuesTableAvailableAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  C# names: {(csharpSymbolNameReadyAfter ? "ready" : "degraded")}");
+            Console.WriteLine($"  C# meta : {(csharpMetadataTargetReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Fold    : {(foldReadyAfter ? "ready" : "degraded")}");
             Console.WriteLine($"  Elapsed : {stopwatch.Elapsed:hh\\:mm\\:ss}");
             Console.WriteLine();
             if (errors > 0)
                 ConsoleUi.PrintWarning($"Some files failed to index. Fix the reported files or permissions, then rerun `cdidx index \"{projectRoot}\"` to restore a fully ready index.");
-            if (!graphTableAvailableAfter || !issuesTableAvailableAfter || !csharpSymbolNameReadyAfter || !foldReadyAfter)
-                ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, csharpSymbolNameReadyAfter, foldReadyAfter, resolvedDbPath));
+            if (!graphTableAvailableAfter || !issuesTableAvailableAfter || !csharpSymbolNameReadyAfter || !csharpMetadataTargetReadyAfter || !foldReadyAfter)
+                ConsoleUi.PrintWarning(GetIndexReadinessWarning(graphTableAvailableAfter, issuesTableAvailableAfter, csharpSymbolNameReadyAfter, csharpMetadataTargetReadyAfter, foldReadyAfter, resolvedDbPath));
         }
 
         return CommandExitCodes.Success;
@@ -1606,7 +1608,7 @@ public static class IndexCommandRunner
         return "--exact Unicode fold path not stamped: some folded keys were not regenerated under the current runtime. Run `cdidx backfill-fold` to rewrite folded keys in place, or use `cdidx index . --rebuild` to regenerate the whole DB.";
     }
 
-    private static string GetIndexReadinessWarning(bool graphTableAvailable, bool issuesTableAvailable, bool csharpSymbolNameReady, bool foldReady, string resolvedDbPath)
+    private static string GetIndexReadinessWarning(bool graphTableAvailable, bool issuesTableAvailable, bool csharpSymbolNameReady, bool csharpMetadataTargetReady, bool foldReady, string resolvedDbPath)
     {
         var degradedParts = new List<string>();
         if (!graphTableAvailable)
@@ -1615,6 +1617,8 @@ public static class IndexCommandRunner
             degradedParts.Add("issues_table_available=false");
         if (!csharpSymbolNameReady)
             degradedParts.Add("csharp_symbol_name_ready=false");
+        if (!csharpMetadataTargetReady)
+            degradedParts.Add("csharp_metadata_target_ready=false");
         if (!foldReady)
             degradedParts.Add("fold_ready=false");
 

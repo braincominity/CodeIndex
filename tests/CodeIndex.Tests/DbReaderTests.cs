@@ -5545,6 +5545,63 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetStatus_ExposesCSharpMetadataTargetReadyForWorkspaceWithoutCSharpFiles()
+    {
+        // #435 codex review iter 3: README / CLAUDE.md advertise `csharp_metadata_target_ready`
+        // on `status --json`. Before iter 3, `StatusResult` had no such property, so the JSON
+        // silently returned `null` and the contract was violated. A workspace with NO C# files
+        // must still report the flag as `true` because no edge is exposed to degraded fallback.
+        // #435 codex review iter 3: C# ファイルが 0 の workspace では契約上 ready=true を返す。
+        var status = _reader.GetStatus();
+
+        Assert.True(status.CSharpMetadataTargetReady);
+    }
+
+    [Fact]
+    public void GetStatus_ExposesCSharpMetadataTargetReadyFalseWhenContractStampMissing()
+    {
+        // #435 codex review iter 3: a workspace with C# files whose DB is missing the
+        // `metadata_target_version_csharp` stamp must surface as `csharp_metadata_target_ready=false`
+        // so `status --json` and the human `WARN` line can tell AI clients that `deps` / `impact`
+        // metadata-attribute edges are running on the legacy `signature LIKE '%: %'` heuristic
+        // instead of the authoritative persisted column. Before the iter-3 fix the flag never
+        // flowed into `StatusResult` at all, so a degraded DB looked healthy in both paths.
+        // #435 codex review iter 3: C# ファイルがあり、かつ stamp 欠落 / ズレで authoritative
+        // column が信頼できない状態では false を返して AI クライアントに縮退を伝える。
+        InsertIndexedFile("src/Foo.cs", "csharp", "public class Foo { }\n");
+        ClearMetaStamp(DbContext.GetMetadataTargetVersionMetaKey("csharp"));
+        var freshReader = new DbReader(_db.Connection);
+
+        var status = freshReader.GetStatus();
+
+        Assert.False(status.CSharpMetadataTargetReady);
+    }
+
+    [Fact]
+    public void GetStatus_ExposesCSharpMetadataTargetReadyTrueWhenContractStampCurrent()
+    {
+        // Happy path: C# files are indexed and the current-version stamp is present, so the
+        // reader should report the authoritative column is trustworthy. Pins the positive side
+        // of the flag to prevent future regressions that would keep the JSON always false.
+        // C# ファイル + 現行契約 stamp が揃っているときは true を返すという正常系の pin。
+        InsertIndexedFile("src/Bar.cs", "csharp", "public class Bar { }\n");
+        _writer.MarkMetadataTargetReady("csharp");
+        var freshReader = new DbReader(_db.Connection);
+
+        var status = freshReader.GetStatus();
+
+        Assert.True(status.CSharpMetadataTargetReady);
+    }
+
+    private void ClearMetaStamp(string key)
+    {
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = @key";
+        cmd.Parameters.AddWithValue("@key", key);
+        cmd.ExecuteNonQuery();
+    }
+
+    [Fact]
     public void GetRepoMap_ReturnsOverviewSectionsAndEntrypoints()
     {
         InsertIndexedFile("src/Program.cs", "csharp", "public class Program\n{\n    public static void Main(string[] args)\n    {\n        var client = new ApiClient();\n    }\n}\n");
