@@ -22092,6 +22092,52 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbolsAndDefinition_ExactNameAtOnly_ReturnsZeroWithoutBroadening()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_exact_name_at_only");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                public class Foo
+                {
+                    public int Bar() => 0;
+                }
+                """);
+
+            var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--name", "@", "--exact-name", "--count"],
+                _jsonOptions));
+            using var symbolsDocument = ParseJsonOutput(symbolsStdout);
+            var symbolsJson = symbolsDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+            Assert.Equal(string.Empty, symbolsStderr);
+            Assert.Equal(0, symbolsJson.GetProperty("count").GetInt32());
+            Assert.Equal(0, symbolsJson.GetProperty("files").GetInt32());
+
+            var (definitionExitCode, definitionStdout, definitionStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["@", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--count"],
+                _jsonOptions));
+            using var definitionDocument = ParseJsonOutput(definitionStdout);
+            var definitionJson = definitionDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, definitionExitCode);
+            Assert.Equal(string.Empty, definitionStderr);
+            Assert.Equal(0, definitionJson.GetProperty("count").GetInt32());
+            Assert.Equal(0, definitionJson.GetProperty("files").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunDefinition_ExactZeroJson_PreservesRelaxedCountAndCapsSamplesToFive()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_definition_exact_zero_cap");
