@@ -1438,6 +1438,13 @@ public class QueryCommandRunnerTests
                 namespace RealTypes;
                 class Red {}
                 """);
+
+            using (var db = new DbContext(dbPath))
+            {
+                var countCmd = db.Connection.CreateCommand();
+                countCmd.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE symbol_name = 'Red'";
+                Assert.Equal(2L, (long)countCmd.ExecuteScalar()!);
+            }
             MarkGraphAndFoldReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
