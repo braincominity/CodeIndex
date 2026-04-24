@@ -1608,6 +1608,7 @@ public static class QueryCommandRunner
         {
             var maxDepth = options.ContextAfter > 0 ? options.ContextAfter : 5; // --depth is parsed into ContextAfter
             var analysis = reader.AnalyzeImpact(options.Query, maxDepth, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var sqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var confirmedCount = analysis.Callers.Count;
             var confirmedFileCount = analysis.Callers.Select(r => r.Path).Distinct().Count();
             var hintCount = analysis.FileImpacts.Count;
@@ -1615,6 +1616,8 @@ public static class QueryCommandRunner
             var hasHeuristicHints = analysis.ImpactMode == "file_dependency_hints";
             var visibleCount = hasHeuristicHints ? hintCount : confirmedCount;
             var visibleFileCount = hasHeuristicHints ? hintFileCount : confirmedFileCount;
+
+            WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
 
             if (confirmedCount == 0 && !hasHeuristicHints)
             {
@@ -1648,6 +1651,7 @@ public static class QueryCommandRunner
                             payload["suggestion"] = analysis.Suggestion;
                         if (!analysis.GraphTableAvailable)
                             payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
+                        AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
                         AddFreshnessHint(payload, reader);
                         Console.WriteLine(payload.ToJsonString(jsonOptions));
                     }
@@ -1691,6 +1695,7 @@ public static class QueryCommandRunner
                                 zeroPayload["zero_result_reason"] = analysis.ZeroResultReason;
                             if (analysis.Suggestion != null)
                                 zeroPayload["suggestion"] = analysis.Suggestion;
+                            AddSqlGraphContractJsonFields(zeroPayload, sqlGraphSignal);
                         });
                     if (!analysis.GraphTableAvailable)
                         payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
@@ -1708,52 +1713,62 @@ public static class QueryCommandRunner
 
             if (options.CountOnly)
             {
-                Console.WriteLine(options.Json
-                    ? JsonSerializer.Serialize(new
+                if (options.Json)
+                {
+                    var payload = new JsonObject
                     {
-                        query = options.Query,
-                        resolved_name = analysis.ResolvedName,
-                        count = visibleCount,
-                        file_count = visibleFileCount,
-                        confirmed_count = confirmedCount,
-                        confirmed_file_count = confirmedFileCount,
-                        impact_mode = analysis.ImpactMode,
-                        heuristic = analysis.Heuristic,
-                        hint_count = hintCount,
-                        hint_file_count = hintFileCount,
-                        truncated = analysis.Truncated,
-                    }, jsonOptions)
-                    : $"{visibleCount}");
+                        ["query"] = options.Query,
+                        ["resolved_name"] = analysis.ResolvedName,
+                        ["count"] = visibleCount,
+                        ["file_count"] = visibleFileCount,
+                        ["confirmed_count"] = confirmedCount,
+                        ["confirmed_file_count"] = confirmedFileCount,
+                        ["impact_mode"] = analysis.ImpactMode,
+                        ["heuristic"] = analysis.Heuristic,
+                        ["hint_count"] = hintCount,
+                        ["hint_file_count"] = hintFileCount,
+                        ["truncated"] = analysis.Truncated,
+                    };
+                    AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+                    Console.WriteLine(payload.ToJsonString(jsonOptions));
+                }
+                else
+                {
+                    Console.WriteLine($"{visibleCount}");
+                }
                 return CommandExitCodes.Success;
             }
 
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(new
+                var payload = new JsonObject
                 {
-                    query = options.Query,
-                    resolved_name = analysis.ResolvedName,
-                    count = visibleCount,
-                    file_count = visibleFileCount,
-                    confirmed_count = confirmedCount,
-                    confirmed_file_count = confirmedFileCount,
-                    hint_count = hintCount,
-                    hint_file_count = hintFileCount,
-                    max_depth = maxDepth,
-                    actual_depth = analysis.Callers.Count > 0 ? analysis.Callers.Max(r => r.Depth) : 0,
-                    truncated = analysis.Truncated,
-                    impact_mode = analysis.ImpactMode,
-                    heuristic = analysis.Heuristic,
-                    callers = analysis.Callers,
-                    file_impacts = analysis.FileImpacts,
-                    definition_count = analysis.DefinitionCount,
-                    definition_file_count = analysis.DefinitionFileCount,
-                    has_multiple_definitions = analysis.HasMultipleDefinitions,
-                    has_class_like_definitions = analysis.HasClassLikeDefinitions,
-                    has_multiple_definition_files = analysis.HasMultipleDefinitionFiles,
-                    definitions = analysis.Definitions,
-                    suggestion = analysis.Suggestion,
-                }, jsonOptions));
+                    ["query"] = options.Query,
+                    ["resolved_name"] = analysis.ResolvedName,
+                    ["count"] = visibleCount,
+                    ["file_count"] = visibleFileCount,
+                    ["confirmed_count"] = confirmedCount,
+                    ["confirmed_file_count"] = confirmedFileCount,
+                    ["hint_count"] = hintCount,
+                    ["hint_file_count"] = hintFileCount,
+                    ["max_depth"] = maxDepth,
+                    ["actual_depth"] = analysis.Callers.Count > 0 ? analysis.Callers.Max(r => r.Depth) : 0,
+                    ["truncated"] = analysis.Truncated,
+                    ["impact_mode"] = analysis.ImpactMode,
+                    ["heuristic"] = analysis.Heuristic,
+                    ["callers"] = JsonSerializer.SerializeToNode(analysis.Callers, jsonOptions),
+                    ["file_impacts"] = JsonSerializer.SerializeToNode(analysis.FileImpacts, jsonOptions),
+                    ["definition_count"] = analysis.DefinitionCount,
+                    ["definition_file_count"] = analysis.DefinitionFileCount,
+                    ["has_multiple_definitions"] = analysis.HasMultipleDefinitions,
+                    ["has_class_like_definitions"] = analysis.HasClassLikeDefinitions,
+                    ["has_multiple_definition_files"] = analysis.HasMultipleDefinitionFiles,
+                    ["definitions"] = JsonSerializer.SerializeToNode(analysis.Definitions, jsonOptions),
+                };
+                if (analysis.Suggestion != null)
+                    payload["suggestion"] = analysis.Suggestion;
+                AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+                Console.WriteLine(payload.ToJsonString(jsonOptions));
             }
             else
             {
