@@ -7716,13 +7716,17 @@ public static class SymbolExtractor
         // Expression-body arrow (`=> expr;`). Walk until a class-field terminator at depth 0.
         // Explicit `;` always terminates; implicit ASI also terminates when we hit the enclosing
         // class body `}` or a newline followed by a new class-member start (identifier+`=`/`(`,
-        // `#private`, `*name`, `[computed]`, decorator, or modifier keyword). `{}` / `()` / `[]`
-        // stay balanced; strings / comments are already masked by the upstream lexer. If the
-        // accumulated header ends at depth 0 with expression tokens but no visible terminator,
-        // return false so TryCapture pulls another line and retries.
+        // `#private`, `*name`, decorator, or modifier keyword). `[` is treated as continuation
+        // here because a bare `[` is ambiguous between computed-member access and a computed
+        // method name; see StartsJavaScriptTypeScriptClassMemberAt for the full rationale.
+        // `{}` / `()` / `[]` stay balanced; strings / comments are already masked by the upstream
+        // lexer. If the accumulated header ends at depth 0 with expression tokens but no visible
+        // terminator, return false so TryCapture pulls another line and retries.
         // 式本体矢印 (`=> expr;`)。深さ 0 でのクラスフィールド終端まで歩く。明示的な `;` は常に終端し、
         // 暗黙の ASI は囲みクラス body の `}` か、改行直後に新しいクラスメンバの開始 (identifier+`=`/`(`、
-        // `#private`、`*name`、`[computed]`、decorator、修飾子キーワード) が来た場合にも終端する。
+        // `#private`、`*name`、decorator、修飾子キーワード) が来た場合にも終端する。`[` は computed
+        // member access の継続と computed method 名の両方になり得るためここでは継続扱いとする
+        // (詳細は StartsJavaScriptTypeScriptClassMemberAt のコメント参照)。
         // 括弧類はバランスを取り、文字列・コメントは上流の lexer でマスク済み。終端が見えないまま
         // 蓄積ヘッダの末尾に達したら false を返し、TryCapture に次の行を積ませる。
         var expressionStart = index;
@@ -7825,34 +7829,51 @@ public static class SymbolExtractor
     }
 
     // Returns true when `ch` is a token that can validly end a JavaScript / TypeScript expression
-    // (identifier/digit tail, closing bracket, or `$`/`_`). Operator-like characters (`+`, `.`,
-    // `,`, etc.) return false so multi-line expression continuations are not accidentally cut off
-    // by the ASI heuristic.
-    // `ch` が JavaScript / TypeScript の式を終端できるトークン (識別子/数字末尾、閉じ括弧、`$`/`_`) なら true。
-    // 演算子類 (`+`、`.`、`,` 等) は false を返すことで、複数行の式継続が ASI ヒューリスティックで
-    // 誤って途中終端されないようにする。
+    // (identifier/digit tail, closing bracket, `$`/`_`, or the closing delimiter of a string /
+    // template literal). The upstream lexer preserves the opening and closing `"`/`'`/`` ` `` in
+    // the sanitized header (only the body content is blanked to spaces), so a string-returning
+    // arrow such as `only = () => "x"` ends with a visible quote character here.
+    // Operator-like characters (`+`, `.`, `,`, etc.) return false so multi-line expression
+    // continuations are not accidentally cut off by the ASI heuristic.
+    // `ch` が JavaScript / TypeScript の式を終端できるトークン (識別子/数字末尾、閉じ括弧、`$`/`_`、
+    // 文字列・テンプレートリテラルの閉じデリミタ) なら true。上流の lexer は sanitized header 上で
+    // `"` / `'` / `` ` `` の開き/閉じ文字は残し、リテラル本体だけをスペースに blank する。
+    // そのため `only = () => "x"` のような文字列を返す式は、ここでは閉じクォートが lastNonWhitespace と
+    // して可視のまま残る。演算子類 (`+`、`.`、`,` 等) は false を返すことで、複数行の式継続が ASI
+    // ヒューリスティックで誤って途中終端されないようにする。
     private static bool CanJavaScriptTypeScriptExpressionEndAt(char ch)
     {
         if (char.IsLetterOrDigit(ch))
             return true;
-        return ch is '_' or '$' or ')' or ']' or '}';
+        return ch is '_' or '$' or ')' or ']' or '}' or '"' or '\'' or '`';
     }
 
     // Returns true when the position starts a new class-body member declaration: `}` (class body
-    // close), `;` (stray empty statement), `#` / `@` / `[` / `*<name>` lead tokens, or an
-    // identifier that is either a well-known class-member modifier keyword or is followed by a
-    // class-field / method-shorthand syntactic marker (`=`, `(`, `<`, `?`, `!`, `:`, `;`).
+    // close), `;` (stray empty statement), `#` / `@` / `*<name>` lead tokens, or an identifier that
+    // is either a well-known class-member modifier keyword or is followed by a class-field /
+    // method-shorthand syntactic marker (`=`, `(`, `<`, `?`, `!`, `:`, `;`).
+    // Note: `[` is intentionally NOT a member-start signal here. A bare `[` after a newline is
+    // ambiguous between a computed method name (`[Symbol.iterator]()`) and a computed member
+    // access continuation (`foo\n  [bar]`). JavaScript's ASI rule explicitly forbids inserting a
+    // `;` before a line that starts with `[`, so any source file that wants the computed-method
+    // reading must write an explicit `;` — which the outer loop's `;` branch already handles. That
+    // makes "treat `[` as continuation" the safe default for this heuristic.
     // Feed a sanitized (lex-masked) header string; strings/comments must already be blanked.
     // 指定位置がクラスボディの新しいメンバ宣言を始めるかを判定する: `}` (クラス body 閉じ)、
-    // `;` (空文)、`#` / `@` / `[` / `*<name>` の先頭トークン、あるいは識別子で「クラスメンバ修飾キーワード」
-    // または直後が `=` / `(` / `<` / `?` / `!` / `:` / `;` の場合。呼び出し側は lexer でマスク済み
-    // (文字列/コメントが blanked) の sanitizedHeader を渡すこと。
+    // `;` (空文)、`#` / `@` / `*<name>` の先頭トークン、あるいは識別子で「クラスメンバ修飾キーワード」
+    // または直後が `=` / `(` / `<` / `?` / `!` / `:` / `;` の場合。
+    // 注意: `[` はあえて member-start として扱わない。改行直後の素の `[` は computed method name
+    // (`[Symbol.iterator]()`) と computed member access の継続 (`foo\n  [bar]`) の両方に見えてしまう。
+    // JavaScript の ASI 規則は `[` で始まる行の前に自動で `;` を挿入しないため、計算メンバ名を意図する
+    // ソースは明示的に `;` を書く必要があり、そのケースは外側ループの `;` 分岐で既に拾える。よって
+    // この ASI ヒューリスティックでは `[` を継続として扱うのが安全な既定。
+    // 呼び出し側は lexer でマスク済み (文字列/コメントが blanked) の sanitizedHeader を渡すこと。
     private static bool StartsJavaScriptTypeScriptClassMemberAt(string sanitizedHeader, int index)
     {
         if (index < 0 || index >= sanitizedHeader.Length)
             return false;
         var ch = sanitizedHeader[index];
-        if (ch is '}' or ';' or '#' or '@' or '[')
+        if (ch is '}' or ';' or '#' or '@')
             return true;
         if (ch == '*')
         {
