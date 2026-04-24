@@ -1770,6 +1770,7 @@ internal static class StructuralLineMasker
     {
         var result = new string[lines.Length];
         var lexState = default(JsLexState);
+        var activeJsStringQuote = '\0';
         lexState.Reset();
         for (int i = 0; i < lines.Length; i++)
         {
@@ -1783,6 +1784,17 @@ internal static class StructuralLineMasker
             int pos = 0;
             while (pos < line.Length)
             {
+                if (activeJsStringQuote != '\0')
+                {
+                    pos = MaskJsTemplateHoleString(line, pos, buf, activeJsStringQuote, startsInsideString: true, out var continuesOnNextLine);
+                    if (continuesOnNextLine)
+                        break;
+
+                    activeJsStringQuote = '\0';
+                    lexState.SetKind(JsPrevTokenKind.Literal);
+                    continue;
+                }
+
                 if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '/')
                 {
                     for (int k = pos; k < line.Length; k++)
@@ -1793,10 +1805,14 @@ internal static class StructuralLineMasker
                 char ch = line[pos];
                 if (ch == '"' || ch == '\'')
                 {
-                    int end = SkipJsSingleLineString(line, pos);
-                    for (int k = pos; k < end; k++)
-                        buf[k] = ' ';
-                    pos = end;
+                    var quote = ch;
+                    pos = MaskJsTemplateHoleString(line, pos, buf, quote, startsInsideString: false, out var continuesOnNextLine);
+                    if (continuesOnNextLine)
+                    {
+                        activeJsStringQuote = quote;
+                        break;
+                    }
+
                     lexState.SetKind(JsPrevTokenKind.Literal);
                     continue;
                 }

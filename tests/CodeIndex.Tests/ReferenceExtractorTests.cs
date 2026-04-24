@@ -773,7 +773,7 @@ public class ReferenceExtractorTests
     {
         const string content = """
             function caller() {
-              const s = "line1\
+              const s = 'line1\
             } fake_in_string() line2";
               runTask();
             }
@@ -786,6 +786,25 @@ public class ReferenceExtractorTests
 
         Assert.Contains(references, reference => reference.SymbolName == "runTask" && reference.ContainerName == "caller");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "fake_in_string");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptContinuedSingleQuotedString_DoesNotPolluteForOfHeaderScan()
+    {
+        const string content = "function f() {\n" +
+            "    const s = 'line1\\\n" +
+            "of fake_in_string';\n" +
+            "    for (\n" +
+            "        const ch of `abc`\n" +
+            "    ) {\n" +
+            "        use(ch);\n" +
+            "    }\n" +
+            "}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
     }
 
     [Fact]
