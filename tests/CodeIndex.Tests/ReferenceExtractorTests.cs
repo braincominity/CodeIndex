@@ -10608,6 +10608,106 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SqlQualifiedDefinition_DoesNotEmitPhantomSelfReference()
+    {
+        // Schema-qualified SQL symbols keep their qualified definition name (`dbo.fn_X`), while
+        // CallRegex only captures the leaf call token (`fn_X`). The definition-line suppression
+        // must therefore compare both the full and leaf forms so the header is not misindexed as
+        // a self-call. Issue #296.
+        // SQL の定義名は `dbo.fn_X` のように修飾付きだが、CallRegex は leaf の `fn_X` だけを拾う。
+        // そのため定義行の自己呼び出し抑止は full/leaf の両方を比較し、ヘッダを幽霊 call にしない必要がある。
+        const string content = """
+            CREATE FUNCTION dbo.fn_GetOrderItems(@orderId INT)
+            RETURNS TABLE
+            AS
+            RETURN (SELECT * FROM dbo.OrderItems WHERE OrderId = @orderId);
+            GO
+
+            CREATE PROCEDURE dbo.usp_GetOrders
+            AS
+            BEGIN
+                SELECT *
+                FROM dbo.Orders o
+                CROSS APPLY dbo.fn_GetOrderItems(o.OrderId) fi;
+            END
+            GO
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRefs = references
+            .Where(r => r.SymbolName == "fn_GetOrderItems" && r.ReferenceKind == "call")
+            .ToList();
+
+        var realCall = Assert.Single(targetRefs);
+        Assert.Equal(12, realCall.Line);
+        Assert.Equal("dbo.usp_GetOrders", realCall.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_SqlQualifiedDefinition_SameLineCrossSchemaCallStillEmitsReference()
+    {
+        const string content = """
+            CREATE PROCEDURE sales.fn_Target AS EXEC dbo.fn_Target;
+            GO
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRef = Assert.Single(references.Where(r => r.SymbolName == "fn_Target" && r.ReferenceKind == "call"));
+        Assert.Equal(1, targetRef.Line);
+        Assert.Equal("sales.fn_Target", targetRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_SqlQualifiedDefinition_SameLineCallAfterStringLiteralPreservesRawColumn()
+    {
+        const string content = """
+            CREATE PROCEDURE sales.host
+            AS
+            BEGIN
+                SELECT 'prefix'; EXEC dbo.fn_Target;
+            END
+            GO
+            CREATE PROCEDURE dbo.fn_Target AS SELECT 1;
+            GO
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRef = Assert.Single(references.Where(r => r.SymbolName == "fn_Target" && r.ReferenceKind == "call"));
+        Assert.Equal(4, targetRef.Line);
+        Assert.Equal(31, targetRef.Column);
+        Assert.Equal("sales.host", targetRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_SqlQualifiedDefinition_SameLineCallAfterInlineBlockCommentPreservesRawColumn()
+    {
+        const string content = """
+            CREATE PROCEDURE sales.host
+            AS
+            BEGIN
+                SELECT /*note*/ 1; EXEC dbo.fn_Target;
+            END
+            GO
+            CREATE PROCEDURE dbo.fn_Target AS SELECT 1;
+            GO
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRef = Assert.Single(references.Where(r => r.SymbolName == "fn_Target" && r.ReferenceKind == "call"));
+        Assert.Equal(4, targetRef.Line);
+        Assert.Equal(33, targetRef.Column);
+        Assert.Equal("sales.host", targetRef.ContainerName);
+    }
+
+    [Fact]
     public void Extract_SqlExecDynamicSql_DoesNotEmitPhantomKeywordReference()
     {
         // T-SQL dynamic-SQL execution `EXEC(@sql)` / `EXEC('...')` / `EXECUTE(@sql)` pass a string or
@@ -10831,6 +10931,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SqlExecQualifiedIdentifierWithWhitespaceAroundDots_CapturesTerminalIdentifier()
+    {
+        const string content = """
+            EXEC [server1] . [AdventureWorks] . [dbo] . [sp_GetCustomer];
+            CALL sales . proc_name;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "sp_GetCustomer" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "proc_name" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "server1" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "AdventureWorks" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "dbo" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "sales" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_SqlCallBacktickQuotedIdentifier_IsCapturedAndDoesNotMisattributeQualifier()
     {
         // MySQL / MariaDB use backticks to quote identifiers. The shared PrepareLine
@@ -10857,6 +10976,34 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "do_stuff" && r.ReferenceKind == "call" && r.Line == 3);
         Assert.DoesNotContain(references, r => r.SymbolName == "db" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "mydb" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SqlCallDoubleQuotedIdentifier_IsCapturedAndDoesNotMisattributeQualifier()
+    {
+        // PostgreSQL / ANSI SQL use double quotes for delimited identifiers. The SQL no-parens
+        // scan must preserve `"..."` so `CALL "sales"."proc_name"` and `EXEC "dbo"."fn_Target"`
+        // still emit the leaf call edge instead of dropping the call entirely or misattributing
+        // the qualifier as a separate target. Single-quoted string literals must remain masked.
+        // PostgreSQL / ANSI SQL では二重引用符で識別子を区切る。SQL の括弧なし scan は `"..."` を
+        // 保持し、`CALL "sales"."proc_name"` や `EXEC "dbo"."fn_Target"` で call を落とさず、
+        // 修飾子を別ターゲットとして誤発行しない必要がある。単引用符の文字列リテラルは引き続き無視する。
+        const string content = """
+            CALL "proc_name";
+            CALL "sales"."proc_name";
+            EXEC "dbo"."fn_Target";
+            CALL 'not_a_proc';
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "proc_name" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "proc_name" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "fn_Target" && r.ReferenceKind == "call" && r.Line == 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "sales" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "dbo" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "not_a_proc" && r.ReferenceKind == "call");
     }
 
     [Fact]

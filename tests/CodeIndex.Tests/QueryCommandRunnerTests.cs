@@ -3562,6 +3562,50 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_SqlExactNameCountSupportsMultipleUnicodeLeafQueries()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_sql_exact_multi_count");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/procs.sql",
+                "sql",
+                """
+                CREATE PROCEDURE dbo.Äpfel
+                AS
+                BEGIN
+                    SELECT 1;
+                END;
+                GO
+
+                CREATE PROCEDURE dbo.Bananen
+                AS
+                BEGIN
+                    SELECT 2;
+                END;
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "sql", "--name", "Äpfel", "--name", "Bananen", "--exact-name", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, json.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_CSharpConversionOperatorsUseDistinctExactNames()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_conversion_names");
@@ -6640,6 +6684,239 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Contains("cross-file hotspot family grouping", stdout);
             Assert.Contains("authoritative cross-file hotspot families", stdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_ReportsDegradedSqlGraphContractTrust()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+            DowngradeSqlGraphContractRows(dbPath);
+
+            var (jsonExitCode, jsonStdout, jsonStderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using (var jsonDocument = ParseJsonOutput(jsonStdout))
+            {
+                var json = jsonDocument.RootElement;
+                Assert.Equal(CommandExitCodes.Success, jsonExitCode);
+                Assert.Equal(string.Empty, jsonStderr);
+                Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
+                Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
+                Assert.Contains("DEGRADED", json.GetProperty("summary").GetString());
+            }
+
+            var (humanExitCode, humanStdout, humanStderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Equal(string.Empty, humanStderr);
+            Assert.Contains("SQL graph/dependency results may be stale.", humanStdout);
+            Assert.Contains(Path.GetFullPath(projectRoot), humanStdout);
+            Assert.Contains(Path.GetFullPath(dbPath), humanStdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_StaleSqlGraphContractIncludesDegradedState()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+            DowngradeSqlGraphContractRows(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["dbo.fn_Target", "--db", dbPath, "--json", "--lang", "sql", "--exact", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, json.GetProperty("count").GetInt32());
+            Assert.False(json.GetProperty("exact_index_available").GetBoolean());
+            Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
+            Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("degraded_reason").GetString());
+            Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_JsonResults_StaleSqlGraphContractIncludesDegradedState()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_sql_graph_contract_results");
+        try
+        {
+            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+            DowngradeSqlGraphContractRows(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["dbo.fn_Target", "--db", dbPath, "--json", "--lang", "sql"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("fn_Target", json.GetProperty("symbol_name").GetString());
+            Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
+            Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallers_JsonResults_StaleSqlGraphContractIncludesDegradedState()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callers_sql_graph_contract_results");
+        try
+        {
+            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+            DowngradeSqlGraphContractRows(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["dbo.fn_Target", "--db", dbPath, "--json", "--lang", "sql"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("fn_Target", json.GetProperty("callee_name").GetString());
+            Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
+            Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallees_JsonResults_StaleSqlGraphContractIncludesDegradedState()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callees_sql_graph_contract_results");
+        try
+        {
+            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+            DowngradeSqlGraphContractRows(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                ["dbo.usp_Caller", "--db", dbPath, "--json", "--lang", "sql"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("dbo.usp_Caller", json.GetProperty("caller_name").GetString());
+            Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
+            Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallees_ExactJson_NormalizesBracketedSqlCallerNames()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callees_sql_exact_bracketed");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/sql_exact_bracketed_callee_targets.sql",
+                "sql",
+                """
+                CREATE PROCEDURE [dbo].[fn_Target]
+                AS
+                BEGIN
+                    SELECT 1;
+                END
+                GO
+
+                CREATE PROCEDURE [sales].[fn_Target]
+                AS
+                BEGIN
+                    EXEC [sales].[fn_Target];
+                    EXEC fn_Target;
+                END
+                GO
+                """);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+                writer.MarkSqlGraphContractReady();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                ["sales.fn_Target", "--db", dbPath, "--json", "--lang", "sql", "--exact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("[sales].[fn_Target]", json.GetProperty("caller_name").GetString());
+            Assert.Equal("fn_Target", json.GetProperty("callee_name").GetString());
+            Assert.Equal(2, json.GetProperty("reference_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDeps_Json_StaleSqlGraphContractIncludesDegradedState()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_deps_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+            DowngradeSqlGraphContractRows(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+                ["--db", dbPath, "--json", "--lang", "sql"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
+            Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
         }
         finally
         {
@@ -11171,9 +11448,10 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, onlyStderr);
             Assert.Equal(0, onlyDocument.RootElement.GetProperty("count").GetInt32());
 
-            Assert.Equal(CommandExitCodes.NotFound, qualifiedExitCode);
+            Assert.Equal(CommandExitCodes.Success, qualifiedExitCode);
             Assert.Equal(string.Empty, qualifiedStderr);
-            Assert.Equal(0, qualifiedDocument.RootElement.GetProperty("count").GetInt32());
+            Assert.Equal(1, qualifiedDocument.RootElement.GetProperty("line").GetInt32());
+            Assert.Equal("users", qualifiedDocument.RootElement.GetProperty("symbol_name").GetString());
 
             Assert.Equal(CommandExitCodes.NotFound, mangledBracketExitCode);
             Assert.Equal(string.Empty, mangledBracketStderr);
@@ -11247,13 +11525,15 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, sourceStderr);
             Assert.Single(sourceRows);
 
-            Assert.Equal(CommandExitCodes.NotFound, qualifiedTargetExitCode);
+            Assert.Equal(CommandExitCodes.Success, qualifiedTargetExitCode);
             Assert.Equal(string.Empty, qualifiedTargetStderr);
-            Assert.Equal(0, qualifiedTargetDocument.RootElement.GetProperty("count").GetInt32());
+            Assert.Equal(3, qualifiedTargetDocument.RootElement.GetProperty("line").GetInt32());
+            Assert.Equal("audit_log", qualifiedTargetDocument.RootElement.GetProperty("symbol_name").GetString());
 
-            Assert.Equal(CommandExitCodes.NotFound, qualifiedSourceExitCode);
+            Assert.Equal(CommandExitCodes.Success, qualifiedSourceExitCode);
             Assert.Equal(string.Empty, qualifiedSourceStderr);
-            Assert.Equal(0, qualifiedSourceDocument.RootElement.GetProperty("count").GetInt32());
+            Assert.Equal(3, qualifiedSourceDocument.RootElement.GetProperty("line").GetInt32());
+            Assert.Equal("stage_log", qualifiedSourceDocument.RootElement.GetProperty("symbol_name").GetString());
 
             Assert.Equal(CommandExitCodes.NotFound, mangledBracketExitCode);
             Assert.Equal(string.Empty, mangledBracketStderr);
@@ -22201,6 +22481,57 @@ public class QueryCommandRunnerTests
         writer.MarkGraphReady();
         writer.MarkFoldReady();
         writer.MarkCSharpSymbolNameContractReady();
+    }
+
+    private static string CreateSqlGraphContractFixtureDb(string projectRoot)
+    {
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/target.sql",
+            "sql",
+            """
+            CREATE FUNCTION dbo.fn_Target()
+            RETURNS INT
+            AS
+            BEGIN
+                RETURN 1;
+            END;
+            GO
+            """);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/caller.sql",
+            "sql",
+            """
+            CREATE PROCEDURE dbo.usp_Caller
+            AS
+            BEGIN
+                SELECT dbo.fn_Target();
+            END;
+            GO
+            """);
+
+        using var db = new DbContext(dbPath);
+        var writer = new DbWriter(db.Connection);
+        writer.MarkGraphReady();
+        writer.MarkSqlGraphContractReady();
+        return dbPath;
+    }
+
+    private static void DowngradeSqlGraphContractRows(string dbPath)
+    {
+        using var db = new DbContext(dbPath);
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = """
+            UPDATE symbol_references
+            SET symbol_name = 'fn_Target',
+                symbol_name_folded = 'fn_target',
+                column_number = 1
+            WHERE symbol_name = 'dbo.fn_Target';
+            DELETE FROM codeindex_meta WHERE key = 'sql_graph_contract_version';
+            """;
+        cmd.ExecuteNonQuery();
     }
 
     private static (string ProjectRoot, string DbPath) CreateCountOnlyTotalFixtureDb()
