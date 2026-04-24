@@ -912,7 +912,7 @@ Once configured, the AI can directly call these tools:
 | `excerpt` | Reconstruct a specific line range from indexed chunks |
 | `map` | Summarize languages, modules, hotspots, and likely entrypoints |
 | `analyze_symbol` | Bundle definition, nearby symbols, references, callers, callees, file metadata, workspace trust metadata, and graph support metadata |
-| `outline` | Show all symbols in a single file with line numbers, signatures, and nesting |
+| `outline` | Show all symbols in a single file with line numbers, signatures, and container-depth nesting |
 | `status` | Database statistics |
 | `deps` | File-level dependency edges from the reference graph |
 | `impact_analysis` | Compute transitive callers of a symbol, with single-type fallback to heuristic file-level dependency hints and partial-definition hints |
@@ -1376,7 +1376,7 @@ cdidx outline src/CodeIndex/Cli/GitHelper.cs
 cdidx outline src/CodeIndex/Cli/GitHelper.cs --json
 ```
 
-1ファイル内の全シンボルを行順に、種別・シグネチャ・可視性・コンテナネスト付きで表示します。ファイル全体を読んだり `symbols` + `definition` をチェーンしたりする代わりに、1回でファイル構造を把握できます。
+1ファイル内の全シンボルを行順に、種別・シグネチャ・可視性・コンテナ深さに応じたネスト付きで表示します。ファイル全体を読んだり `symbols` + `definition` をチェーンしたりする代わりに、1回でファイル構造を把握できます。
 
 ### ファイル抜粋を再構成する
 
@@ -1859,7 +1859,7 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `excerpt` | インデックス済みチャンクから特定行範囲を再構成 |
 | `map` | 言語、モジュール、ホットスポット、推定エントリポイントを要約 |
 | `analyze_symbol` | 定義、近傍シンボル、参照、caller、callee、ファイル情報、ワークスペース信頼メタデータ、graph 対応メタデータをまとめて返す |
-| `outline` | 1ファイルの全シンボルを行番号・シグネチャ・ネスト構造付きで表示 |
+| `outline` | 1ファイルの全シンボルを行番号・シグネチャ・コンテナ深さに応じたネスト付きで表示 |
 | `status` | データベース統計情報 |
 | `deps` | 参照グラフからファイル間依存エッジを表示 |
 | `impact_analysis` | シンボルの推移的 caller を算出し、単一定義の型は heuristic な file-level dependency hint にフォールバックし、複数定義時はヒントも返す |

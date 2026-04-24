@@ -1393,7 +1393,7 @@ public static class QueryCommandRunner
                 foreach (var sym in outline.Symbols)
                 {
                     // Indent nested symbols under their container / コンテナ内のシンボルをインデント
-                    var indent = sym.ContainerName != null ? "    " : "";
+                    var indent = sym.Depth > 0 ? new string(' ', sym.Depth * 4) : "";
                     var ret = sym.ReturnType != null ? $": {sym.ReturnType} " : "";
                     var sig = sym.Signature ?? $"{sym.Kind} {sym.Name}";
                     // Avoid duplicating visibility when signature already contains it
