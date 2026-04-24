@@ -773,15 +773,18 @@ public static class ReferenceExtractor
                 if (csharpDocCommentText.IndexOf("cref=\"", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     var docContainer = FindDocumentedContainer(containerCandidates, lineNumber);
-                    EmitCSharpDocCrefReferences(
-                        csharpDocCommentText,
-                        references,
-                        seen,
-                        fileId,
-                        csharpDocCommentStartIndex,
-                        csharpDocCommentText.Trim(),
-                        lineNumber,
-                        docContainer);
+                    if (docContainer != null)
+                    {
+                        EmitCSharpDocCrefReferences(
+                            csharpDocCommentText,
+                            references,
+                            seen,
+                            fileId,
+                            csharpDocCommentStartIndex,
+                            csharpDocCommentText.Trim(),
+                            lineNumber,
+                            docContainer);
+                    }
                 }
                 csharpInDelimitedDocComment = nextCsharpDelimitedDocComment;
             }
@@ -7619,7 +7622,7 @@ public static class ReferenceExtractor
             }
         }
 
-        return best ?? FindInnermostContainer(candidates, lineNumber);
+        return best;
     }
 
     private static SymbolRecord? FindInnermostSameLineCSharpContainer(

@@ -8622,6 +8622,31 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatTripleSlashInsideMethodBodyAsDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                void Run()
+                {
+                    /// <see cref="Foo"/>
+                    var x = 1;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 6);
+    }
+
+    [Fact]
     public void Extract_CsharpDocCref_DelimitedDocCommentsKeepPhysicalLineColumn()
     {
         const string content = """
@@ -8644,6 +8669,31 @@ public class ReferenceExtractorTests
             && r.Line == 5));
         var expectedColumn = content.Split('\n')[4].IndexOf("Foo", StringComparison.Ordinal) + 1;
         Assert.Equal(expectedColumn, fooReference.Column);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatDelimitedBlockCommentsInsideMethodBodyAsDocComments()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                void Run()
+                {
+                    /** <see cref="Foo"/> */
+                    var x = 1;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 6);
     }
 
     [Fact]
