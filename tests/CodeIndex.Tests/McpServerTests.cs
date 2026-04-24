@@ -510,13 +510,19 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_Search_MaxLineWidthZeroReturnsError()
+    public void ToolsCall_Search_MaxLineWidthZeroDisablesTruncation()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"App","maxLineWidth":0}}}""")!;
-        var response = _server.HandleMessage(request)!;
+        var longLine = new string('a', 320) + "TARGET" + new string('b', 320);
+        InsertIndexedFile("src/long.cs", "csharp", longLine);
 
-        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
-        Assert.Equal("maxLineWidth must be greater than or equal to 1", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"TARGET","exact":true,"maxLineWidth":0}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var result = structured["results"]![0]!;
+
+        Assert.Contains("TARGET", result["snippet"]!.GetValue<string>());
+        Assert.DoesNotContain("...(+", result["snippet"]!.GetValue<string>());
+        Assert.True(result["snippet"]!.GetValue<string>().Length > 512);
     }
 
     [Fact]
@@ -829,15 +835,19 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_References_MaxLineWidthZeroReturnsError()
+    public void ToolsCall_References_MaxLineWidthZeroDisablesTruncation()
     {
-        InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
+        var longLine = "def login(user, password): return Run(user) # " + new string('x', 700);
+        InsertIndexedFile("src/session.py", "python", longLine);
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"Run","maxLineWidth":0}}}""")!;
         var response = _server.HandleMessage(request)!;
+        var result = response["result"]!["structuredContent"]!["results"]![0]!;
 
-        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
-        Assert.Equal("maxLineWidth must be greater than or equal to 1", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.False(result["contextTruncated"]!.GetValue<bool>());
+        Assert.Contains("Run(user)", result["context"]!.GetValue<string>());
+        Assert.DoesNotContain("...(+", result["context"]!.GetValue<string>());
+        Assert.True(result["context"]!.GetValue<string>().Length > 512);
     }
 
     [Fact]
@@ -2721,15 +2731,17 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_Excerpt_MaxLineWidthZeroReturnsError()
+    public void ToolsCall_Excerpt_MaxLineWidthZeroDisablesTruncation()
     {
-        InsertIndexedFile("dist/data-max-width-zero.txt", "text", new string('a', 320) + "TARGET" + new string('b', 320));
+        var longLine = new string('a', 320) + "TARGET" + new string('b', 320);
+        InsertIndexedFile("dist/data-max-width-zero.txt", "text", longLine);
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data-max-width-zero.txt","startLine":1,"endLine":1,"maxLineWidth":0}}}""")!;
         var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
 
-        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
-        Assert.Equal("maxLineWidth must be greater than or equal to 1", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.False(structured["contentTruncated"]!.GetValue<bool>());
+        Assert.Equal(longLine, structured["content"]!.GetValue<string>());
     }
 
     [Fact]
@@ -2824,15 +2836,18 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_FindInFile_MaxLineWidthZeroReturnsError()
+    public void ToolsCall_FindInFile_MaxLineWidthZeroDisablesTruncation()
     {
-        InsertIndexedFile("dist/search-max-width-zero.txt", "text", new string('a', 320) + "target" + new string('b', 320));
+        var longLine = new string('a', 320) + "target" + new string('b', 320);
+        InsertIndexedFile("dist/search-max-width-zero.txt", "text", longLine);
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_in_file","arguments":{"query":"target","path":"dist/search-max-width-zero.txt","maxLineWidth":0}}}""")!;
         var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var result = structured["results"]![0]!;
 
-        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
-        Assert.Equal("maxLineWidth must be greater than or equal to 1", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.False(result["snippetTruncated"]!.GetValue<bool>());
+        Assert.Equal(longLine, result["snippet"]!.GetValue<string>());
     }
 
     [Fact]
@@ -2906,20 +2921,22 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_AnalyzeSymbol_MaxLineWidthZeroReturnsError()
+    public void ToolsCall_AnalyzeSymbol_ZeroMaxLineWidthDisablesTruncation()
     {
+        var longLine = "const x = 0; " + new string('a', 320) + " target(); " + new string('b', 320);
         InsertIndexedFile("src/analyze-target.js", "javascript",
-            """
-            function target() {
-              return true;
-            }
-            """);
+            "function target() { return true; }\n" + longLine);
 
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"target","maxLineWidth":0}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"target","lang":"javascript","maxLineWidth":0}}}""")!;
         var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var firstReference = structured["references"]![0]!;
 
-        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
-        Assert.Equal("maxLineWidth must be greater than or equal to 1", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.False(firstReference["contextTruncated"]!.GetValue<bool>());
+        Assert.Contains("target()", firstReference["context"]!.GetValue<string>());
+        Assert.DoesNotContain("...(+", firstReference["context"]!.GetValue<string>());
+        Assert.True(firstReference["context"]!.GetValue<string>().Length > 512);
+        Assert.Equal(0, structured["maxLineWidth"]!.GetValue<int>());
     }
 
     [Fact]

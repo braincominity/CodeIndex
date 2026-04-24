@@ -1096,8 +1096,13 @@ public static class QueryCommandRunner
                     value = args[i + 1];
                     i++;
                 }
-                if ((arg == "--limit" || arg == "--top" || arg == "--max-line-width") && (!int.TryParse(value, out var limit) || limit <= 0))
-                    return $"Error: {arg} requires a positive integer, got '{value}'";
+                if (arg == "--limit" || arg == "--top")
+                {
+                    if (!int.TryParse(value, out var limit) || limit <= 0)
+                        return $"Error: {arg} requires a positive integer, got '{value}'";
+                }
+                if (arg == "--max-line-width" && (!int.TryParse(value, out var widthValue) || widthValue < 0))
+                    return $"Error: {arg} requires a non-negative integer, got '{value}'";
                 if (arg == "--max-line-width" && int.TryParse(value, out var widthCeil) && widthCeil > LineWidthFormatter.MaxAllowedLineWidth)
                     return $"Error: --max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth} (got '{value}').";
                 if ((arg == "--before" || arg == "--after") && (!int.TryParse(value, out var context) || context < 0))
@@ -2775,7 +2780,7 @@ public static class QueryCommandRunner
                 case "--max-line-width":
                     if (!TryReadRawOptionValue(args, ref i, "--max-line-width", inlineValue, out var maxLineWidthValue, out var missingMaxLineWidthError))
                         AddParseError(missingMaxLineWidthError!);
-                    else if (TryParsePositiveInt(maxLineWidthValue!, "--max-line-width", out var parsedMaxLineWidth, out var maxLineWidthError))
+                    else if (TryParseNonNegativeInt(maxLineWidthValue!, "--max-line-width", out var parsedMaxLineWidth, out var maxLineWidthError))
                     {
                         if (parsedMaxLineWidth > LineWidthFormatter.MaxAllowedLineWidth)
                             AddParseError($"--max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth} (got '{maxLineWidthValue}').");

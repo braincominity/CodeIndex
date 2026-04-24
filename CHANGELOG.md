@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Fixed
 - **SymbolExtractor exact-duplicate suppression now uses hash-based per-file bookkeeping (#517)** — `AddSymbolRecord` now tracks exact symbol identities and same-line signature occurrences in per-file hash maps instead of rescanning the accumulated list on every append, preserving the same-line restart duplicate guard while avoiding the quadratic hot path. Added a regression that keeps the surviving same-line `Child` row singular in the `#571`-style fixture and a skipped large-fixture smoke test for symbol-volume performance. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`, `tests/CodeIndex.Tests/PerformanceTests.cs`. Closes #517.
+- **`--max-line-width 0` now preserves the pre-existing no-clamp compatibility contract** — `search`, `references`, `find`, `excerpt`, `inspect`, MCP `maxLineWidth`, and the shared `LineWidthFormatter` helpers once again treat `0` as "do not clamp" instead of rejecting it, so older automation that used `0` to request full-width lines keeps working. Added regression coverage for the CLI parser, `find`, MCP tools, and the shared formatter helper. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Database/LineWidthFormatter.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `tests/CodeIndex.Tests/SearchSnippetFormatterTests.cs`.
 
 ### [1.15.1] - 2026-04-24
 
@@ -906,6 +907,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### 修正
 - **SymbolExtractor の完全重複抑止をファイル単位の hash 管理に変更 (#517)** — `AddSymbolRecord` が、毎回の蓄積済みリスト再走査の代わりに、`SymbolRecord` の完全一致キーと same-line signature の出現回数をファイルごとのハッシュマップで追跡するようになり、same-line restart の重複抑止を保ったまま二乗オーダーのホットパスを避けるようになった。`#571` 系 fixture で surviving する `Child` 行が 1 件のままであることを確認する回帰テストと、symbol volume 向けの手動 smoke test を追加した。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`, `tests/CodeIndex.Tests/PerformanceTests.cs`. Closes #517.
+- **`--max-line-width 0` が従来の「クランプしない」互換契約を維持するように修正** — `search` / `references` / `find` / `excerpt` / `inspect`、MCP の `maxLineWidth`、および共有 `LineWidthFormatter` ヘルパーは、`0` を拒否するのではなく再び「クランプしない」として扱うようになり、`0` で全幅行を要求していた既存の自動化がそのまま動くようになりました。CLI パーサー、`find`、MCP ツール、共有 formatter ヘルパー向けの回帰テストを追加しました。対象: `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Database/LineWidthFormatter.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `tests/CodeIndex.Tests/SearchSnippetFormatterTests.cs`.
 
 ### [1.15.1] - 2026-04-24
 
