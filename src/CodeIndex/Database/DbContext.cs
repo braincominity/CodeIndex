@@ -316,6 +316,17 @@ public class DbContext : IDisposable
     // leaving `VerbatimImportAttribute : BaseAttr` as `is_metadata_target=0` and dropping
     // the attribute-consumer edge from `deps` / `impact`. Bumping the contract degrades
     // iter-5 DBs to the legacy reader path until reindexed.
+    // Version 4 (#435 iter 7) widens the C# namespace / class / struct / interface / enum
+    // declaration regexes to accept verbatim identifiers (`public class @BaseAttr : Attribute`,
+    // `namespace @Foo.@Bar`) and canonicalizes the persisted symbol name so the qualified
+    // index keys off `BaseAttr` / `Foo.Bar` regardless of source syntax. Iter-6 DBs never
+    // indexed verbatim class declarations at all (the extractor regex rejected them), so
+    // every derived `class X : @BaseAttr` stayed `is_metadata_target=0` and dropped the
+    // attribute edge even with iter-6's base-name stripping in place. Iter 7 also teaches
+    // `StripCSharpVerbatimPrefixes` about the `::` boundary so `global::@Foo.@Bar.BaseAttr`
+    // canonicalizes all the way to `global::Foo.Bar.BaseAttr` instead of leaving the first
+    // `@` after `::` intact. Bumping the contract forces iter-6 DBs to degrade to the
+    // legacy reader path until a reindex republishes `is_metadata_target`.
     // バージョン 2 (#435 iter 5)で resolver が import を考慮するようになった。非修飾な基底は
     // deriving ファイルの `using Namespace;` / `using Alias = FQN;`（および全ファイル集約の
     // `global using`）を通して解決してから BCL の `Attribute` サフィックス規約にフォールバック
@@ -328,7 +339,18 @@ public class DbContext : IDisposable
     // `@Foo.@Bar` を残していたため qualified 索引に当たらず、`VerbatimImportAttribute :
     // BaseAttr` が `is_metadata_target=0` となり attribute consumer 側の edge が落ちていた。
     // 契約バージョンを上げて、再 index 前の iter-5 DB を reader の legacy パスに縮退させる。
-    public const int MetadataTargetVersion = 3;
+    // バージョン 4 (#435 iter 7) で C# の namespace / class / struct / interface / enum 宣言
+    // 正規表現が verbatim 識別子（`public class @BaseAttr : Attribute` / `namespace
+    // @Foo.@Bar`）を受理するようになり、永続化されるシンボル名も canonical 化される。qualified
+    // 索引は `BaseAttr` / `Foo.Bar` としてキー付けされ、ソース表記に依らない。iter-6 DB は
+    // verbatim class 宣言自体がインデックスされず（extractor の regex が弾いていた）、
+    // `class X : @BaseAttr` のような派生は iter 6 の base 側 `@` 剥がしでも resolve できず
+    // `is_metadata_target=0` のまま attribute edge が落ちていた。iter 7 では
+    // `StripCSharpVerbatimPrefixes` も `::` 境界を処理するよう拡張し、`global::@Foo.@Bar.BaseAttr`
+    // を `global::Foo.Bar.BaseAttr` まで完全に canonical 化する（iter 6 は `::` 直後の `@` を
+    // 残していた）。契約バージョンを上げて iter-6 DB を reader の legacy パスに縮退させ、
+    // 再 index で republish されるまで metadata edge を黙って誤るのを防ぐ。
+    public const int MetadataTargetVersion = 4;
     public static string GetMetadataTargetVersionMetaKey(string lang) => $"metadata_target_version_{lang}";
 
     public int GetUserVersion()

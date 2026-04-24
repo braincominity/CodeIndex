@@ -208,7 +208,7 @@ public static class SymbolExtractor
         "public", "private", "protected", "static", "readonly", "abstract", "override", "async", "get", "set"
     ];
 
-    private static readonly Regex CSharpEnumDeclarationRegex = new(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+|(?:file)\s+)*enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpEnumDeclarationRegex = new(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+|(?:file)\s+)*enum\s+(?<name>@?\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpEnumMemberRegex = new(@"^\s*(?<name>@?[_\p{L}]\w*)\s*(?:=\s*(?:-?\d|0x|@?[_\p{L}]\w*(?:\s*\|\s*@?[_\p{L}]\w*)*)[^""']*)?,?\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpEnumMemberNameRegex = new(@"^\s*(?<name>@?[_\p{L}]\w*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
@@ -318,8 +318,14 @@ public static class SymbolExtractor
         ],
         ["csharp"] =
         [
-            new("namespace", new Regex(@"^\s*namespace\s+(?<name>[\w.]+)\s*;", RegexOptions.Compiled), BodyStyle.None),  // file-scoped namespace (C# 10+)
-            new("namespace", new Regex(@"^\s*namespace\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.Brace),  // block-scoped namespace
+            // Verbatim-identifier segments (`@Foo.@Bar`) are accepted per segment and later
+            // canonicalized to `Foo.Bar` by `NormalizeCSharpSymbolName`. See the iter-6 / iter-7
+            // notes around `StripCSharpVerbatimPrefixes` for the shared canonical-form policy.
+            // verbatim 識別子の各セグメント（`@Foo.@Bar`）を受け入れ、`NormalizeCSharpSymbolName`
+            // で `Foo.Bar` に canonical 化する。iter-6 / iter-7 の `StripCSharpVerbatimPrefixes`
+            // 周辺コメントを参照。
+            new("namespace", new Regex(@"^\s*namespace\s+(?<name>@?\w+(?:\.@?\w+)*)\s*;", RegexOptions.Compiled), BodyStyle.None),  // file-scoped namespace (C# 10+)
+            new("namespace", new Regex(@"^\s*namespace\s+(?<name>@?\w+(?:\.@?\w+)*)", RegexOptions.Compiled), BodyStyle.Brace),  // block-scoped namespace
             // extern alias (must precede using directives per C# spec) — captures assembly-alias reconciliation
             // extern alias — C# 仕様上 using より前に置かれるファイル先頭宣言。アセンブリエイリアス用
             new("import",    new Regex(@"^\s*extern\s+alias\s+(?<name>\w+)\s*;", RegexOptions.Compiled), BodyStyle.None),
@@ -387,7 +393,7 @@ public static class SymbolExtractor
             // `new public interface` for nested types). Closes #355.
             // インターフェース — visibility 省略可。修飾子順序は自由
             // （例: `partial public interface`、`file interface`、ネスト型向けの `new public interface`）。Closes #355.
-            new("interface", new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:partial|unsafe|file|new)\s+)*interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("interface", new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:partial|unsafe|file|new)\s+)*interface\s+(?<name>@?\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Enum — visibility optional / enum — visibility 省略可
             new("enum",      CSharpEnumDeclarationRegex, BodyStyle.Brace, "visibility"),
             // Struct (including record struct, ref struct, readonly struct) — visibility optional;
@@ -396,14 +402,14 @@ public static class SymbolExtractor
             // 構造体（record struct, ref struct, readonly struct を含む）— visibility 省略可。
             // 修飾子順序は自由で、visibility は任意位置に置いてよい（例: `readonly public struct`、
             // `ref public struct`）。Closes #355.
-            new("struct",    new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|partial|readonly|file|new|ref|unsafe)\s+)*(?:record\s+)?struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("struct",    new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|partial|readonly|file|new|ref|unsafe)\s+)*(?:record\s+)?struct\s+(?<name>@?\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Class (including record, record class) — visibility optional (defaults to internal
             // for top-level); modifier order is free, so visibility may appear anywhere in the
             // modifier sequence (e.g. `abstract public class`, `sealed public class`). Closes #355.
             // クラス（record, record class を含む）— visibility は省略可能（トップレベルでは internal がデフォルト）。
             // 修飾子順序は自由で、visibility は任意位置に置いてよい（例: `abstract public class`、
             // `sealed public class`）。Closes #355.
-            new("class",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*(?:record\s+class\s+|record\s+|class\s+)(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("class",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*(?:record\s+class\s+|record\s+|class\s+)(?<name>@?\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Implicit/explicit conversion operator — must come before general operator pattern.
             // Visibility may appear before or after `static` / `unsafe` / `extern`. Closes #355.
             // Modifier slot also accepts `abstract|virtual|sealed|override|new` so C# 11
@@ -12391,7 +12397,64 @@ public static class SymbolExtractor
         if (name == "this" && match.Value.Contains("this", StringComparison.Ordinal) && match.Value.Contains('[', StringComparison.Ordinal))
             return "Item";
 
+        // Canonicalize verbatim identifier prefixes (`@` escape) so the persisted
+        // symbol name matches the writer-side import / base-resolution canonical
+        // form in `DbWriter.StripCSharpVerbatimPrefixes`. `@BaseAttr` -> `BaseAttr`,
+        // `@Foo.@Bar` -> `Foo.Bar` (namespaces). Without this, iter 5's import-aware
+        // resolver and iter 6's base normalizer cannot match a class declared as
+        // `public class @BaseAttr : Attribute` since its persisted name would stay
+        // `@BaseAttr` while imports / qualified lookups use `BaseAttr`. Mirrors the
+        // one-way canonicalization policy: the `@` escape is purely syntactic.
+        // verbatim 識別子（`@` エスケープ）を canonical 化し、永続化されたシンボル名と
+        // `DbWriter.StripCSharpVerbatimPrefixes` の正規化側のキーが一致するようにする。
+        // `@BaseAttr` -> `BaseAttr`、`@Foo.@Bar` -> `Foo.Bar`（名前空間）。これをしないと
+        // `public class @BaseAttr : Attribute` の class 行が `@BaseAttr` のまま永続化され、
+        // iter 5 の import-aware resolver と iter 6 の base 正規化では一致しない。
+        // `@` エスケープは純粋に構文上のものであるという一方向 canonical 化の方針に従う。
+        if (name.Length > 0 && name.IndexOf('@') >= 0)
+            return StripCSharpVerbatimPrefixes(name);
+
         return name;
+    }
+
+    // Mirror of DbWriter.StripCSharpVerbatimPrefixes — strip `@` verbatim escapes from
+    // identifier starts with segment boundaries at string start, `.`, and `::`. Kept
+    // local to SymbolExtractor so the extractor has no dependency on the Database layer.
+    // DbWriter.StripCSharpVerbatimPrefixes のミラー。文字列先頭、`.`、`::` を境界として
+    // 各識別子先頭の verbatim `@` を剥がす。Extractor が Database 層に依存しないようローカルに置く。
+    private static string StripCSharpVerbatimPrefixes(string qualified)
+    {
+        if (qualified.Length == 0 || qualified.IndexOf('@') < 0)
+            return qualified;
+        var sb = new System.Text.StringBuilder(qualified.Length);
+        bool atBoundary = true;
+        for (int i = 0; i < qualified.Length; i++)
+        {
+            char c = qualified[i];
+            if (atBoundary && c == '@'
+                && i + 1 < qualified.Length
+                && (qualified[i + 1] == '_' || char.IsLetter(qualified[i + 1])))
+            {
+                atBoundary = false;
+                continue;
+            }
+            sb.Append(c);
+            if (c == '.')
+            {
+                atBoundary = true;
+            }
+            else if (c == ':' && i + 1 < qualified.Length && qualified[i + 1] == ':')
+            {
+                sb.Append(':');
+                i++;
+                atBoundary = true;
+            }
+            else
+            {
+                atBoundary = false;
+            }
+        }
+        return sb.Length == qualified.Length ? qualified : sb.ToString();
     }
 
     private static bool TryReadCSharpConversionOperatorName(Match match, string matchLine, out string name)

@@ -1167,31 +1167,65 @@ public class DbWriter
             global.Namespaces.Add(ns);
     }
 
-    // Strip the C# verbatim-identifier `@` prefix from each dotted segment of a qualified
-    // name. `@Foo.@Bar.BaseAttr` → `Foo.Bar.BaseAttr`; `Foo.Bar` → `Foo.Bar` (unchanged).
+    // Strip the C# verbatim-identifier `@` prefix from each identifier segment of a
+    // qualified name. Segment boundaries are the start of the string, every `.`, and
+    // every `::` (the alias-qualifier boundary that produces `global::Foo`,
+    // `Alias::Foo`, etc.). `@Foo.@Bar.BaseAttr` → `Foo.Bar.BaseAttr`;
+    // `global::@Foo.@Bar.BaseAttr` → `global::Foo.Bar.BaseAttr`; `Foo.Bar` → unchanged.
     // Runs on the writer side so every qualified-index key and every scope/import entry
     // shares one canonical form regardless of whether the source used verbatim syntax.
-    // Issue #435 codex review iter 6.
-    // 修飾名の各 dotted segment 先頭の C# verbatim 識別子 `@` を剥がす。`@Foo.@Bar.BaseAttr`
-    // は `Foo.Bar.BaseAttr` に正規化。書き込み側で正規化することで、qualified 索引キーと
-    // scope / import エントリをソース表記に依らない単一の形に統一する。
+    // The `@` escape is purely syntactic in C# (`@class` is the identifier `class`
+    // escaping a keyword), so stripping it never changes identity. Issue #435 codex
+    // review iter 6 + iter 7 (the `::` boundary was missing in iter 6 so
+    // `global::@Foo.@Bar.BaseAttr` stayed as `global::@Foo.Bar.BaseAttr` and did not
+    // match the canonical qualified index key).
+    // 修飾名の各識別子セグメント先頭に付く C# verbatim 識別子 `@` を剥がす。セグメント境界は
+    // 文字列の先頭、`.`、`::`（`global::Foo` や `Alias::Foo` を作る alias 修飾境界）。
+    // `@Foo.@Bar.BaseAttr` → `Foo.Bar.BaseAttr`、`global::@Foo.@Bar.BaseAttr`
+    // → `global::Foo.Bar.BaseAttr`、`Foo.Bar` → そのまま。書き込み側で正規化することで、
+    // qualified 索引キーと scope / import エントリをソース表記に依らない単一の canonical 形に
+    // 統一する。`@` エスケープは C# では純粋に構文上のものなので（`@class` は識別子
+    // `class`）、剥がしても同一性は変わらない。Issue #435 codex review iter 6 + iter 7
+    // （iter 6 は `::` 境界を処理していなかったため `global::@Foo.@Bar.BaseAttr` が
+    // `global::@Foo.Bar.BaseAttr` のまま残り、canonical な qualified 索引キーと一致しなかった）。
     private static string StripCSharpVerbatimPrefixes(string qualified)
     {
         if (qualified.Length == 0 || qualified.IndexOf('@') < 0)
             return qualified;
-        var segments = qualified.Split('.');
-        bool anyChanged = false;
-        for (int i = 0; i < segments.Length; i++)
+        var sb = new System.Text.StringBuilder(qualified.Length);
+        bool atBoundary = true;
+        for (int i = 0; i < qualified.Length; i++)
         {
-            var seg = segments[i];
-            if (seg.Length > 0 && seg[0] == '@')
+            char c = qualified[i];
+            if (atBoundary && c == '@'
+                && i + 1 < qualified.Length
+                && IsCSharpIdentifierStartChar(qualified[i + 1]))
             {
-                segments[i] = seg.Substring(1);
-                anyChanged = true;
+                // Skip the verbatim prefix; the next iteration emits the escaped identifier.
+                atBoundary = false;
+                continue;
+            }
+            sb.Append(c);
+            if (c == '.')
+            {
+                atBoundary = true;
+            }
+            else if (c == ':' && i + 1 < qualified.Length && qualified[i + 1] == ':')
+            {
+                sb.Append(':');
+                i++;
+                atBoundary = true;
+            }
+            else
+            {
+                atBoundary = false;
             }
         }
-        return anyChanged ? string.Join('.', segments) : qualified;
+        return sb.Length == qualified.Length ? qualified : sb.ToString();
     }
+
+    private static bool IsCSharpIdentifierStartChar(char c) =>
+        c == '_' || char.IsLetter(c);
 
     // Yield every qualified-name variant that callers might write against this class:
     // `Namespace.TypeName`, `global::Namespace.TypeName`, and (for nested classes whose

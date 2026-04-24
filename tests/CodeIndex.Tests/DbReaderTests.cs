@@ -3840,6 +3840,143 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverHandlesVerbatimBaseClassDeclaration()
+    {
+        // issue #435 codex review iter 7: the defining side uses a verbatim identifier in
+        // the declaration itself (`public class @BaseAttr : Attribute`). Before iter 7 the
+        // C# class-declaration regex only accepted `\w+` for the name capture, so this file
+        // did not produce a class row at all. The deriving file's `class Verbatim : BaseAttr`
+        // then had no in-repo target to resolve against and stayed `is_metadata_target=0`.
+        // issue #435 codex review iter 7: 宣言側自体が verbatim（`public class @BaseAttr :
+        // Attribute`）のケース。iter 7 以前の C# class 宣言 regex は name キャプチャが `\w+`
+        // のみで、この file は class 行をまったく生成しなかった。その結果 `class Verbatim :
+        // BaseAttr` 側も in-repo target を持てず `is_metadata_target=0` のままだった。
+        InsertIndexedFile("src/V/VerbatimBase.cs", "csharp",
+            """
+            using System;
+
+            namespace Foo.Bar
+            {
+                public class @BaseAttr : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/V/VerbatimBaseTypeAttribute.cs", "csharp",
+            """
+            using Foo.Bar;
+
+            namespace V
+            {
+                public class VerbatimBaseTypeAttribute : BaseAttr
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/V/VerbatimBaseConsumer.cs", "csharp",
+            """
+            namespace V
+            {
+                [VerbatimBaseType]
+                public class VerbatimBaseConsumer
+                {
+                }
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        using (var defnCmd = _db.Connection.CreateCommand())
+        {
+            // Verify the verbatim class declaration is persisted with its canonical name.
+            // 宣言側 verbatim が canonical 名で永続化されていることを確認。
+            defnCmd.CommandText = @"
+                SELECT s.name
+                FROM symbols s
+                JOIN files f ON f.id = s.file_id
+                WHERE f.path = 'src/V/VerbatimBase.cs' AND s.kind = 'class'";
+            var defnName = defnCmd.ExecuteScalar() as string;
+            Assert.Equal("BaseAttr", defnName);
+        }
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.is_metadata_target
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.path = 'src/V/VerbatimBaseTypeAttribute.cs' AND s.kind = 'class' AND s.name = 'VerbatimBaseTypeAttribute'";
+        var flag = cmd.ExecuteScalar();
+        Assert.Equal(1L, Convert.ToInt64(flag));
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+        Assert.Contains(dependencies, d => d.SourcePath == "src/V/VerbatimBaseConsumer.cs" && d.TargetPath == "src/V/VerbatimBaseTypeAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverHandlesGlobalQualifiedVerbatimBase()
+    {
+        // issue #435 codex review iter 7: the consumer writes its base as
+        // `global::@Foo.@Bar.BaseAttr`. iter 6's `StripCSharpVerbatimPrefixes` only handled
+        // `.` boundaries, so after splitting into segments the first segment
+        // `global::@Foo` kept its `@`, the later `global::` trim produced
+        // `@Foo.Bar.BaseAttr`, and the qualified-index lookup missed the canonical key
+        // `Foo.Bar.BaseAttr`. iter 7 teaches the helper about the `::` boundary.
+        // issue #435 codex review iter 7: consumer が基底を `global::@Foo.@Bar.BaseAttr`
+        // と書くケース。iter 6 の `StripCSharpVerbatimPrefixes` は `.` 境界しか扱わず、
+        // 最初のセグメント `global::@Foo` の `@` が残り、後段の `global::` 剥がしを経て
+        // `@Foo.Bar.BaseAttr` になって canonical なキー `Foo.Bar.BaseAttr` と一致しなかった。
+        // iter 7 で helper が `::` 境界も処理するようになった。
+        InsertIndexedFile("src/Foo/Bar/BaseAttr.cs", "csharp",
+            """
+            using System;
+
+            namespace Foo.Bar
+            {
+                public class BaseAttr : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/Q/QualifiedVerbatimNamespaceAttribute.cs", "csharp",
+            """
+            namespace Q
+            {
+                public class QualifiedVerbatimNamespaceAttribute : global::@Foo.@Bar.BaseAttr
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/Q/QualifiedVerbatimConsumer.cs", "csharp",
+            """
+            namespace Q
+            {
+                [QualifiedVerbatimNamespace]
+                public class QualifiedVerbatimConsumer
+                {
+                }
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.is_metadata_target
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.path = 'src/Q/QualifiedVerbatimNamespaceAttribute.cs' AND s.kind = 'class' AND s.name = 'QualifiedVerbatimNamespaceAttribute'";
+        var flag = cmd.ExecuteScalar();
+        Assert.Equal(1L, Convert.ToInt64(flag));
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+        Assert.Contains(dependencies, d => d.SourcePath == "src/Q/QualifiedVerbatimConsumer.cs" && d.TargetPath == "src/Q/QualifiedVerbatimNamespaceAttribute.cs");
+    }
+
+    [Fact]
     public void ResolveCSharpMetadataTargets_DoesNotMistakeGenericConstraintForBaseList()
     {
         // issue #435 codex review iter 1: `class Foo<T> where T : Attribute {}` has no
