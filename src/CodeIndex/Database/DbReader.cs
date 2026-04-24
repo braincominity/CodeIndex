@@ -1044,7 +1044,7 @@ public partial class DbReader
 
         var patternContext = contextForFilter;
         var patternColumn = columnNumber;
-        TryBuildCSharpUsingStaticPatternContextWindow(path, lineNumber, contextForFilter, columnNumber, out patternContext, out patternColumn);
+        TryBuildCSharpUsingStaticPatternContextWindow(path, lineNumber, symbolName, contextForFilter, columnNumber, out patternContext, out patternColumn);
         if (ShouldSuppressCSharpQualifiedConstantPatternReference(path, lineNumber, symbolName, patternContext, patternColumn))
             return true;
 
@@ -2278,12 +2278,13 @@ public partial class DbReader
             || TryConsumeTrailingCSharpToken(text, ref cursor, "default");
     }
 
-    private void TryBuildCSharpUsingStaticPatternContextWindow(string path, int lineNumber, string contextForFilter, int columnNumber, out string patternContext, out int patternColumn)
+    private void TryBuildCSharpUsingStaticPatternContextWindow(string path, int lineNumber, string symbolName, string contextForFilter, int columnNumber, out string patternContext, out int patternColumn)
     {
         patternContext = contextForFilter;
         patternColumn = columnNumber;
         if (!_hasChunksTable
             || string.IsNullOrWhiteSpace(path)
+            || string.IsNullOrWhiteSpace(symbolName)
             || string.IsNullOrWhiteSpace(contextForFilter)
             || lineNumber <= 1
             || columnNumber <= 0)
@@ -2291,37 +2292,54 @@ public partial class DbReader
             return;
         }
 
-        // Multiline logical patterns can legitimately span several physical lines
-        // (`case` / head / `or` / head / ...), so keep a slightly wider window.
-        // `case` / head / `or` / head / ... のような複数行 pattern でも先頭 anchor を
-        // 見失わないよう、少し広めのコンテキスト窓を読む。
-        var startLine = Math.Max(1, lineNumber - 6);
+        if (IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn)
+            || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _))
+        {
+            return;
+        }
+
+        // Multiline logical patterns can be longer than a tiny fixed window. Walk backward
+        // until we either rediscover the real `case` / `is` anchor or hit an obvious boundary.
+        // 長い複数行 logical pattern では小さな固定窓だと anchor を見失うため、実際の
+        // `case` / `is` anchor を再発見するか、明確な境界に当たるまで後方へ戻る。
+        const int maxContextLines = 64;
+        var startLine = Math.Max(1, lineNumber - (maxContextLines - 1));
         if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap, startLine, lineNumber)
             || !lineMap.TryGetValue(lineNumber, out var currentLine))
         {
             return;
         }
 
-        var lines = new List<string>();
+        var lines = new List<string> { currentLine };
         var prefixLength = 0;
-        for (var absoluteLine = startLine; absoluteLine <= lineNumber; absoluteLine++)
+
+        for (var absoluteLine = lineNumber - 1; absoluteLine >= startLine; absoluteLine--)
         {
             if (!lineMap.TryGetValue(absoluteLine, out var lineText))
-                continue;
+                break;
 
-            if (absoluteLine < lineNumber)
-                prefixLength += lineText.Length + 1;
-            lines.Add(lineText);
+            if (string.IsNullOrWhiteSpace(lineText))
+                break;
+
+            prefixLength += lineText.Length + 1;
+            lines.Insert(0, lineText);
+
+            var candidateContext = string.Join('\n', lines);
+            var candidateColumn = prefixLength + columnNumber;
+            if (IsCSharpUsingStaticConstantPatternContext(candidateContext, symbolName, candidateColumn)
+                || TryExtractQualifiedCSharpPatternQualifier(candidateContext, symbolName, candidateColumn, out _))
+            {
+                patternContext = candidateContext;
+                patternColumn = candidateColumn;
+                return;
+            }
         }
 
-        if (lines.Count <= 1)
+        if (lines.Count > 1)
         {
-            patternContext = currentLine;
-            return;
+            patternContext = string.Join('\n', lines);
+            patternColumn = prefixLength + columnNumber;
         }
-
-        patternContext = string.Join('\n', lines);
-        patternColumn = prefixLength + columnNumber;
     }
 
     private HashSet<string> GetScopedCSharpQualifiedPatternQualifierCandidates(string path, int lineNumber, string qualifier)

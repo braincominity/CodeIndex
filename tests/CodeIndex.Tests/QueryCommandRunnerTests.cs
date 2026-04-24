@@ -16501,6 +16501,86 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_CSharpLongMultiLineCaseUsingStaticConstantPattern_NonExactKeepsRows_ExactSuppressesAll()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_long_multiline_case_constant_pattern_suppressed");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Defs.cs", "csharp",
+                """
+                namespace Probe;
+
+                public enum Color
+                {
+                    Red
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Use.cs", "csharp",
+                """
+                using static Probe.Color;
+
+                namespace Probe;
+
+                class Demo
+                {
+                    void Run(object value)
+                    {
+                        switch (value)
+                        {
+                            case
+                                Red
+                                or
+                                Red
+                                or
+                                Red
+                                or
+                                Red:
+                                break;
+                        }
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (nonExactExitCode, nonExactStdout, nonExactStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--path", "src/Use.cs"],
+                _jsonOptions));
+            var nonExactRows = ParseJsonLines(nonExactStdout)
+                .Select(document => document.RootElement)
+                .ToList();
+
+            Assert.Equal(CommandExitCodes.Success, nonExactExitCode);
+            Assert.Equal(string.Empty, nonExactStderr);
+            Assert.Equal(4, nonExactRows.Count);
+            Assert.Equal([12, 14, 16, 18], nonExactRows.Select(row => row.GetProperty("line").GetInt32()).OrderBy(line => line).ToArray());
+            Assert.All(nonExactRows, row => Assert.Equal("Run", row.GetProperty("container_name").GetString()));
+
+            var (exactExitCode, exactStdout, exactStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            using var exactDocument = ParseJsonOutput(exactStdout);
+
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--count"],
+                _jsonOptions));
+            using var countDocument = ParseJsonOutput(countStdout);
+
+            Assert.Equal(CommandExitCodes.NotFound, exactExitCode);
+            Assert.Equal(string.Empty, exactStderr);
+            Assert.Equal(0, exactDocument.RootElement.GetProperty("count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal(string.Empty, countStderr);
+            Assert.Equal(0, countDocument.RootElement.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpQualifiedMultiLineCaseLogicalConstantPattern_StaysSuppressed()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_qualified_multiline_case_constant_pattern_suppressed");
