@@ -1933,11 +1933,14 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var zeroResultSqlGraphSignal = NarrowSqlGraphContractSignal(
+                baseSqlGraphSignal,
+                reader.ScopeMayIncludeSqlSymbols(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests));
             if (groupByName)
             {
                 var groupedResults = reader.GetGroupedSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
                 var effectiveSqlGraphSignal = groupedResults.Count == 0
-                    ? baseSqlGraphSignal
+                    ? zeroResultSqlGraphSignal
                     : NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, groupedResults.Select(result => result.Symbol.Lang), options.Lang);
                 if (groupedResults.Count == 0)
                 {
@@ -2039,7 +2042,7 @@ public static class QueryCommandRunner
 
             var results = reader.GetSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var sqlGraphSignal = results.Count == 0
-                ? baseSqlGraphSignal
+                ? zeroResultSqlGraphSignal
                 : NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Symbol.Lang), options.Lang);
             var hotspotSignal = reader.GetHotspotFamilySignal(options.Lang);
             if (results.Count == 0)
@@ -2176,11 +2179,14 @@ public static class QueryCommandRunner
             bool? graphSupported = options.Lang != null ? ReferenceExtractor.SupportsLanguage(options.Lang) : null;
             var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(options.Lang, graphSupported);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var zeroResultSqlGraphSignal = NarrowSqlGraphContractSignal(
+                baseSqlGraphSignal,
+                reader.ScopeMayIncludeSqlSymbols(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests));
             if (options.CountOnly)
             {
                 var countSummary = reader.CountUnusedSymbols(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
                 var effectiveSqlGraphSignal = countSummary.Count == 0
-                    ? baseSqlGraphSignal
+                    ? zeroResultSqlGraphSignal
                     : NarrowSqlGraphContractSignal(
                         baseSqlGraphSignal,
                         countSummary.IncludesSql || DbReader.IsSqlLanguage(options.Lang));
@@ -2210,7 +2216,7 @@ public static class QueryCommandRunner
 
             var results = reader.GetUnusedSymbols(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var sqlGraphSignal = results.Count == 0
-                ? baseSqlGraphSignal
+                ? zeroResultSqlGraphSignal
                 : NarrowSqlGraphContractSignalByLanguages(
                     baseSqlGraphSignal,
                     results.Select(result => result.Lang),

@@ -7046,7 +7046,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_ZeroJson_StaleSqlGraphContractIncludesDegradedStateWhenSqlScopeIsEmpty()
+    public void RunUnused_ZeroJson_StaleSqlGraphContractStaysCleanWhenSqlSymbolsCannotMatchKind()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_zero_sql_graph_contract");
         try
@@ -7064,8 +7064,9 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
-            Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
+            Assert.False(json.TryGetProperty("sql_graph_contract_ready", out _));
+            Assert.False(json.TryGetProperty("sql_graph_contract_degraded_reason", out _));
+            Assert.False(json.TryGetProperty("degraded", out _));
         }
         finally
         {
@@ -7074,7 +7075,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunUnused_CountZeroJson_StaleSqlGraphContractIncludesDegradedStateWhenSqlScopeIsEmpty()
+    public void RunUnused_CountZeroJson_StaleSqlGraphContractStaysCleanWhenSqlSymbolsCannotMatchKind()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_zero_sql_graph_contract_count");
         try
@@ -7093,8 +7094,37 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.Equal(0, json.GetProperty("files").GetInt32());
-            Assert.False(json.GetProperty("sql_graph_contract_ready").GetBoolean());
-            Assert.Contains("sql_graph_contract_ready=false", json.GetProperty("sql_graph_contract_degraded_reason").GetString());
+            Assert.False(json.TryGetProperty("sql_graph_contract_ready", out _));
+            Assert.False(json.TryGetProperty("sql_graph_contract_degraded_reason", out _));
+            Assert.False(json.GetProperty("degraded").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunHotspots_ZeroJson_StaleSqlGraphContractStaysCleanWhenSqlSymbolsCannotMatchKind()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_zero_sql_graph_contract_kind");
+        try
+        {
+            var dbPath = CreateSqlGraphContractZeroResultFixtureDb(projectRoot);
+            DowngradeSqlGraphContractVersion(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--kind", "class"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, json.GetProperty("count").GetInt32());
+            Assert.False(json.TryGetProperty("sql_graph_contract_ready", out _));
+            Assert.False(json.TryGetProperty("sql_graph_contract_degraded_reason", out _));
         }
         finally
         {

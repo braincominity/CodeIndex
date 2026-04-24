@@ -1913,6 +1913,31 @@ public partial class DbReader
             reader.FieldCount > 2 && !reader.IsDBNull(2) && Convert.ToInt32(reader.GetValue(2)) != 0);
     }
 
+    public bool ScopeMayIncludeSqlSymbols(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    {
+        if (lang != null && !IsSqlLanguage(lang))
+            return false;
+
+        using var cmd = _conn.CreateCommand();
+        var sql = """
+            SELECT 1
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.lang = 'sql'
+              AND s.kind NOT IN ('import', 'namespace')
+            """;
+        if (kind != null)
+            sql += " AND s.kind = @kind";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += " LIMIT 1";
+
+        cmd.CommandText = sql;
+        if (kind != null)
+            cmd.Parameters.AddWithValue("@kind", kind);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        return cmd.ExecuteScalar() != null;
+    }
+
     private bool HasReflectionAttributeContext(string path, int startLine)
     {
         if (!_hasChunksTable || startLine <= 1)

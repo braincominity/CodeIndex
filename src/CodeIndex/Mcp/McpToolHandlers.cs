@@ -1340,8 +1340,11 @@ public partial class McpServer
             var results = reader.GetSymbolHotspots(limit, kind, lang, pathPatterns, excludePaths, excludeTests);
             var hotspotSignal = reader.GetHotspotFamilySignal(lang);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
+            var zeroResultSqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignal(
+                baseSqlGraphSignal,
+                reader.ScopeMayIncludeSqlSymbols(kind, lang, pathPatterns, excludePaths, excludeTests));
             var sqlGraphSignal = results.Count == 0
-                ? baseSqlGraphSignal
+                ? zeroResultSqlGraphSignal
                 : QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
                     baseSqlGraphSignal,
                     results.Select(result => result.Symbol.Lang),
@@ -1395,8 +1398,11 @@ public partial class McpServer
         {
             var results = reader.GetUnusedSymbols(limit, kind, lang, pathPatterns, excludePaths, excludeTests);
             var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
+            var zeroResultSqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignal(
+                baseSqlGraphSignal,
+                reader.ScopeMayIncludeSqlSymbols(kind, lang, pathPatterns, excludePaths, excludeTests));
             var sqlGraphSignal = results.Count == 0
-                ? baseSqlGraphSignal
+                ? zeroResultSqlGraphSignal
                 : QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
                     baseSqlGraphSignal,
                     results.Select(result => result.Lang),

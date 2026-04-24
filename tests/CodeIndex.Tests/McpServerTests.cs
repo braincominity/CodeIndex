@@ -2375,7 +2375,7 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_UnusedSymbols_ZeroResultSqlScopeStillIncludesDegradedState()
+    public void ToolsCall_UnusedSymbols_ZeroResultStaysCleanWhenSqlSymbolsCannotMatchKind()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_unused_zero_sql_graph_contract");
         try
@@ -2389,10 +2389,37 @@ public class McpServerTests : IDisposable
             var structured = response["result"]!["structuredContent"]!;
 
             Assert.Equal(0, structured["count"]!.GetValue<int>());
-            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
-            Assert.False(structured["sqlGraphContractReady"]!.GetValue<bool>());
-            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
-            Assert.Contains("sql_graph_contract_ready=false", structured["sqlGraphContractDegradedReason"]!.GetValue<string>());
+            Assert.Null(structured["sql_graph_contract_ready"]);
+            Assert.Null(structured["sqlGraphContractReady"]);
+            Assert.Null(structured["sql_graph_contract_degraded_reason"]);
+            Assert.Null(structured["sqlGraphContractDegradedReason"]);
+            Assert.Null(structured["degraded"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_SymbolHotspots_ZeroResultStaysCleanWhenSqlSymbolsCannotMatchKind()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_hotspots_zero_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractZeroResultFixtureDb(projectRoot);
+            DowngradeSqlGraphContractVersion(dbPath);
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{"kind":"class"}}}""")!;
+            var response = server.HandleMessage(request)!;
+            var structured = response["result"]!["structuredContent"]!;
+
+            Assert.Equal(0, structured["count"]!.GetValue<int>());
+            Assert.Null(structured["sql_graph_contract_ready"]);
+            Assert.Null(structured["sqlGraphContractReady"]);
+            Assert.Null(structured["sql_graph_contract_degraded_reason"]);
+            Assert.Null(structured["sqlGraphContractDegradedReason"]);
         }
         finally
         {
