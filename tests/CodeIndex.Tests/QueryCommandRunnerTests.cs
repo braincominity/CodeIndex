@@ -24082,6 +24082,93 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunStatus_Json_UsesIndexedAndSourceFreshnessInsteadOfClockAge()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_freshness");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            var sourcePath = Path.Combine(projectRoot, "src", "app.cs");
+            File.WriteAllText(sourcePath, "class App {}\n");
+            TestProjectHelper.RunGit(projectRoot, "add", "src/app.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            var indexedAt = new DateTime(2025, 1, 2, 0, 0, 0, DateTimeKind.Utc);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n", modified);
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "UPDATE files SET indexed_at = @indexed_at WHERE path = @path";
+                cmd.Parameters.AddWithValue("@indexed_at", indexedAt);
+                cmd.Parameters.AddWithValue("@path", "src/app.cs");
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("index fresh", json.GetProperty("summary").GetString());
+            Assert.DoesNotContain("index stale", json.GetProperty("summary").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_Json_UsesSourceNewerThanIndexAsStale()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_stale");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            var sourcePath = Path.Combine(projectRoot, "src", "app.cs");
+            File.WriteAllText(sourcePath, "class App {}\n");
+            TestProjectHelper.RunGit(projectRoot, "add", "src/app.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var modified = new DateTime(2025, 1, 2, 0, 0, 0, DateTimeKind.Utc);
+            var indexedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n", modified);
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "UPDATE files SET indexed_at = @indexed_at WHERE path = @path";
+                cmd.Parameters.AddWithValue("@indexed_at", indexedAt);
+                cmd.Parameters.AddWithValue("@path", "src/app.cs");
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("index stale", json.GetProperty("summary").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunStatus_ReadOnlyUriForExplicitDb_UsesPersistedProjectRootMetadata()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_uri");
