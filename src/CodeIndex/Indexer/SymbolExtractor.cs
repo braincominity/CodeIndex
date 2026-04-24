@@ -832,7 +832,7 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final)\s+){2}(?<returnType>[\w?.<>\[\],\s]+?)\s+(?<name>[A-Z_]\w*)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, "visibility", "returnType"),
             // Method with return type — expanded modifiers (default, native, synchronized, final)
             // 戻り値型付きメソッド — 拡張修飾子対応（default, native, synchronized, final）
-            new("function", new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|abstract|synchronized|final|default|native|strictfp)\s+)*(?<returnType>\w+(?:<[^>]+>)?(?:\[\])?)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility", "returnType"),
+            new("function", new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|abstract|synchronized|final|default|native|strictfp)\s+)*(?!(?:record)\b)(?<returnType>\w+(?:<[^>]+>)?(?:\[\])?)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility", "returnType"),
             // Enum members are extracted by ExtractJavaEnumMembers using a body-scoped scanner,
             // which handles any indent style (tab, 2-space, 4-space) and skips member-like lines
             // outside the enum body (e.g. `\tRED();` method calls inside a class body).
@@ -2434,7 +2434,7 @@ public static class SymbolExtractor
                             matchLine.Length,
                             line.Length)
                         : sameLineEndColumn;
-                    if (lang == "csharp" && kind is "class" or "struct" or "interface" or "enum" or "namespace")
+                    if (CanStepIntoSameLineTypeBody(lang, kind))
                     {
                         var nextTypeBodyOffset = FindNextSameLineNonClosingBraceStatementStart(
                             matchLine,
@@ -2468,8 +2468,7 @@ public static class SymbolExtractor
                         nextSameLineOffset = FindNextSameLineNonClosingBraceStatementStart(matchLine, sameLineEndColumn + 1, lang);
                     }
                     var sameLineAdvanceComparisonColumn = sameLineRestartComparisonColumn;
-                    if (lang == "csharp"
-                        && kind is "class" or "struct" or "interface" or "enum" or "namespace"
+                    if (CanStepIntoSameLineTypeBody(lang, kind)
                         && nextSameLineOffset > sameLineAdvanceComparisonColumn
                         && nextSameLineOffset < matchLine.Length
                         && matchLine[nextSameLineOffset] != '}')
@@ -3809,54 +3808,67 @@ public static class SymbolExtractor
                     && segmentStart < segmentEndExclusive)
                 {
                     var segment = line[segmentStart..segmentEndExclusive];
-                    if (TryMatchJavaDeclarationSegment(JavaCompactConstructorRegex, segment, out var match, out var javaLeadingAnnotationOffset)
-                        && match.Groups["name"].Value == recordSymbol.Name)
+                    var compactConstructorOffset = 0;
+                    while (compactConstructorOffset >= 0 && compactConstructorOffset < segment.Length)
                     {
-                        var absoluteStartColumn = segmentStart + javaLeadingAnnotationOffset + match.Index;
-                        var visibility = TryGetGroup(match, "visibility");
-                        var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(rawLines, i, BodyStyle.Brace, "java", absoluteStartColumn);
-                        var sameLineEndColumn = bodyEndLine == i + 1
-                            ? FindSameLineBraceEndColumn(line, absoluteStartColumn, "java", "function")
-                            : -1;
-                        var existingSymbols = symbols
-                            .Where(symbol =>
-                                symbol.FileId == fileId
-                                && symbol.Kind == "function"
-                                && symbol.Name == recordSymbol.Name
-                                && symbol.StartLine == i + 1
-                                && (symbol.ContainerName == null || symbol.ContainerName == recordSymbol.Name)
-                                && (symbol.ContainerKind == null || symbol.ContainerKind == "class"))
-                            .ToList();
-                        foreach (var existingSymbol in existingSymbols)
+                        var candidateSegment = segment[compactConstructorOffset..];
+                        if (TryMatchJavaDeclarationSegment(JavaCompactConstructorRegex, candidateSegment, out var match, out var javaLeadingAnnotationOffset)
+                            && match.Groups["name"].Value == recordSymbol.Name)
                         {
-                            if (LooksLikeJavaCompactConstructorSymbol(existingSymbol, recordSymbol.Name))
-                                continue;
-                            symbols.Remove(existingSymbol);
+                            var absoluteStartColumn = segmentStart + compactConstructorOffset + javaLeadingAnnotationOffset + match.Index;
+                            var visibility = TryGetGroup(match, "visibility");
+                            var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(rawLines, i, BodyStyle.Brace, "java", absoluteStartColumn);
+                            var sameLineEndColumn = bodyEndLine == i + 1
+                                ? FindSameLineBraceEndColumn(line, absoluteStartColumn, "java", "function")
+                                : -1;
+                            var existingSymbols = symbols
+                                .Where(symbol =>
+                                    symbol.FileId == fileId
+                                    && symbol.Kind == "function"
+                                    && symbol.Name == recordSymbol.Name
+                                    && symbol.StartLine == i + 1
+                                    && (symbol.ContainerName == null || symbol.ContainerName == recordSymbol.Name)
+                                    && (symbol.ContainerKind == null || symbol.ContainerKind == "class"))
+                                .ToList();
+                            foreach (var existingSymbol in existingSymbols)
+                            {
+                                if (LooksLikeJavaCompactConstructorSymbol(existingSymbol, recordSymbol.Name))
+                                    continue;
+                                symbols.Remove(existingSymbol);
+                            }
+
+                            if (!symbols.Any(symbol => LooksLikeJavaCompactConstructorSymbol(symbol, recordSymbol.Name)
+                                    && symbol.FileId == fileId
+                                    && symbol.StartLine == i + 1))
+                            {
+                                symbols.Add(new SymbolRecord
+                                {
+                                    FileId = fileId,
+                                    Kind = "function",
+                                    Name = recordSymbol.Name,
+                                    Line = i + 1,
+                                    StartLine = i + 1,
+                                    StartColumn = absoluteStartColumn,
+                                    EndLine = Math.Max(i + 1, endLine),
+                                    BodyStartLine = bodyStartLine,
+                                    BodyEndLine = bodyEndLine,
+                                    Signature = sameLineEndColumn >= absoluteStartColumn
+                                        ? line[absoluteStartColumn..(sameLineEndColumn + 1)].Trim()
+                                        : line[absoluteStartColumn..].Trim(),
+                                    ContainerKind = "class",
+                                    ContainerName = recordSymbol.Name,
+                                    Visibility = visibility,
+                                });
+                            }
+
+                            if (sameLineEndColumn < absoluteStartColumn)
+                                break;
+
+                            compactConstructorOffset = FindNextSameLineBraceStatementStart(segment, sameLineEndColumn - segmentStart + 1, "java");
+                            continue;
                         }
 
-                        if (!symbols.Any(symbol => LooksLikeJavaCompactConstructorSymbol(symbol, recordSymbol.Name)
-                                && symbol.FileId == fileId
-                                && symbol.StartLine == i + 1))
-                        {
-                            symbols.Add(new SymbolRecord
-                            {
-                                FileId = fileId,
-                                Kind = "function",
-                                Name = recordSymbol.Name,
-                                Line = i + 1,
-                                StartLine = i + 1,
-                                StartColumn = absoluteStartColumn,
-                                EndLine = Math.Max(i + 1, endLine),
-                                BodyStartLine = bodyStartLine,
-                                BodyEndLine = bodyEndLine,
-                                Signature = sameLineEndColumn >= absoluteStartColumn
-                                    ? line[absoluteStartColumn..(sameLineEndColumn + 1)].Trim()
-                                    : line[absoluteStartColumn..].Trim(),
-                                ContainerKind = "class",
-                                ContainerName = recordSymbol.Name,
-                                Visibility = visibility,
-                            });
-                        }
+                        compactConstructorOffset = FindNextSameLineBraceStatementStart(segment, compactConstructorOffset + 1, "java");
                     }
                 }
 
@@ -12823,6 +12835,14 @@ public static class SymbolExtractor
 
         return lang is "javascript" or "typescript" or "css" or "java"
             || (lang == "csharp" && CanContinueScanningSameLineCSharpBraceBody(kind));
+    }
+
+    private static bool CanStepIntoSameLineTypeBody(string? lang, string kind)
+    {
+        if (kind is not ("class" or "struct" or "interface" or "enum" or "namespace"))
+            return false;
+
+        return lang is "csharp" or "java";
     }
 
     private static bool IsCSharpFieldLikeFunctionPattern(SymbolPattern pattern)
