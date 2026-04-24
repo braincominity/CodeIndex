@@ -5567,6 +5567,31 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_FromCommaSeparatedSourcesCapturesAllReferences()
+    {
+        // issue #802: comma-separated `FROM` source lists must keep every top-level source, not
+        // just the first one before the comma.
+        // issue #802: comma-separated な `FROM` source list は、comma の前にある 1 件目だけで
+        // なく top-level な全 source を保持する必要がある。
+        const string content = """
+            SELECT * FROM users, accounts;
+            SELECT * FROM public.logs l, [archive].[events] e;
+            SELECT * FROM users WITH (NOLOCK), accounts;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "users" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "accounts" && r.ReferenceKind == "reference"));
+        Assert.Equal(1, references.Count(r => r.SymbolName == "logs" && r.ReferenceKind == "reference"));
+        Assert.Equal(1, references.Count(r => r.SymbolName == "events" && r.ReferenceKind == "reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "NOLOCK");
+        Assert.DoesNotContain(references, r => r.SymbolName == "public.logs");
+        Assert.DoesNotContain(references, r => r.SymbolName == "archive].[events");
+    }
+
+    [Fact]
     public void Extract_SQL_DeleteUsingTempSourcesAfterComma_AreNotTreatedAsComments()
     {
         // issue #789: `#temp` after a comma in `DELETE ... USING #a, #b` must stay on the temp-table

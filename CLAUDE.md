@@ -71,7 +71,7 @@ src/CodeIndex/
   Indexer/FileIndexer.cs    — Directory scan, extension/file-name/shebang language detection, FileRecord building (returns warning via tuple)
   Indexer/ChunkSplitter.cs  — 80-line chunks with 10-line overlap
   Indexer/SymbolExtractor.cs — Hybrid symbol extraction: compiled regexes for most languages, plus a lightweight JS/TS lexer/state machine for class-body methods, export-surface extraction (including multiline/type-only/import-attribute star/named re-exports and parenthesized or multiline/constrained TS-generic-arrow CommonJS bindings), scope filtering, and range resolution, and a dedicated HTML tag-structure state machine that walks tag openers, quoted/unquoted (including multi-line) attribute values, and masks `<script>`/`<style>`/`<textarea>`/`<title>` bodies plus `<!-- ... -->` comments
-  Indexer/ReferenceExtractor.cs — Regex-based reference extraction with type-position `type_reference` edges (31 languages with graph queries)
+  Indexer/ReferenceExtractor.cs — Regex-based reference extraction with type-position `type_reference` edges and SQL source-list handling for comma-separated `FROM` clauses plus table hints (31 languages with graph queries)
   Indexer/ReferenceExtractor.cs — Regex-based reference extraction (language-aware)
   Mcp/McpServer.cs          — MCP server core (stdin/stdout JSON-RPC 2.0 protocol handling) (partial class)
   Mcp/McpToolDefinitions.cs — MCP tool schema definitions (partial class)
