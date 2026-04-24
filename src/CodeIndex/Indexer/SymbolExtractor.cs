@@ -1353,7 +1353,7 @@ public static class SymbolExtractor
                     // がテンプレート区切りを空白にマスクするため、マスク後の
                     // `patternMatchLine` ではバッククォートが見えないことへの対処。
                     // Closes #240 follow-up（codex レビュー #5 の blocker 対応）。
-                    if (ShouldSkipJavaScriptTypeScriptStyledFactoryCandidate(lang, pattern, match, lineOffset, line))
+                    if (ShouldSkipJavaScriptTypeScriptStyledFactoryCandidate(lang, pattern, match, lineOffset, lines, i))
                     {
                         lineOffset = FindNextJavaScriptTypeScriptStatementStart(patternMatchLine, lineOffset + Math.Max(1, match.Length));
                         continue;
@@ -10735,45 +10735,99 @@ public static class SymbolExtractor
         && !matchLine.TrimStart().StartsWith('@');
 
     // Reject JS/TS HOC candidate matches whose captured RHS uses the bare `styled.`
-    // or `styled(` forms without a tagged-template backtick on the raw line. The
-    // HOC regex accepts `styled[.(` `]` as the first post-identifier token so the
-    // real tagged-template bindings (`styled.div\`...\``, `styled(Box)\`...\``)
+    // or `styled(` forms without a tagged-template backtick on the same statement.
+    // The HOC regex accepts `styled[.(` `]` as the first post-identifier token so
+    // the real tagged-template bindings (`styled.div\`...\``, `styled(Box)\`...\``)
     // still match, but it also lets through the factory-capture and plain-call
     // shapes (`const F = styled.div;`, `const F = styled(Box);`) which do not
     // declare a rendered component and must not be surfaced as function symbols.
-    // The gate reads the raw (unmasked) source line because
+    // The gate reads the raw (unmasked) source because
     // StructuralLineMasker.MaskJsTsTemplateLiteralContents replaces template
     // delimiters with space, so the masked line cannot distinguish the shapes.
     // The backtick scan is statement-local: only characters between the match end
-    // and the next `;` (or end-of-line) are inspected, so an unrelated template
-    // literal on another statement of the same line does not reopen the gate.
+    // and the next `;` (or next statement) are inspected, so an unrelated template
+    // literal on another statement does not reopen the gate. The scanner is also
+    // multi-line aware — Prettier-style styled bindings place the backtick on the
+    // line after `styled.div` / `styled(Component)`, so the scan walks forward
+    // across raw lines while carrying block-comment state, bounded to a short
+    // lookahead window. A line that starts with a JS/TS statement-starter keyword
+    // (`const`, `let`, `var`, `function`, `class`, `return`, `import`, etc.)
+    // terminates the scan to model implicit ASI: `const X = styled.div\nconst Y =
+    // 5;` must stay rejected even though no `;` appears on the `styled.div` line.
     // The scanner also understands line comments (`//`), block comments
     // (`/* ... */`), and plain string literals (`'...'`, `"..."`), so a backtick
     // that only lives inside a comment or string does not keep a non-template
     // binding alive, and a `;` that only lives inside a comment does not fence
     // a real backtick off from a subsequent tagged template on the same
-    // statement. Closes #240 follow-up (codex review #5, #7, and #8 blockers).
+    // statement. Closes #240 follow-up (codex review #5, #7, #8, and #9 blockers).
     // JS/TS 行における HOC 候補のうち、`styled.` / `styled(` を素のまま使い、同じ文内に
     // タグ付きテンプレートのバッククォートを持たない形（`const F = styled.div;`、
     // `const F = styled(Box);`）を弾く。HOC regex は識別子直後の `styled[.(`、`]`
     // を受け付けるためタグ付きテンプレート形（`styled.div\`...\``、`styled(Box)\`...\``）
     // はマッチさせつつ、factory 捕捉 / 素の呼び出し形も通過させてしまう。これらは
     // コンポーネントを生成しないため function シンボルとして surface してはいけない。
-    // ゲートは raw 行を参照する — `StructuralLineMasker.MaskJsTsTemplateLiteralContents`
+    // ゲートは raw 行（マスク前）を参照する — `StructuralLineMasker.MaskJsTsTemplateLiteralContents`
     // がテンプレート区切りを空白にマスクするため、マスク後では形状を区別できないのが理由。
-    // バッククォート探索は文ローカル（match 終端から次の `;` または行末まで）に限定し、
-    // 同じ行に別の文として配置された無関係なテンプレートリテラルでゲートを誤って解除しない。
-    // さらに行コメント（`//`）・ブロックコメント（`/* ... */`）・通常の文字列リテラル
-    // （`'...'` / `"..."`）を構文として理解し、コメントや文字列内のバッククォートが
-    // 非テンプレート束縛を延命させたり、コメント内の `;` が同一文内の本物のバッククォート
-    // より先に文終端として扱われて実タグ付きテンプレートを落とすことを防ぐ。
-    // Closes #240 follow-up（codex レビュー #5・#7・#8 の blocker 対応）。
+    // バッククォート探索は文ローカル（match 終端から次の `;` または次の文まで）に限定し、
+    // 別の文として配置された無関係なテンプレートリテラルでゲートを誤って解除しない。
+    // さらに Prettier 整形のように `styled.div` / `styled(Component)` の次行にバッククォートを
+    // 置くケースへ対応するため、スキャナはブロックコメント状態を引き継ぎつつ複数行を前方走査する
+    // （行数上限付き）。JS/TS の文頭キーワード（`const`、`let`、`var`、`function`、`class`、
+    // `return`、`import` 等）で始まる新しい行は暗黙 ASI による文終端として扱い走査を打ち切る。
+    // これにより `const X = styled.div\nconst Y = 5;` は `;` が `styled.div` 行に無くても
+    // 引き続き除外される。さらに行コメント（`//`）・ブロックコメント（`/* ... */`）・
+    // 通常の文字列リテラル（`'...'` / `"..."`）を構文として理解し、コメントや文字列内の
+    // バッククォートが非テンプレート束縛を延命させたり、コメント内の `;` が同一文内の本物の
+    // バッククォートより先に文終端として扱われて実タグ付きテンプレートを落とすことを防ぐ。
+    // Closes #240 follow-up（codex レビュー #5・#7・#8・#9 の blocker 対応）。
+    private const int JsTsStyledFactoryGateMaxLookaheadLines = 8;
+    private static readonly string[] JsTsStatementStarterKeywords = new[]
+    {
+        "const", "let", "var", "function", "class", "type", "interface", "enum",
+        "namespace", "module", "declare", "export", "import", "return", "throw",
+        "if", "for", "while", "do", "switch", "try", "break", "continue", "async",
+    };
+
+    private static bool IsJsTsStatementStarterLine(string line)
+    {
+        int i = 0;
+        while (i < line.Length && (line[i] == ' ' || line[i] == '\t'))
+            i++;
+        if (i >= line.Length)
+            return false;
+        foreach (var kw in JsTsStatementStarterKeywords)
+        {
+            if (i + kw.Length > line.Length)
+                continue;
+            if (string.CompareOrdinal(line, i, kw, 0, kw.Length) != 0)
+                continue;
+            var end = i + kw.Length;
+            // Require a non-identifier character (or end-of-line) after the keyword
+            // so `constructor`, `letme`, `varargs`, etc. are not mistaken for
+            // statement starters. Tagged-template continuation lines legitimately
+            // begin with whitespace followed by a backtick or an identifier
+            // (the selector string), which we do not want to treat as a new
+            // statement.
+            // キーワード直後は識別子境界でなければならない — `constructor`、`letme`、
+            // `varargs` 等を文頭扱いしないため。タグ付きテンプレートの継続行は
+            // バッククォートや識別子（セレクタ文字列）で始まるのが正当な形で、それを
+            // 新しい文の開始として扱わないようにする。
+            if (end >= line.Length)
+                return true;
+            var c = line[end];
+            if (!(char.IsLetterOrDigit(c) || c == '_' || c == '$'))
+                return true;
+        }
+        return false;
+    }
+
     private static bool ShouldSkipJavaScriptTypeScriptStyledFactoryCandidate(
         string? lang,
         SymbolPattern pattern,
         Match match,
         int matchOffset,
-        string rawLine)
+        string[] lines,
+        int lineIndex)
     {
         if (lang is not ("javascript" or "typescript"))
             return false;
@@ -10800,79 +10854,90 @@ public static class SymbolExtractor
         if (next == '`')
             return false;
 
-        // Forward-scan the raw line from the match's absolute end position, skipping
-        // over line comments, block comments, and plain string literals so only
-        // real source characters contribute to the accept/reject decision. The
-        // first real backtick → accept (tagged template on this statement). The
-        // first real `;` → reject (factory-capture or plain call).
-        // match の絶対終端位置から raw 行を前方走査し、行コメント・ブロックコメント・
-        // 通常文字列リテラルをスキップしたうえで最初に出会う「実コード上の」バッククォートか
-        // `;` で判定する。バッククォート → 維持（同一文のタグ付きテンプレート）、`;` → 除外
-        // （factory 捕捉 / 素の呼び出し形）。
-        int cursor = matchOffset + match.Index + match.Length;
-        int i = cursor;
-        while (i < rawLine.Length)
+        // Forward-scan raw source starting from the match's absolute end position,
+        // walking across raw lines within a bounded lookahead window so that
+        // Prettier-style multi-line tagged templates still resolve to a real
+        // backtick. Comments (`//`, `/* ... */`) and plain string literals
+        // (`'...'`, `"..."`) are skipped so only real source characters drive the
+        // accept/reject decision. Block-comment state carries across line
+        // boundaries. A continuation line that begins with a JS/TS statement
+        // starter keyword terminates the scan under implicit ASI semantics.
+        // The first real backtick → accept (tagged template on this statement).
+        // The first real `;` → reject (factory-capture or plain call).
+        // match の絶対終端位置から raw ソースを前方走査し、Prettier 整形の複数行タグ付き
+        // テンプレートにも対応するため、所定の行数まで改行をまたいで走査する。コメント
+        // （`//`、`/* ... */`）や通常文字列（`'...'`、`"..."`）はスキップし、実コード上の
+        // 文字だけで判定する。ブロックコメント状態は行境界をまたいで持ち越す。新しい行が
+        // JS/TS の文頭キーワードで始まる場合は暗黙 ASI による文終端として走査を打ち切る。
+        // バッククォート → 維持（同一文のタグ付きテンプレート）、`;` → 除外（factory 捕捉 /
+        // 素の呼び出し形）。
+        bool inBlockComment = false;
+        int maxLine = Math.Min(lines.Length - 1, lineIndex + JsTsStyledFactoryGateMaxLookaheadLines);
+        for (int li = lineIndex; li <= maxLine; li++)
         {
-            var c = rawLine[i];
-            // Line comment — the rest of the raw line is comment, so no real
-            // backtick can appear after this point.
-            // 行コメント — 以降は全てコメントなので実コード上のバッククォートは現れない。
-            if (c == '/' && i + 1 < rawLine.Length && rawLine[i + 1] == '/')
+            var raw = lines[li];
+            if (li > lineIndex && !inBlockComment && IsJsTsStatementStarterLine(raw))
                 break;
-            // Block comment — skip through to the matching `*/` on the same raw
-            // line. If the block does not close on this line, the rest is comment
-            // and we bail out the same way as a line comment.
-            // ブロックコメント — 同一 raw 行内の対応する `*/` まで読み飛ばす。閉じが見つから
-            // なければ残りはコメント扱いで離脱する。
-            if (c == '/' && i + 1 < rawLine.Length && rawLine[i + 1] == '*')
+            int i = li == lineIndex ? matchOffset + match.Index + match.Length : 0;
+            while (i < raw.Length)
             {
-                i += 2;
-                var closed = false;
-                while (i + 1 < rawLine.Length)
+                if (inBlockComment)
                 {
-                    if (rawLine[i] == '*' && rawLine[i + 1] == '/')
+                    if (i + 1 < raw.Length && raw[i] == '*' && raw[i + 1] == '/')
                     {
-                        i += 2;
-                        closed = true;
-                        break;
-                    }
-                    i++;
-                }
-                if (!closed)
-                    break;
-                continue;
-            }
-            // Plain string literal — skip to the matching closing quote. Basic
-            // escape handling lets `"\\""` and `'\\''` close correctly; nested
-            // interpolation is not possible in plain strings, so no further
-            // state is needed here.
-            // 通常の文字列リテラル — 対応する閉じクォートまで読み飛ばす。基本的なエスケープ
-            // 処理のみ行い、補間は通常文字列では発生しないため追加の状態は不要。
-            if (c == '"' || c == '\'')
-            {
-                var quote = c;
-                i++;
-                while (i < rawLine.Length)
-                {
-                    if (rawLine[i] == '\\' && i + 1 < rawLine.Length)
-                    {
+                        inBlockComment = false;
                         i += 2;
                         continue;
                     }
-                    if (rawLine[i] == quote)
-                    {
-                        i++;
-                        break;
-                    }
                     i++;
+                    continue;
                 }
-                continue;
+                var c = raw[i];
+                // Line comment — the rest of this raw line is comment.
+                // 行コメント — 同一 raw 行の残りは全てコメント。
+                if (c == '/' && i + 1 < raw.Length && raw[i + 1] == '/')
+                    break;
+                // Block comment — skip through to the matching `*/`, possibly on
+                // a later raw line (state carries via `inBlockComment`).
+                // ブロックコメント — `*/` まで読み飛ばし、閉じない場合は `inBlockComment`
+                // を次行へ持ち越す。
+                if (c == '/' && i + 1 < raw.Length && raw[i + 1] == '*')
+                {
+                    inBlockComment = true;
+                    i += 2;
+                    continue;
+                }
+                // Plain string literal — skip to the matching closing quote on
+                // the same raw line. Unterminated plain strings are invalid JS/TS
+                // and fall off the end of the line.
+                // 通常の文字列リテラル — 同一 raw 行内の閉じクォートまで読み飛ばす。
+                // 閉じない文字列は JS/TS として不正だが、そのまま行末で抜ける。
+                if (c == '"' || c == '\'')
+                {
+                    var quote = c;
+                    i++;
+                    while (i < raw.Length)
+                    {
+                        if (raw[i] == '\\' && i + 1 < raw.Length)
+                        {
+                            i += 2;
+                            continue;
+                        }
+                        if (raw[i] == quote)
+                        {
+                            i++;
+                            break;
+                        }
+                        i++;
+                    }
+                    continue;
+                }
+                if (c == '`')
+                    return false;
+                if (c == ';')
+                    return true;
+                i++;
             }
-            if (c == '`')
-                return false;
-            if (c == ';')
-                break;
-            i++;
         }
         return true;
     }

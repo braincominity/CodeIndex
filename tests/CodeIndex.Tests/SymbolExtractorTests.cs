@@ -595,6 +595,75 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_HocBindingPatternAcceptsMultiLineTaggedTemplateContinuation()
+    {
+        // Prettier / dprint style often places the tagged-template backtick on the
+        // line after `styled.div` / `styled(Component)`. The statement-local gate
+        // must walk across raw lines within a bounded lookahead window so these
+        // bindings still register as function symbols. Implicit ASI must still
+        // terminate the scan: `const X = styled.div\nconst Y = 5;` stays rejected
+        // because the continuation line begins with a `const` statement starter.
+        // Closes #240 follow-up (codex review #9 blocker, upstream issue #901).
+        // Prettier / dprint の整形では `styled.div` / `styled(Component)` の次行に
+        // タグ付きテンプレートのバッククォートを置くことが多い。文ローカルのゲートは
+        // 所定の行数まで改行をまたいで走査し、これらの束縛を function シンボルとして
+        // 維持しなければならない。同時に暗黙 ASI による終端は守る必要があり、
+        // `const X = styled.div\nconst Y = 5;` は継続行が `const` の文頭キーワードで
+        // 始まるため引き続き除外される。Closes #240 follow-up（codex レビュー #9 の
+        // blocker 対応、上流 issue #901）。
+        var content = """
+            const MultiLineMember = styled.div
+              `color: red;`;
+            const MultiLineCall = styled(Component)
+              `color: blue;`;
+            const AsiRejectedMember = styled.div
+            const AsiFollower = 5;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MultiLineMember");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MultiLineCall");
+        Assert.DoesNotContain(symbols, s => s.Name == "AsiRejectedMember");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_HocBindingPatternAcceptsMultiLineTaggedTemplateContinuation()
+    {
+        // Same multi-line continuation support on the TypeScript side. The
+        // TS HOC row uses the same `styled[.(\`]` branch as JavaScript (no
+        // generic suffix on `styled` itself), so the shapes that need to be
+        // pinned mirror the JavaScript test. TypeScript-specific binding
+        // forms such as an optional `: ComponentType<Props>` type annotation
+        // between the name and `=` are also exercised so the gate does not
+        // get confused by an identifier that carries a type annotation.
+        // Closes #240 follow-up (codex review #9 blocker, upstream issue #901).
+        // TypeScript 側でも同じ複数行継続対応が必要。TS の HOC 行は `styled`
+        // 自体に generic 接尾辞を載せない `styled[.(\`]` 分岐を JS と共有するため、
+        // pin すべき形も JS テストとミラーする。加えて TS 特有の型注釈付き束縛
+        // （`const Foo: ComponentType<Props> = styled.div\n\`...\``）も通過
+        // させ、ゲートが型注釈付き識別子で混乱しないことを確認する。
+        // Closes #240 follow-up（codex レビュー #9 の blocker 対応、上流 issue #901）。
+        var content = """
+            const MultiLineMember = styled.div
+              `color: red;`;
+            const MultiLineCall = styled(Component)
+              `color: blue;`;
+            const MultiLineAnnotated: ComponentType<Props> = styled.div
+              `color: green;`;
+            const AsiRejectedMember = styled.div
+            const AsiFollower: number = 5;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MultiLineMember");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MultiLineCall");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MultiLineAnnotated");
+        Assert.DoesNotContain(symbols, s => s.Name == "AsiRejectedMember");
+    }
+
+    [Fact]
     public void Extract_TypeScript_HocBindingPatternAcceptsCallbackPropInsideFunctionTypeGeneric()
     {
         // Inline function-type generic arguments whose parameter object literal

@@ -70,7 +70,7 @@ src/CodeIndex/
   Database/RepoMapBuilder.cs — Repo-level overview builder (map command): file stats, entrypoint scoring, module grouping
   Indexer/FileIndexer.cs    — Directory scan, extension/file-name/shebang language detection, FileRecord building (returns warning via tuple)
   Indexer/ChunkSplitter.cs  — 80-line chunks with 10-line overlap
-  Indexer/SymbolExtractor.cs — Hybrid symbol extraction: compiled regexes for most languages, plus a lightweight JS/TS lexer/state machine for class-body methods, scope filtering, and range resolution, and a dedicated HTML tag-structure state machine that walks tag openers, quoted/unquoted (including multi-line) attribute values, and masks `<script>`/`<style>`/`<textarea>`/`<title>` bodies plus `<!-- ... -->` comments
+  Indexer/SymbolExtractor.cs — Hybrid symbol extraction: compiled regexes for most languages, plus a lightweight JS/TS lexer/state machine for class-body methods, scope filtering, and range resolution, a JS/TS HOC-binding gate with a multi-line statement-local comment/string-aware scanner that distinguishes real tagged-template styled bindings (`styled.div\`...\``, including Prettier-style backtick-on-next-line shapes) from factory-capture / plain-call shapes (`styled.div;`, `styled(Component);`), and a dedicated HTML tag-structure state machine that walks tag openers, quoted/unquoted (including multi-line) attribute values, and masks `<script>`/`<style>`/`<textarea>`/`<title>` bodies plus `<!-- ... -->` comments
   Indexer/ReferenceExtractor.cs — Regex-based reference extraction (31 languages with graph queries)
   Indexer/ReferenceExtractor.cs — Regex-based reference extraction (language-aware)
   Mcp/McpServer.cs          — MCP server core (stdin/stdout JSON-RPC 2.0 protocol handling) (partial class)
@@ -321,7 +321,7 @@ src/CodeIndex/
   Database/RepoMapBuilder.cs — リポジトリ俯瞰ビルダー（mapコマンド）: ファイル統計、エントリポイント採点、モジュールグループ化
   Indexer/FileIndexer.cs    — ディレクトリ走査、拡張子・ファイル名・shebang による言語検出、FileRecord構築（警告をタプルで返す）
   Indexer/ChunkSplitter.cs  — 80行チャンク（10行重複）
-  Indexer/SymbolExtractor.cs — ハイブリッドなシンボル抽出（大半はコンパイル済み正規表現、JS/TS は class body method・scope filtering・range 解決向けの軽量 lexer / state machine を追加、HTML は汎用パターンループではなくタグ構造を理解した文字単位 state machine でタグ開始・引用符付き/なし（複数行含む）属性値・`<script>` / `<style>` / `<textarea>` / `<title>` 本体・`<!-- ... -->` コメントをマスクして属性名に似た文字列から phantom を防ぐ）
+  Indexer/SymbolExtractor.cs — ハイブリッドなシンボル抽出（大半はコンパイル済み正規表現、JS/TS は class body method・scope filtering・range 解決向けの軽量 lexer / state machine に加え、タグ付きテンプレートの styled 束縛（`styled.div\`...\``。Prettier 整形による次行バッククォート形も含む）と factory 捕捉 / 素の呼び出し形（`styled.div;` / `styled(Component);`）を区別する複数行対応・コメント/文字列対応の文ローカルスキャナを持つ HOC 束縛ゲートを備える、HTML は汎用パターンループではなくタグ構造を理解した文字単位 state machine でタグ開始・引用符付き/なし（複数行含む）属性値・`<script>` / `<style>` / `<textarea>` / `<title>` 本体・`<!-- ... -->` コメントをマスクして属性名に似た文字列から phantom を防ぐ）
   Indexer/ReferenceExtractor.cs — 正規表現による参照抽出（言語差分を考慮）
   Mcp/McpServer.cs          — MCPサーバーコア（stdin/stdout JSON-RPC 2.0 プロトコル処理）（partial class）
   Mcp/McpToolDefinitions.cs — MCPツールスキーマ定義（partial class）
