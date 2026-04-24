@@ -882,7 +882,16 @@ public static class ReferenceExtractor
                 return false;
 
             normalized = TrimLeadingCSharpGlobalQualifier(normalized);
-            return csharpKnownTypeNames.Contains(normalized);
+            if (csharpKnownTypeNames.Contains(normalized))
+                return true;
+
+            var shortName = GetLastQualifiedSegment(normalized);
+            return csharpUsingAliases.Any(alias =>
+                alias.TargetsType
+                && alias.Line <= lineNumber
+                && lineNumber >= alias.ScopeStartLine
+                && lineNumber <= alias.ScopeEndLine
+                && string.Equals(alias.AliasName, shortName, StringComparison.Ordinal));
         }
 
         var references = new List<ReferenceRecord>();
@@ -2519,8 +2528,10 @@ public static class ReferenceExtractor
             }
 
             if (IsCSharpNonTypePatternExpression(typeGroup.Value)
-                || IsCSharpConstantPatternMemberHead(
+                || IsCSharpConstantPatternMemberHeadOrSameFileCSharpTypeCandidate(
+                    preparedLine,
                     typeGroup.Value,
+                    continuationIndex,
                     lineNumber,
                     csharpQualifiedConstantPatternMemberLookup,
                     csharpUsingAliases,
@@ -2883,6 +2894,7 @@ public static class ReferenceExtractor
                     preparedLine,
                     currentTypeExpression,
                     currentContinuationIndex,
+                    hadLeadingNot,
                     csharpQualifiedConstantPatternMemberLookup,
                     csharpQualifiedTypePatternLookup,
                     csharpUsingAliases,
@@ -3078,8 +3090,11 @@ public static class ReferenceExtractor
             var currentTypeLineNumber = GetLineNumberFromOffset(preparedContent, armStartOffset + currentTypeIndex, 1);
             if (looksLikeLambda
                 && !HasStrongCSharpSwitchExpressionTypeSignal(
+                    armText,
                     currentTypeExpression,
+                    currentContinuationIndex,
                     currentTypeLineNumber,
+                    csharpQualifiedConstantPatternMemberLookup,
                     csharpQualifiedTypePatternLookup,
                     csharpUsingAliases,
                     hasActiveSameFileCSharpTypeCandidate))
@@ -3135,8 +3150,10 @@ public static class ReferenceExtractor
                 continue;
 
             if (IsCSharpNonTypePatternExpression(currentTypeExpression)
-                || IsCSharpConstantPatternMemberHead(
+                || IsCSharpConstantPatternMemberHeadOrSameFileCSharpTypeCandidate(
+                    armText,
                     currentTypeExpression,
+                    currentContinuationIndex,
                     currentTypeLineNumber,
                     csharpQualifiedConstantPatternMemberLookup,
                     csharpUsingAliases,
@@ -3161,18 +3178,39 @@ public static class ReferenceExtractor
     }
 
     private static bool HasStrongCSharpSwitchExpressionTypeSignal(
+        string preparedLine,
         string typeExpression,
+        int continuationIndex,
         int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
         Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
     {
+        if (HasCSharpDottedConstantPatternMemberTail(
+                preparedLine,
+                typeExpression,
+                continuationIndex,
+                lineNumber,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpUsingAliases))
+        {
+            return false;
+        }
+
         return IsCSharpQualifiedTypePatternHead(
                    typeExpression,
                    lineNumber,
                    csharpQualifiedTypePatternLookup,
                    csharpUsingAliases)
-               || hasActiveSameFileCSharpTypeCandidate(typeExpression, lineNumber);
+               || HasActiveSameFileCSharpTypeCandidateWithoutMemberTail(
+                   preparedLine,
+                   continuationIndex,
+                   typeExpression,
+                   lineNumber,
+                   csharpQualifiedConstantPatternMemberLookup,
+                   csharpUsingAliases,
+                   hasActiveSameFileCSharpTypeCandidate);
     }
 
     private static void EmitCSharpSwitchExpressionArmTypePatternReference(
@@ -5351,6 +5389,7 @@ public static class ReferenceExtractor
         string preparedLine,
         string typeExpression,
         int cursor,
+        bool hadLeadingNot,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
@@ -5366,13 +5405,22 @@ public static class ReferenceExtractor
 
         return preparedLine[cursor] switch
         {
-            ':' => !IsCSharpConstantPatternMemberHead(
+            ':' => !IsCSharpConstantPatternMemberHeadOrSameFileCSharpTypeCandidate(
+                    preparedLine,
                     typeExpression,
+                    cursor,
                     lineNumber,
                     csharpQualifiedConstantPatternMemberLookup,
                     csharpUsingAliases,
                     csharpUsingStatics,
                     hasActiveSameFileCSharpTypeCandidate),
+            '.' => !HasCSharpDottedConstantPatternMemberTail(
+                    preparedLine,
+                    typeExpression,
+                    cursor,
+                    lineNumber,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpUsingAliases),
             '{' or '(' or '[' => true,
             _ => IsCSharpCaseTypePatternIdentifier(
                 preparedLine,
@@ -5408,8 +5456,10 @@ public static class ReferenceExtractor
 
         return rawToken switch
         {
-            "when" => !IsCSharpConstantPatternMemberHead(
+            "when" => !IsCSharpConstantPatternMemberHeadOrSameFileCSharpTypeCandidate(
+                    preparedLine,
                     typeExpression,
+                    tokenCursor,
                     lineNumber,
                     csharpQualifiedConstantPatternMemberLookup,
                     csharpUsingAliases,
@@ -5481,8 +5531,10 @@ public static class ReferenceExtractor
 
         if (sawLogicalKeyword
             && !IsCSharpNonTypePatternExpression(currentTypeExpression)
-            && !IsCSharpConstantPatternMemberHead(
+            && !IsCSharpConstantPatternMemberHeadOrSameFileCSharpTypeCandidate(
+                preparedLine,
                 currentTypeExpression,
+                currentContinuationIndex,
                 lineNumber,
                 csharpQualifiedConstantPatternMemberLookup,
                 csharpUsingAliases,
@@ -5556,8 +5608,10 @@ public static class ReferenceExtractor
         IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
         Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
     {
-        if (IsCSharpConstantPatternMemberHead(
+        if (IsCSharpConstantPatternMemberHeadOrSameFileCSharpTypeCandidate(
+                preparedLine,
                 typeExpression,
+                cursor,
                 lineNumber,
                 csharpQualifiedConstantPatternMemberLookup,
                 csharpUsingAliases,
@@ -5692,6 +5746,97 @@ public static class ReferenceExtractor
     {
         return IsCSharpQualifiedConstantPatternMemberHead(
             typeExpression,
+            lineNumber,
+            csharpQualifiedConstantPatternMemberLookup,
+            csharpUsingAliases);
+    }
+
+    private static bool IsCSharpConstantPatternMemberHeadOrSameFileCSharpTypeCandidate(
+        string preparedLine,
+        string typeExpression,
+        int cursor,
+        int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
+    {
+        if (HasActiveSameFileCSharpTypeCandidateWithoutMemberTail(
+                preparedLine,
+                cursor,
+                typeExpression,
+                lineNumber,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpUsingAliases,
+                hasActiveSameFileCSharpTypeCandidate))
+        {
+            return false;
+        }
+
+        if (HasCSharpDottedConstantPatternMemberTail(
+                preparedLine,
+                typeExpression,
+                cursor,
+                lineNumber,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpUsingAliases))
+        {
+            return true;
+        }
+
+        return IsCSharpConstantPatternMemberHead(
+            typeExpression,
+            lineNumber,
+            csharpQualifiedConstantPatternMemberLookup,
+            csharpUsingAliases,
+            csharpUsingStatics,
+            hasActiveSameFileCSharpTypeCandidate);
+    }
+
+    private static bool HasActiveSameFileCSharpTypeCandidateWithoutMemberTail(
+        string preparedLine,
+        int cursor,
+        string typeExpression,
+        int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
+    {
+        if (!hasActiveSameFileCSharpTypeCandidate(typeExpression, lineNumber))
+            return false;
+
+        if (IsCSharpQualifiedConstantPatternMemberHead(
+                typeExpression,
+                lineNumber,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpUsingAliases))
+        {
+            return false;
+        }
+
+        int nextCursor = SkipWhitespace(preparedLine, cursor);
+        return nextCursor >= preparedLine.Length || preparedLine[nextCursor] != '.';
+    }
+
+    private static bool HasCSharpDottedConstantPatternMemberTail(
+        string preparedLine,
+        string typeExpression,
+        int cursor,
+        int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
+    {
+        int nextCursor = SkipWhitespace(preparedLine, cursor);
+        if (nextCursor >= preparedLine.Length || preparedLine[nextCursor] != '.')
+            return false;
+
+        nextCursor = SkipWhitespace(preparedLine, nextCursor + 1);
+        var nextMatch = CSharpTypeExpressionAtCursorRegex.Match(preparedLine, nextCursor);
+        if (!nextMatch.Success)
+            return false;
+
+        return IsCSharpQualifiedConstantPatternMemberHead(
+            typeExpression + "." + nextMatch.Groups["type"].Value,
             lineNumber,
             csharpQualifiedConstantPatternMemberLookup,
             csharpUsingAliases);

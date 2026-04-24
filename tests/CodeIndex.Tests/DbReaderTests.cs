@@ -6634,6 +6634,44 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchReferences_ExactCSharpUsingStaticTypeAliasPattern_KeepsVisibleRows()
+    {
+        InsertIndexedFile("src/Defs.cs", "csharp",
+            """
+            namespace Probe
+            {
+                public enum Color
+                {
+                    Red
+                }
+
+                namespace Real
+                {
+                    public class Red {}
+                }
+            }
+            """);
+        InsertIndexedFile("src/Use.cs", "csharp",
+            """
+            using static Probe.Color;
+            using Red = Probe.Real.Red;
+
+            namespace Probe;
+
+            class Demo
+            {
+                bool Match(object value) => value is Red;
+            }
+            """);
+
+        var result = Assert.Single(_reader.SearchReferences("Red", limit: 20, lang: "csharp", referenceKind: "type_reference", exact: true, pathPatterns: ["src/Use.cs"]));
+        Assert.Equal("Red", result.SymbolName);
+        Assert.Equal("type_reference", result.ReferenceKind);
+        Assert.Equal("Match", result.ContainerName);
+        Assert.Contains("value is Red", result.Context, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SearchReferences_ExactSameLineResults_AreOrderedByColumn()
     {
         var fileId = _writer.UpsertFile(new FileRecord
