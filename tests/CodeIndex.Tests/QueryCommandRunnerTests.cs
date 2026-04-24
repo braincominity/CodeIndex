@@ -18361,6 +18361,54 @@ public class QueryCommandRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData("Point p when p.GetHashCode() > 0 => 1,")]
+    [InlineData("Point { X: < 0 } => 1,")]
+    public void RunReferences_ExactJson_CSharpSwitchExpressionLaterGenericArmStaysVisible(string previousArm)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_switch_expression_later_generic_arm");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "cases.cs"),
+                $$"""
+                namespace Probe;
+
+                class Point { public int X { get; init; } }
+                class Shape {}
+                class Wrapper<TLeft, TRight> {}
+
+                class Demo
+                {
+                    int Match(object value) => value switch
+                    {
+                        {{previousArm}}
+                        Wrapper<Point, Shape> => 2,
+                        _ => 0,
+                    };
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (exitCode, stdout, stderr) = RunBuiltCli(["references", "Wrapper", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
+            var row = Assert.Single(ParseJsonLines(stdout)).RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("Wrapper", row.GetProperty("symbol_name").GetString());
+            Assert.Equal("type_reference", row.GetProperty("reference_kind").GetString());
+            Assert.Contains("Wrapper<Point, Shape> => 2", row.GetProperty("context").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void RunReferences_ExactJson_CSharpCrossFileSameNamespaceTypePatternStaysVisible()
     {
