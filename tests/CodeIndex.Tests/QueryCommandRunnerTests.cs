@@ -7398,6 +7398,95 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunCallers_Json_CSharpTopLevelStatementsUseSyntheticTopLevelCaller()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callers_csharp_toplevel");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Program.cs", "csharp",
+                """
+                using System;
+
+                Console.WriteLine("boot");
+
+                void Run()
+                {
+                    Console.WriteLine("inside");
+                }
+
+                Run();
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Run", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("function", json.GetProperty("caller_kind").GetString());
+            Assert.Equal("<top-level>", json.GetProperty("caller_name").GetString());
+            Assert.Equal("Run", json.GetProperty("callee_name").GetString());
+            Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallers_WithExplicitKind_CSharpTopLevelStatementsUseSyntheticTopLevelCaller()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callers_csharp_toplevel_kind");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Program.cs", "csharp",
+                """
+                using System;
+
+                Console.WriteLine("boot");
+
+                void Run()
+                {
+                    Console.WriteLine("inside");
+                }
+
+                Run();
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (humanExitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Run", "--db", dbPath, "--lang", "csharp", "--exact-name", "--kind", "call"],
+                _jsonOptions));
+            var (jsonExitCode, jsonStdout, jsonStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Run", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--kind", "call"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(jsonStdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Equal(CommandExitCodes.Success, jsonExitCode);
+            Assert.Contains("(1 callers in 1 files)", stderr);
+            Assert.Equal(string.Empty, jsonStderr);
+            Assert.Contains("function", stdout);
+            Assert.Contains("<top-level>", stdout);
+            Assert.Equal("function", json.GetProperty("caller_kind").GetString());
+            Assert.Equal("<top-level>", json.GetProperty("caller_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunCallers_HumanOutput_ShowsReferenceKindPerRow()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callers_human_reference_kind");

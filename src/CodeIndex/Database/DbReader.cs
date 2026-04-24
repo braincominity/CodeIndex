@@ -91,6 +91,8 @@ public partial class DbReader
     // call-graph (callers/callees/hotspots) に参加する reference kind。`attribute` / `annotation`
     // のようなメタデータ kind は非呼び出しエッジなのでここから除外する (issue #293)。
     internal const string CallGraphReferenceKindsSql = "('call', 'instantiate', 'subscribe')";
+    private const string SyntheticTopLevelCallerName = "<top-level>";
+    private const string SyntheticTopLevelCallerKind = "function";
 
     // Reference kinds that represent compile-time type/member references (e.g. C# `nameof(X)`,
     // `typeof(T)`, Java `T.class`). They are intentionally excluded from default `callers` /
@@ -356,6 +358,19 @@ public partial class DbReader
         _hasReferencesTable
             ? "(SELECT COUNT(*) FROM symbol_references WHERE file_id = f.id)"
             : "0";
+
+    // C# top-level statements emit reference rows without a container symbol.
+    // Graph readers should surface those rows as a synthetic `<top-level>` caller.
+    // C# の top-level statements は container symbol なしの参照行を出すため、
+    // graph reader では合成 `<top-level>` caller として扱う。
+    private static string BuildCallerContainerPredicate(string fileAlias, string referenceAlias) =>
+        $"({referenceAlias}.container_name IS NOT NULL OR ({fileAlias}.lang = 'csharp' AND {referenceAlias}.container_name IS NULL))";
+
+    private static string BuildCallerKindProjectionSql(string referenceAlias) =>
+        $"CASE WHEN {referenceAlias}.container_name IS NULL THEN '{SyntheticTopLevelCallerKind}' ELSE {referenceAlias}.container_kind END";
+
+    private static string BuildCallerNameProjectionSql(string referenceAlias) =>
+        $"CASE WHEN {referenceAlias}.container_name IS NULL THEN '{SyntheticTopLevelCallerName}' ELSE {referenceAlias}.container_name END";
 
     private bool HasTable(string tableName)
     {
@@ -2778,15 +2793,15 @@ public partial class DbReader
                        r.line
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
-                WHERE r.container_name IS NOT NULL
+                WHERE {BuildCallerContainerPredicate("f", "r")}
                   AND r.reference_kind IN {CallGraphReferenceKindsSql}
                   AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}"
             : @"
-            SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
+            SELECT f.path, f.lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, r.symbol_name,
                    r.reference_kind, MIN(r.line) AS first_line, COUNT(*) AS reference_count
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
-            WHERE r.container_name IS NOT NULL";
+            WHERE " + BuildCallerContainerPredicate("f", "r");
         if (referenceKind != null)
             sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
@@ -2822,7 +2837,7 @@ public partial class DbReader
             sql += @"
                 GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number
             )
-            SELECT path, lang, container_kind, container_name, symbol_name,
+            SELECT path, lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, symbol_name,
                    " + GetGroupedCallerReferenceKindSql("r.reference_kind") + @" AS reference_kind,
                    MIN(line) AS first_line, COUNT(*) AS reference_count
             FROM logical_references r
@@ -2885,7 +2900,7 @@ public partial class DbReader
                        r.container_name AS container_name, r.symbol_name AS symbol_name
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
-            WHERE r.container_name IS NOT NULL";
+            WHERE " + BuildCallerContainerPredicate("f", "r");
         groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
         if (referenceKind != null)
@@ -2952,7 +2967,7 @@ public partial class DbReader
                        r.container_name AS container_name, r.symbol_name AS symbol_name
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
-                WHERE r.container_name IS NOT NULL";
+                WHERE " + BuildCallerContainerPredicate("f", "r");
         groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
         if (referenceKind != null)
@@ -3340,12 +3355,13 @@ public partial class DbReader
         // impact の BFS は `callers`/`callees`/`hotspots` と同じ call-graph 契約を共有し、
         // `subscribe` エッジ（`Click += OnClick` 等）も推移 caller に含める。`attribute` /
         // `annotation` のような metadata エッジは引き続き除外する。
+        var callerContainerPredicate = BuildCallerContainerPredicate("f", "r");
         var sql = $@"
             WITH logical_references AS (
                 SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.line
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
-                WHERE r.container_name IS NOT NULL
+                WHERE {callerContainerPredicate}
                   AND r.reference_kind IN {CallGraphReferenceKindsSql}
                   AND {supportedLangFilter}
                   {nameCondition}";
@@ -3355,7 +3371,7 @@ public partial class DbReader
         sql += @"
                 GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number
             )
-            SELECT path, lang, container_kind, container_name, symbol_name,
+            SELECT path, lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, symbol_name,
                    MIN(line) AS first_line, COUNT(*) AS reference_count
             FROM logical_references r
             GROUP BY path, lang, container_kind, container_name, symbol_name";
@@ -3445,7 +3461,7 @@ public partial class DbReader
                         break;
                     }
 
-                    var callerName = caller.CallerName ?? "<top-level>";
+                    var callerName = caller.CallerName ?? SyntheticTopLevelCallerName;
                     var key = $"{caller.Path}:{callerName}";
 
                     if (!visited.Add(key))
@@ -3463,7 +3479,9 @@ public partial class DbReader
                         ReferenceCount = caller.ReferenceCount,
                     });
 
-                    if (caller.CallerName != null && depth + 1 < maxDepth)
+                    if (caller.CallerName != null
+                        && caller.CallerName != SyntheticTopLevelCallerName
+                        && depth + 1 < maxDepth)
                         queue.Enqueue((caller.CallerName, depth + 1));
                 }
 
