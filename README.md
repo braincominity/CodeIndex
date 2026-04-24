@@ -596,7 +596,7 @@ The database reflects the working tree at the time of the last index. After swit
 | Svelte | `.svelte` | -- |
 | Terraform | `.tf` | -- |
 
-JavaScript/TypeScript symbol extraction also surfaces barrel re-exports such as `export * from`, `export * as ns from`, `export { foo as bar } from`, and TypeScript `export type { User } from`, including commented forms, multiline named re-export clauses, and multiline `export *` / `export * as ns` layouts. These re-exports preserve both the exported property surface and the source-module `import` rows. It also surfaces direct CommonJS named exports like `module.exports.foo = function () {}` / `exports.baz = value`, including same-line and multiline parenthesized wrappers, and exported object-literal alias/shorthand properties such as `module.exports = { foo: inner }` / `module.exports = { foo, bar }`.
+JavaScript/TypeScript symbol extraction also surfaces barrel re-exports such as `export * from`, `export * as ns from`, `export { foo as bar } from`, and TypeScript `export type { User } from`, including commented forms, multiline named re-export clauses, multiline `export *` / `export * as ns` layouts, and valid minified forms such as `export*from` / `export{foo as bar}from`. These re-exports preserve both the exported property surface and the source-module `import` rows. It also surfaces direct CommonJS named exports like `module.exports.foo = function () {}` / `exports.baz = value`, including same-line and multiline parenthesized wrappers, while keeping identifier prefixes like `functionCall()` / `classyThing` as ordinary property values. Exported object-literal alias/shorthand properties such as `module.exports = { foo: inner }` / `module.exports = { foo, bar }` are also surfaced.
 
 Modern Node module layouts are indexed without renaming files: `.cjs` / `.mjs` are treated as JavaScript, and `.cts` / `.mts` (including declaration variants such as `.d.cts` / `.d.mts`) are treated as TypeScript.
 
@@ -1529,7 +1529,7 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 | Svelte | `.svelte` | -- |
 | Terraform | `.tf` | -- |
 
-JavaScript/TypeScript のシンボル抽出は、`export * from` / `export * as ns from` / `export { foo as bar } from` のような barrel re-export と TypeScript の `export type { User } from` を、comment 付きや複数行の named re-export clause を含めて表面化します。さらに `module.exports.foo = function () {}` / `exports.baz = value` のような直接的な CommonJS named export に加え、`module.exports = { foo: inner }` / `module.exports = { foo, bar }` のような exported object-literal の alias / shorthand property も表面化します。
+JavaScript/TypeScript のシンボル抽出は、`export * from` / `export * as ns from` / `export { foo as bar } from` のような barrel re-export と TypeScript の `export type { User } from` を、comment 付き、複数行の named re-export clause、複数行の `export *` / `export * as ns`、さらに `export*from` / `export{foo as bar}from` のような minified でも有効な構文を含めて表面化します。さらに `module.exports.foo = function () {}` / `exports.baz = value` のような直接的な CommonJS named export を、同一行 / 複数行の括弧付き右辺も含めて表面化しつつ、`functionCall()` や `classyThing` のような識別子接頭辞は通常の property 値として扱います。`module.exports = { foo: inner }` / `module.exports = { foo, bar }` のような exported object-literal の alias / shorthand property も表面化します。
 
 モダンな Node モジュール構成でも、拡張子を変更せずにそのままインデックスできます。`.cjs` / `.mjs` は JavaScript、`.cts` / `.mts`（`.d.cts` / `.d.mts` の宣言ファイルを含む）は TypeScript として扱います。
 

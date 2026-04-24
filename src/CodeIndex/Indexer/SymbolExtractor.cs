@@ -375,11 +375,11 @@ public static class SymbolExtractor
         RegexOptions.Compiled);
 
     private static readonly Regex JavaScriptTypeScriptStarReExportRegex = new(
-        $@"^\s*export\s+\*(?:\s+as\s+(?<namespace>{JavaScriptTypeScriptIdentifierPattern}))?\s+from\s+(?<module>['""][^'""]+['""])\s*;?\s*$",
+        $@"^\s*export\s*\*(?:\s*as\s+(?<namespace>{JavaScriptTypeScriptIdentifierPattern}))?\s*from\s*(?<module>['""][^'""]+['""])\s*;?\s*$",
         RegexOptions.Compiled);
 
     private static readonly Regex JavaScriptTypeScriptNamedReExportRegex = new(
-        @"^\s*export\s+(?:type\s+)?\{\s*(?<specifiers>[^}]+)\s*\}\s+from\s+(?<module>['""][^'""]+['""])\s*;?\s*$",
+        @"^\s*export\s*(?:type\s+)?\{\s*(?<specifiers>[^}]+)\s*\}\s*from\s*(?<module>['""][^'""]+['""])\s*;?\s*$",
         RegexOptions.Compiled);
 
     private static readonly Regex JavaScriptTypeScriptCommonJsNamedExportAssignmentRegex = new(
@@ -5031,10 +5031,14 @@ public static class SymbolExtractor
 
             endLineIndex = lineIndex;
             clause = clauseBuilder.ToString().Trim();
-            if (!clause.StartsWith("export *", StringComparison.Ordinal))
+            if (!clause.StartsWith("export", StringComparison.Ordinal))
                 break;
 
-            if (!clause.Contains(" from ", StringComparison.Ordinal))
+            var clauseRemainder = clause["export".Length..].TrimStart();
+            if (clauseRemainder.Length == 0 || clauseRemainder[0] != '*')
+                break;
+
+            if (!ContainsJavaScriptTypeScriptKeyword(clause, "from"))
                 continue;
 
             if (JavaScriptTypeScriptStarReExportRegex.IsMatch(clause))
@@ -5145,7 +5149,7 @@ public static class SymbolExtractor
             if (JavaScriptTypeScriptNamedReExportRegex.IsMatch(clause))
                 return true;
 
-            if (clause.Contains(" from ", StringComparison.Ordinal))
+            if (ContainsJavaScriptTypeScriptKeyword(clause, "from"))
                 break;
         }
 
@@ -5441,8 +5445,8 @@ public static class SymbolExtractor
         rhs = rhs.TrimStart();
         while (rhs.Length > 0)
         {
-            if (rhs.StartsWith("function", StringComparison.Ordinal)
-                || rhs.StartsWith("async function", StringComparison.Ordinal)
+            if (IsJavaScriptTypeScriptKeywordAt(rhs, 0, "function")
+                || StartsJavaScriptTypeScriptAsyncFunctionAssignmentValue(rhs)
                 || JavaScriptTypeScriptArrowAssignmentValueRegex.IsMatch(rhs))
             {
                 return true;
@@ -5462,7 +5466,7 @@ public static class SymbolExtractor
         rhs = rhs.TrimStart();
         while (rhs.Length > 0)
         {
-            if (rhs.StartsWith("class", StringComparison.Ordinal))
+            if (IsJavaScriptTypeScriptKeywordAt(rhs, 0, "class"))
                 return true;
 
             if (rhs[0] != '(')
@@ -5472,6 +5476,15 @@ public static class SymbolExtractor
         }
 
         return false;
+    }
+
+    private static bool StartsJavaScriptTypeScriptAsyncFunctionAssignmentValue(string rhs)
+    {
+        if (!IsJavaScriptTypeScriptKeywordAt(rhs, 0, "async"))
+            return false;
+
+        var asyncRemainder = rhs["async".Length..].TrimStart();
+        return IsJavaScriptTypeScriptKeywordAt(asyncRemainder, 0, "function");
     }
 
     private static bool TryCollectJavaScriptTypeScriptAssignedRhs(
@@ -5737,6 +5750,17 @@ public static class SymbolExtractor
 
         var after = text[afterIndex];
         return !(char.IsLetterOrDigit(after) || after is '_' or '$');
+    }
+
+    private static bool ContainsJavaScriptTypeScriptKeyword(string text, string keyword)
+    {
+        for (int index = 0; index <= text.Length - keyword.Length; index++)
+        {
+            if (IsJavaScriptTypeScriptKeywordAt(text, index, keyword))
+                return true;
+        }
+
+        return false;
     }
 
     private static IEnumerable<string> ParseJavaScriptTypeScriptReExportedNames(string specifierList)
