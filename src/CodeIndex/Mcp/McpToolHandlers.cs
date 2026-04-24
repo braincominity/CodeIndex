@@ -91,19 +91,35 @@ public partial class McpServer
     private static int ClampLimit(int limit) => Math.Clamp(limit, 1, MaxLimit);
 
     /// <summary>
-    /// Return true when the requested reference kind is a metadata kind (`attribute` /
-    /// `annotation`) — these are valid on the `references` tool but must be rejected on
-    /// `callers` / `callees`, whose data model cannot answer metadata questions correctly
-    /// (metadata rows are attributed to the enclosing body-range symbol rather than the
-    /// annotated target, so file-level targets drop entirely and method-level metadata
-    /// appears under the enclosing class).
-    /// `references` では有効だが `callers` / `callees` では構造的に誤答するため弾くべき
-    /// metadata kind (`attribute` / `annotation`) かを返す。metadata 行は注釈対象ではなく
-    /// body-range 上の外側シンボルに帰属するため、`callers` / `callees` はこの kind に
-    /// 正しく答えられない。
+    /// Return true when the requested reference kind is NOT a call-graph kind (i.e. metadata
+    /// `attribute` / `annotation` or compile-time `type_reference`) — these are valid on the
+    /// `references` tool but must be rejected on `callers` / `callees`, whose data model
+    /// cannot answer those queries correctly. Metadata rows are attributed to the enclosing
+    /// body-range symbol rather than the annotated target (so file-level targets drop
+    /// entirely and method-level metadata appears under the enclosing class); `type_reference`
+    /// rows are compile-time type-position edges (declaration types, generic constraints,
+    /// `is`/`as`/`instanceof`, XML-doc `cref`), not runtime calls, so they misreport type
+    /// mentions as caller/callee edges.
+    /// `references` では有効だが `callers` / `callees` では構造的に誤答するため弾くべき kind
+    /// （metadata: `attribute` / `annotation`、型位置: `type_reference`）かを返す。metadata 行は
+    /// 注釈対象ではなく body-range 上の外側シンボルに帰属し、`type_reference` は実行時呼び出し
+    /// ではなく compile-time な型言及（宣言型、generic 制約、`is`/`as`/`instanceof`、XML-doc
+    /// `cref` など）なので、`callers` / `callees` はいずれの kind にも正しく答えられない。
     /// </summary>
-    private static bool IsMetadataReferenceKind(string? kind) =>
-        kind == "attribute" || kind == "annotation";
+    private static bool IsNonCallGraphReferenceKind(string? kind) =>
+        kind == "attribute" || kind == "annotation" || kind == "type_reference";
+
+    /// <summary>
+    /// Build the CLI / MCP error message for a non-call-graph reference kind rejected on
+    /// `callers` / `callees`. The message explains why the kind is structurally wrong on
+    /// the command and redirects users to `references`.
+    /// `callers` / `callees` で弾いた非 call-graph kind のエラーメッセージを組み立てる。
+    /// 構造的に誤答する理由を説明し、`references` に誘導する。
+    /// </summary>
+    private static string BuildNonCallGraphKindRejectionMessage(string command, string kind) =>
+        kind == "type_reference"
+            ? $"'kind: type_reference' is not supported on '{command}'. Type-position references are compile-time edges (declaration types, generic constraints, `is`/`as`/`instanceof`, XML-doc `cref`), not runtime calls, so `{command}` cannot return accurate rows for kind 'type_reference'. Use the 'references' tool with kind 'type_reference' instead."
+            : $"'kind: {kind}' is not supported on '{command}'. Metadata references are attributed to the enclosing body-range symbol, so `{command}` cannot return accurate rows for kind '{kind}'. Use the 'references' tool with kind '{kind}' for metadata enumeration.";
 
     private JsonNode? TryGetValidatedMaxLineWidth(JsonNode? id, JsonNode? args, out int maxLineWidth, string propertyName = "maxLineWidth")
     {
@@ -536,8 +552,8 @@ public partial class McpServer
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
 
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
-        if (IsMetadataReferenceKind(kind))
-            return CreateToolErrorResponse(id, $"'kind: {kind}' is not supported on 'callers'. Metadata references are attributed to the enclosing body-range symbol, so `callers` cannot return accurate rows for kind '{kind}'. Use the 'references' tool with kind '{kind}' for metadata enumeration.");
+        if (IsNonCallGraphReferenceKind(kind))
+            return CreateToolErrorResponse(id, BuildNonCallGraphKindRejectionMessage("callers", kind!));
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var pathPatterns = ReadPathList(args, "path");
@@ -598,8 +614,8 @@ public partial class McpServer
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
 
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
-        if (IsMetadataReferenceKind(kind))
-            return CreateToolErrorResponse(id, $"'kind: {kind}' is not supported on 'callees'. Metadata references are attributed to the enclosing body-range symbol, so `callees` cannot return accurate rows for kind '{kind}'. Use the 'references' tool with kind '{kind}' for metadata enumeration.");
+        if (IsNonCallGraphReferenceKind(kind))
+            return CreateToolErrorResponse(id, BuildNonCallGraphKindRejectionMessage("callees", kind!));
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var pathPatterns = ReadPathList(args, "path");
