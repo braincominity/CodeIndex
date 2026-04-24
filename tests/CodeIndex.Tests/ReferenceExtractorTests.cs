@@ -5615,20 +5615,22 @@ public class ReferenceExtractorTests
     [Fact]
     public void Extract_SQL_DeleteUsingMixedTableAndTempSourcesAfterComma_AreNotTreatedAsComments()
     {
-        // issue #792: `DELETE ... USING staging_log, #temp` must keep the temp source after the
-        // comma even when the previous list item is a regular table source.
-        // issue #792: `DELETE ... USING staging_log, #temp` は、直前の list item が通常テーブルでも
+        // issue #792: `DELETE ... USING reusing_data, #temp` must keep the temp source after the
+        // comma even when the previous list item is a regular table source that contains `using`
+        // as a substring.
+        // issue #792: `DELETE ... USING reusing_data, #temp` は、直前の list item が通常テーブルでも
+        // `using` を部分文字列に含む場合があっても、
         // comma 後続の temp source を保持する必要がある。
         const string content = """
             CREATE TABLE #staging_b (id int);
-            DELETE FROM audit_log USING staging_log, #staging_b AS b
+            DELETE FROM audit_log USING reusing_data, #staging_b AS b
             WHERE audit_log.id = b.id;
             """;
 
         var symbols = SymbolExtractor.Extract(1, "sql", content);
         var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
 
-        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "reusing_data" && r.ReferenceKind == "reference");
         Assert.Equal(1, references.Count(r => r.SymbolName == "#staging_b" && r.ReferenceKind == "reference"));
     }
 

@@ -329,6 +329,7 @@ public static class ReferenceExtractor
     private static readonly Regex SqlCreateTempTableRegex = new(
         $@"(?<![\w$])CREATE(?:\s+(?:TEMP|TEMPORARY))?\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+(?<name>{SqlTempIdentifierPattern})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlUsingKeywordRegex = new(@"(?<![\w$])USING\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // T-SQL temp stored routines: `CREATE PROCEDURE #sp` / `CREATE PROC ##sp` / `CREATE FUNCTION #f`
     // and `CREATE OR ALTER|REPLACE` / `CREATE TEMPORARY` variants. Tracks the temp name as
     // established evidence so later `EXEC #sp` / `CALL #sp` / `EXECUTE #sp` calls keep their edge
@@ -11416,9 +11417,9 @@ public static class ReferenceExtractor
                 sourceStart++;
             else
             {
-                sourceStart = priorListItem.LastIndexOf("USING", StringComparison.OrdinalIgnoreCase);
-                if (sourceStart >= 0)
-                    sourceStart += "USING".Length;
+                var usingMatches = SqlUsingKeywordRegex.Matches(priorListItem);
+                if (usingMatches.Count > 0)
+                    sourceStart = usingMatches[^1].Index + usingMatches[^1].Length;
                 else
                 {
                     sourceStart = priorListItem.LastIndexOf('#');
