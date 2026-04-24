@@ -236,9 +236,14 @@ Done.
   Files   : 42
   Chunks  : 318
   Symbols : 156
+  Refs    : 1,024
+  Updated : 14
   Skipped : 28 (unchanged)
   Graph   : ready
   Issues  : ready
+  SQL graph: ready
+  Hotspots: ready
+  C# names: ready
   Fold    : ready
   Elapsed : 00:00:02
 ```
@@ -1160,9 +1165,14 @@ Done.
   Files   : 42
   Chunks  : 318
   Symbols : 156
+  Refs    : 1,024
+  Updated : 14
   Skipped : 28 (unchanged)
   Graph   : ready
   Issues  : ready
+  SQL graph: ready
+  Hotspots: ready
+  C# names: ready
   Fold    : ready
   Elapsed : 00:00:02
 ```
