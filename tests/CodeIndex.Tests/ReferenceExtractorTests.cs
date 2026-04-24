@@ -420,6 +420,30 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpInterpolatedString_KeepsSingleLineInterpolationCallReferences()
+    {
+        const string content = """
+            public class FixtureHost
+            {
+                public int Run() => 42;
+
+                public string Render()
+                {
+                    return $"value = {Run()}";
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var runReference = Assert.Single(references);
+        Assert.Equal("Run", runReference.SymbolName);
+        Assert.Equal("call", runReference.ReferenceKind);
+        Assert.Equal("Render", runReference.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpInterpolatedRawString_WithNestedRawString_DoesNotLeakPhantomReferences()
     {
         const string content = """"
@@ -470,6 +494,50 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         Assert.DoesNotContain(references, reference => reference.SymbolName == "Run");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptTemplateLiteral_KeepsSingleLineInterpolationCallReferences()
+    {
+        const string content = """
+            function run() {
+                return 42;
+            }
+
+            function use() {
+                const value = `value = ${run()}`;
+                return value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        var runReference = Assert.Single(references);
+        Assert.Equal("run", runReference.SymbolName);
+        Assert.Equal("call", runReference.ReferenceKind);
+        Assert.Equal("use", runReference.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_PythonFString_KeepsSingleLineInterpolationCallReferences()
+    {
+        const string content = """
+            def run():
+                return 42
+
+            def use():
+                value = f"value = {run()}"
+                return value
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        var runReference = Assert.Single(references);
+        Assert.Equal("run", runReference.SymbolName);
+        Assert.Equal("call", runReference.ReferenceKind);
+        Assert.Equal("use", runReference.ContainerName);
     }
 
     [Fact]
@@ -5677,6 +5745,25 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "NOLOCK");
         Assert.DoesNotContain(references, r => r.SymbolName == "public.logs");
         Assert.DoesNotContain(references, r => r.SymbolName == "archive].[events");
+    }
+
+    [Fact]
+    public void Extract_SQL_FromDerivedTableSourcesCapturesLaterReferences()
+    {
+        // issue #942: a derived-table source must not stop the top-level comma walk before later items.
+        // issue #942: derived table の後続にある top-level comma-separated source を落とさない。
+        const string content = """
+            SELECT * FROM (SELECT 1) x, accounts;
+            SELECT * FROM (SELECT 1) x(c1), accounts;
+            SELECT * FROM (SELECT func(subfunc(a)) FROM t) AS y, accounts;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(3, references.Count(r => r.SymbolName == "accounts" && r.ReferenceKind == "reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "x" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "y" && r.ReferenceKind == "reference");
     }
 
     [Fact]

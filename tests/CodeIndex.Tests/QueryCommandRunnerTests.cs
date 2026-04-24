@@ -68,6 +68,15 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_AllowsZeroMaxLineWidth()
+    {
+        var options = QueryCommandRunner.ParseArgs(["RunSearch", "--max-line-width", "0"], jsonDefault: false, allowNamedQuery: true);
+
+        Assert.Equal("RunSearch", options.Query);
+        Assert.Equal(0, options.MaxLineWidth);
+    }
+
+    [Fact]
     public void ParseArgs_CountFlagParsed()
     {
         var options = QueryCommandRunner.ParseArgs(["myquery", "--count"], jsonDefault: false);
@@ -239,6 +248,64 @@ public class QueryCommandRunnerTests
 
             Assert.NotEqual(CommandExitCodes.UsageError, exitCode);
             Assert.DoesNotContain("is not supported", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_IndentsByContainerDepth()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_depth");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/deep.cs",
+                "csharp",
+                """
+                namespace OuterNs
+                {
+                    namespace InnerNs
+                    {
+                        public class OuterClass
+                        {
+                            public class NestedClass
+                            {
+                                public class DeeplyNested
+                                {
+                                    public void Method() { }
+                                }
+                            }
+                        }
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/deep.cs", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+
+            var lines = stdout.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+            var outer = lines.Single(line => line.Contains("namespace OuterNs", StringComparison.Ordinal));
+            var inner = lines.Single(line => line.Contains("namespace InnerNs", StringComparison.Ordinal));
+            var outerClass = lines.Single(line => line.Contains("public class OuterClass", StringComparison.Ordinal));
+            var nestedClass = lines.Single(line => line.Contains("public class NestedClass", StringComparison.Ordinal));
+            var deeplyNested = lines.Single(line => line.Contains("public class DeeplyNested", StringComparison.Ordinal));
+            var method = lines.Single(line => line.Contains("public void Method()", StringComparison.Ordinal));
+
+            var outerIndex = outer.IndexOf("namespace OuterNs", StringComparison.Ordinal);
+            Assert.Equal(4, inner.IndexOf("namespace InnerNs", StringComparison.Ordinal) - outerIndex);
+            Assert.Equal(4, outerClass.IndexOf("public class OuterClass", StringComparison.Ordinal) - inner.IndexOf("namespace InnerNs", StringComparison.Ordinal));
+            Assert.Equal(4, nestedClass.IndexOf("public class NestedClass", StringComparison.Ordinal) - outerClass.IndexOf("public class OuterClass", StringComparison.Ordinal));
+            Assert.Equal(4, deeplyNested.IndexOf("public class DeeplyNested", StringComparison.Ordinal) - nestedClass.IndexOf("public class NestedClass", StringComparison.Ordinal));
+            Assert.Equal(4, method.IndexOf("public void Method()", StringComparison.Ordinal) - deeplyNested.IndexOf("public class DeeplyNested", StringComparison.Ordinal));
         }
         finally
         {
@@ -1180,7 +1247,7 @@ public class QueryCommandRunnerTests
     [Theory]
     [InlineData("-1")]
     [InlineData("abc")]
-    public void RunReferences_RejectsInvalidMaxLineWidthValue(string invalidValue)
+    public void RunReferences_RejectsNegativeOrNonNumericMaxLineWidthValue(string invalidValue)
     {
         var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_references_invalid_max_line_width_{invalidValue}");
         try
@@ -1598,6 +1665,65 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_JsonKeepsCsharpQualifiedIsPatternCallExact()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_csharp_qualified_is_pattern_call_exact");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Use.cs",
+                "csharp",
+                """
+                namespace Probe;
+
+                public enum Color
+                {
+                    Red,
+                    Blue
+                }
+
+                public class Red {}
+
+                class Demo
+                {
+                    bool Match(object value) => value is Color.Red or Color.Blue;
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+
+            var references = ParseJsonLines(stdout).Select(line => line.RootElement).ToList();
+            Assert.Single(references);
+            var reference = references[0];
+            Assert.Equal("Red", reference.GetProperty("symbol_name").GetString());
+            Assert.Equal("call", reference.GetProperty("reference_kind").GetString());
+            Assert.Equal("Match", reference.GetProperty("container_name").GetString());
+            Assert.Contains("value is Color.Red or Color.Blue;", reference.GetProperty("context").GetString());
+
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal(string.Empty, countStderr);
+            var countJson = ParseJsonOutput(countStdout).RootElement;
+            Assert.Equal(1, countJson.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_JsonClampsLongSingleLineContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_long_line");
@@ -1860,6 +1986,35 @@ public class QueryCommandRunnerTests
             Assert.True(json.GetProperty("snippet_truncated").GetBoolean());
             Assert.Contains("target", json.GetProperty("snippet").GetString());
             Assert.True(json.GetProperty("snippet").GetString()!.Length <= 96);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_JsonTreatsZeroMaxLineWidthAsUnclamped()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_long_line_zero_width");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var longLine = new string('a', 320) + "target" + new string('b', 320);
+            TestProjectHelper.InsertIndexedFile(dbPath, "dist/search.txt", "text", longLine);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["target", "--db", dbPath, "--path", "dist/search.txt", "--json", "--max-line-width", "0"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.GetProperty("snippet_truncated").GetBoolean());
+            Assert.Contains("target", json.GetProperty("snippet").GetString());
+            Assert.True(json.GetProperty("snippet").GetString()!.Length > 512);
         }
         finally
         {
@@ -21996,6 +22151,52 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbolsAndDefinition_ExactNameAtOnly_ReturnsZeroWithoutBroadening()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_exact_name_at_only");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                public class Foo
+                {
+                    public int Bar() => 0;
+                }
+                """);
+
+            var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--name", "@", "--exact-name", "--count"],
+                _jsonOptions));
+            using var symbolsDocument = ParseJsonOutput(symbolsStdout);
+            var symbolsJson = symbolsDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+            Assert.Equal(string.Empty, symbolsStderr);
+            Assert.Equal(0, symbolsJson.GetProperty("count").GetInt32());
+            Assert.Equal(0, symbolsJson.GetProperty("files").GetInt32());
+
+            var (definitionExitCode, definitionStdout, definitionStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["@", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--count"],
+                _jsonOptions));
+            using var definitionDocument = ParseJsonOutput(definitionStdout);
+            var definitionJson = definitionDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, definitionExitCode);
+            Assert.Equal(string.Empty, definitionStderr);
+            Assert.Equal(0, definitionJson.GetProperty("count").GetInt32());
+            Assert.Equal(0, definitionJson.GetProperty("files").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunDefinition_ExactZeroJson_PreservesRelaxedCountAndCapsSamplesToFive()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_definition_exact_zero_cap");
@@ -24016,6 +24217,93 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Contains($"Git HEAD: {expectedHead}", stdout);
             Assert.Contains("Git Dirty: True", stdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_Json_UsesIndexedAndSourceFreshnessInsteadOfClockAge()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_freshness");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            var sourcePath = Path.Combine(projectRoot, "src", "app.cs");
+            File.WriteAllText(sourcePath, "class App {}\n");
+            TestProjectHelper.RunGit(projectRoot, "add", "src/app.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            var indexedAt = new DateTime(2025, 1, 2, 0, 0, 0, DateTimeKind.Utc);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n", modified);
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "UPDATE files SET indexed_at = @indexed_at WHERE path = @path";
+                cmd.Parameters.AddWithValue("@indexed_at", indexedAt);
+                cmd.Parameters.AddWithValue("@path", "src/app.cs");
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("index fresh", json.GetProperty("summary").GetString());
+            Assert.DoesNotContain("index stale", json.GetProperty("summary").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_Json_UsesSourceNewerThanIndexAsStale()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_stale");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            var sourcePath = Path.Combine(projectRoot, "src", "app.cs");
+            File.WriteAllText(sourcePath, "class App {}\n");
+            TestProjectHelper.RunGit(projectRoot, "add", "src/app.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var modified = new DateTime(2025, 1, 2, 0, 0, 0, DateTimeKind.Utc);
+            var indexedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n", modified);
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "UPDATE files SET indexed_at = @indexed_at WHERE path = @path";
+                cmd.Parameters.AddWithValue("@indexed_at", indexedAt);
+                cmd.Parameters.AddWithValue("@path", "src/app.cs");
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("index stale", json.GetProperty("summary").GetString());
         }
         finally
         {

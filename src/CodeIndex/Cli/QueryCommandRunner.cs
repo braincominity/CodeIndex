@@ -1096,8 +1096,13 @@ public static class QueryCommandRunner
                     value = args[i + 1];
                     i++;
                 }
-                if ((arg == "--limit" || arg == "--top" || arg == "--max-line-width") && (!int.TryParse(value, out var limit) || limit <= 0))
-                    return $"Error: {arg} requires a positive integer, got '{value}'";
+                if (arg == "--limit" || arg == "--top")
+                {
+                    if (!int.TryParse(value, out var limit) || limit <= 0)
+                        return $"Error: {arg} requires a positive integer, got '{value}'";
+                }
+                if (arg == "--max-line-width" && (!int.TryParse(value, out var widthValue) || widthValue < 0))
+                    return $"Error: {arg} requires a non-negative integer, got '{value}'";
                 if (arg == "--max-line-width" && int.TryParse(value, out var widthCeil) && widthCeil > LineWidthFormatter.MaxAllowedLineWidth)
                     return $"Error: --max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth} (got '{value}').";
                 if ((arg == "--before" || arg == "--after") && (!int.TryParse(value, out var context) || context < 0))
@@ -1388,7 +1393,7 @@ public static class QueryCommandRunner
                 foreach (var sym in outline.Symbols)
                 {
                     // Indent nested symbols under their container / コンテナ内のシンボルをインデント
-                    var indent = sym.ContainerName != null ? "    " : "";
+                    var indent = sym.Depth > 0 ? new string(' ', sym.Depth * 4) : "";
                     var ret = sym.ReturnType != null ? $": {sym.ReturnType} " : "";
                     var sig = sym.Signature ?? $"{sym.Kind} {sym.Name}";
                     // Avoid duplicating visibility when signature already contains it
@@ -1540,9 +1545,7 @@ public static class QueryCommandRunner
 
             // Build one-line summary for AI orientation / AI向けの1行サマリーを構築
             var topLangs = status.Languages.OrderByDescending(kv => kv.Value).Take(3).Select(kv => kv.Key);
-            var freshness = status.IndexedAt.HasValue
-                ? (DateTime.UtcNow - status.IndexedAt.Value).TotalMinutes < 5 ? "fresh" : "stale"
-                : "unknown";
+            var freshness = BuildStatusFreshnessLabel(status);
             var dirty = status.GitIsDirty == true ? ", dirty" : "";
             if (IsFoldOnlyReadinessDegraded(status))
             {
@@ -3284,6 +3287,17 @@ public static class QueryCommandRunner
 
     private static string BuildFoldNotReadyWarning(string? foldReadyReason, string backfillCommand, string rebuildCommand)
         => $"{BuildFoldNotReadyExplanation(foldReadyReason)} Run `{backfillCommand}` to restamp folded-name columns in place, or `{rebuildCommand}` for a full rebuild.";
+
+    private static string BuildStatusFreshnessLabel(StatusResult status)
+    {
+        if (!status.IndexedAt.HasValue || !status.LatestModified.HasValue)
+            return "unknown";
+
+        if (status.GitIsDirty == true)
+            return "stale";
+
+        return status.IndexedAt.Value >= status.LatestModified.Value ? "fresh" : "stale";
+    }
 
     private static string BuildFoldBackfillCommand(string dbPath, bool dbPathExplicit)
     {

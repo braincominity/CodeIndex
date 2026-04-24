@@ -967,6 +967,19 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DoesNotTreatCommonJsNamedExportComparisonsAsAssignments()
+    {
+        var content = """
+            module.exports.foo === undefined;
+            exports.bar == null;
+            module.exports.baz !== 1;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Empty(symbols);
+    }
+
+    [Fact]
     public void Extract_JavaScript_DetectsMultilineCommonJsNamedExportAssignments()
     {
         var content = """
@@ -1126,6 +1139,19 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "baz");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DoesNotTreatCommonJsNamedExportComparisonsAsAssignments()
+    {
+        var content = """
+            module.exports.foo === undefined;
+            exports.bar == null;
+            module.exports.baz !== 1;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Empty(symbols);
     }
 
     [Fact]
@@ -12167,6 +12193,7 @@ public class SymbolExtractorTests
         Assert.Equal("public partial class Child { }", child.Signature);
         Assert.Equal("class", child.ContainerKind);
         Assert.Equal("Wrapped", child.ContainerName);
+        Assert.Equal(0, child.SameLineSignatureOccurrenceIndex);
 
         Assert.DoesNotContain(symbols, s =>
             s.Kind == "class"
@@ -13255,15 +13282,66 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_PowerShell_DetectsSymbols()
     {
-        var content = "Import-Module ActiveDirectory\nusing module PSDesiredStateConfiguration\n\nclass ServerConfig {\n    [string]$Name\n}\n\nenum Environment {\n    Dev\n    Staging\n    Prod\n}\n\nfunction Get-UserInfo {\n    param($UserId)\n    Get-ADUser -Identity $UserId\n}\n\nfilter Where-Active {\n    if ($_.Enabled) { $_ }\n}";
+        var content = """
+            Import-Module ActiveDirectory
+            using module PSDesiredStateConfiguration
+            using namespace System.IO
+            using assembly System.Xml.Linq
+
+            configuration MyConfig {
+                Node 'localhost' { }
+            }
+
+            workflow TestFlow {
+                Get-Process
+            }
+
+            class ServerConfig {
+                [string]$Name
+            }
+
+            enum Environment {
+                Dev
+                Staging
+                Prod
+            }
+
+            function Get-UserInfo {
+                param($UserId)
+                Get-ADUser -Identity $UserId
+            }
+
+            function script:Private-Helper { return 42 }
+            function global:Setup-Env {
+                $env:APP_MODE = 'dev'
+            }
+            function local:Inner-Helper { return 'inner' }
+            function private:InternalUtil { return 'util' }
+
+            filter script:Where-Active {
+                if ($_.Enabled) { $_ }
+            }
+            """;
         var symbols = SymbolExtractor.Extract(1, "powershell", content);
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "ActiveDirectory");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "PSDesiredStateConfiguration");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System.IO");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System.Xml.Linq");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MyConfig");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "TestFlow");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ServerConfig");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Environment");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Get-UserInfo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Private-Helper");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Setup-Env");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Inner-Helper");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "InternalUtil");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Where-Active");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "script");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "global");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "local");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "private");
     }
 
     [Fact]
