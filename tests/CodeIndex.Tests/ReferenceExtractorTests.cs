@@ -6277,6 +6277,28 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScriptForOfLoopOverPlainTemplate_IsNotCaptured()
+    {
+        // Regression guard: `for (const ch of \`abc\`)` uses `of` as the for-of iterator
+        // keyword, not as a tag identifier. The backtick backward-scan picks it up, so
+        // IsIgnoredCallName must suppress the phantom `call of` edge.
+        // 退行防止: `for (const ch of \`abc\`)` の `of` は for-of イテレータキーワードで
+        // あり、タグ識別子ではない。backward-scan が拾う `of` は IsIgnoredCallName で握り潰す。
+        const string content = """
+            function f() {
+                for (const ch of `abc`) {
+                    use(ch);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
+    }
+
+    [Fact]
     public void Extract_JavaScriptInstanceofBeforePlainTemplate_IsNotCaptured()
     {
         // Regression guard: `foo instanceof \`plain\`` uses `instanceof` as the type-check

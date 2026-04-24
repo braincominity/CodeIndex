@@ -49,21 +49,22 @@ public static class ReferenceExtractor
             "instanceof", "super", "this", "assert", "throws", "extends", "implements", "synchronized",
         },
         // JavaScript / TypeScript contextual keywords / JavaScript / TypeScript 文脈キーワード
-        // `void`, `case`, `delete`, `in`, and `instanceof` are listed because each legally sits
-        // immediately before a template literal (`void \`...\``, `case \`...\`:`,
-        // `delete \`...\``, `foo in \`...\``, `foo instanceof \`...\``) as an operator / keyword,
-        // not a call target; without these entries the tagged-template scanner (issue #268) would
-        // emit phantom `void` / `case` / `delete` / `in` / `instanceof` call rows.
-        // `void \`...\`` / `case \`...\`:` / `delete \`...\`` / `foo in \`...\`` / `foo instanceof \`...\``
-        // はタグ無しテンプレートの正当な前置形で、issue #268 のタグ付きテンプレート検出が
-        // それらを誤って `call` として発行しないようここに載せる。
+        // `void`, `case`, `delete`, `in`, `instanceof`, and `of` are listed because each legally
+        // sits immediately before a template literal (`void \`...\``, `case \`...\`:`,
+        // `delete \`...\``, `foo in \`...\``, `foo instanceof \`...\``, `for (const x of \`...\`)`)
+        // as an operator / keyword, not a call target; without these entries the tagged-template
+        // scanner (issue #268) would emit phantom call rows for those keywords.
+        // `void \`...\`` / `case \`...\`:` / `delete \`...\`` / `foo in \`...\`` /
+        // `foo instanceof \`...\`` / `for (const x of \`...\`)` はタグ無しテンプレートの正当な
+        // 前置形で、issue #268 のタグ付きテンプレート検出がそれらを誤って `call` として発行
+        // しないようここに載せる。
         ["javascript"] = new HashSet<string>(StringComparer.Ordinal)
         {
-            "import", "super", "yield", "void", "case", "delete", "in", "instanceof",
+            "import", "super", "yield", "void", "case", "delete", "in", "instanceof", "of",
         },
         ["typescript"] = new HashSet<string>(StringComparer.Ordinal)
         {
-            "import", "super", "yield", "void", "case", "delete", "in", "instanceof",
+            "import", "super", "yield", "void", "case", "delete", "in", "instanceof", "of",
         },
         // Python contextual keywords / Python の文脈キーワード
         ["python"] = new HashSet<string>(StringComparer.Ordinal)
