@@ -46,6 +46,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonFString_FormatSpecifier_PreservesFollowingCalls()
+    {
+        const string content = """
+            def real_call():
+                return 1
+
+            def caller(value):
+                msg = f"{value:#x} {real_call()}"
+                return msg
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "real_call"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "caller");
+    }
+
+    [Fact]
     public void Extract_CsharpExpressionBodiedMembers_AttributeToIndividualMember()
     {
         // issue #233: expression-bodied methods and properties must attribute their

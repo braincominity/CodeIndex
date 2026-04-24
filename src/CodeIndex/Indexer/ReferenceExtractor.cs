@@ -11817,7 +11817,11 @@ public static class ReferenceExtractor
                 }
 
                 if (line[i] == '#')
-                    break;
+                {
+                    masked[i] = ' ';
+                    i++;
+                    continue;
+                }
 
                 i++;
             }
