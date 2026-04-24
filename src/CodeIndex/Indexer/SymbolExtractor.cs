@@ -5048,6 +5048,9 @@ public static class SymbolExtractor
                 return true;
             }
 
+            if (HasPendingJavaScriptTypeScriptImportAttributes(clause))
+                continue;
+
             break;
         }
 
@@ -5214,11 +5217,15 @@ public static class SymbolExtractor
             int? bodyEndLine = null;
             if (kind == "function")
             {
-                var openBraceOffset = rhs.IndexOf('{');
-                if (openBraceOffset >= 0)
+                if (TryFindJavaScriptTypeScriptAssignedFunctionBodyOpenBrace(
+                        rawLines,
+                        rhsStartLineIndex,
+                        rhsStartColumn,
+                        lang,
+                        out var openBraceLineIndex,
+                        out var openBraceColumn))
                 {
-                    var openBraceColumn = rhsStartColumn + openBraceOffset;
-                    var (_, resolvedBodyStartLine, resolvedBodyEndLine) = ResolveRange(rawLines, rhsStartLineIndex, BodyStyle.Brace, lang, openBraceColumn);
+                    var (_, resolvedBodyStartLine, resolvedBodyEndLine) = ResolveRange(rawLines, openBraceLineIndex, BodyStyle.Brace, lang, openBraceColumn);
                     bodyStartLine = resolvedBodyStartLine;
                     bodyEndLine = resolvedBodyEndLine;
                 }
@@ -5722,6 +5729,149 @@ public static class SymbolExtractor
         return false;
     }
 
+    private static bool TryFindJavaScriptTypeScriptAssignedFunctionBodyOpenBrace(
+        string[] rawLines,
+        int startLineIndex,
+        int startColumn,
+        string? lang,
+        out int openBraceLineIndex,
+        out int openBraceColumn)
+    {
+        openBraceLineIndex = -1;
+        openBraceColumn = -1;
+
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var angleDepth = 0;
+        var awaitingFunctionBody = false;
+        var awaitingArrowBody = false;
+        var functionHeaderState = new JavaScriptTypeScriptFunctionHeaderState();
+        var lexState = new JavaScriptLexState();
+
+        for (int lineIndex = startLineIndex; lineIndex < rawLines.Length; lineIndex++)
+        {
+            var lexedLine = LexJavaScriptLine(rawLines[lineIndex], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+
+            var column = lineIndex == startLineIndex
+                ? Math.Max(0, startColumn)
+                : 0;
+
+            for (; column < sanitizedLine.Length; column++)
+            {
+                var ch = sanitizedLine[column];
+                var wasFunctionHeaderActive = functionHeaderState.Active;
+
+                if (!functionHeaderState.Active && IsJavaScriptTypeScriptIdentifierStart(ch))
+                {
+                    var tokenStart = column;
+                    var tokenEnd = column + 1;
+                    while (tokenEnd < sanitizedLine.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedLine[tokenEnd]))
+                        tokenEnd++;
+
+                    if (sanitizedLine[tokenStart..tokenEnd] == "function")
+                    {
+                        BeginJavaScriptTypeScriptFunctionHeader(ref functionHeaderState);
+                        column = tokenEnd - 1;
+                        continue;
+                    }
+                }
+
+                var functionHeaderResult = ConsumeJavaScriptTypeScriptFunctionHeaderChar(
+                    ref functionHeaderState,
+                    sanitizedLine,
+                    column,
+                    lang ?? "javascript",
+                    out var functionHeaderAdvanceColumns);
+                if (wasFunctionHeaderActive && !functionHeaderState.Active)
+                    awaitingFunctionBody = true;
+
+                if (functionHeaderResult == JavaScriptTypeScriptFunctionHeaderConsumeResult.Consumed)
+                {
+                    column += functionHeaderAdvanceColumns;
+                    continue;
+                }
+
+                if (char.IsWhiteSpace(ch))
+                    continue;
+
+                if (awaitingFunctionBody)
+                {
+                    if (ch == '{')
+                    {
+                        openBraceLineIndex = lineIndex;
+                        openBraceColumn = column;
+                        return true;
+                    }
+
+                    return false;
+                }
+
+                if (awaitingArrowBody)
+                {
+                    if (ch == '{')
+                    {
+                        openBraceLineIndex = lineIndex;
+                        openBraceColumn = column;
+                        return true;
+                    }
+
+                    return false;
+                }
+
+                if (ch == '(')
+                {
+                    parenDepth++;
+                    continue;
+                }
+
+                if (ch == ')' && parenDepth > 0)
+                {
+                    parenDepth--;
+                    continue;
+                }
+
+                if (ch == '[')
+                {
+                    bracketDepth++;
+                    continue;
+                }
+
+                if (ch == ']' && bracketDepth > 0)
+                {
+                    bracketDepth--;
+                    continue;
+                }
+
+                if (lang == "typescript" && ch == '<' && parenDepth == 0 && bracketDepth == 0)
+                {
+                    angleDepth++;
+                    continue;
+                }
+
+                if (ch == '>' && angleDepth > 0 && (column == 0 || sanitizedLine[column - 1] != '='))
+                {
+                    angleDepth--;
+                    continue;
+                }
+
+                if (ch == '='
+                    && column + 1 < sanitizedLine.Length
+                    && sanitizedLine[column + 1] == '>'
+                    && parenDepth == 0
+                    && bracketDepth == 0
+                    && angleDepth == 0)
+                {
+                    awaitingArrowBody = true;
+                    column++;
+                }
+            }
+        }
+
+        return false;
+    }
+
     private static bool HasOnlyJavaScriptTypeScriptAssignedRhsWrapperParensToLineEnd(string sanitizedLine, int startColumn)
     {
         for (int column = Math.Max(0, startColumn); column < sanitizedLine.Length; column++)
@@ -5913,15 +6063,49 @@ public static class SymbolExtractor
         return !(char.IsLetterOrDigit(after) || after is '_' or '$');
     }
 
-    private static bool ContainsJavaScriptTypeScriptKeyword(string text, string keyword)
+    private static int FindJavaScriptTypeScriptKeywordIndex(string text, string keyword)
     {
         for (int index = 0; index <= text.Length - keyword.Length; index++)
         {
             if (IsJavaScriptTypeScriptKeywordAt(text, index, keyword))
-                return true;
+                return index;
         }
 
-        return false;
+        return -1;
+    }
+
+    private static bool ContainsJavaScriptTypeScriptKeyword(string text, string keyword)
+    {
+        return FindJavaScriptTypeScriptKeywordIndex(text, keyword) >= 0;
+    }
+
+    private static bool HasPendingJavaScriptTypeScriptImportAttributes(string clause)
+    {
+        var withIndex = FindJavaScriptTypeScriptKeywordIndex(clause, "with");
+        var assertIndex = FindJavaScriptTypeScriptKeywordIndex(clause, "assert");
+        var attributeIndex = withIndex >= 0 && assertIndex >= 0
+            ? Math.Min(withIndex, assertIndex)
+            : Math.Max(withIndex, assertIndex);
+        if (attributeIndex < 0)
+            return false;
+
+        var braceDepth = 0;
+        var sawOpeningBrace = false;
+        for (int index = attributeIndex; index < clause.Length; index++)
+        {
+            var ch = clause[index];
+            if (ch == '{')
+            {
+                braceDepth++;
+                sawOpeningBrace = true;
+            }
+            else if (ch == '}' && braceDepth > 0)
+            {
+                braceDepth--;
+            }
+        }
+
+        return !sawOpeningBrace || braceDepth > 0;
     }
 
     private static string SkipJavaScriptTypeScriptTypeOnlyExportModifier(string exportRemainder)

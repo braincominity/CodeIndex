@@ -187,6 +187,33 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DetectsMultilineStarReExportSurfaceSymbolsWithImportAttributes()
+    {
+        var content = """
+            export * from './util' with {
+              type: 'json'
+            };
+            export * as ns from './other' assert {
+              type: 'json'
+            };
+            export type * from './types' with {
+              type: 'json'
+            };
+            export type * as typeNs from './types-ns' assert {
+              type: 'json'
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./util");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./other");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./types");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./types-ns");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "ns");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "typeNs");
+    }
+
+    [Fact]
     public void Extract_JavaScript_StringBraceDoesNotBreakFollowingContainerAssignment()
     {
         var content = """"
@@ -972,6 +999,52 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "baz");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "qux");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_CommonJsNamedExportFunctionsPreserveMultilineBraceBodyRanges()
+    {
+        var content = """
+            module.exports.foo = function ()
+            {
+              return 1;
+            };
+            module.exports.bar = () =>
+            {
+              return 2;
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "foo"));
+        Assert.Equal(1, foo.StartLine);
+        Assert.Equal(4, foo.EndLine);
+        Assert.Equal(2, foo.BodyStartLine);
+        Assert.Equal(4, foo.BodyEndLine);
+
+        var bar = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "bar"));
+        Assert.Equal(5, bar.StartLine);
+        Assert.Equal(8, bar.EndLine);
+        Assert.Equal(6, bar.BodyStartLine);
+        Assert.Equal(8, bar.BodyEndLine);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_GenericArrowCommonJsNamedExportFunctionsPreserveMultilineBraceBodyRanges()
+    {
+        var content = """
+            module.exports.foo = <T>(value: T) =>
+            {
+              return value;
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "foo"));
+        Assert.Equal(1, foo.StartLine);
+        Assert.Equal(4, foo.EndLine);
+        Assert.Equal(2, foo.BodyStartLine);
+        Assert.Equal(4, foo.BodyEndLine);
     }
 
     [Fact]
