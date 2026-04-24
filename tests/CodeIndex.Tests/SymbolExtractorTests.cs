@@ -668,23 +668,19 @@ public class SymbolExtractorTests
     {
         // ASI inserts a `;` between `styled.div` and the next line's expression
         // statement when that statement begins with an identifier / `await` /
-        // other non-continuation token. A statement-starter keyword allowlist
-        // cannot detect this — a bare `foo(\`x\`)` or `await foo(\`x\`)` is a
-        // valid expression statement that ASI terminates before but whose
-        // first line-token is an identifier, not a keyword. The gate must
-        // reject these shapes by inspecting the first meaningful character of
-        // each continuation line: only a backtick (template itself), `.`
-        // (member chain), or `<` (TypeScript generics) may continue the
-        // expression. Closes #240 follow-up (codex review #10 blocker,
-        // upstream issue #910).
+        // other non-continuation token. The gate must inspect the first
+        // meaningful character of each continuation line: only a backtick
+        // (template itself) or `.` (member chain) may continue the expression.
+        // `<` is intentionally not whitelisted because `<Foo>...` at statement
+        // start is a JSX element (or TS cast), not a tagged-template generic
+        // continuation. Closes #240 follow-up (codex review #10 and #11
+        // blockers).
         // ASI は `styled.div` の次行が識別子始まり・`await` 始まり等の非継続トークンで
-        // 始まる式文のとき、暗黙の `;` を挿入する。文頭キーワード allowlist では
-        // これらを検出できない（`foo(\`x\`)` や `await foo(\`x\`)` は識別子始まりの
-        // 式文であり、キーワード始まりではない）。ゲートは継続行の最初の実トークンを
-        // 見て判定する必要がある — バッククォート（テンプレート自体）、`.`（メンバー
-        // チェーン）、`<`（TypeScript generics）のみが式を継続可能で、それ以外は
-        // 新しい文として走査を打ち切る。Closes #240 follow-up（codex レビュー #10 の
-        // blocker 対応、上流 issue #910）。
+        // 始まる式文のとき、暗黙の `;` を挿入する。ゲートは継続行の最初の実トークンを
+        // 見て判定する必要がある — バッククォート（テンプレート自体）か `.`（メンバー
+        // チェーン）のみが式を継続可能で、それ以外は新しい文として走査を打ち切る。
+        // `<` は JSX 要素 / TS キャストの開始にもなるため意図的に許可しない。
+        // Closes #240 follow-up（codex レビュー #10 と #11 の blocker 対応）。
         var content = """
             const IdentifierStartFactory = styled.div
             foo(`not a template`)
@@ -725,6 +721,55 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Name == "AwaitStartFactory");
         Assert.DoesNotContain(symbols, s => s.Name == "CallExprFactory");
         Assert.DoesNotContain(symbols, s => s.Name == "AnnotatedIdentifierStart");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_HocBindingPatternRejectsJsxElementOnNextStatement()
+    {
+        // A `<Foo>...` continuation is a JSX element (standalone expression
+        // statement) — NOT a tagged-template generic — so the styled-factory
+        // candidate on the previous line must be rejected even though the
+        // JSX element contains a backtick-delimited child. Closes #240
+        // follow-up (codex review #11 blocker).
+        // 継続行の先頭が `<Foo>...` の場合は JSX 要素（独立した式文）であり
+        // tagged-template の generic 継続ではない。JSX 要素の子がバッククォートを
+        // 含んでも、前行の styled factory 候補は不採用にする必要がある。
+        // Closes #240 follow-up（codex レビュー #11 の blocker 対応）。
+        var content = """
+            const JsxElementFactory = styled.div
+            <Foo>{`not a template`}</Foo>
+            const JsxFragmentFactory = styled(Component)
+            <><span>{`also not`}</span></>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "JsxElementFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "JsxFragmentFactory");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_HocBindingPatternRejectsJsxElementOnNextStatement()
+    {
+        // Same JSX-on-next-statement rejection on the TypeScript/TSX side —
+        // `<Foo>...` can also be a TS type cast, and in either reading it is
+        // still a new statement inserted by ASI, not a continuation of the
+        // preceding styled expression. Closes #240 follow-up (codex review
+        // #11 blocker).
+        // TypeScript/TSX 側でも同様に `<Foo>...` は JSX 要素か TS キャストであり、
+        // どちらの解釈でも ASI で挿入された新しい文であって先行式の継続ではない。
+        // Closes #240 follow-up（codex レビュー #11 の blocker 対応）。
+        var content = """
+            const JsxElementFactory = styled.div
+            <Foo>{`not a template`}</Foo>
+            const AnnotatedJsxFactory: StyledComponent<'div'> = styled.div
+            <Bar>{`also not`}</Bar>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "JsxElementFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "AnnotatedJsxFactory");
     }
 
     [Fact]

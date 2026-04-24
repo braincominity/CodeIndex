@@ -10889,14 +10889,25 @@ public static class SymbolExtractor
                 }
                 // On continuation lines, the first real (non-whitespace,
                 // non-comment) character must be a valid tagged-template
-                // continuation starter. Anything else → ASI terminated;
-                // treat this as a new statement and reject the HOC binding.
-                // 継続行の最初の実文字が backtick / `.` / `<` でなければ
-                // ASI による文終端として扱い、HOC 束縛として採用しない。
+                // continuation starter — backtick (template body) or `.`
+                // (chain such as `.attrs`). Anything else (identifier,
+                // keyword, `<` JSX element, `await`, etc.) is treated as
+                // ASI-inserted statement termination and the candidate is
+                // rejected. `<` is intentionally NOT whitelisted because
+                // `<Foo>...` at statement start is a JSX element (or TS
+                // cast), not a tagged-template generic continuation —
+                // styled-components generics always appear before the
+                // backtick on the same expression, never on a new line.
+                // 継続行の最初の実文字は tagged-template の継続として妥当な
+                // 開始文字 — backtick / `.` — でなければ ASI による文終端
+                // として扱い HOC 束縛として採用しない。`<` は JSX 要素や
+                // TS キャストの開始にもなるため意図的に許可しない
+                // （styled-components のジェネリクスは常に同一式内で
+                // backtick 前に書かれ、新しい行の先頭には現れない）。
                 if (!firstCharChecked)
                 {
                     firstCharChecked = true;
-                    if (c != '`' && c != '.' && c != '<')
+                    if (c != '`' && c != '.')
                         return true;
                 }
                 // Plain string literal — skip to the matching closing quote on
