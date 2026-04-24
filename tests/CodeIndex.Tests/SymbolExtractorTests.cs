@@ -3813,6 +3813,60 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_NewEnumModifier_ExtractsEnumSymbol()
+    {
+        // Closes #353: nested `new enum` (member hiding in derived type) must be captured.
+        // Modifier order is free, so both `public new enum` and `new public enum` work, and
+        // an explicit underlying-type colon must still classify as kind `enum`.
+        // Closes #353: 派生型で親のネスト enum を隠蔽する `new enum` は enum としてキャプチャする。
+        // 修飾子の順序は自由で、`public new enum` と `new public enum` の両方、
+        // 明示的な基底型指定 `: byte` が付いた場合でも kind `enum` として分類する。
+        var content = """
+            namespace Demo;
+
+            public class Derived : Base
+            {
+                public new enum Kind { A }
+                public new enum KindByte : byte { A }
+                new public enum KindReversed { A }
+                new enum KindPrivate { A }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Kind" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "KindByte" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "KindReversed" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "KindPrivate");
+    }
+
+    [Fact]
+    public void Extract_CSharp_NewDelegateModifier_ExtractsDelegateSymbol()
+    {
+        // Regression for #353 companion: nested `new delegate` (member hiding in derived type)
+        // must stay captured. Modifier order is free, so both `public new delegate` and
+        // `new public delegate` work.
+        // #353 関連の回帰テスト: 派生型で親のネスト delegate を隠蔽する `new delegate` は
+        // delegate としてキャプチャし続ける。修飾子の順序は自由で、`public new delegate` と
+        // `new public delegate` の両方を受け付ける。
+        var content = """
+            namespace Demo;
+
+            public class Derived : Base
+            {
+                public new delegate int Handler(int x);
+                new public delegate int Reversed();
+                new delegate int PrivateD();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "Handler" && s.Visibility == "public" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "Reversed" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "PrivateD");
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineClassHeader_SignatureUnchanged()
     {
         var content = """
