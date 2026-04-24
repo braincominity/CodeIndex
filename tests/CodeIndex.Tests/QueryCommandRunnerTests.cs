@@ -22521,6 +22521,62 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutline_WithJson_JavaModuleInfoWithMultilineDirectivesIncludesImports()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_outline_java_module_multiline");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "main", "java"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "main", "java", "module-info.java"),
+                """
+                module com.example.app {
+                    requires /*comment*/ java.base;
+                    exports com.example.internal
+                        to com.example.plugin,
+                           com.example.tools;
+                    opens com.example.model
+                        to com.example.viewer,
+                           com.example.editor;
+                    uses com.example.spi.MyService;
+                    provides com.example.spi.MyService
+                        with com.example.impl.DefaultService,
+                             com.example.impl.BackupService;
+                }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/main/java/module-info.java", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var symbols = document.RootElement.GetProperty("symbols").EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(6, symbols.Count);
+            Assert.Contains(symbols, symbol => symbol.GetProperty("kind").GetString() == "import"
+                && symbol.GetProperty("name").GetString() == "java.base");
+            Assert.Contains(symbols, symbol => symbol.GetProperty("kind").GetString() == "import"
+                && symbol.GetProperty("name").GetString() == "com.example.internal");
+            Assert.Contains(symbols, symbol => symbol.GetProperty("kind").GetString() == "import"
+                && symbol.GetProperty("name").GetString() == "com.example.model");
+            Assert.Equal(2, symbols.Count(symbol => symbol.GetProperty("kind").GetString() == "import"
+                && symbol.GetProperty("name").GetString() == "com.example.spi.MyService"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_Json_CSharpNestedRawStringInsideInterpolationDoesNotCreatePhantomSymbols()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_nested_raw_fixture");

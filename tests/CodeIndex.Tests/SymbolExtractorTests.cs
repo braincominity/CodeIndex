@@ -8852,6 +8852,38 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_DetectsModuleInfoDirectivesWithMultilineListsAndComments()
+    {
+        const string content = """
+            module com.example.app {
+                requires /*comment*/ java.base;
+                exports com.example.internal
+                    to com.example.plugin,
+                       com.example.tools;
+                opens com.example.model
+                    to com.example.viewer,
+                       com.example.editor;
+                uses com.example.spi.MyService;
+                provides com.example.spi.MyService
+                    with com.example.impl.DefaultService,
+                         com.example.impl.BackupService;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var imports = symbols.Where(s => s.Kind == "import").ToList();
+        Assert.Equal(5, imports.Count);
+        Assert.Contains(imports, s => s.Name == "java.base");
+        Assert.Contains(imports, s => s.Name == "com.example.internal");
+        Assert.Contains(imports, s => s.Name == "com.example.model");
+        Assert.Equal(2, imports.Count(s => s.Name == "com.example.spi.MyService"));
+        Assert.Contains(imports, s => s.Signature == "requires /*comment*/ java.base;");
+        Assert.Contains(imports, s => s.Signature == "exports com.example.internal to com.example.plugin, com.example.tools;");
+        Assert.Contains(imports, s => s.Signature == "opens com.example.model to com.example.viewer, com.example.editor;");
+        Assert.Contains(imports, s => s.Signature == "provides com.example.spi.MyService with com.example.impl.DefaultService, com.example.impl.BackupService;");
+    }
+
+    [Fact]
     public void Extract_Java_DetectsFlexibleConstantOrder()
     {
         // final static order (reversed) and generic types with spaces
