@@ -89,19 +89,19 @@ public partial class DbReader
     /// </summary>
     public List<SymbolResult> SearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
-        var normalizedQuery = NormalizeCSharpVerbatimQuery(query) ?? query;
+        var normalizedQuery = NormalizeCSharpVerbatimQuery(query, lang) ?? query;
         return SearchSymbols(normalizedQuery == null ? null : new[] { normalizedQuery }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact);
     }
 
     public int CountSearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
-        var normalizedQuery = NormalizeCSharpVerbatimQuery(query) ?? query;
+        var normalizedQuery = NormalizeCSharpVerbatimQuery(query, lang) ?? query;
         return CountSearchSymbols(normalizedQuery == null ? null : new[] { normalizedQuery }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact);
     }
 
     public bool AnySearchSymbols(IReadOnlyList<string>? queries, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
-        var validQueries = queries?.Select(query => NormalizeCSharpVerbatimQuery(query) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        var validQueries = queries?.Select(query => NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
         if (validQueries == null || validQueries.Count == 0)
             return CountSearchSymbols(validQueries, 1, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact) > 0;
 
@@ -116,7 +116,7 @@ public partial class DbReader
 
     public int CountSearchSymbols(IReadOnlyList<string>? queries, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
-        var validQueries = queries?.Select(query => NormalizeCSharpVerbatimQuery(query) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        var validQueries = queries?.Select(query => NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
         if (validQueries != null && validQueries.Count > 1)
             return SearchSymbols(validQueries, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact).Count;
 
@@ -197,7 +197,7 @@ public partial class DbReader
                 JOIN files f ON s.file_id = f.id
                 WHERE 1=1";
 
-        var effectiveQueries = queries?.Select(query => NormalizeCSharpVerbatimQuery(query) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        var effectiveQueries = queries?.Select(query => NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
         if (effectiveQueries != null && effectiveQueries.Count > 0)
         {
             var orClauses = exact
@@ -272,7 +272,7 @@ public partial class DbReader
         // public `limit` contract stays "Max total results", not per-name.
         // 複数名指定: 名前ごとに独立検索して候補プールを確保した上で、round-robin で統合し、
         // 最終的に全体で `limit` 件に収める。`limit` は従来どおり「合計の上限」。
-        var validQueries = queries?.Select(query => NormalizeCSharpVerbatimQuery(query) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        var validQueries = queries?.Select(query => NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
         if (validQueries != null && validQueries.Count > 1)
         {
             var perName = new List<List<SymbolResult>>(validQueries.Count);
@@ -477,7 +477,7 @@ public partial class DbReader
 
     public QueryCountResult CountDefinitionsTotal(string query, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
-        var normalizedQuery = NormalizeCSharpVerbatimQuery(query) ?? query;
+        var normalizedQuery = NormalizeCSharpVerbatimQuery(query, lang) ?? query;
         using var cmd = _conn.CreateCommand();
 
         var sql = $@"
@@ -618,7 +618,7 @@ public partial class DbReader
     /// </summary>
     public SymbolAnalysisResult AnalyzeSymbol(string query, int limit = 10, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth)
     {
-        var normalizedQuery = NormalizeCSharpVerbatimQuery(query) ?? query;
+        var normalizedQuery = NormalizeCSharpVerbatimQuery(query, lang) ?? query;
         // Propagate `exact` to every bundled sub-query so the one-round-trip AI workflow
         // (`inspect` / MCP `analyze_symbol`) keeps the same precision contract as the leaf
         // commands. Without this, `inspect Run --exact` would still pull RunAsync/RunImpact
@@ -712,7 +712,7 @@ public partial class DbReader
         IReadOnlyList<string>? excludePathPatterns,
         bool excludeTests)
     {
-        var normalizedQuery = NormalizeCSharpVerbatimQuery(query) ?? query;
+        var normalizedQuery = NormalizeCSharpVerbatimQuery(query, lang) ?? query;
         var kinds = new HashSet<string>(StringComparer.Ordinal);
         if (HasExactUnsupportedCSharpEnumMember(normalizedQuery, lang, pathPatterns, excludePathPatterns, excludeTests))
             kinds.Add("enum_member");
@@ -726,7 +726,7 @@ public partial class DbReader
         IReadOnlyList<string>? excludePathPatterns,
         bool excludeTests)
     {
-        var normalizedQuery = NormalizeCSharpVerbatimQuery(query) ?? query;
+        var normalizedQuery = NormalizeCSharpVerbatimQuery(query, lang) ?? query;
         return false;
     }
 
@@ -737,7 +737,7 @@ public partial class DbReader
         IReadOnlyList<string>? excludePathPatterns,
         bool excludeTests)
     {
-        var normalizedQuery = NormalizeCSharpVerbatimQuery(query) ?? query;
+        var normalizedQuery = NormalizeCSharpVerbatimQuery(query, lang) ?? query;
         return GetExactGraphSupportedDefinitionLanguage(normalizedQuery, lang, pathPatterns, excludePathPatterns, excludeTests) != null;
     }
 
@@ -748,7 +748,7 @@ public partial class DbReader
         IReadOnlyList<string>? excludePathPatterns,
         bool excludeTests)
     {
-        var normalizedQuery = NormalizeCSharpVerbatimQuery(query) ?? query;
+        var normalizedQuery = NormalizeCSharpVerbatimQuery(query, lang) ?? query;
         return TryGetExactGraphSupportedDefinitionLanguage(normalizedQuery, lang, pathPatterns, excludePathPatterns, excludeTests, preferNonEnumMember: true)
             ?? TryGetExactGraphSupportedDefinitionLanguage(normalizedQuery, lang, pathPatterns, excludePathPatterns, excludeTests, preferNonEnumMember: false);
     }
@@ -761,7 +761,7 @@ public partial class DbReader
         bool excludeTests,
         bool preferNonEnumMember)
     {
-        var normalizedQuery = NormalizeCSharpVerbatimQuery(query) ?? query;
+        var normalizedQuery = NormalizeCSharpVerbatimQuery(query, lang) ?? query;
         using var cmd = _conn.CreateCommand();
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "supportedGraphLang");
         var allowLeafFallback = !SqlNameResolver.HasQualifier(normalizedQuery);
@@ -813,7 +813,7 @@ public partial class DbReader
         string extraConditionSql,
         SqliteCommand? command = null)
     {
-        var normalizedQuery = NormalizeCSharpVerbatimQuery(query) ?? query;
+        var normalizedQuery = NormalizeCSharpVerbatimQuery(query, lang) ?? query;
         using var ownedCommand = command == null ? _conn.CreateCommand() : null;
         var cmd = command ?? ownedCommand!;
         var allowLeafFallback = !SqlNameResolver.HasQualifier(normalizedQuery);

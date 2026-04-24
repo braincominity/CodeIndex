@@ -26114,4 +26114,59 @@ public class QueryCommandRunnerTests
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
+
+    [Fact]
+    public void RunSymbols_SqlExactNamePreservesLeadingAt()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_query_runner_sql_verbatim_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/proc.sql",
+                    Lang = "sql",
+                    Size = 64,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 1, 1),
+                    Checksum = Guid.NewGuid().ToString("N"),
+                });
+                writer.InsertChunks([new ChunkRecord
+                {
+                    FileId = fileId,
+                    ChunkIndex = 0,
+                    StartLine = 1,
+                    EndLine = 1,
+                    Content = "DECLARE @count int = 1;",
+                }]);
+                writer.InsertSymbols([new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "variable",
+                    Name = "@count",
+                    Line = 1,
+                    StartLine = 1,
+                    EndLine = 1,
+                }]);
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "sql", "--name", "@count", "--exact-name", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, document.RootElement.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { File.Delete(dbPath); } catch { }
+        }
+    }
 }

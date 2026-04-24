@@ -431,6 +431,8 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "Missing required parameter: query");
         if (query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+        if (IsBareVerbatimQueryToken(query))
+            return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
@@ -487,6 +489,8 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "Missing required parameter: query");
         if (query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+        if (IsBareVerbatimQueryToken(query))
+            return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
@@ -550,6 +554,8 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "Missing required parameter: query");
         if (query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+        if (IsBareVerbatimQueryToken(query))
+            return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         if (IsNonCallGraphReferenceKind(kind))
@@ -612,6 +618,8 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "Missing required parameter: query");
         if (query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+        if (IsBareVerbatimQueryToken(query))
+            return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         if (IsNonCallGraphReferenceKind(kind))
@@ -752,6 +760,8 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "Missing required parameter: query");
         if (query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+        if (IsBareVerbatimQueryToken(query))
+            return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 10);
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
@@ -837,6 +847,12 @@ public partial class McpServer
             payload["degradedReason"] = snakeReason.DeepClone();
         else if (payload["degradedReason"] is JsonNode camelReason && payload["degraded_reason"] is null)
             payload["degraded_reason"] = camelReason.DeepClone();
+    }
+
+    private static bool IsBareVerbatimQueryToken(string value)
+    {
+        var trimmed = value.Trim();
+        return trimmed.Length > 0 && trimmed.All(ch => ch == '@');
     }
 
     private static Dictionary<string, string?> GetHotspotFamilyMetaSnapshot(DbContext db, Func<string, string> keyFactory)
@@ -1242,6 +1258,8 @@ public partial class McpServer
         var query = args?["query"]?.GetValue<string>();
         if (string.IsNullOrWhiteSpace(query))
             return CreateToolErrorResponse(id, "Missing required parameter: query");
+        if (IsBareVerbatimQueryToken(query))
+            return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
         var maxDepth = Math.Clamp(args?["maxDepth"]?.GetValue<int>() ?? 5, 1, 10);
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 50);

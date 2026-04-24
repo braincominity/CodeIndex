@@ -23,6 +23,23 @@ public class DbContext : IDisposable
     public bool IsReadOnly => _isReadOnly;
 
     public static bool TryValidateExistingCodeIndexDb(string dbPath, out string message, out bool isNotFound)
+        => TryValidateExistingCodeIndexDb(dbPath, openTarget =>
+        {
+            var builder = new SqliteConnectionStringBuilder
+            {
+                DataSource = openTarget,
+                Mode = SqliteOpenMode.ReadWrite,
+            };
+            return new SqliteConnection(builder.ConnectionString);
+        }, static connection => connection.Open(), static milliseconds => System.Threading.Thread.Sleep(milliseconds), out message, out isNotFound);
+
+    internal static bool TryValidateExistingCodeIndexDb(
+        string dbPath,
+        Func<string, SqliteConnection> createConnection,
+        Action<SqliteConnection> openConnection,
+        Action<int>? sleep,
+        out string message,
+        out bool isNotFound)
     {
         message = string.Empty;
         isNotFound = false;
@@ -58,13 +75,10 @@ public class DbContext : IDisposable
 
         try
         {
-            var builder = new SqliteConnectionStringBuilder
-            {
-                DataSource = openTarget,
-                Mode = SqliteOpenMode.ReadWrite,
-            };
-            using var connection = new SqliteConnection(builder.ConnectionString);
-            connection.Open();
+            using var connection = OpenSqliteConnectionWithRetry(
+                () => createConnection(openTarget),
+                openConnection,
+                sleep);
 
             using var cmd = connection.CreateCommand();
             cmd.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table'";
@@ -135,7 +149,8 @@ public class DbContext : IDisposable
         {
             _connection = OpenSqliteConnectionWithRetry(
                 () => new SqliteConnection(builder.ConnectionString),
-                static connection => connection.Open());
+                static connection => connection.Open(),
+                static milliseconds => System.Threading.Thread.Sleep(milliseconds));
             RegisterConnectionFunctions(_connection);
 
             // Enable WAL mode and verify it was applied / WALモードを有効にし適用を確認
