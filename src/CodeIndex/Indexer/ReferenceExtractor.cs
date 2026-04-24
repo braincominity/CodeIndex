@@ -453,6 +453,12 @@ public static class ReferenceExtractor
     private static readonly Regex CSharpTrailingCaseTypePatternIntroRegex = new(
         @"(?<![\w$])case(?:\s+not)?\s*$",
         RegexOptions.Compiled);
+    private static readonly Regex CSharpIsAsTypePatternIntroContextRegex = new(
+        @"(?<![\w$])(?:is(?:\s+not)?|as)",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpCaseTypePatternIntroContextRegex = new(
+        @"(?<![\w$])case(?:\s+not)?",
+        RegexOptions.Compiled);
     // C# `case` labels use a small structural follow-token check so declaration / recursive /
     // positional/logical patterns stay visible while constant member labels like
     // `case Color.Red:` and `case Color.Red or Color.Blue:` do not leak
@@ -1006,12 +1012,14 @@ public static class ReferenceExtractor
                     container,
                     ref pendingCSharpMultiLineTypePattern);
 
-                if (CSharpTrailingIsAsTypePatternIntroRegex.IsMatch(preparedLine))
+                if (CSharpTrailingIsAsTypePatternIntroRegex.IsMatch(preparedLine)
+                    && HasTrailingCSharpTypePatternIntro(originalLine, CSharpIsAsTypePatternIntroContextRegex))
                 {
                     StartWaitingForCSharpMultiLineTypePatternHead(ref pendingCSharpMultiLineTypePattern);
                 }
 
-                if (CSharpTrailingCaseTypePatternIntroRegex.IsMatch(preparedLine))
+                if (CSharpTrailingCaseTypePatternIntroRegex.IsMatch(preparedLine)
+                    && HasTrailingCSharpTypePatternIntro(originalLine, CSharpCaseTypePatternIntroContextRegex))
                 {
                     StartWaitingForCSharpMultiLineTypePatternHead(ref pendingCSharpMultiLineTypePattern);
                 }
@@ -2236,6 +2244,7 @@ public static class ReferenceExtractor
 
         EmitCSharpCaseTypePatternReferences(
             preparedLine,
+            originalLine,
             csharpQualifiedConstantPatternMemberLookup,
             csharpQualifiedTypePatternLookup,
             csharpUsingAliases,
@@ -2428,6 +2437,7 @@ public static class ReferenceExtractor
 
     private static void EmitCSharpCaseTypePatternReferences(
         string preparedLine,
+        string originalLine,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
@@ -2451,7 +2461,12 @@ public static class ReferenceExtractor
             var typeMatch = CSharpTypeExpressionAtCursorRegex.Match(preparedLine, cursor);
             if (!typeMatch.Success)
             {
-                StartWaitingForCSharpMultiLineTypePatternHead(ref pendingCSharpMultiLineTypePattern);
+                var rawCaseCursor = SkipCSharpTriviaForward(originalLine, caseMatch.Index + caseMatch.Length);
+                if (TryConsumeLeadingCSharpPatternKeyword(originalLine, ref rawCaseCursor, "not"))
+                    rawCaseCursor = SkipCSharpTriviaForward(originalLine, rawCaseCursor);
+
+                if (HasOnlyTrailingCSharpTrivia(originalLine, rawCaseCursor))
+                    StartWaitingForCSharpMultiLineTypePatternHead(ref pendingCSharpMultiLineTypePattern);
                 continue;
             }
 
@@ -2495,8 +2510,15 @@ public static class ReferenceExtractor
                 var nextMatch = CSharpTypeExpressionAtCursorRegex.Match(preparedLine, nextTypeCursor);
                 if (!nextMatch.Success)
                 {
-                    StartWaitingForCSharpMultiLineTypePatternHead(ref pendingCSharpMultiLineTypePattern);
-                    waitingForNextHead = true;
+                    var rawNextTypeCursor = SkipCSharpTriviaForward(originalLine, nextHeadCursor);
+                    if (TryConsumeLeadingCSharpPatternKeyword(originalLine, ref rawNextTypeCursor, "not"))
+                        rawNextTypeCursor = SkipCSharpTriviaForward(originalLine, rawNextTypeCursor);
+
+                    if (HasOnlyTrailingCSharpTrivia(originalLine, rawNextTypeCursor))
+                    {
+                        StartWaitingForCSharpMultiLineTypePatternHead(ref pendingCSharpMultiLineTypePattern);
+                        waitingForNextHead = true;
+                    }
                     break;
                 }
 
@@ -2560,6 +2582,110 @@ public static class ReferenceExtractor
                 resolveContainerForColumn(currentTypeIndex),
                 "csharp");
         }
+    }
+
+    private static bool HasOnlyTrailingCSharpTrivia(string text, int cursor)
+    {
+        while (cursor < text.Length)
+        {
+            if (char.IsWhiteSpace(text[cursor]))
+            {
+                cursor++;
+                continue;
+            }
+
+            if (cursor + 1 < text.Length
+                && text[cursor] == '/'
+                && text[cursor + 1] == '/')
+            {
+                return true;
+            }
+
+            if (cursor + 1 < text.Length
+                && text[cursor] == '/'
+                && text[cursor + 1] == '*')
+            {
+                var commentEnd = text.IndexOf("*/", cursor + 2, StringComparison.Ordinal);
+                if (commentEnd < 0)
+                    return true;
+
+                cursor = commentEnd + 2;
+                continue;
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private static int SkipCSharpTriviaForward(string text, int cursor)
+    {
+        while (cursor < text.Length)
+        {
+            if (char.IsWhiteSpace(text[cursor]))
+            {
+                cursor++;
+                continue;
+            }
+
+            if (cursor + 1 < text.Length
+                && text[cursor] == '/'
+                && text[cursor + 1] == '/')
+            {
+                return text.Length;
+            }
+
+            if (cursor + 1 < text.Length
+                && text[cursor] == '/'
+                && text[cursor + 1] == '*')
+            {
+                var commentEnd = text.IndexOf("*/", cursor + 2, StringComparison.Ordinal);
+                if (commentEnd < 0)
+                    return text.Length;
+
+                cursor = commentEnd + 2;
+                continue;
+            }
+
+            break;
+        }
+
+        return cursor;
+    }
+
+    private static bool TryConsumeLeadingCSharpPatternKeyword(string text, ref int cursor, string keyword)
+    {
+        if (string.IsNullOrEmpty(keyword))
+            return false;
+
+        cursor = SkipCSharpTriviaForward(text, cursor);
+        if (cursor + keyword.Length > text.Length
+            || !text.AsSpan(cursor, keyword.Length).Equals(keyword, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var nextIndex = cursor + keyword.Length;
+        if (nextIndex < text.Length
+            && (char.IsLetterOrDigit(text[nextIndex]) || text[nextIndex] == '_'))
+        {
+            return false;
+        }
+
+        cursor = nextIndex;
+        return true;
+    }
+
+    private static bool HasTrailingCSharpTypePatternIntro(string text, Regex introRegex)
+    {
+        foreach (Match match in introRegex.Matches(text))
+        {
+            if (HasOnlyTrailingCSharpTrivia(text, match.Index + match.Length))
+                return true;
+        }
+
+        return false;
     }
 
     private static void EmitJavaTypePositionReferences(

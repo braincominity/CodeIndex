@@ -8343,6 +8343,44 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpNonTypeCaseLabels_DoNotArmMultiLineTypeCarry()
+    {
+        // issue #857: relational/non-type `case` labels like `case > 0:` must not arm the
+        // multiline type-pattern carry or the next-line call token becomes a phantom type reference.
+        // issue #857: `case > 0:` のような非型 `case` ラベルで複数行 type-pattern carry を
+        // armed にしてしまうと、次行の call token が phantom type_reference になってしまう。
+        const string content = """
+            namespace Probe;
+
+            class Demo
+            {
+                void Run(int value)
+                {
+                    switch (value)
+                    {
+                        case > 0:
+                            Target();
+                            break;
+                    }
+                }
+
+                void Target() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Target"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "Run");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Target"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpUsingStaticMultiLineCaseLogicalConstantPatterns_KeepAmbiguousHeads()
     {
         // issue #843: multi-line `case` labels should keep the same ambiguous using-static
