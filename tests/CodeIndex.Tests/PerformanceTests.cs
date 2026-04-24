@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
@@ -90,6 +91,25 @@ public class PerformanceTests : IDisposable
         // FTS5 search should be fast even with many files / FTS5検索は多数ファイルでも高速であるべき
         Assert.True(sw.Elapsed.TotalMilliseconds < 500, $"Search took {sw.Elapsed.TotalMilliseconds:F0}ms");
         Assert.True(results.Count > 0);
+    }
+
+    [Fact(Skip = "Performance test — run manually with: dotnet test --filter ExtractLargeSameLineSymbolFixture_CompletesInReasonableTime")]
+    public void ExtractLargeSameLineSymbolFixture_CompletesInReasonableTime()
+    {
+        var content = string.Join(
+            "\n",
+            Enumerable.Range(0, 2_000).Select(i => $"public partial class C{i} {{ public partial class N{i} {{ }} }}"));
+
+        var sw = Stopwatch.StartNew();
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        sw.Stop();
+
+        // The hot path should stay close to linear even when a file contains a large
+        // number of symbols. This is a manual smoke test rather than a CI gate.
+        // hot path は、大量の symbol を含むファイルでもほぼ線形であるべき。
+        // CI の強制ゲートではなく、手動 smoke test として残す。
+        Assert.True(sw.Elapsed.TotalSeconds < 10, $"Extraction took {sw.Elapsed.TotalSeconds:F1}s");
+        Assert.Equal(4_000, symbols.Count);
     }
 
     public void Dispose()

@@ -124,10 +124,10 @@ public partial class McpServer
     private JsonNode? TryGetValidatedMaxLineWidth(JsonNode? id, JsonNode? args, out int maxLineWidth, string propertyName = "maxLineWidth")
     {
         var maxLineWidthValue = args?[propertyName]?.GetValue<int>();
-        if (maxLineWidthValue.HasValue && maxLineWidthValue.Value <= 0)
+        if (maxLineWidthValue.HasValue && maxLineWidthValue.Value < 0)
         {
             maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth;
-            return CreateToolErrorResponse(id, "maxLineWidth must be greater than or equal to 1");
+            return CreateToolErrorResponse(id, "maxLineWidth must be greater than or equal to 0");
         }
 
         if (maxLineWidthValue.HasValue && maxLineWidthValue.Value > LineWidthFormatter.MaxAllowedLineWidth)

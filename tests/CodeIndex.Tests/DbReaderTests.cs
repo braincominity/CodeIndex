@@ -4420,6 +4420,56 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverKeepsQualifiedAttributeEdgeWithSameNameNonAttributeSibling()
+    {
+        // issue #443: a fully-qualified metadata reference like `[A.Foo]` must still
+        // resolve to the real `A.FooAttribute` even when a sibling namespace contains
+        // a same-named non-Attribute impostor. The ambiguity guard must not let the
+        // impostor suppress the legitimate deps edge.
+        // issue #443: `[A.Foo]` のような fully-qualified metadata 参照は、別 namespace に
+        // 同名の non-Attribute impostor があっても本物の `A.FooAttribute` に解決される必要がある。
+        // impostor を理由に legitimate な deps edge を消してはならない。
+        InsertIndexedFile("src/A/FooAttribute.cs", "csharp",
+            """
+            namespace A;
+
+            public sealed class FooAttribute : System.Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/B/FooAttribute.cs", "csharp",
+            """
+            namespace B;
+
+            public class BaseService
+            {
+            }
+
+            public sealed class FooAttribute : BaseService
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            namespace A;
+
+            [A.Foo]
+            public class Svc
+            {
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        Assert.Contains(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/A/FooAttribute.cs");
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/B/FooAttribute.cs");
+    }
+
+    [Fact]
     public void GetFileDependencies_CSharpMetadataTargetResolverHandlesTransitiveAttributeDerivation()
     {
         // issue #435: derivation can be transitive — `class FooAttribute : BaseAttr`
@@ -6634,6 +6684,44 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchReferences_ExactCSharpUsingStaticTypeAliasPattern_KeepsVisibleRows()
+    {
+        InsertIndexedFile("src/Defs.cs", "csharp",
+            """
+            namespace Probe
+            {
+                public enum Color
+                {
+                    Red
+                }
+
+                namespace Real
+                {
+                    public class Red {}
+                }
+            }
+            """);
+        InsertIndexedFile("src/Use.cs", "csharp",
+            """
+            using static Probe.Color;
+            using Red = Probe.Real.Red;
+
+            namespace Probe;
+
+            class Demo
+            {
+                bool Match(object value) => value is Red;
+            }
+            """);
+
+        var result = Assert.Single(_reader.SearchReferences("Red", limit: 20, lang: "csharp", referenceKind: "type_reference", exact: true, pathPatterns: ["src/Use.cs"]));
+        Assert.Equal("Red", result.SymbolName);
+        Assert.Equal("type_reference", result.ReferenceKind);
+        Assert.Equal("Match", result.ContainerName);
+        Assert.Contains("value is Red", result.Context, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SearchReferences_ExactSameLineResults_AreOrderedByColumn()
     {
         var fileId = _writer.UpsertFile(new FileRecord
@@ -7813,6 +7901,113 @@ public class DbReaderTests : IDisposable
         for (int i = 1; i < outline.Symbols.Count; i++)
             Assert.True(outline.Symbols[i].Line >= outline.Symbols[i - 1].Line,
                 $"Symbol at index {i} (line {outline.Symbols[i].Line}) should be >= previous (line {outline.Symbols[i - 1].Line})");
+    }
+
+    [Fact]
+    public void GetOutline_ComputesContainerDepthFromSymbolChain()
+    {
+        InsertIndexedFile(
+            "src/deep.cs",
+            "csharp",
+            """
+            namespace OuterNs
+            {
+                namespace InnerNs
+                {
+                    public class OuterClass
+                    {
+                        public class NestedClass
+                        {
+                            public class DeeplyNested
+                            {
+                                public void Method() { }
+                            }
+                        }
+                    }
+                }
+            }
+            """);
+
+        var outline = _reader.GetOutline("src/deep.cs");
+
+        Assert.NotNull(outline);
+        Assert.Equal(6, outline!.Symbols.Count);
+        Assert.Collection(outline.Symbols,
+            symbol =>
+            {
+                Assert.Equal("OuterNs", symbol.Name);
+                Assert.Equal(0, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("InnerNs", symbol.Name);
+                Assert.Equal(1, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("OuterClass", symbol.Name);
+                Assert.Equal(2, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("NestedClass", symbol.Name);
+                Assert.Equal(3, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("DeeplyNested", symbol.Name);
+                Assert.Equal(4, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("Method", symbol.Name);
+                Assert.Equal(5, symbol.Depth);
+            });
+    }
+
+    [Fact]
+    public void GetOutline_ComputesDepthForFileScopedNamespace()
+    {
+        InsertIndexedFile(
+            "src/file_scoped.cs",
+            "csharp",
+            """
+            namespace FileScoped;
+
+            public class OuterClass
+            {
+                public class NestedClass
+                {
+                    public void Method() { }
+                }
+            }
+            """);
+
+        var outline = _reader.GetOutline("src/file_scoped.cs");
+
+        Assert.NotNull(outline);
+        Assert.Equal(4, outline!.Symbols.Count);
+        Assert.Collection(outline.Symbols,
+            symbol =>
+            {
+                Assert.Equal("FileScoped", symbol.Name);
+                Assert.Equal(0, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("OuterClass", symbol.Name);
+                Assert.Equal(1, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("NestedClass", symbol.Name);
+                Assert.Equal(2, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("Method", symbol.Name);
+                Assert.Equal(3, symbol.Depth);
+            });
     }
 
     [Fact]

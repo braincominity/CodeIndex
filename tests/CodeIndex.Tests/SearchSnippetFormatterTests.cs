@@ -180,4 +180,16 @@ public class SearchSnippetFormatterTests
         Assert.Equal("call Target()", joined);
         Assert.DoesNotContain("...(+", joined);
     }
+
+    [Fact]
+    public void Format_DoesNotClamp_WhenMaxLineWidthIsZero()
+    {
+        var huge = new string('a', 1_000) + "Target" + new string('b', 1_000);
+
+        var formatted = SearchSnippetFormatter.Format(huge, "Target", maxLines: 1, maxLineWidth: 0);
+
+        var joined = string.Join('\n', formatted);
+        Assert.Equal(huge, joined);
+        Assert.DoesNotContain("...(+", joined);
+    }
 }

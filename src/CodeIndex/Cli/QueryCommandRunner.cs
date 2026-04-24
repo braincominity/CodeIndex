@@ -142,7 +142,7 @@ public static class QueryCommandRunner
                 Console.Error.WriteLine($"({results.Count} results in {fileCount} files)");
             }
             return CommandExitCodes.Success;
-        });
+        }, options.RawFts);
     }
 
     public static int RunDefinition(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -1131,8 +1131,13 @@ public static class QueryCommandRunner
                     value = args[i + 1];
                     i++;
                 }
-                if ((arg == "--limit" || arg == "--top" || arg == "--max-line-width") && (!int.TryParse(value, out var limit) || limit <= 0))
-                    return $"Error: {arg} requires a positive integer, got '{value}'";
+                if (arg == "--limit" || arg == "--top")
+                {
+                    if (!int.TryParse(value, out var limit) || limit <= 0)
+                        return $"Error: {arg} requires a positive integer, got '{value}'";
+                }
+                if (arg == "--max-line-width" && (!int.TryParse(value, out var widthValue) || widthValue < 0))
+                    return $"Error: {arg} requires a non-negative integer, got '{value}'";
                 if (arg == "--max-line-width" && int.TryParse(value, out var widthCeil) && widthCeil > LineWidthFormatter.MaxAllowedLineWidth)
                     return $"Error: --max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth} (got '{value}').";
                 if ((arg == "--before" || arg == "--after") && (!int.TryParse(value, out var context) || context < 0))
@@ -1431,7 +1436,7 @@ public static class QueryCommandRunner
                 foreach (var sym in outline.Symbols)
                 {
                     // Indent nested symbols under their container / コンテナ内のシンボルをインデント
-                    var indent = sym.ContainerName != null ? "    " : "";
+                    var indent = sym.Depth > 0 ? new string(' ', sym.Depth * 4) : "";
                     var ret = sym.ReturnType != null ? $": {sym.ReturnType} " : "";
                     var sig = sym.Signature ?? $"{sym.Kind} {sym.Name}";
                     // Avoid duplicating visibility when signature already contains it
@@ -2826,7 +2831,7 @@ public static class QueryCommandRunner
                 case "--max-line-width":
                     if (!TryReadRawOptionValue(args, ref i, "--max-line-width", inlineValue, out var maxLineWidthValue, out var missingMaxLineWidthError))
                         AddParseError(missingMaxLineWidthError!);
-                    else if (TryParsePositiveInt(maxLineWidthValue!, "--max-line-width", out var parsedMaxLineWidth, out var maxLineWidthError))
+                    else if (TryParseNonNegativeInt(maxLineWidthValue!, "--max-line-width", out var parsedMaxLineWidth, out var maxLineWidthError))
                     {
                         if (parsedMaxLineWidth > LineWidthFormatter.MaxAllowedLineWidth)
                             AddParseError($"--max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth} (got '{maxLineWidthValue}').");
@@ -2927,7 +2932,7 @@ public static class QueryCommandRunner
     // preview 系オプションの検証はコマンド別 allowlist に寄せたため、この shim は常に null を返す。
     private static string? ValidatePreviewOptions(string commandName, string[] args, bool allowMaxLineWidth, bool allowFocusOptions) => null;
 
-    private static int WithDb(string dbPath, Func<DbReader, int> action)
+    private static int WithDb(string dbPath, Func<DbReader, int> action, bool allowFtsQuerySyntaxErrors = false)
     {
         if (string.IsNullOrWhiteSpace(dbPath))
         {
@@ -2963,6 +2968,9 @@ public static class QueryCommandRunner
             if (JsonOutputFailure.TryHandle(ex, out var exitCode))
                 return exitCode;
 
+            if (allowFtsQuerySyntaxErrors && TryWriteFtsQuerySyntaxError(ex, out var ftsExitCode))
+                return ftsExitCode;
+
             if (ex is SqliteException sqliteEx && sqliteEx.SqliteErrorCode == 13)
             {
                 Console.Error.WriteLine("Error: SQLite temp-store exhausted while evaluating this query.");
@@ -2980,6 +2988,36 @@ public static class QueryCommandRunner
         {
             Database.DbDebug.ResetContext();
         }
+    }
+
+    private static bool TryWriteFtsQuerySyntaxError(Exception ex, out int exitCode)
+    {
+        exitCode = default;
+        if (ex is not SqliteException sqliteEx)
+            return false;
+
+        if (!IsFtsQuerySyntaxError(sqliteEx.Message))
+            return false;
+
+        Console.Error.WriteLine($"Error: FTS5 query syntax: {sqliteEx.Message}");
+        Console.Error.WriteLine(BuildFtsQuerySyntaxHint(sqliteEx.Message));
+        exitCode = CommandExitCodes.UsageError;
+        return true;
+    }
+
+    private static bool IsFtsQuerySyntaxError(string message)
+    {
+        return message.Contains("fts5: syntax error", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("no such column:", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("unterminated string", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string BuildFtsQuerySyntaxHint(string message)
+    {
+        if (message.Contains("no such column:", StringComparison.OrdinalIgnoreCase))
+            return "Hint: --fts treats `:` as an FTS5 column qualifier. If `:` is part of the identifier, drop `--fts` to use literal-safe search.";
+
+        return "Hint: fix the raw FTS5 syntax or drop `--fts` to use literal-safe search.";
     }
 
     private static void WriteNumberedExcerpt(int startLine, string content)

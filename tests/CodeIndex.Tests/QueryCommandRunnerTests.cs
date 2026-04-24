@@ -68,10 +68,28 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_AllowsZeroMaxLineWidth()
+    {
+        var options = QueryCommandRunner.ParseArgs(["RunSearch", "--max-line-width", "0"], jsonDefault: false, allowNamedQuery: true);
+
+        Assert.Equal("RunSearch", options.Query);
+        Assert.Equal(0, options.MaxLineWidth);
+    }
+
+    [Fact]
     public void ParseArgs_CountFlagParsed()
     {
         var options = QueryCommandRunner.ParseArgs(["myquery", "--count"], jsonDefault: false);
         Assert.True(options.CountOnly);
+        Assert.Equal("myquery", options.Query);
+    }
+
+    [Fact]
+    public void ParseArgs_AllowsZeroMaxLineWidthForNoTruncation()
+    {
+        var options = QueryCommandRunner.ParseArgs(["myquery", "--max-line-width", "0"], jsonDefault: false);
+
+        Assert.Equal(0, options.MaxLineWidth);
         Assert.Equal("myquery", options.Query);
     }
 
@@ -82,6 +100,56 @@ public class QueryCommandRunnerTests
 
         Assert.Equal("--open-reports", options.Query);
         Assert.Equal("query.db", options.DbPath);
+    }
+
+    [Theory]
+    [InlineData("tokio::spawn", "column qualifier")]
+    [InlineData("AND OR", "literal-safe search")]
+    [InlineData("foo\"bar", "literal-safe search")]
+    public void RunSearch_RawFtsQuerySyntaxErrorsReturnUsageError(string query, string expectedHint)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_error");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void spawn() { } }");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [query, "--db", dbPath, "--fts"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("Error: FTS5 query syntax:", stderr);
+            Assert.Contains(expectedHint, stderr);
+            Assert.DoesNotContain("Error: database error:", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RawFtsValidQueryStillWorks()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_success");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void spawn() { } }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["spawn", "--db", dbPath, "--fts", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.NotEqual("0", stdout.Trim());
+            Assert.DoesNotContain("Error:", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Theory]
@@ -180,6 +248,64 @@ public class QueryCommandRunnerTests
 
             Assert.NotEqual(CommandExitCodes.UsageError, exitCode);
             Assert.DoesNotContain("is not supported", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_IndentsByContainerDepth()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_depth");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/deep.cs",
+                "csharp",
+                """
+                namespace OuterNs
+                {
+                    namespace InnerNs
+                    {
+                        public class OuterClass
+                        {
+                            public class NestedClass
+                            {
+                                public class DeeplyNested
+                                {
+                                    public void Method() { }
+                                }
+                            }
+                        }
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/deep.cs", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+
+            var lines = stdout.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+            var outer = lines.Single(line => line.Contains("namespace OuterNs", StringComparison.Ordinal));
+            var inner = lines.Single(line => line.Contains("namespace InnerNs", StringComparison.Ordinal));
+            var outerClass = lines.Single(line => line.Contains("public class OuterClass", StringComparison.Ordinal));
+            var nestedClass = lines.Single(line => line.Contains("public class NestedClass", StringComparison.Ordinal));
+            var deeplyNested = lines.Single(line => line.Contains("public class DeeplyNested", StringComparison.Ordinal));
+            var method = lines.Single(line => line.Contains("public void Method()", StringComparison.Ordinal));
+
+            var outerIndex = outer.IndexOf("namespace OuterNs", StringComparison.Ordinal);
+            Assert.Equal(4, inner.IndexOf("namespace InnerNs", StringComparison.Ordinal) - outerIndex);
+            Assert.Equal(4, outerClass.IndexOf("public class OuterClass", StringComparison.Ordinal) - inner.IndexOf("namespace InnerNs", StringComparison.Ordinal));
+            Assert.Equal(4, nestedClass.IndexOf("public class NestedClass", StringComparison.Ordinal) - outerClass.IndexOf("public class OuterClass", StringComparison.Ordinal));
+            Assert.Equal(4, deeplyNested.IndexOf("public class DeeplyNested", StringComparison.Ordinal) - nestedClass.IndexOf("public class NestedClass", StringComparison.Ordinal));
+            Assert.Equal(4, method.IndexOf("public void Method()", StringComparison.Ordinal) - deeplyNested.IndexOf("public class DeeplyNested", StringComparison.Ordinal));
         }
         finally
         {
@@ -1119,9 +1245,9 @@ public class QueryCommandRunnerTests
     }
 
     [Theory]
-    [InlineData("0")]
+    [InlineData("-1")]
     [InlineData("abc")]
-    public void RunReferences_RejectsInvalidMaxLineWidthValue(string invalidValue)
+    public void RunReferences_RejectsNegativeOrNonNumericMaxLineWidthValue(string invalidValue)
     {
         var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_references_invalid_max_line_width_{invalidValue}");
         try
@@ -1133,7 +1259,7 @@ public class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("--max-line-width requires a positive integer", stderr);
+            Assert.Contains("--max-line-width requires a non-negative integer", stderr);
         }
         finally
         {
@@ -1460,6 +1586,133 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_JsonKeepsCsharpTypeAliasPatternReference()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_csharp_type_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Defs.cs",
+                "csharp",
+                """
+                using Red = RealTypes.Red;
+                using static Probe.Color;
+
+                namespace Probe;
+
+                enum Color { Red, Blue }
+                class Demo
+                {
+                    bool Match(object value) => value is Red;
+                    void ProbeType() { _ = typeof(Red); }
+                }
+
+                namespace RealTypes;
+                class Red {}
+                """);
+
+            using (var db = new DbContext(dbPath))
+            {
+                var countCmd = db.Connection.CreateCommand();
+                countCmd.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE symbol_name = 'Red'";
+                Assert.Equal(2L, (long)countCmd.ExecuteScalar()!);
+            }
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+
+            var references = ParseJsonLines(stdout).Select(line => line.RootElement).ToList();
+            Assert.Equal(2, references.Count);
+            Assert.Contains(references, reference =>
+                reference.GetProperty("symbol_name").GetString() == "Red"
+                && reference.GetProperty("reference_kind").GetString() == "type_reference"
+                && reference.GetProperty("container_name").GetString() == "Match");
+            Assert.Contains(references, reference =>
+                reference.GetProperty("symbol_name").GetString() == "Red"
+                && reference.GetProperty("reference_kind").GetString() == "type_reference"
+                && reference.GetProperty("container_name").GetString() == "ProbeType");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_JsonKeepsGlobalCsharpTypeAliasPatternReference()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_csharp_global_type_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/GlobalUsings.cs",
+                "csharp",
+                """
+                global using Red = RealTypes.Red;
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Use.cs",
+                "csharp",
+                """
+                using static Probe.Color;
+
+                namespace Probe;
+
+                enum Color { Red, Blue }
+                class Demo
+                {
+                    bool Match(object value) => value is Red;
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/RealRed.cs",
+                "csharp",
+                """
+                namespace RealTypes;
+                class Red {}
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+
+            var references = ParseJsonLines(stdout).Select(line => line.RootElement).ToList();
+            Assert.Single(references);
+            Assert.Equal("Red", references[0].GetProperty("symbol_name").GetString());
+            Assert.Equal("type_reference", references[0].GetProperty("reference_kind").GetString());
+            Assert.Equal("Match", references[0].GetProperty("container_name").GetString());
+
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal(string.Empty, countStderr);
+            var countJson = ParseJsonOutput(countStdout).RootElement;
+            Assert.Equal(1, countJson.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_JsonClampsLongSingleLineContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_long_line");
@@ -1574,6 +1827,67 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunExcerpt_JsonLeavesLongSingleLineContentUnclampedWhenMaxLineWidthIsZero()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_long_line_no_truncate");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var longLine = new string('a', 320) + "TARGET" + new string('b', 320);
+            TestProjectHelper.InsertIndexedFile(dbPath, "dist/data.txt", "text", longLine);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["dist/data.txt", "--db", dbPath, "--start", "1", "--end", "1", "--json", "--max-line-width", "0"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.GetProperty("content_truncated").GetBoolean());
+            Assert.Equal(longLine, json.GetProperty("content").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_JsonLeavesLongSingleLineSnippetUnclampedWhenMaxLineWidthIsZero()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_long_line_no_truncate");
+        try
+        {
+            var longLine = new string('a', 320) + " TARGET " + new string('b', 320);
+            var sourcePath = Path.Combine(projectRoot, "notes.md");
+            File.WriteAllText(sourcePath, longLine);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["TARGET", "--db", dbPath, "--json", "--max-line-width", "0"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains(longLine, stdout);
+            Assert.DoesNotContain("...(+", stdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunExcerpt_FocusLineWithoutFocusColumnReturnsUsageError()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_focus_dep");
@@ -1661,6 +1975,35 @@ public class QueryCommandRunnerTests
             Assert.True(json.GetProperty("snippet_truncated").GetBoolean());
             Assert.Contains("target", json.GetProperty("snippet").GetString());
             Assert.True(json.GetProperty("snippet").GetString()!.Length <= 96);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_JsonTreatsZeroMaxLineWidthAsUnclamped()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_long_line_zero_width");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var longLine = new string('a', 320) + "target" + new string('b', 320);
+            TestProjectHelper.InsertIndexedFile(dbPath, "dist/search.txt", "text", longLine);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["target", "--db", dbPath, "--path", "dist/search.txt", "--json", "--max-line-width", "0"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.GetProperty("snippet_truncated").GetBoolean());
+            Assert.Contains("target", json.GetProperty("snippet").GetString());
+            Assert.True(json.GetProperty("snippet").GetString()!.Length > 512);
         }
         finally
         {
@@ -5807,6 +6150,126 @@ public class QueryCommandRunnerTests
             Assert.Equal("AfterVerbatimString", definition.GetProperty("name").GetString());
             Assert.Equal("class", definition.GetProperty("container_kind").GetString());
             Assert.Equal("FixtureHost", definition.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbolsOutlineAndInspect_CSharpInterfaceAndStructContainerMetadataRoundTrips()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_container_metadata_roundtrip_issue474");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.cs"),
+                """
+                namespace EventMods
+                {
+                    using System;
+
+                    public interface IBus
+                    {
+                        event EventHandler Regular;
+                        static abstract event EventHandler StaticAbs;
+                        static virtual event EventHandler StaticVirt { add { } remove { } }
+                    }
+                }
+
+                namespace Demo
+                {
+                    public struct S
+                    {
+                        public int P { get; set; }
+                        public event System.EventHandler E;
+                    }
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (interfaceExitCode, interfaceStdout, interfaceStderr) = RunBuiltCli(
+                ["symbols", "StaticVirt", "--db", dbPath, "--json", "--kind", "event", "--exact-name", "--lang", "csharp"]);
+            var (structPropertyExitCode, structPropertyStdout, structPropertyStderr) = RunBuiltCli(
+                ["symbols", "P", "--db", dbPath, "--json", "--kind", "property", "--exact-name", "--lang", "csharp"]);
+            var (structEventExitCode, structEventStdout, structEventStderr) = RunBuiltCli(
+                ["symbols", "E", "--db", dbPath, "--json", "--kind", "event", "--exact-name", "--lang", "csharp"]);
+            var (outlineExitCode, outlineStdout, outlineStderr) = RunBuiltCli(
+                ["outline", "src/fixture.cs", "--db", dbPath, "--json"]);
+            var (inspectExitCode, inspectStdout, inspectStderr) = RunBuiltCli(
+                ["inspect", "StaticVirt", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"]);
+
+            var interfaceRow = Assert.Single(ParseJsonLines(interfaceStdout)).RootElement;
+            var structPropertyRow = Assert.Single(ParseJsonLines(structPropertyStdout)).RootElement;
+            var structEventRow = Assert.Single(ParseJsonLines(structEventStdout)).RootElement;
+            using var outlineDocument = ParseJsonOutput(outlineStdout);
+            using var inspectDocument = ParseJsonOutput(inspectStdout);
+            var outlineJson = outlineDocument.RootElement;
+            var inspectJson = inspectDocument.RootElement;
+            var outlineSymbols = outlineJson.GetProperty("symbols").EnumerateArray().ToArray();
+            var inspectDefinition = Assert.Single(inspectJson.GetProperty("definitions").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, interfaceExitCode);
+            Assert.Equal(string.Empty, interfaceStderr);
+            Assert.Equal(CommandExitCodes.Success, structPropertyExitCode);
+            Assert.Equal(string.Empty, structPropertyStderr);
+            Assert.Equal(CommandExitCodes.Success, structEventExitCode);
+            Assert.Equal(string.Empty, structEventStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Equal(CommandExitCodes.Success, inspectExitCode);
+            Assert.Equal(string.Empty, inspectStderr);
+
+            Assert.Equal("StaticVirt", interfaceRow.GetProperty("name").GetString());
+            Assert.Equal("event", interfaceRow.GetProperty("kind").GetString());
+            Assert.Equal("interface", interfaceRow.GetProperty("container_kind").GetString());
+            Assert.Equal("IBus", interfaceRow.GetProperty("container_name").GetString());
+
+            Assert.Equal("P", structPropertyRow.GetProperty("name").GetString());
+            Assert.Equal("property", structPropertyRow.GetProperty("kind").GetString());
+            Assert.Equal("struct", structPropertyRow.GetProperty("container_kind").GetString());
+            Assert.Equal("S", structPropertyRow.GetProperty("container_name").GetString());
+
+            Assert.Equal("E", structEventRow.GetProperty("name").GetString());
+            Assert.Equal("event", structEventRow.GetProperty("kind").GetString());
+            Assert.Equal("struct", structEventRow.GetProperty("container_kind").GetString());
+            Assert.Equal("S", structEventRow.GetProperty("container_name").GetString());
+
+            Assert.Contains(
+                outlineSymbols,
+                symbol => symbol.TryGetProperty("name", out var name)
+                    && symbol.TryGetProperty("kind", out var kind)
+                    && symbol.TryGetProperty("container_kind", out var containerKind)
+                    && symbol.TryGetProperty("container_name", out var containerName)
+                    && name.GetString() == "StaticVirt"
+                    && kind.GetString() == "event"
+                    && containerKind.GetString() == "interface"
+                    && containerName.GetString() == "IBus");
+            Assert.Contains(
+                outlineSymbols,
+                symbol => symbol.TryGetProperty("name", out var name)
+                    && symbol.TryGetProperty("kind", out var kind)
+                    && symbol.TryGetProperty("container_kind", out var containerKind)
+                    && symbol.TryGetProperty("container_name", out var containerName)
+                    && name.GetString() == "P"
+                    && kind.GetString() == "property"
+                    && containerKind.GetString() == "struct"
+                    && containerName.GetString() == "S");
+
+            Assert.Equal("StaticVirt", inspectDefinition.GetProperty("name").GetString());
+            Assert.Equal("interface", inspectDefinition.GetProperty("container_kind").GetString());
+            Assert.Equal("IBus", inspectDefinition.GetProperty("container_name").GetString());
+            Assert.Contains(
+                inspectJson.GetProperty("nearby_symbols").EnumerateArray(),
+                symbol => symbol.TryGetProperty("container_kind", out var containerKind)
+                    && symbol.TryGetProperty("container_name", out var containerName)
+                    && containerKind.GetString() == "interface"
+                    && containerName.GetString() == "IBus");
         }
         finally
         {
@@ -18940,6 +19403,57 @@ public class QueryCommandRunnerTests
                 """
                 using static Probe.Color;
                 using Red = Probe.Real.Red;
+
+                namespace Probe;
+
+                class Demo
+                {
+                    bool Match(object value) => value is Red;
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            var row = Assert.Single(ParseJsonLines(stdout)).RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("type_reference", row.GetProperty("reference_kind").GetString());
+            Assert.Contains("value is Red", row.GetProperty("context").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_CSharpUsingStaticConstantPatternsPreserveTypeAliasPatternAcrossNamespaces()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_using_static_constant_pattern_type_alias_across_namespaces");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Defs.cs", "csharp",
+                """
+                namespace Probe;
+
+                public enum Color
+                {
+                    Red
+                }
+
+                namespace Shapes
+                {
+                    public class Red {}
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Use.cs", "csharp",
+                """
+                using static Probe.Color;
+                using Red = Probe.Shapes.Red;
 
                 namespace Probe;
 
