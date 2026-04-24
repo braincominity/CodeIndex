@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.15.0] - 2026-04-24
+
 #### Changed
 - **Hardened licensing and distribution policy against unauthorized productized forks** — Replaced the package and repository licensing metadata with PolyForm Perimeter 1.0.0, added commercial-use and trademark policy documents, embedded the policy files into NuGet packages and release payloads, gated official release publishing to the canonical repository, added `cdidx license`, and documented legacy package handling. Affected: `LICENSE`, `COMMERCIAL_LICENSE.md`, `TRADEMARKS.md`, `README.md`, `DEVELOPER_GUIDE.md`, `src/CodeIndex/CodeIndex.csproj`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Cli/ProgramRunner.cs`, `.github/workflows/release.yml`, `.github/workflows/license-policy.yml`, `tests/CodeIndex.Tests/LicensePolicyTests.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`, `tests/CodeIndex.Tests/ProgramCliTests.cs`.
 
@@ -894,6 +896,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.15.0] - 2026-04-24
+
 #### 変更
 - **無断の商品化 Fork に対するライセンスと配布ポリシーを強化** — package / repository のライセンス metadata を PolyForm Perimeter 1.0.0 に置き換え、商用利用ポリシーと商標ポリシーを追加し、NuGet package と release payload にポリシー文書を同梱し、公式 release publish を canonical repository に限定し、`cdidx license` を追加し、legacy package の扱いを文書化しました。対象: `LICENSE`, `COMMERCIAL_LICENSE.md`, `TRADEMARKS.md`, `README.md`, `DEVELOPER_GUIDE.md`, `src/CodeIndex/CodeIndex.csproj`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Cli/ProgramRunner.cs`, `.github/workflows/release.yml`, `.github/workflows/license-policy.yml`, `tests/CodeIndex.Tests/LicensePolicyTests.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`, `tests/CodeIndex.Tests/ProgramCliTests.cs`。
 
@@ -1771,7 +1775,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.14.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.15.0...HEAD
+[1.15.0]: https://github.com/Widthdom/CodeIndex/compare/v1.14.0...v1.15.0
 [1.14.0]: https://github.com/Widthdom/CodeIndex/compare/v1.13.0...v1.14.0
 [1.13.0]: https://github.com/Widthdom/CodeIndex/compare/v1.12.0...v1.13.0
 [1.12.0]: https://github.com/Widthdom/CodeIndex/compare/v1.11.0...v1.12.0
