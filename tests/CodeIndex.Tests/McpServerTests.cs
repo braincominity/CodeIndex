@@ -1141,6 +1141,83 @@ public class McpServerTests : IDisposable
         Assert.Contains("not indexed", response["result"]!["structuredContent"]!["graphSupportReason"]!.GetValue<string>());
     }
 
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_StaleSqlGraphContractIncludesDegradedState()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_analyze_symbol_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+            DowngradeSqlGraphContractRows(dbPath);
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"fn_Target","lang":"sql","exact":true}}}""")!;
+            var response = server.HandleMessage(request)!;
+            var structured = response["result"]!["structuredContent"]!;
+
+            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
+            Assert.False(structured["sqlGraphContractReady"]!.GetValue<bool>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sqlGraphContractDegradedReason"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_References_StaleSqlGraphContractIncludesDegradedState()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_references_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+            DowngradeSqlGraphContractRows(dbPath);
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"fn_Target","lang":"sql"}}}""")!;
+            var response = server.HandleMessage(request)!;
+            var structured = response["result"]!["structuredContent"]!;
+
+            Assert.Equal(1, structured["count"]!.GetValue<int>());
+            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
+            Assert.False(structured["sqlGraphContractReady"]!.GetValue<bool>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sqlGraphContractDegradedReason"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Callers_MixedRepoStaleSqlGraphContractDoesNotDegradePureCSharpQuery()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_callers_mixed_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateMixedSqlGraphContractFixtureDb(projectRoot);
+            DowngradeSqlGraphContractRows(dbPath);
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"N","exact":true}}}""")!;
+            var response = server.HandleMessage(request)!;
+            var structured = response["result"]!["structuredContent"]!;
+
+            Assert.Equal(1, structured["count"]!.GetValue<int>());
+            Assert.Null(structured["sql_graph_contract_ready"]);
+            Assert.Null(structured["sqlGraphContractReady"]);
+            Assert.Null(structured["sql_graph_contract_degraded_reason"]);
+            Assert.Null(structured["sqlGraphContractDegradedReason"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("callers", "attribute")]
     [InlineData("callers", "annotation")]
@@ -2187,6 +2264,162 @@ public class McpServerTests : IDisposable
             Assert.False(callersStructured["sqlGraphContractReady"]!.GetValue<bool>());
             Assert.NotNull(callersStructured["sql_graph_contract_degraded_reason"]);
             Assert.NotNull(callersStructured["sqlGraphContractDegradedReason"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_StaleSqlGraphContractIncludesDegradedState()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_impact_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+            DowngradeSqlGraphContractRows(dbPath);
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"fn_Target","lang":"sql"}}}""")!;
+            var response = server.HandleMessage(request)!;
+            var structured = response["result"]!["structuredContent"]!;
+
+            Assert.Equal(1, structured["count"]!.GetValue<int>());
+            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
+            Assert.False(structured["sqlGraphContractReady"]!.GetValue<bool>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sqlGraphContractDegradedReason"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_MixedRepoStaleSqlGraphContractDoesNotDegradePureCSharpBundle()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_analyze_symbol_mixed_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateMixedSqlGraphContractFixtureDb(projectRoot);
+            DowngradeSqlGraphContractRows(dbPath);
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"N","exact":true}}}""")!;
+            var response = server.HandleMessage(request)!;
+            var structured = response["result"]!["structuredContent"]!;
+
+            Assert.Null(structured["sql_graph_contract_ready"]);
+            Assert.Null(structured["sqlGraphContractReady"]);
+            Assert.Null(structured["sql_graph_contract_degraded_reason"]);
+            Assert.Null(structured["sqlGraphContractDegradedReason"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Deps_ZeroResultSqlScopeStillIncludesDegradedState()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_deps_zero_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractZeroResultFixtureDb(projectRoot);
+            DowngradeSqlGraphContractVersion(dbPath);
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"deps","arguments":{}}}""")!;
+            var response = server.HandleMessage(request)!;
+            var structured = response["result"]!["structuredContent"]!;
+
+            Assert.Equal(0, structured["count"]!.GetValue<int>());
+            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
+            Assert.False(structured["sqlGraphContractReady"]!.GetValue<bool>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sqlGraphContractDegradedReason"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Hotspots_ZeroResultSqlScopeStillIncludesDegradedState()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_hotspots_zero_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractZeroResultFixtureDb(projectRoot);
+            DowngradeSqlGraphContractVersion(dbPath);
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{}}}""")!;
+            var response = server.HandleMessage(request)!;
+            var structured = response["result"]!["structuredContent"]!;
+
+            Assert.Equal(0, structured["count"]!.GetValue<int>());
+            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
+            Assert.False(structured["sqlGraphContractReady"]!.GetValue<bool>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sqlGraphContractDegradedReason"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_UnusedSymbols_ZeroResultStaysCleanWhenSqlSymbolsCannotMatchKind()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_unused_zero_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractZeroResultFixtureDb(projectRoot);
+            DowngradeSqlGraphContractVersion(dbPath);
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"kind":"interface"}}}""")!;
+            var response = server.HandleMessage(request)!;
+            var structured = response["result"]!["structuredContent"]!;
+
+            Assert.Equal(0, structured["count"]!.GetValue<int>());
+            Assert.Null(structured["sql_graph_contract_ready"]);
+            Assert.Null(structured["sqlGraphContractReady"]);
+            Assert.Null(structured["sql_graph_contract_degraded_reason"]);
+            Assert.Null(structured["sqlGraphContractDegradedReason"]);
+            Assert.Null(structured["degraded"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_SymbolHotspots_ZeroResultStaysCleanWhenSqlSymbolsCannotMatchKind()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_hotspots_zero_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractZeroResultFixtureDb(projectRoot);
+            DowngradeSqlGraphContractVersion(dbPath);
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{"kind":"class"}}}""")!;
+            var response = server.HandleMessage(request)!;
+            var structured = response["result"]!["structuredContent"]!;
+
+            Assert.Equal(0, structured["count"]!.GetValue<int>());
+            Assert.Null(structured["sql_graph_contract_ready"]);
+            Assert.Null(structured["sqlGraphContractReady"]);
+            Assert.Null(structured["sql_graph_contract_degraded_reason"]);
+            Assert.Null(structured["sqlGraphContractDegradedReason"]);
         }
         finally
         {
@@ -5512,6 +5745,65 @@ public class McpServerTests : IDisposable
         return dbPath;
     }
 
+    private static string CreateMixedSqlGraphContractFixtureDb(string projectRoot)
+    {
+        var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/mixed.cs",
+            "csharp",
+            """
+            public class MixedCalls
+            {
+                public void N() { }
+
+                public void M()
+                {
+                    N();
+                }
+            }
+            """);
+
+        using var db = new DbContext(dbPath);
+        var writer = new DbWriter(db.Connection);
+        writer.MarkGraphReady();
+        writer.MarkSqlGraphContractReady();
+        return dbPath;
+    }
+
+    private static string CreateSqlGraphContractZeroResultFixtureDb(string projectRoot)
+    {
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/a.cs",
+            "csharp",
+            """
+            public class C
+            {
+                public void M() { }
+            }
+            """);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/b.sql",
+            "sql",
+            """
+            CREATE PROCEDURE dbo.Target
+            AS
+            BEGIN
+                SELECT 1;
+            END;
+            GO
+            """);
+
+        using var db = new DbContext(dbPath);
+        var writer = new DbWriter(db.Connection);
+        writer.MarkGraphReady();
+        writer.MarkSqlGraphContractReady();
+        return dbPath;
+    }
+
     private static void DowngradeSqlGraphContractRows(string dbPath)
     {
         using var db = new DbContext(dbPath);
@@ -5524,6 +5816,14 @@ public class McpServerTests : IDisposable
             WHERE symbol_name = 'dbo.fn_Target';
             DELETE FROM codeindex_meta WHERE key = 'sql_graph_contract_version';
             """;
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void DowngradeSqlGraphContractVersion(string dbPath)
+    {
+        using var db = new DbContext(dbPath);
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = 'sql_graph_contract_version';";
         cmd.ExecuteNonQuery();
     }
 
