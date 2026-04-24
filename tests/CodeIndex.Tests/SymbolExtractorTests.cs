@@ -533,6 +533,68 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_HocBindingPatternIgnoresStyledBacktickInCommentsAndStrings()
+    {
+        // The statement-local styled-factory gate must understand line comments,
+        // block comments, and plain string literals when looking for a backtick
+        // or `;`. A backtick or `;` that lives only inside a comment or string
+        // must not steer the gate's accept/reject decision. Four failure shapes
+        // are pinned:
+        //   (a) `// \`...\`` — backtick inside a line comment must not accept
+        //       a factory-capture binding.
+        //   (b) `/* \`...\` */` — backtick inside a block comment must not
+        //       accept a factory-capture binding.
+        //   (c) `+ "\`"` — backtick inside a plain string literal must not
+        //       accept a non-template binding.
+        //   (d) `/* ; */ \`color:red\`;` — `;` inside a block comment must not
+        //       fence a real subsequent backtick off from a real tagged
+        //       template on the same statement.
+        // Closes #240 follow-up (codex review #8 blocker).
+        // 文ローカルの styled factory ゲートは、バッククォートや `;` を探索する際に行コメント /
+        // ブロックコメント / 通常文字列リテラルを構文として認識する必要がある。コメントや文字列
+        // 内のバッククォート・`;` がゲートの判定を誤らせてはならない。(a) 行コメント内の
+        // バッククォートで factory 捕捉が維持されない、(b) ブロックコメント内のバッククォートで
+        // 維持されない、(c) 文字列リテラル内のバッククォートで維持されない、(d) ブロックコメント
+        // 内の `;` によって同一文の本物のバッククォートが文終端で遮られない、の 4 形を pin する。
+        // Closes #240 follow-up（codex レビュー #8 の blocker 対応）。
+        var content = """
+            const LineCommentFactory = styled.div // `not a template`
+            const BlockCommentFactory = styled.div /* `not a template` */;
+            const StringLiteralFactory = styled.div + "`";
+            const RealStyledAfterBlock = styled.div /* ; */ `color:red`;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "LineCommentFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "BlockCommentFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "StringLiteralFactory");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "RealStyledAfterBlock");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_HocBindingPatternIgnoresStyledBacktickInCommentsAndStrings()
+    {
+        // Same comment / string awareness on the TypeScript side. Closes #240
+        // follow-up (codex review #8 blocker).
+        // TypeScript 側でも同じコメント / 文字列対応が必要。Closes #240 follow-up
+        // （codex レビュー #8 の blocker 対応）。
+        var content = """
+            const LineCommentFactory = styled.div // `not a template`
+            const BlockCommentFactory = styled.div /* `not a template` */;
+            const StringLiteralFactory = styled.div + "`";
+            const RealStyledAfterBlock = styled.div<Props> /* ; */ `color:red`;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "LineCommentFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "BlockCommentFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "StringLiteralFactory");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "RealStyledAfterBlock");
+    }
+
+    [Fact]
     public void Extract_TypeScript_HocBindingPatternAcceptsCallbackPropInsideFunctionTypeGeneric()
     {
         // Inline function-type generic arguments whose parameter object literal
