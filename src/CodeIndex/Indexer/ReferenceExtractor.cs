@@ -360,7 +360,7 @@ public static class ReferenceExtractor
         @"\bis\s+" + CSharpDeclarationPatternTypeRegex + CSharpRecursivePatternClauseRegex + @"\s+(?<name>@?[A-Za-z_]\w*)\b",
         RegexOptions.Compiled);
     private static readonly Regex CSharpSwitchExpressionDeclarationPatternValueNameRegex = new(
-        @"^\s*" + CSharpDeclarationPatternTypeRegex + @"\s+(?<name>@?[A-Za-z_]\w*)\s*$",
+        @"^\s*(?<type>" + CSharpDeclarationPatternTypeRegex + @")\s+(?<name>@?[A-Za-z_]\w*)\s*$",
         RegexOptions.Compiled);
     private static readonly Regex CSharpCaseDeclarationPatternValueNameRegex = new(
         @"\bcase\s+" + CSharpDeclarationPatternTypeRegex + CSharpRecursivePatternClauseRegex + @"\s+(?<name>@?[A-Za-z_]\w*)\b(?=\s*(?::|\bwhen\b))",
@@ -2294,25 +2294,43 @@ public static class ReferenceExtractor
             if (IsPotentialCSharpLambdaArrow(preparedContent, arrowIndex))
                 continue;
 
-            if (!TryFindCSharpSwitchExpressionArmStartOffset(preparedContent, arrowIndex, out var armStartOffset)
-                || armStartOffset >= arrowIndex)
+            if (!TryGetCSharpSwitchExpressionArmTypePatternRange(
+                    preparedContent,
+                    arrowIndex,
+                    out var armStartOffset,
+                    out var armPatternEndOffset)
+                || armStartOffset >= armPatternEndOffset)
             {
                 continue;
             }
 
-            var armText = preparedContent[armStartOffset..arrowIndex];
+            var armText = preparedContent[armStartOffset..armPatternEndOffset];
             var cursor = SkipWhitespaceForward(armText, 0);
             if (TryConsumeCSharpPatternKeyword(armText, ref cursor, "not"))
                 cursor = SkipWhitespace(armText, cursor);
 
-            var typeMatch = CSharpTypeExpressionAtCursorRegex.Match(armText, cursor);
-            if (!typeMatch.Success)
-                continue;
+            string currentTypeExpression;
+            int currentTypeIndex;
+            int currentContinuationIndex;
+            var declarationPatternMatch = CSharpSwitchExpressionDeclarationPatternValueNameRegex.Match(armText);
+            if (declarationPatternMatch.Success)
+            {
+                var declarationTypeGroup = declarationPatternMatch.Groups["type"];
+                currentTypeExpression = declarationTypeGroup.Value;
+                currentTypeIndex = declarationTypeGroup.Index;
+                currentContinuationIndex = SkipWhitespace(armText, declarationTypeGroup.Index + declarationTypeGroup.Length);
+            }
+            else
+            {
+                var typeMatch = CSharpTypeExpressionAtCursorRegex.Match(armText, cursor);
+                if (!typeMatch.Success)
+                    continue;
 
-            var typeGroup = typeMatch.Groups["type"];
-            var currentTypeExpression = typeGroup.Value;
-            var currentTypeIndex = typeGroup.Index;
-            var currentContinuationIndex = SkipWhitespace(armText, typeGroup.Index + typeGroup.Length);
+                var typeGroup = typeMatch.Groups["type"];
+                currentTypeExpression = typeGroup.Value;
+                currentTypeIndex = typeGroup.Index;
+                currentContinuationIndex = SkipWhitespace(armText, typeGroup.Index + typeGroup.Length);
+            }
 
             while (TryConsumeCSharpLogicalPatternKeyword(armText, currentContinuationIndex, out var nextHeadCursor))
             {
@@ -2401,7 +2419,7 @@ public static class ReferenceExtractor
         if (lineIndex < 0 || lineIndex >= lines.Count)
             return;
 
-        var context = lines[lineIndex].Trim();
+        var context = lines[lineIndex];
         if (context.Length == 0)
             return;
 
@@ -2945,6 +2963,15 @@ public static class ReferenceExtractor
         var trimmed = line.TrimStart();
         if (trimmed.Length == 0)
             return true;
+        if (language == "csharp"
+            && TryFindFirstTopLevelCSharpArrow(line, out var arrowIndex))
+        {
+            var commaIndex = FindFirstTopLevelChar(line, ',');
+            var semicolonIndex = FindFirstTopLevelChar(line, ';');
+            if (commaIndex > arrowIndex && (semicolonIndex < 0 || commaIndex < semicolonIndex))
+                return true;
+        }
+
         if (trimmed.StartsWith("using ", StringComparison.Ordinal)
             || trimmed.StartsWith("namespace ", StringComparison.Ordinal)
             || trimmed.StartsWith("package ", StringComparison.Ordinal)
@@ -2977,6 +3004,63 @@ public static class ReferenceExtractor
             || trimmed.StartsWith("interface ", StringComparison.Ordinal)
             || trimmed.StartsWith("record ", StringComparison.Ordinal)
             || (language == "java" && trimmed.StartsWith("enum ", StringComparison.Ordinal));
+    }
+
+    private static bool TryFindFirstTopLevelCSharpArrow(string text, out int arrowIndex)
+    {
+        arrowIndex = -1;
+        var angleDepth = 0;
+        var parenDepth = 0;
+        var squareDepth = 0;
+        var braceDepth = 0;
+        for (var i = 0; i + 1 < text.Length; i++)
+        {
+            switch (text[i])
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0)
+                        squareDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    break;
+                case '=':
+                    if (text[i + 1] == '>'
+                        && angleDepth == 0
+                        && parenDepth == 0
+                        && squareDepth == 0
+                        && braceDepth == 0)
+                    {
+                        arrowIndex = i;
+                        return true;
+                    }
+
+                    break;
+            }
+        }
+
+        return false;
     }
 
     private static void AddTypeExpressionSegments(
@@ -5102,7 +5186,6 @@ public static class ReferenceExtractor
         var parenDepth = 0;
         var bracketDepth = 0;
         var braceDepth = 0;
-        var angleDepth = 0;
         for (var index = arrowIndex - 1; index >= 0; index--)
         {
             var current = bodyText[index];
@@ -5122,21 +5205,107 @@ public static class ReferenceExtractor
                     if (bracketDepth > 0)
                         bracketDepth--;
                     break;
-                case '>':
-                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0
-                        && IsPotentialCSharpGenericClose(bodyText, index, arrowIndex))
+                case '}':
+                    braceDepth++;
+                    break;
+                case '{':
+                    if (braceDepth > 0)
                     {
-                        angleDepth++;
+                        braceDepth--;
+                        break;
+                    }
+
+                    if (parenDepth == 0 && bracketDepth == 0)
+                    {
+                        armStartOffset = SkipWhitespaceForward(bodyText, index + 1);
+                        return armStartOffset < arrowIndex;
                     }
 
                     break;
-                case '<':
-                    if (angleDepth > 0 && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0
-                        && IsPotentialCSharpGenericOpen(bodyText, index, arrowIndex))
+                case ',':
+                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
                     {
-                        angleDepth--;
+                        armStartOffset = SkipWhitespaceForward(bodyText, index + 1);
+                        return armStartOffset < arrowIndex;
                     }
 
+                    break;
+                case ';':
+                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                        return false;
+                    break;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryGetCSharpSwitchExpressionArmTypePatternRange(
+        string bodyText,
+        int arrowIndex,
+        out int armStartOffset,
+        out int armPatternEndOffset)
+    {
+        armStartOffset = 0;
+        armPatternEndOffset = 0;
+        if (!TryFindCSharpSwitchExpressionBodyStartOffset(bodyText, arrowIndex, out var bodyStartOffset))
+            return false;
+
+        var segmentStartOffset = bodyStartOffset + 1;
+        if (segmentStartOffset >= arrowIndex)
+            return false;
+
+        var segmentText = bodyText[segmentStartOffset..arrowIndex];
+        var whenOffset = FindTopLevelCSharpWhenKeywordOffset(segmentText);
+        var patternSegment = whenOffset >= 0 ? segmentText[..whenOffset] : segmentText;
+        if (string.IsNullOrWhiteSpace(patternSegment))
+            return false;
+
+        var lastCommaOffset = FindLastTopLevelCSharpComma(patternSegment);
+        var relativeArmStart = lastCommaOffset >= 0
+            ? SkipWhitespaceForward(patternSegment, lastCommaOffset + 1)
+            : SkipWhitespaceForward(patternSegment, 0);
+        if (relativeArmStart >= patternSegment.Length)
+            return false;
+
+        var relativePatternEnd = patternSegment.Length;
+        while (relativePatternEnd > relativeArmStart && char.IsWhiteSpace(patternSegment[relativePatternEnd - 1]))
+            relativePatternEnd--;
+        if (relativePatternEnd <= relativeArmStart)
+            return false;
+
+        armStartOffset = segmentStartOffset + relativeArmStart;
+        armPatternEndOffset = segmentStartOffset + relativePatternEnd;
+        return armStartOffset < armPatternEndOffset;
+    }
+
+    private static bool TryFindCSharpSwitchExpressionBodyStartOffset(string bodyText, int arrowIndex, out int bodyStartOffset)
+    {
+        bodyStartOffset = -1;
+        if (arrowIndex <= 0 || arrowIndex > bodyText.Length)
+            return false;
+
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        for (var index = arrowIndex - 1; index >= 0; index--)
+        {
+            var current = bodyText[index];
+            switch (current)
+            {
+                case ')':
+                    parenDepth++;
+                    break;
+                case '(':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case ']':
+                    bracketDepth++;
+                    break;
+                case '[':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
                     break;
                 case '}':
                     braceDepth++;
@@ -5148,23 +5317,15 @@ public static class ReferenceExtractor
                         break;
                     }
 
-                    if (parenDepth == 0 && bracketDepth == 0 && angleDepth == 0)
+                    if (parenDepth == 0 && bracketDepth == 0)
                     {
-                        armStartOffset = SkipWhitespaceForward(bodyText, index + 1);
-                        return armStartOffset < arrowIndex;
-                    }
-
-                    break;
-                case ',':
-                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0)
-                    {
-                        armStartOffset = SkipWhitespaceForward(bodyText, index + 1);
-                        return armStartOffset < arrowIndex;
+                        bodyStartOffset = index;
+                        return true;
                     }
 
                     break;
                 case ';':
-                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0)
+                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
                         return false;
                     break;
             }
@@ -5173,61 +5334,53 @@ public static class ReferenceExtractor
         return false;
     }
 
-    private static bool IsPotentialCSharpGenericClose(string bodyText, int index, int arrowIndex)
+    private static int FindLastTopLevelCSharpComma(string text)
     {
-        var leftIndex = SkipWhitespaceBackward(bodyText, index - 1);
-        if (leftIndex < 0)
-            return false;
-
-        var leftChar = bodyText[leftIndex];
-        if (!IsCSharpIdentifierPart(leftChar) && leftChar is not '>' and not ']' and not ')' and not '?')
-            return false;
-
-        if (IsCSharpIdentifierPart(leftChar)
-            && TryReadPreviousIdentifierToken(bodyText, leftIndex, out var previousToken)
-            && IsCSharpPatternControlKeyword(NormalizeCSharpIdentifier(previousToken)))
+        var angleDepth = 0;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var lastComma = -1;
+        for (var i = 0; i < text.Length; i++)
         {
-            return false;
+            switch (text[i])
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    break;
+                case ',':
+                    if (angleDepth == 0 && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                        lastComma = i;
+                    break;
+            }
         }
 
-        var rightIndex = SkipWhitespaceForward(bodyText, index + 1);
-        if (rightIndex >= arrowIndex)
-            return true;
-
-        if (bodyText[rightIndex] == '=' && rightIndex + 1 < bodyText.Length && bodyText[rightIndex + 1] == '>')
-            return true;
-
-        if (bodyText[rightIndex] is '>' or ',' or '?' or '{' or '[' or '(' or ')' or ']' or '.')
-            return true;
-
-        if (IsCSharpIdentifierStart(bodyText[rightIndex])
-            && TryReadNextIdentifierToken(bodyText, rightIndex, out var nextToken))
-        {
-            return NormalizeCSharpIdentifier(nextToken) is not "when";
-        }
-
-        return false;
-    }
-
-    private static bool IsPotentialCSharpGenericOpen(string bodyText, int index, int arrowIndex)
-    {
-        var leftIndex = SkipWhitespaceBackward(bodyText, index - 1);
-        if (leftIndex < 0)
-            return false;
-
-        var leftChar = bodyText[leftIndex];
-        if (!IsCSharpIdentifierPart(leftChar) && leftChar is not '>' and not ']' and not ')' and not '?')
-            return false;
-
-        var rightIndex = SkipWhitespaceForward(bodyText, index + 1);
-        if (rightIndex >= arrowIndex)
-            return false;
-
-        if (IsCSharpIdentifierStart(bodyText[rightIndex])
-            && TryReadNextIdentifierToken(bodyText, rightIndex, out _))
-            return true;
-
-        return bodyText[rightIndex] is '>' or '[' or '(';
+        return lastComma;
     }
 
     private static bool TryParseCSharpSwitchExpressionArmPatternDesignation(
@@ -7587,7 +7740,31 @@ public static class ReferenceExtractor
             return false;
 
         if (bodyText[leftIndex] == ')')
-            return TryFindMatchingOpenParen(bodyText, leftIndex, out _);
+        {
+            if (!TryFindMatchingOpenParen(bodyText, leftIndex, out var openParenIndex))
+                return false;
+
+            var parenPrefixIndex = SkipWhitespaceBackward(bodyText, openParenIndex - 1);
+            if (parenPrefixIndex < 0)
+                return true;
+
+            var parenPrefixChar = bodyText[parenPrefixIndex];
+            if (parenPrefixChar is '.' or ']' or ')')
+                return false;
+
+            if (IsCSharpIdentifierPart(parenPrefixChar))
+            {
+                var parenIdentifierStart = parenPrefixIndex;
+                while (parenIdentifierStart >= 0 && IsCSharpIdentifierPart(bodyText[parenIdentifierStart]))
+                    parenIdentifierStart--;
+                parenIdentifierStart++;
+
+                var identifierPrefixIndex = SkipWhitespaceBackward(bodyText, parenIdentifierStart - 1);
+                return identifierPrefixIndex < 0 || bodyText[identifierPrefixIndex] != '.';
+            }
+
+            return parenPrefixChar is '=' or '(' or ',' or ':';
+        }
 
         var identifierEnd = leftIndex + 1;
         var identifierStart = leftIndex;
@@ -7686,25 +7863,6 @@ public static class ReferenceExtractor
             return false;
 
         token = text[start..(end + 1)];
-        return token.Length > 0;
-    }
-
-    private static bool TryReadNextIdentifierToken(string text, int index, out string token)
-    {
-        token = string.Empty;
-        var start = index;
-        while (start < text.Length && !IsCSharpIdentifierPart(text[start]))
-            start++;
-        if (start >= text.Length)
-            return false;
-
-        var end = start;
-        while (end < text.Length && IsCSharpIdentifierPart(text[end]))
-            end++;
-        if (end <= start)
-            return false;
-
-        token = text[start..end];
         return token.Length > 0;
     }
 

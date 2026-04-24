@@ -8155,6 +8155,43 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpSwitchExpressionGenericDeclarationPatternWithRelationalWhenGuard_KeepsArmHead()
+    {
+        // issue #732 follow-up: relational `>` inside a `when` guard must not steal the
+        // arm-head generic close and make the declaration-pattern type disappear.
+        // issue #732 の追補: `when` guard 内の relational `>` が arm head 側の generic close を
+        // 奪って、宣言パターンの型依存を消してはいけない。
+        const string content = """
+            namespace Probe;
+
+            class Wrapper<TLeft, TRight> {}
+            class Point { public int X { get; init; } }
+            class Shape {}
+
+            class Demo
+            {
+                int Match(object value, int limit) => value switch
+                {
+                    Wrapper<Point, Shape> p when p is Wrapper<Point, Shape> && limit > p.GetHashCode() => 1,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var wrapperRefs = references
+            .Where(r => r.SymbolName == "Wrapper" && r.ReferenceKind == "type_reference")
+            .OrderBy(r => r.Column)
+            .ToList();
+
+        Assert.Equal(2, wrapperRefs.Count);
+        Assert.Equal([9, 43], wrapperRefs.Select(r => r.Column).ToArray());
+        Assert.All(wrapperRefs, r => Assert.Equal("Match", r.ContainerName));
+    }
+
+    [Fact]
     public void Extract_CsharpVerbatimPatternTypeNames_DoNotCollapseIntoBarePatternTokens()
     {
         // issue #677: `@not` / `@default` are legal type names, so the non-type pattern
