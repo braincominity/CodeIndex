@@ -8258,6 +8258,122 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpMultiLineCasePatterns_KeepFirstAndLaterTypeHeads()
+    {
+        // issues #843 / #747: `case` labels must keep both a first head that moves to the next
+        // line and later logical heads that continue on following lines.
+        // issues #843 / #747: `case` ラベルは、次行へ移る first head と、後続行へ続く logical head
+        // の両方を維持しなければならない。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+            class Shape {}
+
+            class Demo
+            {
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case
+                            Point:
+                            break;
+                        case Point or
+                            Shape:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+        var shapeRefs = references.Where(r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference").ToList();
+
+        Assert.Equal(2, pointRefs.Count);
+        Assert.Single(shapeRefs);
+        Assert.All(pointRefs, reference => Assert.Equal("Run", reference.ContainerName));
+        Assert.Equal("Run", shapeRefs[0].ContainerName);
+        Assert.Equal([13, 15], pointRefs.Select(reference => reference.Line).OrderBy(line => line).ToArray());
+        Assert.Equal(16, shapeRefs[0].Line);
+    }
+
+    [Fact]
+    public void Extract_CsharpUsingStaticMultiLineCaseLogicalConstantPatterns_KeepAmbiguousHeads()
+    {
+        // issue #843: multi-line `case` labels should keep the same ambiguous using-static
+        // constant heads that the single-line form leaves for read-time filtering.
+        // issue #843: 複数行 `case` ラベルでも、単一行版と同じ using-static の曖昧な constant head
+        // を read path の判定用に残す必要がある。
+        const string content = """
+            using static Probe.Color;
+
+            namespace Probe;
+
+            enum Color { Red, Blue }
+
+            class Demo
+            {
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case
+                            Red
+                            or
+                            Red:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var redRefs = references.Where(r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(2, redRefs.Count);
+        Assert.All(redRefs, reference => Assert.Equal("Run", reference.ContainerName));
+        Assert.Equal([14, 16], redRefs.Select(reference => reference.Line).OrderBy(line => line).ToArray());
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedMultiLineCaseLogicalConstantPatterns_StaySuppressed()
+    {
+        // issue #747 follow-up control: extending `case` logical-pattern carry across lines must
+        // not reintroduce phantom qualified constant/member type references.
+        // issue #747 の対照ケース: `case` の logical-pattern carry を複数行へ広げても、
+        // 修飾済み constant/member の phantom type_reference を復活させてはいけない。
+        const string content = """
+            namespace Probe;
+
+            enum Color { Red, Blue }
+
+            class Demo
+            {
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case Color.Red or
+                            Color.Blue:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpUsingStaticTypeAliasPattern_KeepsTypeReference()
     {
         const string content = """

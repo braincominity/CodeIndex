@@ -450,6 +450,9 @@ public static class ReferenceExtractor
     private static readonly Regex CSharpTrailingIsAsTypePatternIntroRegex = new(
         @"(?<![\w$])(?:is(?:\s+not)?|as)\s*$",
         RegexOptions.Compiled);
+    private static readonly Regex CSharpTrailingCaseTypePatternIntroRegex = new(
+        @"(?<![\w$])case(?:\s+not)?\s*$",
+        RegexOptions.Compiled);
     // C# `case` labels use a small structural follow-token check so declaration / recursive /
     // positional/logical patterns stay visible while constant member labels like
     // `case Color.Red:` and `case Color.Red or Color.Blue:` do not leak
@@ -993,17 +996,17 @@ public static class ReferenceExtractor
                     context,
                     lineNumber,
                     ResolveContainerForCall,
-                    container);
+                    container,
+                    ref pendingCSharpMultiLineTypePattern);
 
                 if (CSharpTrailingIsAsTypePatternIntroRegex.IsMatch(preparedLine))
                 {
-                    pendingCSharpMultiLineTypePattern = new CSharpMultiLineTypePatternState(
-                        WaitingForHead: true,
-                        PendingTypeExpression: null,
-                        PendingTypeIndex: 0,
-                        PendingTypeLineNumber: 0,
-                        PendingContext: null,
-                        PendingContainer: null);
+                    StartWaitingForCSharpMultiLineTypePatternHead(ref pendingCSharpMultiLineTypePattern);
+                }
+
+                if (CSharpTrailingCaseTypePatternIntroRegex.IsMatch(preparedLine))
+                {
+                    StartWaitingForCSharpMultiLineTypePatternHead(ref pendingCSharpMultiLineTypePattern);
                 }
             }
             else if (language == "java")
@@ -2154,7 +2157,8 @@ public static class ReferenceExtractor
         string context,
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn,
-        SymbolRecord? container)
+        SymbolRecord? container,
+        ref CSharpMultiLineTypePatternState pendingCSharpMultiLineTypePattern)
     {
         TryEmitCSharpBaseListReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitCSharpWhereConstraintReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -2235,7 +2239,8 @@ public static class ReferenceExtractor
             fileId,
             context,
             lineNumber,
-            resolveContainerForColumn);
+            resolveContainerForColumn,
+            ref pendingCSharpMultiLineTypePattern);
     }
 
     private static void AdvanceCSharpMultiLineTypePatternState(
@@ -2403,6 +2408,17 @@ public static class ReferenceExtractor
         state = default;
     }
 
+    private static void StartWaitingForCSharpMultiLineTypePatternHead(ref CSharpMultiLineTypePatternState state)
+    {
+        state = new CSharpMultiLineTypePatternState(
+            WaitingForHead: true,
+            PendingTypeExpression: null,
+            PendingTypeIndex: 0,
+            PendingTypeLineNumber: 0,
+            PendingContext: null,
+            PendingContainer: null);
+    }
+
     private static void EmitCSharpCaseTypePatternReferences(
         string preparedLine,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
@@ -2415,7 +2431,8 @@ public static class ReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        ref CSharpMultiLineTypePatternState pendingCSharpMultiLineTypePattern)
     {
         foreach (Match caseMatch in CSharpCaseLabelRegex.Matches(preparedLine))
         {
@@ -2426,56 +2443,114 @@ public static class ReferenceExtractor
 
             var typeMatch = CSharpTypeExpressionAtCursorRegex.Match(preparedLine, cursor);
             if (!typeMatch.Success)
+            {
+                StartWaitingForCSharpMultiLineTypePatternHead(ref pendingCSharpMultiLineTypePattern);
                 continue;
+            }
 
             var typeGroup = typeMatch.Groups["type"];
-            int continuationIndex = SkipWhitespace(preparedLine, typeGroup.Index + typeGroup.Length);
-            if (TryEmitCSharpLogicalTypePatternHeads(
-                    preparedLine,
-                    typeGroup.Value,
-                    typeGroup.Index,
-                    continuationIndex,
-                    lineNumber,
-                    csharpQualifiedConstantPatternMemberLookup,
-                    csharpQualifiedTypePatternLookup,
-                    csharpUsingAliases,
-                    csharpUsingStatics,
-                    hasActiveSameFileCSharpTypeCandidate,
-                    (logicalTypeExpression, logicalTypeIndex) => AddTypeExpressionSegments(
+            var currentTypeExpression = typeGroup.Value;
+            var currentTypeIndex = typeGroup.Index;
+            var currentContinuationIndex = SkipWhitespace(preparedLine, typeGroup.Index + typeGroup.Length);
+            var sawLogicalKeyword = false;
+            var waitingForNextHead = false;
+
+            while (TryConsumeCSharpLogicalPatternKeyword(preparedLine, currentContinuationIndex, out var nextHeadCursor))
+            {
+                sawLogicalKeyword = true;
+                if (!IsCSharpLogicalConstantPatternHead(
+                        preparedLine,
+                        currentTypeExpression,
+                        nextHeadCursor,
+                        lineNumber,
+                        csharpQualifiedConstantPatternMemberLookup,
+                        csharpQualifiedTypePatternLookup,
+                        csharpUsingAliases,
+                        csharpUsingStatics,
+                        hasActiveSameFileCSharpTypeCandidate))
+                {
+                    AddTypeExpressionSegments(
                         references,
                         seen,
                         fileId,
-                        logicalTypeExpression,
-                        logicalTypeIndex,
+                        currentTypeExpression,
+                        currentTypeIndex,
                         context,
                         lineNumber,
-                        resolveContainerForColumn(logicalTypeIndex),
-                        "csharp")))
+                        resolveContainerForColumn(currentTypeIndex),
+                        "csharp");
+                }
+
+                int nextTypeCursor = nextHeadCursor;
+                if (TryConsumeCSharpPatternKeyword(preparedLine, ref nextTypeCursor, "not"))
+                    nextTypeCursor = SkipWhitespace(preparedLine, nextTypeCursor);
+
+                var nextMatch = CSharpTypeExpressionAtCursorRegex.Match(preparedLine, nextTypeCursor);
+                if (!nextMatch.Success)
+                {
+                    StartWaitingForCSharpMultiLineTypePatternHead(ref pendingCSharpMultiLineTypePattern);
+                    waitingForNextHead = true;
+                    break;
+                }
+
+                var nextTypeGroup = nextMatch.Groups["type"];
+                currentTypeExpression = nextTypeGroup.Value;
+                currentTypeIndex = nextTypeGroup.Index;
+                currentContinuationIndex = SkipWhitespace(preparedLine, currentTypeIndex + currentTypeExpression.Length);
+            }
+
+            if (waitingForNextHead)
+                continue;
+
+            if (sawLogicalKeyword)
             {
+                if (!IsCSharpNonTypePatternExpression(currentTypeExpression)
+                    && !IsCSharpConstantPatternMemberHead(
+                        currentTypeExpression,
+                        lineNumber,
+                        csharpQualifiedConstantPatternMemberLookup,
+                        csharpUsingAliases,
+                        csharpUsingStatics,
+                        hasActiveSameFileCSharpTypeCandidate))
+                {
+                    AddTypeExpressionSegments(
+                        references,
+                        seen,
+                        fileId,
+                        currentTypeExpression,
+                        currentTypeIndex,
+                        context,
+                        lineNumber,
+                        resolveContainerForColumn(currentTypeIndex),
+                        "csharp");
+                }
+
                 continue;
             }
 
             if (!IsCSharpCaseTypePatternContinuation(
                     preparedLine,
-                    typeGroup.Value,
-                    continuationIndex,
+                    currentTypeExpression,
+                    currentContinuationIndex,
                     csharpQualifiedConstantPatternMemberLookup,
                     csharpQualifiedTypePatternLookup,
                     csharpUsingAliases,
                     csharpUsingStatics,
                     hasActiveSameFileCSharpTypeCandidate,
                     lineNumber))
+            {
                 continue;
+            }
 
             AddTypeExpressionSegments(
                 references,
                 seen,
                 fileId,
-                typeGroup.Value,
-                typeGroup.Index,
+                currentTypeExpression,
+                currentTypeIndex,
                 context,
                 lineNumber,
-                resolveContainerForColumn(typeGroup.Index),
+                resolveContainerForColumn(currentTypeIndex),
                 "csharp");
         }
     }

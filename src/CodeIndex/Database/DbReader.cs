@@ -1045,6 +1045,9 @@ public partial class DbReader
         var patternContext = contextForFilter;
         var patternColumn = columnNumber;
         TryBuildCSharpUsingStaticPatternContextWindow(path, lineNumber, contextForFilter, columnNumber, out patternContext, out patternColumn);
+        if (ShouldSuppressCSharpQualifiedConstantPatternReference(path, lineNumber, symbolName, patternContext, patternColumn))
+            return true;
+
         if (!IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn))
             return false;
 
@@ -1065,6 +1068,27 @@ public partial class DbReader
         foreach (var target in activeTargets)
         {
             if (matchingContainers.Contains(target))
+                return true;
+        }
+
+        return false;
+    }
+
+    private bool ShouldSuppressCSharpQualifiedConstantPatternReference(string path, int lineNumber, string symbolName, string patternContext, int patternColumn)
+    {
+        if (!TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out var qualifier))
+            return false;
+
+        if (HasScopedCSharpTypeCandidate(path, lineNumber, symbolName))
+            return false;
+
+        var matchingContainers = GetCSharpConstantPatternContainersByMemberName(symbolName);
+        if (matchingContainers.Count == 0)
+            return false;
+
+        foreach (var candidate in GetScopedCSharpQualifiedPatternQualifierCandidates(path, lineNumber, qualifier))
+        {
+            if (matchingContainers.Contains(candidate))
                 return true;
         }
 
@@ -2182,6 +2206,36 @@ public partial class DbReader
             || IsCSharpUsingStaticConstantTypeKeywordAnchor(context, ref cursor);
     }
 
+    private static bool TryExtractQualifiedCSharpPatternQualifier(string context, string symbolName, int columnNumber, out string qualifier)
+    {
+        qualifier = string.Empty;
+        if (string.IsNullOrWhiteSpace(context)
+            || string.IsNullOrWhiteSpace(symbolName)
+            || !TryFindCSharpReferenceTokenStart(context, symbolName, columnNumber, out var symbolColumn))
+        {
+            return false;
+        }
+
+        var headCursor = symbolColumn + symbolName.Length;
+        if (!SkipCSharpPatternHeadBackward(context, ref headCursor))
+            return false;
+
+        var fullHead = NormalizeDbCSharpQualifiedName(context[headCursor..(symbolColumn + symbolName.Length)]);
+        if (string.IsNullOrWhiteSpace(fullHead))
+            return false;
+
+        var lastDot = fullHead.LastIndexOf('.');
+        if (lastDot < 0)
+            return false;
+
+        var anchorCursor = headCursor;
+        if (!IsCSharpUsingStaticConstantPatternAnchor(context, ref anchorCursor))
+            return false;
+
+        qualifier = fullHead[..lastDot];
+        return !string.IsNullOrWhiteSpace(qualifier);
+    }
+
     private static bool IsCSharpUsingStaticConstantPatternAnchor(string text, ref int cursor)
     {
         cursor = SkipCSharpTriviaBackward(text, cursor);
@@ -2237,7 +2291,11 @@ public partial class DbReader
             return;
         }
 
-        var startLine = Math.Max(1, lineNumber - 2);
+        // Multiline logical patterns can legitimately span several physical lines
+        // (`case` / head / `or` / head / ...), so keep a slightly wider window.
+        // `case` / head / `or` / head / ... のような複数行 pattern でも先頭 anchor を
+        // 見失わないよう、少し広めのコンテキスト窓を読む。
+        var startLine = Math.Max(1, lineNumber - 6);
         if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap, startLine, lineNumber)
             || !lineMap.TryGetValue(lineNumber, out var currentLine))
         {
@@ -2264,6 +2322,36 @@ public partial class DbReader
 
         patternContext = string.Join('\n', lines);
         patternColumn = prefixLength + columnNumber;
+    }
+
+    private HashSet<string> GetScopedCSharpQualifiedPatternQualifierCandidates(string path, int lineNumber, string qualifier)
+    {
+        var candidates = new HashSet<string>(StringComparer.Ordinal);
+        var normalizedQualifier = NormalizeDbCSharpQualifiedName(ResolveActiveCSharpUsingAliasReference(path, lineNumber, qualifier));
+        if (string.IsNullOrWhiteSpace(normalizedQualifier))
+            return candidates;
+
+        candidates.Add(normalizedQualifier);
+
+        foreach (var activeNamespace in GetActiveCSharpTypeNamespaces(path, lineNumber))
+        {
+            if (string.IsNullOrWhiteSpace(activeNamespace))
+                continue;
+            candidates.Add(activeNamespace + "." + normalizedQualifier);
+        }
+
+        foreach (var activeContainingTypeScope in GetActiveCSharpContainingTypeScopes(path, lineNumber))
+        {
+            candidates.Add(activeContainingTypeScope.QualifiedName + "." + normalizedQualifier);
+
+            var inheritedContainingTypes = GetInheritedCSharpContainingTypes(activeContainingTypeScope);
+            foreach (var inheritedContainingType in inheritedContainingTypes)
+            {
+                candidates.Add(inheritedContainingType + "." + normalizedQualifier);
+            }
+        }
+
+        return candidates;
     }
 
     private static int SkipCSharpTriviaBackward(string text, int cursor)

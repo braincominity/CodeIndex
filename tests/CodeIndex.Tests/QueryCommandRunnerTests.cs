@@ -16155,6 +16155,247 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpMultiLineCaseTypePatternsKeepFirstAndLaterHeads()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_multiline_case_type_patterns");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Probe;
+
+                class Point {}
+                class Shape {}
+
+                class Demo
+                {
+                    void Run(object value)
+                    {
+                        switch (value)
+                        {
+                            case
+                                Point:
+                                break;
+                            case Point or
+                                Shape:
+                                break;
+                        }
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (pointExitCode, pointStdout, pointStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Point", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            var pointRows = ParseJsonLines(pointStdout)
+                .Select(document => document.RootElement)
+                .ToList();
+
+            Assert.Equal(CommandExitCodes.Success, pointExitCode);
+            Assert.Equal(string.Empty, pointStderr);
+            Assert.Equal(2, pointRows.Count);
+            Assert.Equal([13, 15], pointRows.Select(row => row.GetProperty("line").GetInt32()).OrderBy(line => line).ToArray());
+            Assert.All(pointRows, row => Assert.Equal("Run", row.GetProperty("container_name").GetString()));
+
+            var (shapeExitCode, shapeStdout, shapeStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Shape", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            var shapeRows = ParseJsonLines(shapeStdout)
+                .Select(document => document.RootElement)
+                .ToList();
+
+            Assert.Equal(CommandExitCodes.Success, shapeExitCode);
+            Assert.Equal(string.Empty, shapeStderr);
+            var shapeRow = Assert.Single(shapeRows);
+            Assert.Equal(16, shapeRow.GetProperty("line").GetInt32());
+            Assert.Equal("Run", shapeRow.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_NonExactJson_CSharpMultiLineCaseUsingStaticConstantPatternKeepsRows()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_multiline_case_constant_pattern_refs");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Defs.cs", "csharp",
+                """
+                namespace Probe;
+
+                public enum Color
+                {
+                    Red
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Use.cs", "csharp",
+                """
+                using static Probe.Color;
+
+                namespace Probe;
+
+                class Demo
+                {
+                    void Run(object value)
+                    {
+                        switch (value)
+                        {
+                            case
+                                Red
+                                or
+                                Red:
+                                break;
+                        }
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--path", "src/Use.cs"],
+                _jsonOptions));
+
+            var rows = ParseJsonLines(stdout)
+                .Select(document => document.RootElement)
+                .ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, rows.Count);
+            Assert.Equal([12, 14], rows.Select(row => row.GetProperty("line").GetInt32()).OrderBy(line => line).ToArray());
+            Assert.All(rows, row => Assert.Equal("Run", row.GetProperty("container_name").GetString()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_CSharpMultiLineCaseUsingStaticConstantPattern_StaysSuppressed()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_multiline_case_constant_pattern_exact_suppressed");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Defs.cs", "csharp",
+                """
+                namespace Probe;
+
+                public enum Color
+                {
+                    Red
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Use.cs", "csharp",
+                """
+                using static Probe.Color;
+
+                namespace Probe;
+
+                class Demo
+                {
+                    void Run(object value)
+                    {
+                        switch (value)
+                        {
+                            case
+                                Red
+                                or
+                                Red:
+                                break;
+                        }
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            using var document = ParseJsonOutput(stdout);
+
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--count"],
+                _jsonOptions));
+            using var countDocument = ParseJsonOutput(countStdout);
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal(string.Empty, countStderr);
+            Assert.Equal(0, countDocument.RootElement.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_CSharpQualifiedMultiLineCaseLogicalConstantPattern_StaysSuppressed()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_qualified_multiline_case_constant_pattern_suppressed");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Defs.cs", "csharp",
+                """
+                namespace Probe;
+
+                public enum Color
+                {
+                    Red,
+                    Blue
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Use.cs", "csharp",
+                """
+                namespace Probe;
+
+                class Demo
+                {
+                    void Run(object value)
+                    {
+                        switch (value)
+                        {
+                            case Color.Red or
+                                Color.Blue:
+                                break;
+                        }
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            foreach (var symbolName in new[] { "Red", "Blue" })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                    [symbolName, "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                    _jsonOptions));
+
+                using var document = ParseJsonOutput(stdout);
+
+                Assert.Equal(CommandExitCodes.NotFound, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpLogicalPatternsKeepLaterTypeHeads()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_logical_type_pattern_all_heads");
