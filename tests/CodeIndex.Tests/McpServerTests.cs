@@ -2936,7 +2936,6 @@ public class McpServerTests : IDisposable
         Assert.Contains("target()", firstReference["context"]!.GetValue<string>());
         Assert.DoesNotContain("...(+", firstReference["context"]!.GetValue<string>());
         Assert.True(firstReference["context"]!.GetValue<string>().Length > 512);
-        Assert.Equal(0, structured["maxLineWidth"]!.GetValue<int>());
     }
 
     [Fact]

@@ -142,7 +142,7 @@ public static class QueryCommandRunner
                 Console.Error.WriteLine($"({results.Count} results in {fileCount} files)");
             }
             return CommandExitCodes.Success;
-        });
+        }, options.RawFts);
     }
 
     public static int RunDefinition(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -2881,7 +2881,7 @@ public static class QueryCommandRunner
     // preview 系オプションの検証はコマンド別 allowlist に寄せたため、この shim は常に null を返す。
     private static string? ValidatePreviewOptions(string commandName, string[] args, bool allowMaxLineWidth, bool allowFocusOptions) => null;
 
-    private static int WithDb(string dbPath, Func<DbReader, int> action)
+    private static int WithDb(string dbPath, Func<DbReader, int> action, bool allowFtsQuerySyntaxErrors = false)
     {
         if (string.IsNullOrWhiteSpace(dbPath))
         {
@@ -2917,6 +2917,9 @@ public static class QueryCommandRunner
             if (JsonOutputFailure.TryHandle(ex, out var exitCode))
                 return exitCode;
 
+            if (allowFtsQuerySyntaxErrors && TryWriteFtsQuerySyntaxError(ex, out var ftsExitCode))
+                return ftsExitCode;
+
             if (ex is SqliteException sqliteEx && sqliteEx.SqliteErrorCode == 13)
             {
                 Console.Error.WriteLine("Error: SQLite temp-store exhausted while evaluating this query.");
@@ -2934,6 +2937,36 @@ public static class QueryCommandRunner
         {
             Database.DbDebug.ResetContext();
         }
+    }
+
+    private static bool TryWriteFtsQuerySyntaxError(Exception ex, out int exitCode)
+    {
+        exitCode = default;
+        if (ex is not SqliteException sqliteEx)
+            return false;
+
+        if (!IsFtsQuerySyntaxError(sqliteEx.Message))
+            return false;
+
+        Console.Error.WriteLine($"Error: FTS5 query syntax: {sqliteEx.Message}");
+        Console.Error.WriteLine(BuildFtsQuerySyntaxHint(sqliteEx.Message));
+        exitCode = CommandExitCodes.UsageError;
+        return true;
+    }
+
+    private static bool IsFtsQuerySyntaxError(string message)
+    {
+        return message.Contains("fts5: syntax error", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("no such column:", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("unterminated string", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string BuildFtsQuerySyntaxHint(string message)
+    {
+        if (message.Contains("no such column:", StringComparison.OrdinalIgnoreCase))
+            return "Hint: --fts treats `:` as an FTS5 column qualifier. If `:` is part of the identifier, drop `--fts` to use literal-safe search.";
+
+        return "Hint: fix the raw FTS5 syntax or drop `--fts` to use literal-safe search.";
     }
 
     private static void WriteNumberedExcerpt(int startLine, string content)
