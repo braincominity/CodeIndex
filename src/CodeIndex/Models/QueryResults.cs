@@ -138,6 +138,8 @@ public class ReferenceResult
     public string ReferenceKind { get; set; } = string.Empty;
     public int Line { get; set; }
     public int Column { get; set; }
+    [JsonIgnore]
+    public string RawContext { get; set; } = string.Empty;
     public string Context { get; set; } = string.Empty;
     public bool ContextTruncated { get; set; }
     public string? ContainerKind { get; set; }
@@ -151,6 +153,8 @@ public class CallerResult
     public string? CallerKind { get; set; }
     public string? CallerName { get; set; }
     public string CalleeName { get; set; } = string.Empty;
+    [JsonIgnore]
+    public string ReferenceKind { get; set; } = string.Empty;
     public int FirstLine { get; set; }
     public int ReferenceCount { get; set; }
 }
@@ -234,6 +238,20 @@ public class StatusResult
     public bool GraphTableAvailable { get; set; } = true;
     public bool IssuesTableAvailable { get; set; } = true;
     /// <summary>
+    /// True when authoritative cross-file hotspot-family grouping metadata is current for every
+    /// marker-capable language currently indexed in this DB. False means `hotspots` can still
+    /// run, but duplicate-name families may be conservatively degraded until `cdidx index .`
+    /// restamps the hotspot-family metadata.
+    /// 現在 index 済みの marker-capable 言語すべてで authoritative な hotspot-family metadata
+    /// が最新なら true。false の間も `hotspots` は動くが、duplicate-name family は保守的
+    /// fallback に縮退しうるため、`cdidx index .` で metadata を restamp する必要がある。
+    /// </summary>
+    [JsonPropertyName("hotspot_family_ready")]
+    public bool HotspotFamilyReady { get; set; } = true;
+    [JsonPropertyName("hotspot_family_degraded_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? HotspotFamilyDegradedReason { get; set; }
+    /// <summary>
     /// True when C# canonical symbol-name upgrades (for operators, conversion operators,
     /// indexers) have been applied to all indexed C# rows in this DB. False means exact-name
     /// lookup for those C# symbol families may still require an upgrade pass via `cdidx index .`.
@@ -241,6 +259,17 @@ public class StatusResult
     /// </summary>
     [JsonPropertyName("csharp_symbol_name_ready")]
     public bool CSharpSymbolNameReady { get; set; } = true;
+    /// <summary>
+    /// True when every indexed SQL graph row was written under the current stored call-column /
+    /// qualified-name contract. False means SQL graph/dependency readers may still return false
+    /// negatives until `cdidx index .` rewrites unchanged SQL rows.
+    /// SQL graph 行が current の call-column / qualified-name 契約で書かれていれば true。
+    /// </summary>
+    [JsonPropertyName("sql_graph_contract_ready")]
+    public bool SqlGraphContractReady { get; set; } = true;
+    [JsonPropertyName("sql_graph_contract_degraded_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SqlGraphContractDegradedReason { get; set; }
     /// <summary>
     /// True when every row in symbols / symbol_references has its name_folded column
     /// populated AND the FoldReadyFlag bit is set on the DB. False means `--exact` still

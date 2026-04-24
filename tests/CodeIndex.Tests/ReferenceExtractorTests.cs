@@ -162,6 +162,36 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_VerboseVerbatimIdentifiers_NormalizeCallsAndInstantiation()
+    {
+        const string content = """
+            public class @class
+            {
+                public void @if() { }
+
+                public void Run()
+                {
+                    @if();
+                    var direct = new @class();
+                    var initializer = new @class { };
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "if"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "Run");
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "class"
+            && reference.ReferenceKind == "instantiate"));
+        Assert.DoesNotContain(references, reference => reference.SymbolName.StartsWith("@", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Extract_CsharpAllmanBlockBodiedProperty_WithBlockComment_AttributesToProperty()
     {
         // issue #233 fourth review follow-up: a multi-line /* ... */ block comment
@@ -221,6 +251,73 @@ public class ReferenceExtractorTests
         var computeRef = Assert.Single(references.Where(r => r.SymbolName == "Compute"));
         Assert.Equal("property", computeRef.ContainerKind);
         Assert.Equal("Wrap", computeRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpCompactSameLineTypeBody_AttributesEnumMemberReferenceToInnermostMethod()
+    {
+        // issue #546: when a compact same-line C# type body contains multiple nested
+        // members, enum-member references inside the inline method must attach to the
+        // innermost function rather than collapsing to the outer class.
+        // issue #546: compact な same-line C# 型本体で複数メンバーが同一行に並んでも、
+        // inline method 内の enum member 参照は外側 class ではなく最内側 function に帰属すること。
+        const string content = """
+            namespace N;
+            enum Color { Red }
+            class C { int N => 0; void M() { var x = global::N.Color.Red; } }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var redRef = Assert.Single(references.Where(r => r.SymbolName == "Red"));
+        Assert.Equal("function", redRef.ContainerKind);
+        Assert.Equal("M", redRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpCompactSameLineTypeBody_AttributesPropertyCallToInnermostProperty()
+    {
+        // Compact same-line type bodies must also keep earlier inline property references on
+        // the property itself instead of letting a later same-line method steal them.
+        // compact な same-line 型本体でも、先行する inline property 内の参照は、
+        // 後続 method ではなく property 自身に帰属し続ける必要がある。
+        const string content = """
+            namespace N;
+            enum Color { Red }
+            class C { Color Wrap => global::N.Color.Red; void M() { var x = global::N.Color.Red; } }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var wrapRef = Assert.Single(references.Where(r => r.SymbolName == "Red" && r.ContainerName == "Wrap"));
+        Assert.Equal("property", wrapRef.ContainerKind);
+        Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ContainerName == "Wrap" && r.ContainerKind == "class");
+    }
+
+    [Fact]
+    public void Extract_CsharpMultiLineTypeBody_KeepsEnumMemberReferenceOnMethod()
+    {
+        // The fix for compact same-line type bodies must not regress the existing multi-line
+        // control case, which already resolves enum-member references to the method.
+        // compact same-line 向け修正で、既存の multi-line 制御ケースが class 側へ戻らないこと。
+        const string content = """
+            namespace N;
+            enum Color { Red }
+            class C
+            {
+                int N => 0;
+                void M() { var x = global::N.Color.Red; }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var redRef = Assert.Single(references.Where(r => r.SymbolName == "Red"));
+        Assert.Equal("function", redRef.ContainerKind);
+        Assert.Equal("M", redRef.ContainerName);
     }
 
     [Fact]
@@ -759,7 +856,7 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_DoesNotCreateBareEnumMemberReferencesYet()
+    public void Extract_CsharpQualifiedEnumMemberAccess_UsesNarrowestOwnerContainer()
     {
         const string content = """
             namespace Demo;
@@ -773,10 +870,16 @@ public class ReferenceExtractorTests
 
             public class UsesEnum
             {
+                public Nested Value => Nested.A;
+
+                public Nested GetValue()
+                {
+                    return Nested.A;
+                }
+
                 public void Use()
                 {
-                    _ = Nested.A;
-                    _ = Outer.First.None;
+                    return Outer.First.None;
                 }
             }
             """;
@@ -784,8 +887,16 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "A");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "None");
+        var aRefs = references.Where(reference => reference.SymbolName == "A").OrderBy(reference => reference.Line).ToList();
+        Assert.Equal(2, aRefs.Count);
+        Assert.All(aRefs, reference => Assert.Equal("call", reference.ReferenceKind));
+        Assert.Contains(aRefs, reference => reference.ContainerKind == "property" && reference.ContainerName == "Value");
+        Assert.Contains(aRefs, reference => reference.ContainerKind == "function" && reference.ContainerName == "GetValue");
+
+        var noneRef = Assert.Single(references.Where(reference => reference.SymbolName == "None"));
+        Assert.Equal("call", noneRef.ReferenceKind);
+        Assert.Equal("function", noneRef.ContainerKind);
+        Assert.Equal("Use", noneRef.ContainerName);
     }
 
     [Fact]
@@ -851,7 +962,3786 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "A");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "A" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithConflictingNonEnumType_DoesNotLeakAcrossNamespaces()
+    {
+        const string content = """
+            namespace A;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            namespace B;
+
+            public static class Status
+            {
+                public static int Ready = 1;
+            }
+
+            public class Uses
+            {
+                public int Read()
+                {
+                    return Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithUsingAliasToNonEnumType_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace A;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Values
+            {
+                public static int Ready = 1;
+            }
+
+            namespace B;
+
+            using Status = A.Values;
+
+            public class UsesAlias
+            {
+                public int Read()
+                {
+                    return Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithUsingAliasToEnumType_PreservesEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            using Alias = Demo.Status;
+
+            public class UsesAlias
+            {
+                public Status Read()
+                {
+                    return Alias.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var ready = Assert.Single(references.Where(reference => reference.SymbolName == "Ready"));
+        Assert.Equal("call", ready.ReferenceKind);
+        Assert.Equal("Read", ready.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithRepeatedAliasNames_UsesNearestAliasScope()
+    {
+        const string content = """
+            namespace Demo
+            {
+                public enum Status
+                {
+                    Ready
+                }
+
+                public static class Values
+                {
+                    public static int Ready = 1;
+                }
+            }
+
+            namespace B
+            {
+                using Alias = Demo.Values;
+
+                public class UsesValues
+                {
+                    public int Read()
+                    {
+                        return Alias.Ready;
+                    }
+                }
+            }
+
+            namespace C
+            {
+                using Alias = Demo.Status;
+
+                public class UsesEnum
+                {
+                    public Demo.Status Read()
+                    {
+                        return Alias.Ready;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal(35, readyRef.Line);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithLaterSiblingAliasRebinding_DoesNotStealEarlierEnumScope()
+    {
+        const string content = """
+            namespace Demo
+            {
+                public enum Status
+                {
+                    Ready
+                }
+
+                public static class Values
+                {
+                    public static int Ready = 1;
+                }
+            }
+
+            namespace B
+            {
+                using Alias = Demo.Status;
+
+                public class UsesEnum
+                {
+                    public Demo.Status Read()
+                    {
+                        return Alias.Ready;
+                    }
+                }
+            }
+
+            namespace C
+            {
+                using Alias = Demo.Values;
+
+                public class UsesValues
+                {
+                    public int Read()
+                    {
+                        return Alias.Ready;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal(22, readyRef.Line);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithValueReceiverNamedLikeEnum_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Holder Status { get; } = new();
+
+                public int Read()
+                {
+                    return Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithInstancePropertyShadowInStaticMethod_PreservesEnumReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Holder Status { get; } = new();
+
+                public static Demo.Status Read()
+                {
+                    return Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal(19, readyRef.Line);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithStaticPropertyShadowInStaticMethod_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public static Holder Status { get; } = new();
+
+                public static int Read()
+                {
+                    return Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithIndentedLocalShadowing_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(bool flag)
+                {
+                    if (flag)
+                    {
+                        Holder Status = new();
+                        _ = Status.Ready;
+                    }
+
+                    return Demo.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal(23, readyRef.Line);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithIndentedUsingVarShadowing_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder : IDisposable
+            {
+                public int Ready { get; set; }
+
+                public void Dispose()
+                {
+                }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(bool flag)
+                {
+                    if (flag)
+                    {
+                        using var Status = new Holder();
+                        _ = Status.Ready;
+                    }
+
+                    return Demo.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal(27, readyRef.Line);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithPropertyAccessorLocalShadowing_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Value
+                {
+                    get
+                    {
+                        Holder Status = new();
+                        _ = Status.Ready;
+                        return Demo.Status.Ready;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Value", readyRefs[0].ContainerName);
+        Assert.Equal("property", readyRefs[0].ContainerKind);
+    }
+
+    [Fact]
+    public void Extract_CsharpGlobalQualifiedEnumMemberAccess_WithPropertyShadowing_PreservesReference()
+    {
+        const string content = """
+            enum Color
+            {
+                Red
+            }
+
+            class C
+            {
+                int Color => 0;
+
+                void M()
+                {
+                    var x = global::Color.Red;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var redRef = Assert.Single(references.Where(reference => reference.SymbolName == "Red" && reference.ReferenceKind == "call"));
+        Assert.Equal(12, redRef.Line);
+        Assert.Equal("M", redRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpGlobalQualifiedEnumMemberAccess_WithConflictingUsingAlias_PreservesReference()
+    {
+        const string content = """
+            namespace Demo
+            {
+                public enum Color
+                {
+                    Red
+                }
+            }
+
+            namespace Shadow
+            {
+                public static class Demo
+                {
+                    public static int Red => 0;
+                }
+            }
+
+            using Demo = Shadow;
+
+            class C
+            {
+                Demo.Color M()
+                {
+                    return global::Demo.Color.Red;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var redRef = Assert.Single(references.Where(reference => reference.SymbolName == "Red" && reference.ReferenceKind == "call"));
+        Assert.Equal(23, redRef.Line);
+        Assert.Equal("M", redRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpGlobalQualifiedEnumMemberAccess_WithUsingAliasName_DoesNotCreateReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Color
+            {
+                Red
+            }
+
+            using Color = Demo.Color;
+
+            class C
+            {
+                void M()
+                {
+                    _ = global::Color.Red;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Red" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithGetterLocalShadowing_DoesNotLeakIntoSetter()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Status Value
+                {
+                    get
+                    {
+                        Holder Status = new();
+                        _ = Status.Ready;
+                        return Demo.Status.Ready;
+                    }
+                    set
+                    {
+                        _ = Status.Ready;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .OrderBy(reference => reference.Line)
+            .ToList();
+        Assert.Equal([21, 25], readyRefs.Select(reference => reference.Line).ToArray());
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithOutDeclarationShadowing_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                private static bool TryGet(out Holder holder)
+                {
+                    holder = new Holder();
+                    return true;
+                }
+
+                public Demo.Status Read()
+                {
+                    if (TryGet(out Holder Status))
+                    {
+                        _ = Status.Ready;
+                    }
+
+                    return Demo.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithCatchShadowing_DoesNotLeakAfterCatchBlock()
+    {
+        const string content = """
+            using System;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Status Read()
+                {
+                    try
+                    {
+                        throw new Exception();
+                    }
+                    catch (Exception Status)
+                    {
+                        _ = Status.Message;
+                    }
+
+                    return Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithUsingStatementShadowing_DoesNotLeakAfterUsingBlock()
+    {
+        const string content = """
+            using System;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder : IDisposable
+            {
+                public int Ready { get; set; }
+
+                public void Dispose()
+                {
+                }
+            }
+
+            public sealed class Uses
+            {
+                public Status Read(bool flag)
+                {
+                    if (flag)
+                    {
+                        using (Holder Status = new())
+                        {
+                            _ = Status.Ready;
+                        }
+                    }
+
+                    return Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithOutVarShadowing_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                private static bool TryGet(out Holder holder)
+                {
+                    holder = new Holder();
+                    return true;
+                }
+
+                public Demo.Status Read()
+                {
+                    if (TryGet(out var Status))
+                    {
+                        _ = Status.Ready;
+                    }
+
+                    return Demo.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithLambdaParameterNamedLikeEnum_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            using System;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Func<Holder, int> Build()
+                {
+                    return Status => Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithMultiLineLambdaParameterNamedLikeEnum_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            using System;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Func<Holder, int> Build()
+                {
+                    return
+                        (Status) =>
+                            Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithLambdaParameterNamedLikeEnum_DoesNotLeakAfterLambda()
+    {
+        const string content = """
+            using System;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read()
+                {
+                    Func<Holder, int> f = Status => Status.Ready;
+                    return Demo.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithLambdaParameterNamedLikeEnum_DoesNotLeakAfterSameLineLambda()
+    {
+        const string content = """
+            using System;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read()
+                {
+                    Func<Holder, int> f = Status => Status.Ready; return Demo.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedLambdaParameterNamedLikeEnum_DoesNotSuppressEarlierSameLineReference()
+    {
+        const string content = """
+            using System;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(Demo.Status left, Func<Holder, int> right) => left;
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read()
+                {
+                    return Sink.Pick(Demo.Status.Ready, (Holder Status) => Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryRangeVariableNamedLikeEnum_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    return from Status in items
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryRangeVariableNamedLikeEnum_DoesNotLeakAfterQuery()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<Holder> items)
+                {
+                    _ = from Status in items
+                        select Status.Ready;
+
+                    return Demo.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryRangeVariableNamedLikeEnum_DoesNotLeakPastQueryArgument()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(IEnumerable<int> left, Demo.Status right) => right;
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<Holder> items)
+                {
+                    return Sink.Pick(from Status in items select Status.Ready, Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryRangeVariableNamedLikeEnum_OrderByComma_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    return from Status in items
+                           orderby Status, items.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryRangeVariableNamedLikeEnum_OrderByDirectionalComma_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    return from Status in items
+                           orderby Status descending, items.Count() ascending
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedTerminalSelectInArgument_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<Holder> items)
+                {
+                    return Sink.Pick(from Status in items select(Status.Ready), Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedGroupByQueryInArgument_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<Holder> items)
+                {
+                    return Sink.Pick(from Status in items group(Status.Ready) by items.Count(), Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryRangeVariableMemberNamedSelect_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+                public int select { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    return from Status in items
+                           orderby Status.select, items.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryRangeVariableMemberNamedEscapedSelect_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+                public int @select { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    return from Status in items
+                           orderby Status.@select, items.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryRangeVariableMemberNamedSelectSeparatedBySpaces_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+                public int select { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    return from Status in items
+                           orderby Status . select, items.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryRangeVariableOrderByAnonymousTypeComma_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    return from Status in items
+                           orderby new { X = Status.Ready, Y = items.Count() }, items.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryKeywordNamedLocalFunctionInParenthesizedOrderByExpression_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    static int select(IEnumerable<Holder> xs) => xs.Count();
+                    return from Status in items
+                           orderby select(items), items.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryKeywordNamedLocalFunctionAfterGreaterThanInOrderByTernary_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    static int select(IEnumerable<Holder> xs) => xs.Count();
+                    return from Status in items
+                           orderby items.Count() > select(items) ? 1 : 0, items.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryKeywordNamedLocalFunctionAfterLessThanInOrderByTernary_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    static int select(IEnumerable<Holder> xs) => xs.Count();
+                    return from Status in items
+                           orderby items.Count() < select(items) ? 1 : 0, items.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryKeywordNamedLocalFunctionAfterBangInOrderByTernary_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    static bool select(IEnumerable<Holder> xs) => xs.Any();
+                    return from Status in items
+                           orderby ! select(items) ? 1 : 0, items.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithAwaitBeforeQueryKeywordNamedLocalFunctionInOrderBy_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+            using System.Threading.Tasks;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public async Task<IEnumerable<int>> Read(IEnumerable<Holder> items)
+                {
+                    static async Task<int> select(IEnumerable<Holder> xs) => await Task.FromResult(xs.Count());
+                    return from Status in items
+                           orderby await select(items), items.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithCommentSeparatedAwaitBeforeQueryKeywordNamedLocalFunctionInOrderBy_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+            using System.Threading.Tasks;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public async Task<IEnumerable<int>> Read(IEnumerable<Holder> items)
+                {
+                    static async Task<int> select(IEnumerable<Holder> xs) => await Task.FromResult(xs.Count());
+                    return from Status in items
+                           orderby await select /*comment*/ (items), items.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithPostfixNullForgivingBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Status Pick(object left, Status right) => right;
+                public static Holder? Maybe(Holder value) => value;
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Status Read(IEnumerable<Holder> items)
+                {
+                    return Sink.Pick(from Status in items
+                                     let alias = Sink.Maybe(Status)!
+                                     select(Status.Ready),
+                                     Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithThrowBeforeQueryKeywordNamedLocalFunctionInOrderBy_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    static System.Exception select(IEnumerable<Holder> xs) => new System.Exception(xs.Count().ToString());
+                    return from Status in items
+                           orderby items.Count() > 0 ? throw select(items) : 0, items.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithThrowBeforeGroupNamedLocalFunctionInOrderBy_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    static System.Exception group(IEnumerable<Holder> xs) => new System.Exception(xs.Count().ToString());
+                    return from Status in items
+                           orderby items.Count() > 0 ? throw group(items) : 0, items.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithMultilineSelectAfterGreaterThan_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    static int select(IEnumerable<Holder> xs) => xs.Count();
+                    return from Status in items
+                           orderby items.Count() >
+                                   select
+                                   (items) ? 1 : 0, items.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithMultilineThrowBeforeGroup_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    static System.Exception group(IEnumerable<Holder> xs) => new System.Exception(xs.Count().ToString());
+                    return from Status in items
+                           orderby items.Count() > 0 ? throw
+                                   group
+                                   (items) : null, items.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithNullableTypeSuffixBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<object> items, object value)
+                {
+                    return Sink.Pick(from Status in items
+                                     let cast = value as Status?
+                                     select(Status.Ready),
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithPostfixIncrementBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<object> items, int counter)
+                {
+                    return Sink.Pick(from Status in items
+                                     let n = counter++
+                                     select(Status.Ready),
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithNullableArrayRankSuffixBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<object> items, object value)
+                {
+                    return Sink.Pick(from Status in items
+                                     let cast = value as Status[,]?
+                                     select(Status.Ready),
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithCastedLocalSelectCallInOrderBy_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    static object select(IEnumerable<Holder> xs) => xs.Count();
+                    return from Status in items
+                           orderby (object)select(items), items.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithSimpleIdentifierCastedLocalSelectCallInOrderBy_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class CustomType
+            {
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<Holder> items)
+                {
+                    static CustomType select(IEnumerable<Holder> xs) => new();
+                    return Sink.Pick(from Status in items
+                                     orderby (CustomType)select(items), items.Count()
+                                     select Status.Ready,
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithMultilineSimpleIdentifierCastedLocalSelectCallInOrderBy_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class CustomType
+            {
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<Holder> items)
+                {
+                    static CustomType select(IEnumerable<Holder> xs) => new();
+                    return Sink.Pick(from Status in items
+                                     orderby (CustomType)
+                                             select(items), items.Count()
+                                     select Status.Ready,
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedTernaryOrderByBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<object> items, bool flag, int left, int right)
+                {
+                    return Sink.Pick(from Status in items
+                                     orderby (flag ? left : right)
+                                     select(Status.Ready),
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedCoalesceOrderByBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<object> items, int? left, int right)
+                {
+                    return Sink.Pick(from Status in items
+                                     orderby (left ?? right)
+                                     select(Status.Ready),
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedQualifiedMemberAccessBeforeParenthesizedTerminalSelect_PreservesOnlyRealReferences()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<object> items)
+                {
+                    return Sink.Pick(from Status in items
+                                     orderby (Demo.Status.Ready)
+                                     select(Status.Ready),
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Equal(2, readyRefs.Count);
+        Assert.All(readyRefs, readyRef => Assert.Equal("Read", readyRef.ContainerName));
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithLowercaseAliasCastedLocalSelectCallInOrderBy_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+            using customType = Demo.CustomType;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class CustomType
+            {
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<object> items)
+                {
+                    static customType select(IEnumerable<object> xs) => new();
+                    return Sink.Pick(from Status in items
+                                     orderby (customType)select(items)
+                                     select Status.Ready,
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedKeywordNamedParameterBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<object> items, int Select)
+                {
+                    return Sink.Pick(from Status in items
+                                     orderby (Select)
+                                     select(Status.Ready),
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedKeywordNamedLocalBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<object> items)
+                {
+                    const int Select = 1;
+                    return Sink.Pick(from Status in items
+                                     orderby (Select)
+                                     select(Status.Ready),
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedUppercaseConstantBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<object> items)
+                {
+                    const int READY = 1;
+                    return Sink.Pick(from Status in items
+                                     orderby (READY)
+                                     select(Status.Ready),
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithParenthesizedTerminalSelectAfterGenericClose_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<object> items)
+                {
+                    return Sink.Pick(from Status in items where Status is List<int> select(Status.Ready), Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryRangeVariableOrderByObjectInitializerComma_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Key
+            {
+                public int A { get; set; }
+                public int B { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    return from Status in items
+                           orderby new Key { A = Status.Ready, B = items.Count() }, items.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithNestedQueryBeforeOrderByComma_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items, IEnumerable<int> others)
+                {
+                    return from Status in items
+                           let nested = from x in others select x
+                           orderby items.Count(), nested.Count()
+                           select Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithNestedQueryBeforeParenthesizedOrderByComma_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<Holder> items, IEnumerable<int> others)
+                {
+                    return Sink.Pick(from Status in items
+                                     let nested = from x in others select x
+                                     orderby(items.Count()), nested.Count()
+                                     select Status.Ready,
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithTerminalSelectGenericTypeArgumentComma_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public static class Sink
+            {
+                public static int Wrap<TLeft, TRight>(int value) => value;
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    return from Status in items
+                           select Sink.Wrap<int, int>(Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithTerminalSelectSingleGenericArgument_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public static class Sink
+            {
+                public static int Wrap<T>(int value) => value;
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    return from Status in items
+                           select Sink.Wrap<int>(Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithTerminalSelectShiftExpression_PreservesOnlyTrailingEnumReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public static class Sink
+            {
+                public static IEnumerable<int> Pick(IEnumerable<int> left, Status right) => left;
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    return Sink.Pick(
+                        from Status in items
+                        select (Status.Ready << 1) >> (1 + Status.Ready),
+                        Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .OrderBy(reference => reference.Line)
+            .ToList();
+
+        Assert.Equal([28], readyRefs.Select(reference => reference.Line).ToArray());
+        Assert.All(readyRefs, reference => Assert.Equal("Read", reference.ContainerName));
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithTerminalSelectGenericTypePatternDesignation_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public int Read(IEnumerable<Holder> items)
+                {
+                    return (from Status in items
+                            select Status is Dictionary<int, int> dict ? Status.Ready : 0).First();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithTerminalSelectGenericTypePatternWithoutDesignation_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public int Read(IEnumerable<Holder> items)
+                {
+                    return (from Status in items
+                            select Status is Dictionary<int, int> ? Status.Ready : 0).First();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Theory]
+    [InlineData("!=")]
+    [InlineData("==")]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithTerminalSelectGenericAsNullComparison_DoesNotLeakReference(string comparisonOperator)
+    {
+        var content = $$"""
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public int Read(IEnumerable<Holder> items)
+                {
+                    return (from Status in items
+                            select Status as Dictionary<int, int> {{comparisonOperator}} null ? Status.Ready : 0).First();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithTerminalSelectGenericAsNullComparison_PreservesLaterEnumReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Status Pick(int left, Status right) => right;
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Status Read(IEnumerable<Holder> items)
+                {
+                    return Sink.Pick(
+                        (from Status in items
+                         select Status as Dictionary<int, int> != null ? Status.Ready : 0).First(),
+                        Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Ready"
+            && reference.ReferenceKind == "call"
+            && reference.Line == 28
+            && reference.Context.Contains("Status.Ready", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithTerminalSelectTupleGenericTypeArgument_DoesNotLeakReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public static class Sink
+            {
+                public static int Wrap<T>(int value) => value;
+            }
+
+            public sealed class Uses
+            {
+                public IEnumerable<int> Read(IEnumerable<Holder> items)
+                {
+                    return from Status in items
+                           select Sink.Wrap<(int, List<int>)>(Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithQueryKeywordNamedLocalFunctionInSelectExpression_PreservesLaterEnumReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Status Pick(IEnumerable<int> left, Status right) => right;
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Status Read(IEnumerable<Holder> items)
+                {
+                    static int from(IEnumerable<Holder> xs) => xs.Count();
+                    return Sink.Pick(from Status in items select from(items), Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Ready"
+            && reference.ReferenceKind == "call"
+            && reference.Line == 26
+            && reference.Context.Contains("Status.Ready", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithGroupByQueryInArgument_PreservesLaterEnumReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public static class Sink
+            {
+                public static object Pick(object left, Status right) => right;
+            }
+
+            public sealed class Uses
+            {
+                public object Read(IEnumerable<Holder> items)
+                {
+                    return Sink.Pick(from Status in items group Status.Ready by items.Count(), Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .ToList();
+
+        Assert.Single(readyRefs);
+        Assert.Equal(25, readyRefs[0].Line);
+        Assert.Contains("Status.Ready", readyRefs[0].Context, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithTerminalSelectIdentifierNamedDescending_PreservesLaterEnumReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static object Pick(object left, Status right) => right;
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public object Read(IEnumerable<Holder> items)
+                {
+                    var descending = 1;
+                    return Sink.Pick(from Status in items select descending, Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .ToList();
+
+        Assert.Single(readyRefs);
+        Assert.Equal(26, readyRefs[0].Line);
+        Assert.Contains("Status.Ready", readyRefs[0].Context, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithForeachValueNamedLikeEnum_DoesNotLeakAfterEmbeddedStatement()
+    {
+        const string content = """
+            using System.Collections.Generic;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<Holder> items)
+                {
+                    foreach (var Status in items)
+                        _ = Status.Ready;
+
+                    return Demo.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithForeachValueNamedLikeEnum_DoesNotLeakAfterSameLineEmbeddedStatement()
+    {
+        const string content = """
+            using System.Collections.Generic;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<Holder> items)
+                {
+                    foreach (var Status in items) _ = Status.Ready; return Demo.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithForeachValueNamedLikeEnum_DoesNotLeakInsideElseBranch()
+    {
+        const string content = """
+            using System.Collections.Generic;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<Holder> items, bool flag)
+                {
+                    foreach (var Status in items)
+                        if (flag)
+                            _ = 0;
+                        else
+                            _ = Status.Ready;
+
+                    return Demo.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithLaterLocalShadowing_DoesNotSuppressEarlierReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Before()
+                {
+                    _ = Status.Ready;
+                    Holder Status = new();
+                    return Demo.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .OrderBy(reference => reference.Line)
+            .ToList();
+        Assert.Equal([17, 19], readyRefs.Select(reference => reference.Line).ToArray());
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithParameterNamedLikeEnum_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public int Read(Holder Status)
+                {
+                    return Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithDeclarationPatternVariable_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(object value)
+                {
+                    if (value is Holder Status)
+                    {
+                        _ = Status.Ready;
+                    }
+
+                    return Demo.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal(22, readyRef.Line);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithMultiLineIfDeclarationPatternVariable_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(object value)
+                {
+                    if (
+                        value is Holder Status)
+                    {
+                        _ = Status.Ready;
+                    }
+
+                    return Demo.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal(23, readyRef.Line);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithMultiLineWhileDeclarationPatternVariable_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(object value)
+                {
+                    while (
+                        value is Holder Status)
+                    {
+                        _ = Status.Ready;
+                        break;
+                    }
+
+                    return Demo.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal(24, readyRef.Line);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithLambdaScopedDeclarationPatternVariable_DoesNotLeakIntoOuterIfBody()
+    {
+        const string content = """
+            namespace RealNs;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public RealNs.Status Read(object[] values)
+                {
+                    if (values.Any(value => value is Holder RealNs))
+                    {
+                        return RealNs.Status.Ready;
+                    }
+
+                    return RealNs.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .OrderBy(reference => reference.Line)
+            .ToList();
+
+        Assert.Equal([19, 22], readyRefs.Select(reference => reference.Line).ToArray());
+        Assert.All(readyRefs, reference => Assert.Equal("Read", reference.ContainerName));
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithSwitchCaseDeclarationPatternVariable_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(object value)
+                {
+                    switch (value)
+                    {
+                        case Holder Status:
+                            _ = Status.Ready;
+                            break;
+                    }
+
+                    return Demo.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal(24, readyRef.Line);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithConditionalExpressionDeclarationPatternVariable_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(object value)
+                {
+                    return value is Holder Status
+                        ? (Demo.Status)Status.Ready
+                        : Demo.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal(19, readyRef.Line);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithRecursivePatternVariable_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(object value)
+                {
+                    if (value is Holder { Ready: > 0 } Status)
+                    {
+                        _ = Status.Ready;
+                    }
+
+                    return Demo.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal(22, readyRef.Line);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithMultiLineRecursivePatternVariable_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(object value)
+                {
+                    if (value is Holder
+                        {
+                            Ready: > 0
+                        } Status)
+                    {
+                        _ = Status.Ready;
+                    }
+
+                    return Demo.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal(25, readyRef.Line);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithRecursivePatternCaseVariable_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(object value)
+                {
+                    switch (value)
+                    {
+                        case Holder { Ready: > 0 } Status:
+                            _ = Status.Ready;
+                            break;
+                    }
+
+                    return Demo.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal(24, readyRef.Line);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithSwitchExpressionRecursivePatternVariable_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(object value)
+                {
+                    return value switch
+                    {
+                        Holder { Ready: > 0 } Status => (Demo.Status)Status.Ready,
+                        _ => Demo.Status.Ready
+                    };
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal(20, readyRef.Line);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithSwitchExpressionDeclarationPatternVariable_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(object value)
+                {
+                    return value switch
+                    {
+                        Holder Status => (Demo.Status)Status.Ready,
+                        _ => Demo.Status.Ready
+                    };
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal(20, readyRef.Line);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithSwitchExpressionDeclarationPatternWhenGuard_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(object value)
+                {
+                    return value switch
+                    {
+                        Holder Status when Status.Ready > 0 => Demo.Status.Ready,
+                        _ => Demo.Status.Ready
+                    };
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .OrderBy(reference => reference.Line)
+            .ThenBy(reference => reference.Column)
+            .ToList();
+
+        Assert.Equal([19, 20], readyRefs.Select(reference => reference.Line).ToArray());
+        Assert.Equal([64, 30], readyRefs.Select(reference => reference.Column).ToArray());
+        Assert.All(readyRefs, reference => Assert.Equal("Read", reference.ContainerName));
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithSwitchExpressionDeclarationPatternWhenInComment_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(object value)
+                {
+                    return value switch
+                    {
+                        Holder Status /* when comment */ => (Demo.Status)Status.Ready,
+                        _ => Demo.Status.Ready
+                    };
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal(20, readyRef.Line);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithSwitchExpressionDeclarationPatternWhenInMultiLineComment_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(object value)
+                {
+                    return value switch
+                    {
+                        Holder /* trivia
+                                  when comment */ Status when Status.Ready > 0 => Demo.Status.Ready,
+                        _ => Demo.Status.Ready
+                    };
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .OrderBy(reference => reference.Line)
+            .ThenBy(reference => reference.Column)
+            .ToList();
+
+        Assert.Equal([20, 21], readyRefs.Select(reference => reference.Line).ToArray());
+        Assert.Equal([83, 30], readyRefs.Select(reference => reference.Column).ToArray());
+        Assert.All(readyRefs, reference => Assert.Equal("Read", reference.ContainerName));
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithStaticLambdaScopedDeclarationPatternVariable_DoesNotLeakIntoOuterIfBody()
+    {
+        const string content = """
+            namespace RealNs;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public sealed class Holder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class Uses
+            {
+                public RealNs.Status Read(object[] values)
+                {
+                    if (values.Any(static value => value is Holder RealNs))
+                    {
+                        return RealNs.Status.Ready;
+                    }
+
+                    return RealNs.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .OrderBy(reference => reference.Line)
+            .ToList();
+
+        Assert.Equal([19, 22], readyRefs.Select(reference => reference.Line).ToArray());
+        Assert.All(readyRefs, reference => Assert.Equal("Read", reference.ContainerName));
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithDottedValueReceiverChain_DoesNotLeakAsEnumMemberReference()
+    {
+        const string content = """
+            namespace RealNs;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            namespace Test;
+
+            public sealed class ReadyHolder
+            {
+                public int Ready { get; set; }
+            }
+
+            public sealed class NamespaceLike
+            {
+                public ReadyHolder Status { get; } = new();
+            }
+
+            public sealed class Uses
+            {
+                public global::RealNs.Status Read(NamespaceLike RealNs)
+                {
+                    _ = RealNs.Status.Ready;
+                    return global::RealNs.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRef = Assert.Single(readyRefs);
+        Assert.Equal(25, readyRef.Line);
+        Assert.Equal("Read", readyRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithGlobalQualifierAndConflictingType_PreservesReference()
+    {
+        const string content = """
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            namespace Other;
+
+            public static class Status
+            {
+                public static int Value = 1;
+            }
+
+            public class Uses
+            {
+                public Demo.Status Read()
+                {
+                    return global::Demo.Status.Ready;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var ready = Assert.Single(references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call"));
+        Assert.Equal(19, ready.Line);
+        Assert.Equal("Read", ready.ContainerName);
     }
 
     [Fact]
@@ -881,6 +4771,327 @@ public class ReferenceExtractorTests
         Assert.Contains(references, reference => reference.SymbolName == "Bar" && reference.ReferenceKind == "instantiate");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "Foo" && reference.ReferenceKind == "call");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "Bar" && reference.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpNestedGenericConstructorAndMethodCalls_AreIndexed()
+    {
+        // Regression (issue #263): nested generic tails such as `>>(` previously broke the
+        // flat CallRegex generic segment, so constructor calls like
+        // `new Dictionary<string, List<int>>()` and generic method calls like
+        // `Helper.DoWork<List<int>>()` were silently dropped from the reference index.
+        // リグレッション (issue #263): `>>(` を含む nested generic 呼び出しは平坦な
+        // CallRegex の generic segment が壊れ、`new Dictionary<string, List<int>>()` や
+        // `Helper.DoWork<List<int>>()` が reference index から黙って脱落していた。
+        const string content = """
+            using System.Collections.Generic;
+
+            namespace Demo;
+
+            public static class Helper
+            {
+                public static void DoWork<T>() { }
+                public static void Process<T>() { }
+            }
+
+            public class Builder
+            {
+                public void Build()
+                {
+                    var a = new Dictionary<string, List<int>>();
+                    var b = new List<Dictionary<string, int>>();
+                    var c = new Dictionary<int, Dictionary<string, List<int>>>();
+                    Helper.DoWork<List<int>>();
+                    Helper.Process<Dictionary<string, int>>();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "instantiate" && r.Line == 15);
+        Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "instantiate" && r.Line == 16);
+        Assert.Contains(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "instantiate" && r.Line == 17);
+        Assert.Contains(references, r => r.SymbolName == "DoWork" && r.ReferenceKind == "call" && r.Line == 18);
+        Assert.Contains(references, r => r.SymbolName == "Process" && r.ReferenceKind == "call" && r.Line == 19);
+        Assert.DoesNotContain(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "List" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_JavaNestedGenericConstructors_AreInstantiate()
+    {
+        // Regression (issue #263): Java constructor calls with nested generic type args
+        // such as `new HashMap<String, List<Integer>>()` must still emit instantiate rows.
+        // リグレッション (issue #263): `new HashMap<String, List<Integer>>()` のような
+        // Java の nested generic コンストラクタ呼び出しも `instantiate` を発行する必要がある。
+        const string content = """
+            import java.util.ArrayList;
+            import java.util.HashMap;
+            import java.util.List;
+
+            class Worker {
+                void run() {
+                    var a = new HashMap<String, List<Integer>>();
+                    var b = new ArrayList<HashMap<String, Integer>>();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "HashMap" && r.ReferenceKind == "instantiate" && r.Line == 7);
+        Assert.Contains(references, r => r.SymbolName == "ArrayList" && r.ReferenceKind == "instantiate" && r.Line == 8);
+        Assert.DoesNotContain(references, r => r.SymbolName == "HashMap" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ArrayList" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_JavaInvalidNestedGenericParenlessInitializer_DoesNotEmitInstantiate()
+    {
+        // Java does not have collection/object initializer syntax, so the C#-only nested
+        // initializer fallback must not manufacture a phantom `instantiate` edge from
+        // invalid Java like `new HashMap<String, List<Integer>> { }`.
+        // Java には C# のようなコレクション/オブジェクト initializer 構文がないため、
+        // `new HashMap<String, List<Integer>> { }` のような不正構文から
+        // phantom な `instantiate` edge を作ってはいけない。
+        const string content = """
+            import java.util.HashMap;
+            import java.util.List;
+
+            class Worker {
+                void run() {
+                    var a = new HashMap<String, List<Integer>>();
+                    var b = new HashMap<String, List<Integer>>
+                    {
+                    };
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "HashMap" && r.ReferenceKind == "instantiate" && r.Line == 6);
+        Assert.DoesNotContain(references, r => r.SymbolName == "HashMap" && r.ReferenceKind == "instantiate" && r.Line == 7);
+    }
+
+    [Fact]
+    public void Extract_CsharpNestedGenericParenlessInitializers_AreInstantiate()
+    {
+        // Regression follow-up for issue #263: nested generic parenless initializers such as
+        // `new Dictionary<string, List<int>> { ... }` and Allman-style `new Dictionary<...>\n{`
+        // must keep the outer instantiate edge instead of indexing only the inner flat ctor calls.
+        // issue #263 の追補: `new Dictionary<string, List<int>> { ... }` や
+        // Allman 形式の `new Dictionary<...>\n{` でも、内側の平坦な ctor 呼び出しだけでなく
+        // 外側型の instantiate edge を維持しなければならない。
+        const string content = """
+            using System.Collections.Generic;
+
+            namespace Demo;
+
+            public class Builder
+            {
+                public void Build()
+                {
+                    var a = new Dictionary<string, List<int>> { ["k"] = new List<int>() };
+                    var b = new List<Dictionary<string, int>> { new Dictionary<string, int>() };
+                    var c = new Dictionary<int, List<int>>
+                    {
+                        [1] = new List<int>()
+                    };
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "instantiate" && r.Line == 9);
+        Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "instantiate" && r.Line == 10);
+        Assert.Contains(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "instantiate" && r.Line == 11);
+        Assert.DoesNotContain(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "List" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpParenlessInitializers_AreInstantiate()
+    {
+        // issue #286: object/collection/dictionary/array initializer syntax without `()`
+        // (`new Foo { ... }`, `new List<int> { ... }`, `new Dictionary<K,V> { [k] = v }`,
+        // `new Bar[] { ... }`) must be recorded as `instantiate` references.
+        // issue #286: 括弧省略のオブジェクト/コレクション/ディクショナリ/配列イニシャライザも
+        // `instantiate` として参照テーブルに記録される必要がある。
+        const string content = """
+            namespace App;
+
+            using System.Collections.Generic;
+
+            public class Bar { public int X { get; set; } }
+
+            public class Worker
+            {
+                public void M()
+                {
+                    var a = new Bar { X = 1 };
+                    var list = new List<int> { 1, 2, 3 };
+                    var dict = new Dictionary<string, int> { ["k"] = 1 };
+                    var arr = new int[] { 1, 2, 3 };
+                    var arr2 = new Bar[] { new Bar() { X = 9 } };
+                    if (true) { }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Bar" && r.ReferenceKind == "instantiate" && r.Line == 11);
+        Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "instantiate" && r.Line == 12);
+        Assert.Contains(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "instantiate" && r.Line == 13);
+        Assert.Contains(references, r => r.SymbolName == "Bar" && r.ReferenceKind == "instantiate" && r.Line == 15 && r.Column == 24);
+        Assert.Contains(references, r => r.SymbolName == "Bar" && r.ReferenceKind == "instantiate" && r.Line == 15 && r.Column == 36);
+        // Built-in `int` must not produce an `instantiate int` row from `new int[] { ... }`.
+        // 組み込み型 `int` は `instantiate int` を発行しない。
+        Assert.DoesNotContain(references, r => r.SymbolName == "int");
+        // The negative `if (true) { }` line must not match the initializer regex.
+        // `if (true) { }` のような `new` を含まない `{` 開始は initializer regex にマッチしない。
+        Assert.DoesNotContain(references, r => r.SymbolName == "if" && r.ReferenceKind == "instantiate");
+        // Same target on the same line/column must not double-emit instantiate + call.
+        // 同一行・同一列で `instantiate` と `call` を二重に出さない。
+        Assert.DoesNotContain(references, r => r.SymbolName == "Bar" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "List" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedParenlessInitializer_IsInstantiate()
+    {
+        // Qualified type names (`new N.Foo { ... }`, `new global::N.Foo { ... }`) must
+        // capture the trailing identifier as `instantiate`, mirroring the behavior of
+        // `new N.Foo()` which the existing CallRegex+IsConstructorCallName path already covers.
+        // 修飾された型名（`new N.Foo { ... }` / `new global::N.Foo { ... }`）でも、
+        // `new N.Foo()` と同様に末尾の識別子が `instantiate` として捕捉されること。
+        const string content = """
+            namespace N
+            {
+                public class Foo { public int X { get; set; } }
+                public class Bar { public int X { get; set; } }
+            }
+
+            public class Worker
+            {
+                public void M()
+                {
+                    var a = new N.Foo { X = 1 };
+                    var b = new global::N.Bar { X = 2 };
+                    var c = new global::System.Collections.Generic.Dictionary<string, global::System.Collections.Generic.List<int>> { ["k"] = new global::System.Collections.Generic.List<int>() };
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Foo" && r.ReferenceKind == "instantiate" && r.Line == 11);
+        Assert.Contains(references, r => r.SymbolName == "Bar" && r.ReferenceKind == "instantiate" && r.Line == 12);
+        Assert.Contains(references, r => r.SymbolName == "Dictionary" && r.ReferenceKind == "instantiate" && r.Line == 13);
+    }
+
+    [Fact]
+    public void Extract_JavaParenlessArrayInitializer_IsInstantiate()
+    {
+        // issue #286 (Java side): `new String[] { "a", "b" }` is genuinely an array
+        // instantiation but CallRegex misses it because there is no `(`. Primitive
+        // types (`int`, `boolean`, ...) must continue to be skipped.
+        // issue #286 の Java 側: `new String[] { "a", "b" }` は配列インスタンス化だが
+        // `(` がないため CallRegex で取りこぼす。プリミティブ型（`int` 等）は引き続き除外する。
+        const string content = """
+            public class Demo {
+                public void run() {
+                    String[] s = new String[] { "a", "b" };
+                    int[] n = new int[] { 1, 2, 3 };
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "String" && r.ReferenceKind == "instantiate" && r.Line == 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "int");
+        Assert.DoesNotContain(references, r => r.SymbolName == "boolean");
+    }
+
+    [Fact]
+    public void Extract_CsharpAllmanParenlessInitializers_AreInstantiate()
+    {
+        // issue #286 (multi-line): the common Allman-style form places `{` on the next
+        // physical line. The same-line regex cannot see that `{`, so add a trailing-shape
+        // path that matches `new T` at end of line and peeks forward to a `{`-starting line.
+        // issue #286 の多行形式: Allman スタイルでは `{` が次行にあるため、行末の `new T` を
+        // 末尾マッチ regex で拾い、次の非空 prepared line が `{` で始まる時だけ `instantiate` を発行する。
+        const string content = """
+            namespace App;
+
+            using System.Collections.Generic;
+
+            public class Foo { public int X { get; set; } }
+            public class Bag { public List<Foo> Items { get; set; } = new(); }
+
+            public static class Helper
+            {
+                public static Bag BuildBagAllman()
+                {
+                    return new Bag
+                    {
+                        Items = new List<Foo>
+                        {
+                            new Foo
+                            {
+                                X = 6
+                            }
+                        }
+                    };
+                }
+
+                public static Foo[] BuildArrayAllman()
+                {
+                    return new Foo[]
+                    {
+                        new Foo { X = 4 }
+                    };
+                }
+
+                public static Foo NotAnInstantiate()
+                {
+                    // `new Foo` here is not followed by `{` — it is a compile error in
+                    // real code, but the extractor must not emit a phantom instantiate.
+                    // This exercises the peek-ahead negative path.
+                    var f = new Foo
+                    ;
+                    return f;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        // new Bag (line 12) with `{` on line 13
+        Assert.Contains(references, r => r.SymbolName == "Bag" && r.ReferenceKind == "instantiate" && r.Line == 12);
+        // new List<Foo> (line 14) with `{` on line 15
+        Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "instantiate" && r.Line == 14);
+        // new Foo (line 16) with `{` on line 17
+        Assert.Contains(references, r => r.SymbolName == "Foo" && r.ReferenceKind == "instantiate" && r.Line == 16);
+        // new Foo[] (line 26) with `{` on line 27
+        Assert.Contains(references, r => r.SymbolName == "Foo" && r.ReferenceKind == "instantiate" && r.Line == 26);
+        // The negative `var f = new Foo` (line 37) followed by `;` (line 38) must NOT
+        // emit an instantiate at that line via the trailing peek path.
+        // ネガティブ: `var f = new Foo` (行 37) の次行は `;` なので trailing peek は発行しない。
+        Assert.DoesNotContain(references, r => r.SymbolName == "Foo" && r.ReferenceKind == "instantiate" && r.Line == 37);
     }
 
     [Fact]
@@ -1155,6 +5366,880 @@ public class ReferenceExtractorTests
         // SQL keywords should not be extracted / SQL キーワードは抽出されないこと
         Assert.DoesNotContain(references, r => r.SymbolName == "SELECT");
         Assert.DoesNotContain(references, r => r.SymbolName == "WHERE");
+    }
+
+    [Fact]
+    public void Extract_SQL_CapturesNamedSourceReferences()
+    {
+        // issue #284 / #665: SQL source/target identifiers such as FROM/JOIN/INTO/view/CTE usages
+        // should surface as `reference` edges, while table-valued functions keep their `call` edge,
+        // including bracketed/backtick/double-quoted identifier forms.
+        // issue #284 / #665: SQL の FROM/JOIN/INTO/view/CTE 使用は `reference` として出し、TVF は
+        // `call` のまま維持する。角括弧 / バッククォート / 二重引用符の識別子形も含む。
+        const string content = """
+            WITH ActiveUsers AS (
+                SELECT user_id, name
+                FROM users
+                WHERE status = 'active'
+            ),
+            RecentOrders AS (
+                SELECT order_id, user_id, total
+                FROM orders
+                WHERE created_at > '2024-01-01'
+            )
+            SELECT au.name, ro.total
+            FROM ActiveUsers au
+            JOIN RecentOrders ro ON ro.user_id = au.user_id;
+
+            SELECT * FROM user_summary_view WHERE region = 'EU';
+            EXEC usp_ProcessOrders @BatchSize = 100;
+            SELECT * FROM dbo.fn_GetUserStats(42);
+            SELECT * FROM [dbo].[fn_GetOrderStats](7);
+            SELECT * FROM `fn_get_backtick_stats`(9);
+            SELECT * FROM "quoted_users";
+            SELECT * FROM "reporting"."quoted_orders";
+            SELECT * FROM "fn_quoted_stats"(11);
+            INSERT INTO audit_log (action, user_id)
+            SELECT 'login', user_id FROM ActiveUsers;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "ActiveUsers" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "RecentOrders" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "orders" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "user_summary_view" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "usp_ProcessOrders" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "fn_GetUserStats" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "fn_GetOrderStats" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "fn_get_backtick_stats" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "quoted_users" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "quoted_orders" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "fn_quoted_stats" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fn_GetUserStats" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fn_GetOrderStats" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fn_get_backtick_stats" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fn_quoted_stats" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fn_GetUserStat");
+    }
+
+    [Fact]
+    public void Extract_SQL_SkipsModifierKeywordsBeforeSourcesAndTargets()
+    {
+        // issue #684: SQL source/target modifiers such as TOP / ONLY / LATERAL must not become
+        // phantom object names, and the real source/target should still be indexed.
+        // issue #684: TOP / ONLY / LATERAL のような SQL 修飾子は phantom object 名にしてはならず、
+        // 実際の source/target を引き続き索引できるべき。
+        const string content = """
+            SELECT TOP (10) * FROM top_users;
+            UPDATE TOP (10) audit_log SET action = 'done';
+            DELETE TOP (5) FROM audit_log;
+            SELECT * FROM ONLY public.users;
+            UPDATE ONLY public.users SET active = true;
+            SELECT * FROM LATERAL fn_users(42);
+            MERGE TOP (5) audit_log AS t
+            USING staging_log AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action;
+            INSERT TOP (10) INTO inserted_log (action) VALUES ('done');
+            MERGE TOP (5) #batch_log AS u
+            USING staging_batch AS v
+            ON u.id = v.id
+            WHEN MATCHED THEN
+                UPDATE SET action = v.action;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "top_users" && r.ReferenceKind == "reference");
+        Assert.Equal(3, references.Count(r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "users" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "fn_users" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "inserted_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "#batch_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "staging_batch" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "TOP");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ONLY");
+        Assert.DoesNotContain(references, r => r.SymbolName == "LATERAL");
+    }
+
+    [Fact]
+    public void Extract_SQL_TruncateTargetsHandleOnlyAndMultipleTargets()
+    {
+        // issues #684 / #711: `TRUNCATE TABLE` should skip `ONLY` and keep all comma-separated
+        // targets instead of emitting phantom `ONLY` or dropping later targets.
+        // issues #684 / #711: `TRUNCATE TABLE` は `ONLY` を飛ばし、comma-separated target を
+        // すべて保持するべきであり、phantom `ONLY` や後続 target の欠落を出してはいけない。
+        const string content = """
+            TRUNCATE TABLE ONLY public.users;
+            TRUNCATE TABLE audit_log, archived_log;
+            TRUNCATE TABLE [dbo].[users], `analytics`.`logs`, "public"."accounts";
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "users" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "archived_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "logs" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "accounts" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "ONLY");
+        Assert.DoesNotContain(references, r => r.SymbolName == "public.users");
+        Assert.DoesNotContain(references, r => r.SymbolName == "dbo].[users");
+        Assert.DoesNotContain(references, r => r.SymbolName == "analytics`.`logs");
+        Assert.DoesNotContain(references, r => r.SymbolName == "public\".\"accounts");
+    }
+
+    [Fact]
+    public void Extract_SQL_DeleteUsingCapturesSourceReferences()
+    {
+        // issue #712: PostgreSQL `DELETE ... USING` keeps the target on `DELETE FROM`, but the
+        // joined source list after `USING` must also stay visible as SQL `reference` edges.
+        // issue #712: PostgreSQL の `DELETE ... USING` は `DELETE FROM` 側 target だけでなく、
+        // `USING` 後の source list も SQL `reference` edge として保持するべき。
+        const string content = """
+            DELETE FROM audit_log USING staging_log, archived_log
+            WHERE audit_log.id = staging_log.id;
+            DELETE FROM public.audit_log USING staging.stage_log, [archive].[archived_log], "public"."source"
+            WHERE audit_log.id = stage_log.id;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "archived_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "stage_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "source" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "public.audit_log");
+        Assert.DoesNotContain(references, r => r.SymbolName == "staging.stage_log");
+        Assert.DoesNotContain(references, r => r.SymbolName == "stage].[stage_log");
+        Assert.DoesNotContain(references, r => r.SymbolName == "archive].[archived_log");
+        Assert.DoesNotContain(references, r => r.SymbolName == "public\".\"source");
+    }
+
+    [Fact]
+    public void Extract_SQL_DeleteUsingTempSourcesAfterComma_AreNotTreatedAsComments()
+    {
+        // issue #789: `#temp` after a comma in `DELETE ... USING #a, #b` must stay on the temp-table
+        // path, not fall into MySQL `# comment` stripping and disappear from the graph.
+        // issue #789: `DELETE ... USING #a, #b` の comma 後にある `#temp` は、MySQL の `# comment`
+        // 扱いへ落ちず temp-table 経路に残り、graph から消えてはいけない。
+        const string content = """
+            CREATE TABLE #staging_a (id int);
+            CREATE TABLE #staging_b (id int);
+            DELETE FROM audit_log USING #staging_a, #staging_b
+            WHERE audit_log.id = #staging_a.id;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(1, references.Count(r => r.SymbolName == "#staging_a" && r.ReferenceKind == "reference"));
+        Assert.Equal(1, references.Count(r => r.SymbolName == "#staging_b" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_MergeUsingDoesNotTreatOtherUsingClausesAsSources()
+    {
+        // issue #695: `USING` should stay on the SQL source path only for `MERGE ... USING <source>`,
+        // not for PostgreSQL DDL/operator clauses such as `CREATE INDEX ... USING btree (...)`.
+        // issue #695: `USING` は `MERGE ... USING <source>` にだけ source 経路を与えるべきであり、
+        // `CREATE INDEX ... USING btree (...)` のような PostgreSQL DDL/演算子節まで拾ってはいけない。
+        const string content = """
+            CREATE INDEX idx_users_name ON users USING btree (name);
+            ALTER TABLE users ALTER COLUMN name TYPE text USING lower(name);
+            MERGE INTO audit_log AS t
+            USING staging_log AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action;
+            MERGE audit_log_archive AS t
+            USING staging_archive AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "audit_log_archive" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "staging_archive" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "lower" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "btree");
+        Assert.DoesNotContain(references, r => r.SymbolName == "btree" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SQL_MergeUsingWithTargetHintStillCapturesSourceReference()
+    {
+        // issue #698: SQL Server `MERGE INTO target WITH (...) AS t USING source` should still keep
+        // the source-side `reference`, even when target hints include nested parens such as INDEX(...).
+        // issue #698: SQL Server の `MERGE INTO target WITH (...) AS t USING source` は、target hint
+        // に nested parens を含んでも source 側の `reference` を維持するべき。
+        const string content = """
+            MERGE INTO audit_log WITH (INDEX(ix_audit_log), HOLDLOCK) AS t
+            USING staging_log AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "INDEX");
+        Assert.DoesNotContain(references, r => r.SymbolName == "HOLDLOCK");
+    }
+
+    [Fact]
+    public void Extract_SQL_MergeTempUsingWithMultilineTargetHintStillCapturesSourceReference()
+    {
+        // issue #741: multiline SQL Server target hints for `MERGE [INTO] #temp` must not flush the
+        // carried temp-establishing prefix before the later `USING <source>` line is parsed.
+        // issue #741: `MERGE [INTO] #temp` の複数行 target hint は、後続の `USING <source>` 行を
+        // 解析する前に temp-establishing prefix を flush してはいけない。
+        const string content = """
+            MERGE INTO #audit_log
+            WITH (INDEX(ix_audit_log), HOLDLOCK) AS t
+            USING staging_log AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action;
+            MERGE #archive_log
+            WITH (HOLDLOCK) AS u
+            USING staging_archive AS v
+            ON u.id = v.id
+            WHEN MATCHED THEN
+                UPDATE SET action = v.action;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "#audit_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "#archive_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "staging_archive" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "INDEX");
+        Assert.DoesNotContain(references, r => r.SymbolName == "HOLDLOCK");
+    }
+
+    [Fact]
+    public void Extract_SQL_DoubleQuotedDynamicSqlDoesNotLeakPhantomReferences()
+    {
+        // issue #689: preserving ANSI double-quoted identifiers must not let dynamic SQL strings
+        // leak phantom source references into the graph.
+        // issue #689: ANSI 二重引用符識別子を保持しても、dynamic SQL 文字列から phantom source
+        // reference が漏れてはいけない。
+        const string content = """
+            SET @sql = "SELECT * FROM users";
+            EXECUTE IMMEDIATE @sql;
+            SELECT * FROM "users";
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var usersReferences = references
+            .Where(r => r.SymbolName == "users" && r.ReferenceKind == "reference")
+            .ToList();
+
+        var usersReference = Assert.Single(usersReferences);
+        Assert.Equal(3, usersReference.Line);
+    }
+
+    [Fact]
+    public void Extract_SQL_DoubleQuotedDynamicSqlDoesNotEstablishTempTables()
+    {
+        // issue #707: dynamic SQL text inside double quotes must not establish temp tables for
+        // later statement-order reads.
+        // issue #707: 二重引用符内の dynamic SQL テキストは、後続 statement-order read 向けの
+        // temp table を確立した扱いになってはいけない。
+        const string content = """
+            SET @sql = "SELECT id INTO #temp_users FROM users";
+            SELECT * FROM #temp_users;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "#temp_users" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_SameLineDollarQuotedBodiesDoNotSwallowFollowingStatements()
+    {
+        // issue #697: when one dollar-quoted body ends and later same-line SQL continues, the
+        // sanitizer must close at the first real delimiter instead of blanking the later statement.
+        // issue #697: 1 つの dollar-quoted body が閉じた後に同一行の SQL が続く場合、sanitize は
+        // 後続 statement ごと空白化せず、最初の実 close delimiter で閉じなければならない。
+        const string content = """
+            DO $$BEGIN END$$; SELECT * FROM users; DO $$BEGIN END$$;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_SingleQuotedStringsWithEscapedQuotesDoNotLeakPhantomReferences()
+    {
+        // issue #696: the SQL single-quote scanner must preserve both MySQL `\'` escapes and
+        // doubled SQL quotes so string contents never leak phantom source references.
+        // issue #696: SQL の single-quote scanner は MySQL の `\'` escape と doubled quote の
+        // 両方を維持し、文字列内容から phantom source reference を漏らしてはいけない。
+        const string content = """
+            SELECT 'abc\' FROM phantom';
+            SELECT 'abc'' FROM still_phantom';
+            SELECT * FROM users # comment with comment_phantom;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "phantom" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "still_phantom" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "comment_phantom" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_MultilineSingleQuotedStringsDoNotLeakSourcesOrEstablishTempTables()
+    {
+        // issue #708: multiline single-quoted SQL bodies must stay opaque across lines so source
+        // references and temp-table establishment do not leak out of the string body.
+        // issue #708: 複数行 single-quoted SQL 本体は行をまたいでも opaque のまま維持し、
+        // source 参照や temp-table establishment を文字列内から漏らしてはいけない。
+        const string content = """
+            SELECT 'abc''
+            still escaped \'
+            FROM phantom
+            INTO #temp_users
+            ';
+            SELECT * FROM users;
+            SELECT * FROM #temp_users;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "phantom" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "#temp_users" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 6);
+    }
+
+    [Fact]
+    public void Extract_SQL_NonCodeRegionsDoNotLeakPhantomSourceOrTargetReferences()
+    {
+        // issue #694: SQL source/target extraction must ignore multiline block comments and
+        // PostgreSQL dollar-quoted bodies so non-code text does not leak authoritative references.
+        // issue #694: SQL source/target 抽出は複数行 block comment と PostgreSQL dollar quote 本体を
+        // 無視し、非コード領域から authoritative な reference が漏れないようにするべき。
+        const string content = """
+            SELECT * FROM users /* comment
+            FROM phantom */;
+            UPDATE audit_log SET action = 'done';
+            DO $$
+            BEGIN
+              EXECUTE $$SELECT * FROM phantom$$;
+            END
+            $$;
+            DO $body$
+            BEGIN
+              UPDATE phantom SET action = 'nope';
+            END
+            $body$;
+            SELECT * FROM accounts;
+            DELETE FROM archived_accounts;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "phantom" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "accounts" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "archived_accounts" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_HandlesTempTablesAndDoesNotTreatSelectIntoVariablesAsReferences()
+    {
+        // issue #638 / #639 / #648 / #649: temp tables should stay on the SQL reference path,
+        // including `##global` names and `SELECT ... INTO #temp`, while procedural
+        // `SELECT ... INTO variable` still must not leak into the object graph.
+        // issue #638 / #639 / #648 / #649: temp table は SQL reference 経路に残し、
+        // `##global` 名と `SELECT ... INTO #temp` も拾いつつ、手続き系の
+        // `SELECT ... INTO variable` は object graph に混ぜない。
+        const string content = """
+            INSERT INTO #audit_log (action) VALUES ('login');
+            UPDATE #audit_log SET action = 'logout';
+            SELECT * FROM #audit_log;
+
+            INSERT INTO ##session_log (action) VALUES ('login');
+            UPDATE ##session_log SET action = 'logout';
+            SELECT * FROM ##session_log;
+
+            SELECT id INTO #selected_users FROM users;
+            SELECT id INTO ##selected_global_users FROM users;
+            SELECT id INTO target_var FROM users;
+            SELECT * FROM users # comment with ##ignored_temp;
+
+            INSERT TOP (10) INTO #audit_log (action) VALUES ('merge-ready');
+            MERGE #audit_log AS t
+            USING staging_log AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(5, references.Count(r => r.SymbolName == "#audit_log" && r.ReferenceKind == "reference"));
+        Assert.Equal(3, references.Count(r => r.SymbolName == "##session_log" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "#selected_users" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "##selected_global_users" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "#audit_log" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "session_log" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "TOP");
+        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "target_var");
+        Assert.DoesNotContain(references, r => r.SymbolName == "##ignored_temp");
+    }
+
+    [Fact]
+    public void Extract_SQL_TempStatementPrefixStillFlushesBeforeTopLevelWithCte()
+    {
+        // issue #741 control: `WITH cte AS (...)` must still start a new top-level statement even
+        // after a temp-establishing prefix on the previous line.
+        // issue #741 の control: 前行が temp-establishing prefix でも、`WITH cte AS (...)` は
+        // 引き続き新しい top-level statement として始まらなければならない。
+        const string content = """
+            SELECT id INTO #selected_users FROM users
+            WITH recent_users AS (
+                SELECT * FROM accounts
+            )
+            SELECT * FROM recent_users;
+            SELECT * FROM #selected_users;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "#selected_users" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "accounts" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "recent_users" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_LineEndCommentsDoNotBreakDeleteUsingOrMergeUsingContinuations()
+    {
+        // issue #750: a trailing `-- comment` must not drop an unfinished multiline `DELETE ... USING`
+        // or `MERGE ... USING` prefix before the later source line is parsed.
+        // issue #750: 行末 `-- comment` があっても、未完了の複数行 `DELETE ... USING` / `MERGE ... USING`
+        // prefix を後続 source 行の解析前に捨ててはいけない。
+        const string content = """
+            DELETE FROM audit_log -- trailing comment
+            USING staging_log
+            WHERE audit_log.id = staging_log.id;
+
+            MERGE INTO audit_log -- trailing comment
+            USING staging_merge AS s
+            ON audit_log.id = s.id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action;
+
+            SELECT id INTO #comment_temp -- trailing comment
+            FROM users;
+            SELECT * FROM #comment_temp;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "staging_merge" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "#comment_temp" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_LineEndCommentsKeepUnfinishedSourceTargetAndHintContinuations()
+    {
+        // issue #752: line-end comments must not drop unfinished SQL prefixes before the decisive
+        // temp/source/hint token appears on a later line.
+        // issue #752: 行末コメントがあっても、決定的な temp/source/hint token が後続行に現れる前に
+        // 未完了の SQL prefix を捨ててはいけない。
+        const string content = """
+            SELECT id INTO -- trailing comment
+                #comment_temp
+            FROM users;
+            SELECT * FROM #comment_temp;
+
+            DELETE FROM audit_log USING staging_log, -- trailing comment
+                archived_log
+            WHERE audit_log.id = staging_log.id;
+
+            MERGE INTO audit_log WITH (INDEX(ix_audit_log), -- trailing comment
+                HOLDLOCK) AS t
+            USING staging_merge AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#comment_temp" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "archived_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "staging_merge" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_LineEndCommentsKeepUnfinishedTargetPrefixes()
+    {
+        // issue #759: unfinished SQL target prefixes before a line-end comment must still carry to
+        // the next line so target references survive and `INSERT INTO ... (` does not regress into
+        // a phantom call on the target identifier.
+        // issue #759: 行末コメントより前で終わる未完了の SQL target prefix も次行へ継続し、
+        // target reference を落とさず、`INSERT INTO ... (` が target 識別子への phantom call に
+        // 戻らないようにする必要がある。
+        const string content = """
+            INSERT INTO -- trailing comment
+                audit_log (action) VALUES ('x');
+
+            UPDATE -- trailing comment
+                #update_temp SET action = 'x';
+            SELECT * FROM #update_temp;
+
+            DELETE FROM -- trailing comment
+                #delete_temp;
+            SELECT * FROM #delete_temp;
+
+            TRUNCATE TABLE -- trailing comment
+                #truncate_temp;
+            SELECT * FROM #truncate_temp;
+
+            CREATE TABLE -- trailing comment
+                #create_temp (id int);
+            SELECT * FROM #create_temp;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(1, references.Count(r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "call");
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#update_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#delete_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#truncate_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(1, references.Count(r => r.SymbolName == "#create_temp" && r.ReferenceKind == "reference"));
+    }
+
+    [Fact]
+    public void Extract_SQL_TruncateTempTargetsEstablishLaterReads()
+    {
+        // issue #768: `TRUNCATE TABLE #temp` must establish the temp object for later reads the same
+        // way other temp-targeting SQL mutations already do.
+        // issue #768: `TRUNCATE TABLE #temp` も、他の temp-targeting SQL mutation と同様に
+        // 後続 read 向けの temp object を確立しなければならない。
+        const string content = """
+            TRUNCATE TABLE #truncate_temp;
+            SELECT * FROM #truncate_temp;
+            SELECT * FROM #future_temp;
+            TRUNCATE TABLE #future_temp;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#truncate_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(1, references.Count(r => r.SymbolName == "#future_temp" && r.ReferenceKind == "reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "#future_temp" && r.ReferenceKind == "reference" && r.Line == 3);
+    }
+
+    [Fact]
+    public void Extract_SQL_TruncateMultipleTempTargetsEstablishLaterReads()
+    {
+        // issues #768 / #789: comma-separated `TRUNCATE TABLE #a, #b` should establish every temp
+        // target so later reads of both names remain visible.
+        // issues #768 / #789: `TRUNCATE TABLE #a, #b` の comma-separated target は全て temp object
+        // として確立され、後続 read の両方が可視のまま残るべき。
+        const string content = """
+            TRUNCATE TABLE #truncate_a, #truncate_b;
+            SELECT * FROM #truncate_a;
+            SELECT * FROM #truncate_b;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#truncate_a" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#truncate_b" && r.ReferenceKind == "reference"));
+    }
+
+    [Fact]
+    public void Extract_SQL_TempTablesRespectSemicolonlessSetAndDeclareBoundaries()
+    {
+        // issue #753: temp establishment must flush across semicolon-less top-level `SET` /
+        // `DECLARE` boundaries, while forward reads before a later establish still stay excluded.
+        // issue #753: temp 確立は semicolon-less な top-level `SET` / `DECLARE` 境界でも flush
+        // されるべきで、後続の establish より前にある forward read は引き続き除外されるべき。
+        const string content = """
+            SELECT * FROM #future_temp;
+            SELECT id INTO #set_temp FROM users
+            SET @count = (SELECT COUNT(*) FROM #set_temp);
+            SELECT id INTO #declare_temp FROM users
+            DECLARE @first_id INT = (SELECT TOP (1) id FROM #declare_temp);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Empty(references.Where(r => r.SymbolName == "#future_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#set_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#declare_temp" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 4);
+    }
+
+    [Fact]
+    public void Extract_SQL_TempTablesRespectSemicolonlessIfAndWhileBoundaries()
+    {
+        // issue #757: temp establishment must also flush across semicolon-less top-level `IF` /
+        // `WHILE` boundaries so later control-flow reads keep the established temp object.
+        // issue #757: temp 確立は semicolon-less な top-level `IF` / `WHILE` 境界でも flush
+        // されるべきで、後続の制御構文内 read でも確立済み temp object を維持するべき。
+        const string content = """
+            SELECT id INTO #if_temp FROM users
+            IF EXISTS (SELECT 1) SELECT * FROM #if_temp;
+            SELECT id INTO #while_temp FROM users
+            WHILE 1 = 0 SELECT * FROM #while_temp;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#if_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#while_temp" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "#if_temp" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "#while_temp" && r.ReferenceKind == "reference" && r.Line == 4);
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 3);
+    }
+
+    [Fact]
+    public void Extract_SQL_BareDollarIdentifiersStayWholeOnSourceAndTargetPaths()
+    {
+        // issue #726: PostgreSQL bare identifiers may contain `$`, and source/target exact-name
+        // queries must keep the whole identifier instead of truncating to the prefix before `$`.
+        // issue #726: PostgreSQL の bare identifier は `$` を含められるため、source/target の
+        // exact-name は `$` より前で切らずに識別子全体を保持する必要がある。
+        const string content = """
+            SELECT * FROM my$table;
+            INSERT INTO my$table (id) VALUES (1);
+            UPDATE my$table SET id = 2;
+            DELETE FROM my$table;
+            TRUNCATE TABLE my$table;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(5, references.Count(r => r.SymbolName == "my$table" && r.ReferenceKind == "reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "my" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_NonAsciiBareIdentifiersStayWholeOnSourceTargetAndProcPaths()
+    {
+        // issue #764: widening SQL bare identifiers for `$` must not drop the existing non-ASCII
+        // unquoted identifier support on source/target/proc-call paths.
+        // issue #764: SQL bare identifier の `$` 対応を広げても、既存の非 ASCII な unquoted
+        // identifier 対応を source/target/proc-call 経路で落としてはいけない。
+        const string content = """
+            SELECT * FROM ユーザー;
+            INSERT INTO ユーザー (id) VALUES (1);
+            UPDATE ユーザー SET id = 2;
+            DELETE FROM ユーザー;
+            TRUNCATE TABLE ユーザー;
+            CALL ユーザー;
+            EXEC ユーザー;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(5, references.Count(r => r.SymbolName == "ユーザー" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "ユーザー" && r.ReferenceKind == "call"));
+    }
+
+    [Fact]
+    public void Extract_SQL_TempTablesRequirePriorEstablishmentAndSupportMultilineDefinitions()
+    {
+        // issue #664: temp reads should only succeed after an earlier statement established the temp
+        // object, and multiline `SELECT ... INTO #temp` / `CREATE TABLE #temp` forms should still
+        // establish later reads.
+        // issue #664: temp read は先行 statement で temp object が確立された後だけ成功し、
+        // 複数行の `SELECT ... INTO #temp` / `CREATE TABLE #temp` でも後続 read を確立できるべき。
+        const string content = """
+            SELECT * FROM #later_temp;
+            SELECT id
+            INTO #later_temp
+            FROM users;
+            SELECT * FROM #later_temp;
+            CREATE TABLE #created_temp (id int);
+            SELECT * FROM #created_temp;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "#later_temp" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "#later_temp" && r.ReferenceKind == "reference" && r.Line == 3);
+        Assert.Contains(references, r => r.SymbolName == "#later_temp" && r.ReferenceKind == "reference" && r.Line == 5);
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#later_temp" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "#created_temp" && r.ReferenceKind == "reference" && r.Line == 7);
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 4);
+    }
+
+    [Fact]
+    public void Extract_SQL_TempTablesRespectSameLineStatementOrder()
+    {
+        // issue #679: statement-order temp gating must also work when multiple SQL statements share
+        // one physical line.
+        // issue #679: 複数 statement が同一行に並ぶ場合でも、temp gating は statement 順で評価されるべき。
+        const string content = """
+            SELECT id INTO #inline_temp FROM users; SELECT * FROM #inline_temp;
+            SELECT * FROM #forward_temp; SELECT id INTO #forward_temp FROM users;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#inline_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(1, references.Count(r => r.SymbolName == "#forward_temp" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_SQL_TempTablesRespectSemicolonlessStatementBoundaries()
+    {
+        // issue #681: temp establishment must also survive semicolon-less statement boundaries and
+        // line-end comments, while forward reads before a later establish still stay excluded.
+        // issue #681: temp 確立は semicolon-less な statement 境界や行末コメント越しでも効き、
+        // 後続の establish より前にある forward read は引き続き除外されるべき。
+        const string content = """
+            CREATE TABLE #created_temp (id int)
+            SELECT * FROM #created_temp;
+            SELECT id INTO #selected_temp FROM users
+            SELECT * FROM #selected_temp;
+            INSERT INTO #inserted_temp (action) VALUES ('login')
+            SELECT * FROM #inserted_temp;
+            UPDATE #updated_temp SET action = 'done'
+            SELECT * FROM #updated_temp;
+            SELECT id INTO #comment_temp -- trailing comment
+            FROM users;
+            SELECT * FROM #comment_temp;
+            DELETE FROM #deleted_temp;
+            SELECT * FROM #deleted_temp;
+            SELECT * FROM #future_temp;
+            CREATE TABLE #future_temp (id int)
+            SELECT * FROM #future_deleted_temp;
+            DELETE FROM #future_deleted_temp;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(1, references.Count(r => r.SymbolName == "#created_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#selected_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#inserted_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#updated_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#comment_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#deleted_temp" && r.ReferenceKind == "reference"));
+        Assert.Empty(references.Where(r => r.SymbolName == "#future_temp" && r.ReferenceKind == "reference"));
+        Assert.Equal(1, references.Count(r => r.SymbolName == "#future_deleted_temp" && r.ReferenceKind == "reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "#future_temp" && r.ReferenceKind == "reference" && r.Line == 12);
+        Assert.DoesNotContain(references, r => r.SymbolName == "#future_deleted_temp" && r.ReferenceKind == "reference" && r.Line == 15);
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 3);
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 10);
+    }
+
+    [Fact]
+    public void Extract_SQL_MergeUpdateSetDoesNotEmitSetAsTargetReference()
+    {
+        // issue #660: `MERGE ... WHEN MATCHED THEN UPDATE SET ...` must not emit `SET` as a table
+        // reference, while ordinary `UPDATE target SET ...` and quoted `[SET]` targets still work.
+        // issue #660: `MERGE ... WHEN MATCHED THEN UPDATE SET ...` から `SET` をテーブル参照として
+        // 出してはならない。通常の `UPDATE target SET ...` と quoted `[SET]` target は維持する。
+        const string content = """
+            MERGE INTO audit_log AS t
+            USING staging_log AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN
+                UPDATE SET action = s.action;
+
+            UPDATE audit_log SET action = 'done';
+            UPDATE [SET] SET action = 'quoted';
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "SET" && r.ReferenceKind == "reference" && r.Line == 5);
+        Assert.Equal(2, references.Count(r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "SET" && r.ReferenceKind == "reference" && r.Line == 8);
+    }
+
+    [Fact]
+    public void Extract_SQL_HashCommentsDoNotLeakAsTempObjects()
+    {
+        // issue #653: after restoring temp-table support, MySQL-style `# comment` tails that begin
+        // with identifier-looking text must not be mistaken for temp tables or procedures.
+        // issue #653: temp-table 対応を戻した後でも、識別子風テキストで始まる MySQL 形式の
+        // `# comment` は temp table / procedure と誤認しない。
+        const string content = """
+            CALL #commented_out;
+            EXEC #tempProc;
+            SELECT * FROM #commented_source;
+            INSERT INTO #audit_log (action) VALUES ('login');
+            SELECT * FROM #audit_log;
+            SELECT * FROM users #trailing_comment;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "#commented_out");
+        Assert.Contains(references, r => r.SymbolName == "#tempProc" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "#commented_source");
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#audit_log" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "#trailing_comment");
     }
 
     [Fact]
@@ -2239,6 +7324,59 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JsOptionalChainingCall_CapturesCallReference()
+    {
+        // issue #294: `callback?.()` is an optional chaining call; the `?.` sits between the
+        // identifier and the argument-list `(`, so the old CallRegex never reached the `(` and
+        // silently dropped the `callback` call reference. Covers bare and argumented forms
+        // plus a chained `obj?.handler?.()` where the captured identifier itself is only
+        // reached by the call regex once `(?:\?\.)?` is in place.
+        // issue #294: `callback?.()` は optional chaining 呼び出し。識別子と `(` の間に `?.` が入るため、
+        // 旧 CallRegex では末尾 `(` まで到達できず `callback` への call 参照が欠落していた。
+        // 引数なし・引数あり・プロパティチェーン末端で optional call される `obj?.handler?.()` の 3 形を検証する
+        // （`handler` は `(?:\?\.)?` 追加後にだけ CallRegex にマッチする形）。
+        const string content = """
+            function caller(callback, onSuccess, obj) {
+                callback?.();
+                onSuccess?.(data);
+                obj?.handler?.();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "callback" && r.ReferenceKind == "call" && r.ContainerName == "caller");
+        Assert.Contains(references, r =>
+            r.SymbolName == "onSuccess" && r.ReferenceKind == "call" && r.ContainerName == "caller");
+        Assert.Contains(references, r =>
+            r.SymbolName == "handler" && r.ReferenceKind == "call" && r.ContainerName == "caller");
+    }
+
+    [Fact]
+    public void Extract_TsOptionalChainingCallWithTypeArgs_CapturesCallReference()
+    {
+        // issue #294 follow-up: TypeScript allows type arguments after `?.` in
+        // `callback?.<T>(...)`. The regex must keep matching when the optional chaining
+        // is followed by a generic argument list before `(`.
+        // issue #294 補足: TypeScript では optional chaining の直後に型引数が続く
+        // `callback?.<T>(...)` が許容される。optional chaining と generic 引数が連続しても
+        // regex が call 参照を取り逃がさないことを検証する。
+        const string content = """
+            function caller(callback: (<T>(value: T) => void) | undefined) {
+                callback?.<number>(42);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "callback" && r.ReferenceKind == "call" && r.ContainerName == "caller");
+    }
+
+    [Fact]
     public void Extract_CsharpNameofTypeofDefault_CapturesArgumentAsTypeReference()
     {
         // issue #253: nameof/typeof/sizeof/default arguments are first-class compile-time
@@ -2271,7 +7409,7 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var targetRefs = references.Where(r => r.SymbolName == "Target" && r.ReferenceKind == "type_reference").ToList();
-        Assert.Equal(4, targetRefs.Count); // nameof(Target.Alpha), nameof(Target), typeof(Target), default(Target)
+        Assert.True(targetRefs.Count >= 4); // #256 also adds the local declaration type `Target? def`
         Assert.All(targetRefs, r => Assert.Equal("Work", r.ContainerName));
 
         Assert.Contains(references, r => r.SymbolName == "Alpha" && r.ReferenceKind == "type_reference");
@@ -2497,6 +7635,946 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "demo" && r.ReferenceKind == "type_reference");
         // Java primitive type must be skipped / Java プリミティブ型は除外。
         Assert.DoesNotContain(references, r => r.SymbolName == "int" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpTypePositions_CaptureTypeReferences()
+    {
+        // issue #256: base lists, declaration types, generic constraints, type tests,
+        // and XML-doc crefs must all surface as `type_reference` edges.
+        // issue #256: 継承リスト、宣言型、generic 制約、型テスト、XML doc cref を
+        // `type_reference` として拾う必要がある。
+        const string content = """
+            using System.Collections.Generic;
+
+            namespace Probe;
+
+            public interface ILogger { void Log(string msg); }
+            public class Base { public virtual void Do() {} }
+
+            public class Derived : Base, ILogger
+            {
+                private ILogger _logger;
+                public Base Parent { get; set; }
+
+                public Derived(ILogger logger, Base parent)
+                {
+                    _logger = logger;
+                    Parent  = parent;
+                }
+
+                public List<ILogger> GetAll() => new();
+
+                public void Inspect(object o)
+                {
+                    if (o is Base b) { }
+                    switch (o)
+                    {
+                        case ILogger l: break;
+                        case Base b2:   break;
+                    }
+                    Base cast = o as Base;
+                }
+
+                public T Find<T>() where T : ILogger, new() => new T();
+
+                /// <summary>
+                /// References <see cref="Base.Do"/> and <seealso cref="ILogger.Log"/>.
+                /// </summary>
+                public void WithDocs() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.True(references.Count(r => r.SymbolName == "Base" && r.ReferenceKind == "type_reference") >= 7);
+        Assert.True(references.Count(r => r.SymbolName == "ILogger" && r.ReferenceKind == "type_reference") >= 6);
+        Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Do" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Log" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpIsNotPattern_CapturesActualTypeReference()
+    {
+        // issue #645: `is not Foo` must point at `Foo`, not emit a phantom `not`.
+        // issue #645: `is not Foo` は `Foo` を指す必要があり、偽の `not` を出してはならない。
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                bool Run(object x)
+                {
+                    return x is not Foo;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var fooRef = Assert.Single(references.Where(r => r.SymbolName == "Foo" && r.ReferenceKind == "type_reference"));
+        Assert.Equal("Run", fooRef.ContainerName);
+        Assert.DoesNotContain(references, r => r.SymbolName == "not" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpNullPatterns_DoNotEmitTypeReferences()
+    {
+        // issue #645 follow-up: `is not null` / `is null` are constant patterns, not types.
+        // issue #645 follow-up: `is not null` / `is null` は定数パターンであり型ではない。
+        const string content = """
+            class Demo
+            {
+                bool Run(object x)
+                {
+                    return x is not null && x is null;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "null" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpIsLogicalConstantMemberPatterns_DoNotEmitTypeReferences()
+    {
+        // issue #666: `is Color.Red or Color.Blue` is a logical constant-member pattern,
+        // not a type-test site, so it must not add compile-time `type_reference` rows.
+        // issue #666: `is Color.Red or Color.Blue` は logical な定数 member パターンであり、
+        // 型テスト位置ではないため compile-time な `type_reference` を増やしてはならない。
+        const string content = """
+            namespace Probe;
+
+            enum Color { Red, Blue }
+
+            class Demo
+            {
+                bool Run(Color value)
+                {
+                    return value is Color.Red or Color.Blue;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Equal(1, references.Count(r => r.SymbolName == "Color" && r.ReferenceKind == "type_reference"));
+        Assert.Equal(
+            0,
+            references.Count(r => r.SymbolName == "Color" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Red" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpCaseDeclarationPatterns_SkipEnumMemberLabels()
+    {
+        // issue #647: `case Type name:` is a declaration pattern, but `case Color.Red:`
+        // must not be reclassified as a compile-time type dependency.
+        // issue #647: `case Type name:` は宣言パターンだが、`case Color.Red:` を
+        // compile-time な型依存として再分類してはならない。
+        const string content = """
+            namespace Probe;
+
+            public enum Color { Red, Blue }
+            public interface ILogger {}
+
+            public class Demo
+            {
+                public void Run(object value, Color color)
+                {
+                    switch (value)
+                    {
+                        case ILogger logger:
+                            break;
+                    }
+
+                    switch (color)
+                    {
+                        case Color.Red:
+                            break;
+                        case Probe.Color.Blue:
+                            break;
+                        case Color.Red or Probe.Color.Blue:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "ILogger" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run");
+
+        var colorRefs = references.Where(r => r.SymbolName == "Color" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Single(colorRefs);
+
+        Assert.Contains(references, r => r.SymbolName == "Red" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference");
+
+        Assert.Equal(
+            0,
+            references.Count(r => r.SymbolName == "Color" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run"));
+    }
+
+    [Fact]
+    public void Extract_CsharpCaseLogicalConstantMemberPatterns_DoNotEmitTypeReferences()
+    {
+        // issue #666: logical constant-member labels such as
+        // `case ErrorCodes.NotFound or ErrorCodes.Forbidden:` are not type patterns.
+        // issue #666: `case ErrorCodes.NotFound or ErrorCodes.Forbidden:` のような
+        // logical な定数 member label は型パターンではない。
+        const string content = """
+            namespace Probe;
+
+            static class ErrorCodes
+            {
+                public const int NotFound = 404;
+                public const int Forbidden = 403;
+            }
+
+            class Demo
+            {
+                void Run(int value)
+                {
+                    switch (value)
+                    {
+                        case ErrorCodes.NotFound or ErrorCodes.Forbidden:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "ErrorCodes" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "NotFound" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Forbidden" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.ContainerName == "Run");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedNestedTypePattern_SurvivesConflictingConstMemberShortNames()
+    {
+        // issue #671: a qualified nested type pattern must not disappear just because some
+        // other namespace/type in the same file exposes a const member with the same short name.
+        // issue #671: qualified な nested type pattern は、同じ短い名前の const member を
+        // 別 namespace/type が持っていても消えてはならない。
+        const string content = """
+            namespace N1 { class Color { public const int Red = 1; } }
+            namespace N2
+            {
+                class Color
+                {
+                    public class Red { public int Value { get; } }
+                }
+
+                class Demo
+                {
+                    void Run(object value)
+                    {
+                        switch (value)
+                        {
+                            case N2.Color.Red r:
+                                break;
+                            case N2.Color.Red { Value: 0 }:
+                                break;
+                        }
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var runTypeRefs = references
+            .Where(r => r.ContainerName == "Run" && r.ReferenceKind == "type_reference")
+            .Select(r => r.SymbolName)
+            .ToList();
+
+        Assert.Equal(2, runTypeRefs.Count(name => name == "N2"));
+        Assert.Equal(2, runTypeRefs.Count(name => name == "Color"));
+        Assert.Equal(2, runTypeRefs.Count(name => name == "Red"));
+    }
+
+    [Fact]
+    public void Extract_CsharpCaseTerminalAndGuardedTypePatterns_CaptureTypeReferences()
+    {
+        // issue #672: plain `case Type:` and `case Type when ...:` remain valid type patterns
+        // and must not disappear just because the case scanner now filters constant labels.
+        // issue #672: 素の `case Type:` と `case Type when ...:` は有効な型パターンであり、
+        // 定数ラベル除去の都合で消えてはならない。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+
+            class Demo
+            {
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case Point:
+                            break;
+                        case Point when value != null:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(2, pointRefs.Count);
+        Assert.All(pointRefs, r => Assert.Equal("Run", r.ContainerName));
+        Assert.DoesNotContain(references, r => r.SymbolName == "null" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpLogicalNestedTypePatterns_CaptureTypeReferences()
+    {
+        // issue #673/#675: qualified nested-type logical patterns such as
+        // `Outer.Red or Outer.Blue` are still type tests, and every genuine head must survive.
+        // issue #673/#675: `Outer.Red or Outer.Blue` のような qualified nested-type の logical
+        // pattern は定数 member label ではなく、本物の型 head を両側とも残さなければならない。
+        const string content = """
+            namespace Probe;
+
+            class Outer
+            {
+                public class Red {}
+                public class Blue {}
+            }
+
+            class Demo
+            {
+                bool Match(object value)
+                {
+                    return value is Outer.Red or Outer.Blue;
+                }
+
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case Outer.Red or Outer.Blue:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Equal(4, references.Count(r => r.SymbolName == "Outer" && r.ReferenceKind == "type_reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference"));
+        Assert.Contains(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run");
+        Assert.Contains(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run");
+    }
+
+    [Fact]
+    public void Extract_CsharpMixedLogicalPatterns_KeepFirstGenuineTypeHead()
+    {
+        // issue #674: when a logical pattern mixes constant/member heads with a real type head,
+        // the first genuine type head must still produce a compile-time dependency.
+        // issue #674: logical pattern で定数/member head と本物の型 head が混在しても、
+        // 最初に現れる genuine な型 head の compile-time 依存は残さなければならない。
+        const string content = """
+            namespace Probe;
+
+            enum Color { Red, Blue }
+            class Point {}
+
+            class Demo
+            {
+                bool Match1(object value) => value is Color.Red or Point;
+                bool Match2(object value) => value is Point or Color.Red;
+
+                void Run1(object value)
+                {
+                    switch (value)
+                    {
+                        case Color.Red or Point:
+                            break;
+                    }
+                }
+
+                void Run2(object value)
+                {
+                    switch (value)
+                    {
+                        case Point or Color.Red:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Equal(4, references.Count(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference"));
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match1");
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match2");
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run1");
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run2");
+    }
+
+    [Fact]
+    public void Extract_CsharpLogicalTypePatterns_EmitEveryGenuineTypeHead()
+    {
+        // issue #675: when every logical-pattern head is a real type, all of them must produce
+        // compile-time dependencies instead of only the leftmost head surviving.
+        // issue #675: logical pattern の全 head が本物の型なら、左端だけでなく
+        // すべての head が compile-time 依存として残らなければならない。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+            class Shape {}
+
+            class Demo
+            {
+                bool Match(object value) => value is Point or Shape;
+
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case Point or Shape:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference"));
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run");
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run");
+    }
+
+    [Fact]
+    public void Extract_CsharpVerbatimPatternTypeNames_DoNotCollapseIntoBarePatternTokens()
+    {
+        // issue #677: `@not` / `@default` are legal type names, so the non-type pattern
+        // filter must not erase them just because their normalized spellings match keyword-like tokens.
+        // issue #677: `@not` / `@default` は合法な型名なので、normalized 後に keyword 風 token
+        // と一致しても non-type pattern filter で消してはいけない。
+        const string content = """
+            namespace Probe;
+
+            class @not {}
+            class @default {}
+
+            class Demo
+            {
+                bool MatchNot(object value) => value is @not;
+                bool MatchDefault(object value) => value is @default;
+                bool Guard(object value) => value is not null;
+                bool TypeOfNot() => typeof(@not) == typeof(@not);
+                bool TypeOfDefault() => typeof(@default) == typeof(@default);
+
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case @not:
+                            break;
+                        case @default:
+                            break;
+                        case default:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var notRefs = references.Where(r => r.SymbolName == "not" && r.ReferenceKind == "type_reference").ToList();
+        var defaultRefs = references.Where(r => r.SymbolName == "default" && r.ReferenceKind == "type_reference").ToList();
+
+        Assert.Equal(4, notRefs.Count);
+        Assert.Equal(4, defaultRefs.Count);
+        Assert.Contains(notRefs, r => r.ContainerName == "MatchNot");
+        Assert.Contains(notRefs, r => r.ContainerName == "Run");
+        Assert.Equal(2, notRefs.Count(r => r.ContainerName == "TypeOfNot"));
+        Assert.Contains(defaultRefs, r => r.ContainerName == "MatchDefault");
+        Assert.Contains(defaultRefs, r => r.ContainerName == "Run");
+        Assert.Equal(2, defaultRefs.Count(r => r.ContainerName == "TypeOfDefault"));
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "type_reference" && r.ContainerName == "Guard");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedConstantPatterns_DoNotEmitTypeReferences()
+    {
+        const string content = """
+            namespace Probe;
+
+            enum Color { Red, Blue }
+            class Point {}
+
+            class Demo
+            {
+                bool Match(object value) => value is Color.Red or Color.Blue or Point;
+
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case Color.Red:
+                            break;
+                        case Color.Red or Color.Blue:
+                            break;
+                        case Color.Red or Point:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference");
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(2, pointRefs.Count);
+        Assert.Contains(pointRefs, r => r.ContainerName == "Match");
+        Assert.Contains(pointRefs, r => r.ContainerName == "Run");
+    }
+
+    [Fact]
+    public void Extract_CsharpUsingStaticLogicalConstantPatterns_KeepAmbiguousHeadsForReadTimeFiltering()
+    {
+        const string content = """
+            using static Probe.Color;
+
+            namespace Probe;
+
+            enum Color { Red, Blue }
+            class Point {}
+
+            class Demo
+            {
+                bool Match(object value) => value is Red or Blue or Point;
+
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case Red:
+                            break;
+                        case Red or Blue:
+                            break;
+                        case Red or Point:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var redRefs = references.Where(r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference").ToList();
+        var blueRefs = references.Where(r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference").ToList();
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+
+        Assert.Equal(4, redRefs.Count);
+        Assert.Equal(2, blueRefs.Count);
+        Assert.Equal(2, pointRefs.Count);
+        Assert.Contains(redRefs, r => r.ContainerName == "Match");
+        Assert.Equal(3, redRefs.Count(r => r.ContainerName == "Run"));
+        Assert.Contains(blueRefs, r => r.ContainerName == "Match");
+        Assert.Contains(blueRefs, r => r.ContainerName == "Run");
+        Assert.Contains(pointRefs, r => r.ContainerName == "Match");
+        Assert.Contains(pointRefs, r => r.ContainerName == "Run");
+    }
+
+    [Fact]
+    public void Extract_CsharpUsingStaticTypeAliasPattern_KeepsTypeReference()
+    {
+        const string content = """
+            using static Probe.Color;
+            using Red = Probe.Real.Red;
+
+            namespace Probe
+            {
+                enum Color { Red }
+
+                namespace Real
+                {
+                    class Red {}
+                }
+
+                class Demo
+                {
+                    bool Match(object value) => value is Red;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var redRef = Assert.Single(references.Where(r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference"));
+
+        Assert.Equal("Match", redRef.ContainerName);
+        Assert.Contains("value is Red", redRef.Context, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Extract_CsharpUsingStaticNamespaceImportPattern_KeepsTypeReference()
+    {
+        const string content = """
+            using static Probe.Color;
+            using RealTypes;
+
+            namespace Probe
+            {
+                enum Color { Red }
+
+                class Demo
+                {
+                    bool Match(object value) => value is Red;
+                }
+            }
+
+            namespace RealTypes
+            {
+                class Red {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var redRef = Assert.Single(references.Where(r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference"));
+
+        Assert.Equal("Match", redRef.ContainerName);
+        Assert.Contains("value is Red", redRef.Context, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Extract_CsharpCaseRecursiveAndPositionalPatterns_CaptureTypeReferences()
+    {
+        // issue #661: recursive/property and positional `case Type ...` patterns without
+        // a designation are still real type-pattern sites and must keep `type_reference`.
+        // issue #661: designation を持たない recursive/property / positional の
+        // `case Type ...` パターンも本物の型パターンなので `type_reference` を残す。
+        const string content = """
+            namespace Probe;
+
+            class Point
+            {
+                public int X { get; }
+                public int Y { get; }
+            }
+
+            class Demo
+            {
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case Point { X: 0, Y: 0 }:
+                            break;
+                        case Point(var x, var y):
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(2, pointRefs.Count);
+        Assert.All(pointRefs, r => Assert.Equal("Run", r.ContainerName));
+    }
+
+    [Fact]
+    public void Extract_CsharpCaseLogicalAndNegatedTypePatterns_CaptureTypeReferences()
+    {
+        // issues #668/#670: logical/negated type patterns must keep the left-hand type
+        // dependency for both unqualified and qualified heads without reclassifying enum
+        // member labels such as `Color.Red or Probe.Color.Blue` as type dependencies.
+        // issues #668/#670: logical/negated な型パターンは unqualified / qualified の両方で
+        // 左端の型依存を残しつつ、`Color.Red or Probe.Color.Blue` のような enum member label を
+        // 型依存へ再分類してはならない。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+            enum Color { Red, Blue }
+
+            class Demo
+            {
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case Point or null:
+                            break;
+                        case not Point:
+                            break;
+                        case Probe.Point or null:
+                            break;
+                        case not Probe.Point:
+                            break;
+                        case global::Probe.Point or null:
+                            break;
+                        case Color.Red or Probe.Color.Blue:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(5, pointRefs.Count);
+        Assert.All(pointRefs, r => Assert.Equal("Run", r.ContainerName));
+        Assert.DoesNotContain(references, r => r.SymbolName == "null" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Color" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpCaseVerbatimKeywordLikeDesignations_KeepTypeReferences()
+    {
+        // issue #669: verbatim designators such as `@or` / `@when` / `@and` are identifiers,
+        // not control keywords, so the enclosing type pattern must remain visible.
+        // issue #669: `@or` / `@when` / `@and` のような verbatim designator は識別子であり、
+        // control keyword ではないため enclosing type pattern を落としてはならない。
+        const string content = """
+            namespace Probe;
+
+            class Foo {}
+
+            class Demo
+            {
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case Foo @or:
+                            break;
+                        case Foo @when:
+                            break;
+                        case Foo @and:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var fooRefs = references.Where(r => r.SymbolName == "Foo" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(3, fooRefs.Count);
+        Assert.All(fooRefs, r => Assert.Equal("Run", r.ContainerName));
+    }
+
+    [Fact]
+    public void Extract_JavaTypePositions_CaptureTypeReferences()
+    {
+        // issue #256 Java side: extends/implements, declaration types, throws, and
+        // instanceof should surface as `type_reference` edges without regressing annotations.
+        // issue #256 の Java 側: extends/implements、宣言型、throws、instanceof を
+        // `type_reference` として拾い、annotation 既存経路も壊さないこと。
+        const string content = """
+            import java.io.IOException;
+            import java.util.List;
+
+            @interface Marker {}
+            interface ILogger {}
+            class Base {}
+
+            class Derived extends Base implements ILogger {
+                private ILogger logger;
+                List<ILogger> items;
+                Base parent;
+
+                Derived(ILogger logger, Base parent) {
+                    this.logger = logger;
+                    this.parent = parent;
+                }
+
+                List<ILogger> getAll() throws IOException {
+                    if (logger instanceof ILogger) {
+                        return items;
+                    }
+                    return items;
+                }
+
+                @Marker
+                void oldMethod() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.True(references.Count(r => r.SymbolName == "Base" && r.ReferenceKind == "type_reference") >= 3);
+        Assert.True(references.Count(r => r.SymbolName == "ILogger" && r.ReferenceKind == "type_reference") >= 5);
+        Assert.Contains(references, r => r.SymbolName == "List" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "IOException" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Marker" && r.ReferenceKind == "annotation");
+    }
+
+    [Fact]
+    public void Extract_TypePositionDetection_DoesNotTreatCallReceiversAsReturnTypes()
+    {
+        const string csharp = """
+            class Demo
+            {
+                Service service;
+
+                void Run()
+                {
+                    Console.WriteLine("x");
+                    service.DoWork(1);
+                }
+            }
+
+            class Service
+            {
+                void DoWork(int x) {}
+            }
+            """;
+
+        var csharpSymbols = SymbolExtractor.Extract(1, "csharp", csharp);
+        var csharpReferences = ReferenceExtractor.Extract(1, "csharp", csharp, csharpSymbols);
+
+        Assert.DoesNotContain(csharpReferences, r => r.SymbolName == "Console" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(csharpReferences, r => r.SymbolName == "service" && r.ReferenceKind == "type_reference");
+        Assert.Contains(csharpReferences, r => r.SymbolName == "Service" && r.ReferenceKind == "type_reference");
+
+        const string java = """
+            class Demo {
+                Logger logger;
+
+                void run() {
+                    logger.info("x");
+                    Util.work(1);
+                }
+            }
+
+            class Logger { void info(String s) {} }
+            class Util { static void work(int x) {} }
+            """;
+
+        var javaSymbols = SymbolExtractor.Extract(1, "java", java);
+        var javaReferences = ReferenceExtractor.Extract(1, "java", java, javaSymbols);
+
+        Assert.DoesNotContain(javaReferences, r => r.SymbolName == "logger" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(javaReferences, r => r.SymbolName == "Util" && r.ReferenceKind == "type_reference" && r.Line == 5);
+        Assert.Contains(javaReferences, r => r.SymbolName == "Logger" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_UsesDocumentedMemberAsContainer()
+    {
+        const string content = """
+            class Base { public void Do() {} }
+            interface ILogger { void Log(); }
+            class Derived {
+                /// <summary>
+                /// References <see cref="Base.Do"/> and <seealso cref="ILogger.Log"/>.
+                /// </summary>
+                public void WithDocs() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols)
+            .Where(r => r.Line == 5 && r.ReferenceKind == "type_reference")
+            .ToList();
+
+        Assert.Equal(4, references.Count);
+        Assert.All(references, r => Assert.Equal("WithDocs", r.ContainerName));
+        Assert.Contains(references, r => r.SymbolName == "Base");
+        Assert.Contains(references, r => r.SymbolName == "Do");
+        Assert.Contains(references, r => r.SymbolName == "ILogger");
+        Assert.Contains(references, r => r.SymbolName == "Log");
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatPlainCommentsAsDocComments()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                // <see cref="Foo"/>
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 4);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatFourSlashCommentsAsDocComments()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                //// <see cref="Foo"/>
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 4);
     }
 
     [Fact]
@@ -2958,7 +9036,7 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var chainRef = Assert.Single(references, r => r.SymbolName == "Holder");
+        var chainRef = Assert.Single(references, r => r.SymbolName == "Holder" && r.ReferenceKind == "call");
         Assert.Equal("call", chainRef.ReferenceKind);
         Assert.Equal("IntHolder", chainRef.ContainerName);
     }
@@ -2988,7 +9066,7 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var chainRef = Assert.Single(references, r => r.SymbolName == "Root");
+        var chainRef = Assert.Single(references, r => r.SymbolName == "Root" && r.ReferenceKind == "call");
         Assert.Equal("call", chainRef.ReferenceKind);
         Assert.Equal("Leaf", chainRef.ContainerName);
     }
@@ -3016,7 +9094,7 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "java", content);
         var references = ReferenceExtractor.Extract(1, "java", content, symbols);
 
-        var superRef = Assert.Single(references, r => r.SymbolName == "Root");
+        var superRef = Assert.Single(references, r => r.SymbolName == "Root" && r.ReferenceKind == "call");
         Assert.Equal("call", superRef.ReferenceKind);
         Assert.Equal("Leaf", superRef.ContainerName);
         Assert.DoesNotContain(references, r => r.SymbolName == "super");
@@ -3205,7 +9283,7 @@ public class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "java", content);
         var references = ReferenceExtractor.Extract(1, "java", content, symbols);
 
-        Assert.DoesNotContain(references, r => r.SymbolName == "Base");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Base" && r.ReferenceKind == "call");
     }
 
     [Fact]
@@ -4530,6 +10608,106 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SqlQualifiedDefinition_DoesNotEmitPhantomSelfReference()
+    {
+        // Schema-qualified SQL symbols keep their qualified definition name (`dbo.fn_X`), while
+        // CallRegex only captures the leaf call token (`fn_X`). The definition-line suppression
+        // must therefore compare both the full and leaf forms so the header is not misindexed as
+        // a self-call. Issue #296.
+        // SQL の定義名は `dbo.fn_X` のように修飾付きだが、CallRegex は leaf の `fn_X` だけを拾う。
+        // そのため定義行の自己呼び出し抑止は full/leaf の両方を比較し、ヘッダを幽霊 call にしない必要がある。
+        const string content = """
+            CREATE FUNCTION dbo.fn_GetOrderItems(@orderId INT)
+            RETURNS TABLE
+            AS
+            RETURN (SELECT * FROM dbo.OrderItems WHERE OrderId = @orderId);
+            GO
+
+            CREATE PROCEDURE dbo.usp_GetOrders
+            AS
+            BEGIN
+                SELECT *
+                FROM dbo.Orders o
+                CROSS APPLY dbo.fn_GetOrderItems(o.OrderId) fi;
+            END
+            GO
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRefs = references
+            .Where(r => r.SymbolName == "fn_GetOrderItems" && r.ReferenceKind == "call")
+            .ToList();
+
+        var realCall = Assert.Single(targetRefs);
+        Assert.Equal(12, realCall.Line);
+        Assert.Equal("dbo.usp_GetOrders", realCall.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_SqlQualifiedDefinition_SameLineCrossSchemaCallStillEmitsReference()
+    {
+        const string content = """
+            CREATE PROCEDURE sales.fn_Target AS EXEC dbo.fn_Target;
+            GO
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRef = Assert.Single(references.Where(r => r.SymbolName == "fn_Target" && r.ReferenceKind == "call"));
+        Assert.Equal(1, targetRef.Line);
+        Assert.Equal("sales.fn_Target", targetRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_SqlQualifiedDefinition_SameLineCallAfterStringLiteralPreservesRawColumn()
+    {
+        const string content = """
+            CREATE PROCEDURE sales.host
+            AS
+            BEGIN
+                SELECT 'prefix'; EXEC dbo.fn_Target;
+            END
+            GO
+            CREATE PROCEDURE dbo.fn_Target AS SELECT 1;
+            GO
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRef = Assert.Single(references.Where(r => r.SymbolName == "fn_Target" && r.ReferenceKind == "call"));
+        Assert.Equal(4, targetRef.Line);
+        Assert.Equal(31, targetRef.Column);
+        Assert.Equal("sales.host", targetRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_SqlQualifiedDefinition_SameLineCallAfterInlineBlockCommentPreservesRawColumn()
+    {
+        const string content = """
+            CREATE PROCEDURE sales.host
+            AS
+            BEGIN
+                SELECT /*note*/ 1; EXEC dbo.fn_Target;
+            END
+            GO
+            CREATE PROCEDURE dbo.fn_Target AS SELECT 1;
+            GO
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRef = Assert.Single(references.Where(r => r.SymbolName == "fn_Target" && r.ReferenceKind == "call"));
+        Assert.Equal(4, targetRef.Line);
+        Assert.Equal(33, targetRef.Column);
+        Assert.Equal("sales.host", targetRef.ContainerName);
+    }
+
+    [Fact]
     public void Extract_SqlExecDynamicSql_DoesNotEmitPhantomKeywordReference()
     {
         // T-SQL dynamic-SQL execution `EXEC(@sql)` / `EXEC('...')` / `EXECUTE(@sql)` pass a string or
@@ -4753,6 +10931,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SqlExecQualifiedIdentifierWithWhitespaceAroundDots_CapturesTerminalIdentifier()
+    {
+        const string content = """
+            EXEC [server1] . [AdventureWorks] . [dbo] . [sp_GetCustomer];
+            CALL sales . proc_name;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "sp_GetCustomer" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "proc_name" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "server1" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "AdventureWorks" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "dbo" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "sales" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_SqlCallBacktickQuotedIdentifier_IsCapturedAndDoesNotMisattributeQualifier()
     {
         // MySQL / MariaDB use backticks to quote identifiers. The shared PrepareLine
@@ -4779,6 +10976,34 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "do_stuff" && r.ReferenceKind == "call" && r.Line == 3);
         Assert.DoesNotContain(references, r => r.SymbolName == "db" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "mydb" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SqlCallDoubleQuotedIdentifier_IsCapturedAndDoesNotMisattributeQualifier()
+    {
+        // PostgreSQL / ANSI SQL use double quotes for delimited identifiers. The SQL no-parens
+        // scan must preserve `"..."` so `CALL "sales"."proc_name"` and `EXEC "dbo"."fn_Target"`
+        // still emit the leaf call edge instead of dropping the call entirely or misattributing
+        // the qualifier as a separate target. Single-quoted string literals must remain masked.
+        // PostgreSQL / ANSI SQL では二重引用符で識別子を区切る。SQL の括弧なし scan は `"..."` を
+        // 保持し、`CALL "sales"."proc_name"` や `EXEC "dbo"."fn_Target"` で call を落とさず、
+        // 修飾子を別ターゲットとして誤発行しない必要がある。単引用符の文字列リテラルは引き続き無視する。
+        const string content = """
+            CALL "proc_name";
+            CALL "sales"."proc_name";
+            EXEC "dbo"."fn_Target";
+            CALL 'not_a_proc';
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "proc_name" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "proc_name" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "fn_Target" && r.ReferenceKind == "call" && r.Line == 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "sales" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "dbo" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "not_a_proc" && r.ReferenceKind == "call");
     }
 
     [Fact]
@@ -4850,6 +11075,93 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "proc#1" && r.ReferenceKind == "call" && r.Line == 1);
         Assert.Contains(references, r => r.SymbolName == "proc#sqlserver" && r.ReferenceKind == "call" && r.Line == 2);
     }
+
+    [Fact]
+    public void Extract_SqlCallInsideProcedureBody_AttributesCallerToEnclosingProcedure()
+    {
+        // issue #429: CREATE / ALTER PROCEDURE | FUNCTION | TRIGGER symbols used to have null body ranges,
+        // so FindInnermostContainer could not attribute EXEC / CALL sites inside the body to the enclosing
+        // procedure. callers / callees / impact consequently returned zero for every SQL procedure even
+        // though graph_supported reported true. With BodyStyle.SqlProcBody, calls inside the proc body now
+        // surface with ContainerKind = "function" and ContainerName equal to the owning proc.
+        // issue #429: CREATE/ALTER PROCEDURE 等は本体範囲が null だったため本体内の EXEC/CALL を外側プロシージャに帰属できず、
+        // SQL プロシージャの callers/callees/impact が常に 0 件になっていた。BodyStyle.SqlProcBody により、
+        // 本体内の呼び出しが ContainerKind="function"/ContainerName=外側プロシージャ名で参照に載ることを固定する。
+        const string content = """
+            CREATE PROCEDURE dbo.sp_Outer
+            AS
+            BEGIN
+                EXEC dbo.sp_Inner;
+                EXEC sp_Inner;
+            END
+            GO
+
+            EXEC dbo.sp_Inner;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var innerCalls = references.Where(r => r.SymbolName == "sp_Inner" && r.ReferenceKind == "call").ToList();
+        Assert.Equal(3, innerCalls.Count);
+
+        // Calls inside the proc body (lines 4 and 5) must attribute to sp_Outer.
+        // プロシージャ本体内 (4 行目・5 行目) の呼び出しは sp_Outer に帰属する。
+        var bodyCalls = innerCalls.Where(r => r.Line == 4 || r.Line == 5).ToList();
+        Assert.Equal(2, bodyCalls.Count);
+        Assert.All(bodyCalls, r =>
+        {
+            Assert.Equal("function", r.ContainerKind);
+            // SymbolExtractor stores SQL proc names with their schema prefix (e.g. `dbo.sp_Outer`),
+            // so ContainerName surfaces the qualified name too.
+            // SymbolExtractor は SQL プロシージャ名をスキーマ修飾付き（例: `dbo.sp_Outer`）で保持するため、
+            // ContainerName にも修飾付きの名前が載る。
+            Assert.Equal("dbo.sp_Outer", r.ContainerName);
+        });
+
+        // The post-GO call (line 9) is outside any procedure body and must carry no container.
+        // GO 以降の呼び出し (9 行目) はどのプロシージャ本体にも属さず、コンテナは null でなければならない。
+        var topLevelCall = Assert.Single(innerCalls.Where(r => r.Line == 9));
+        Assert.Null(topLevelCall.ContainerKind);
+        Assert.Null(topLevelCall.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_SqlPostgresDollarQuotedBody_AttributesCallerToEnclosingFunction()
+    {
+        // PostgreSQL dollar-quoted function bodies also rely on FindSqlProcBodyRange to balance `$$ ... $$`
+        // so PERFORM / call-like statements inside attach to the enclosing function rather than leaking out.
+        // PostgreSQL の dollar-quoted 本体でも `$$ ... $$` を FindSqlProcBodyRange が閉じるため、本体内の
+        // PERFORM / 呼び出しが外側関数に帰属することを固定する。
+        const string content = """
+            CREATE OR REPLACE FUNCTION public.fn_outer() RETURNS void AS $$
+            BEGIN
+                PERFORM public.fn_inner();
+            END;
+            $$ LANGUAGE plpgsql;
+
+            SELECT public.fn_inner();
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var innerCalls = references.Where(r => r.SymbolName == "fn_inner" && r.ReferenceKind == "call").ToList();
+        Assert.Equal(2, innerCalls.Count);
+
+        var bodyCall = Assert.Single(innerCalls.Where(r => r.Line == 3));
+        Assert.Equal("function", bodyCall.ContainerKind);
+        // Postgres function names are captured with their schema (e.g. `public.fn_outer`),
+        // so ContainerName surfaces the qualified name too.
+        // Postgres の関数名はスキーマ付き（例: `public.fn_outer`）で取られるため、ContainerName にも
+        // 修飾付きの名前が載る。
+        Assert.Equal("public.fn_outer", bodyCall.ContainerName);
+
+        var outsideCall = Assert.Single(innerCalls.Where(r => r.Line == 7));
+        Assert.Null(outsideCall.ContainerKind);
+        Assert.Null(outsideCall.ContainerName);
+    }
+
     [Fact]
     public void Extract_CsharpAttribute_ClassifiedAsAttribute()
     {
@@ -5915,16 +12227,29 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpMultiLineAttributeArgumentEnum_NotClassifiedAsAttribute()
+    public void Extract_CsharpMultiLineAttributeArgumentEnum_UsesAttributeKindInsteadOfCall()
     {
-        // Regression (issue #293 follow-up): identifiers appearing inside the argument list of
-        // a multi-line attribute such as `ConverterStrategy.AllowNumbers` must NOT be recorded
-        // as `attribute` references. Only the attribute-list top level (`[`/`,` boundary, paren
-        // depth 0) is a valid no-arg attribute name position.
-        // リグレッション (issue #293 補足): 複数行属性の引数リスト内にある識別子
-        // (例: `ConverterStrategy.AllowNumbers`) は `attribute` として記録してはならない。
-        // 属性リストの top-level (paren 深さ 0 の `[` / `,` 境界) のみが no-arg 属性名の位置。
+        // Regression (issue #492): enum-member accesses inside C# attribute arguments must reuse
+        // metadata classification so they do not leak into the runtime call-graph as `call`.
+        // The no-arg attribute detector still only applies to the attribute-list top level.
+        // リグレッション (issue #492): C# 属性引数内の enum メンバーアクセスは metadata kind に
+        // 落とし、runtime call-graph に `call` として混入させない。no-arg 属性検出は引き続き
+        // 属性リストの top-level にのみ適用される。
         const string content = """
+            using System;
+
+            public enum ConverterStrategy
+            {
+                AllowNumbers,
+                Strict
+            }
+
+            [AttributeUsage(AttributeTargets.Class)]
+            public sealed class JsonConverterAttribute : Attribute
+            {
+                public JsonConverterAttribute(ConverterStrategy strategy) { }
+            }
+
             [
                 JsonConverter(
                     ConverterStrategy.AllowNumbers
@@ -5942,11 +12267,12 @@ public class ReferenceExtractorTests
         var jsonConverter = Assert.Single(references.Where(r => r.SymbolName == "JsonConverter"));
         Assert.Equal("attribute", jsonConverter.ReferenceKind);
 
-        // AllowNumbers is an enum member access inside the attribute arguments — it must not be
-        // picked up as a no-arg attribute even though it happens to end at end-of-line inside
-        // the `[...]` section.
-        // AllowNumbers は属性引数内の enum メンバーアクセスなので、no-arg 属性として取り込まれないこと。
-        Assert.DoesNotContain(references, r => r.SymbolName == "AllowNumbers" && r.ReferenceKind == "attribute");
+        // AllowNumbers sits inside the attribute argument list, so it should inherit the metadata
+        // context (`attribute`) without being emitted as a runtime `call`.
+        // AllowNumbers は属性引数内なので、runtime `call` ではなく metadata 文脈 (`attribute`) を継承する。
+        var allowNumbers = Assert.Single(references.Where(r => r.SymbolName == "AllowNumbers"));
+        Assert.Equal("attribute", allowNumbers.ReferenceKind);
+        Assert.DoesNotContain(references, r => r.SymbolName == "AllowNumbers" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "ConverterStrategy" && r.ReferenceKind == "attribute");
     }
 
@@ -6058,5 +12384,120 @@ public class ReferenceExtractorTests
 
         var test = Assert.Single(references.Where(r => r.SymbolName == "Test"));
         Assert.Equal("annotation", test.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_Csharp_LeadingBom_ExtractsReferencesOnFirstLine()
+    {
+        // BOM-prefixed C# source: reference extraction on line 1 must still work.
+        // Closes #183.
+        // BOM 付き C# ソース: 1 行目の参照抽出も機能する。Closes #183.
+        const string content = "\uFEFFusing System;\n\nnamespace BomRef;\n\npublic class C\n{\n    public void Run() { Helper(); }\n    public void Helper() { }\n}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System" && s.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Helper");
+    }
+
+    [Fact]
+    public void Extract_Csharp_MidFileBom_ExtractsReferencesOnAffectedLine()
+    {
+        // Mid-file BOM right before a call site: the reference must still be captured
+        // on its real line number. Closes #183.
+        // mid-file BOM が呼び出し行直前に挟まっても、実際の行番号で参照を拾う。Closes #183.
+        const string content = "namespace BomRef;\npublic class C\n{\n    public void Run()\n    {\n\uFEFF        Helper();\n    }\n    public void Helper() { }\n}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var helperRef = Assert.Single(references.Where(r => r.SymbolName == "Helper"));
+        Assert.Equal(6, helperRef.Line);
+    }
+
+    [Fact]
+    public void Extract_NullContent_ReturnsEmpty()
+    {
+        // Direct callers that pass `null` must not throw. The #183 CRLF-normalization
+        // step added ahead of StripLineLeadingBom would otherwise dereference `null`
+        // before the helper's IsNullOrEmpty guard could run. Closes #183.
+        // direct call で `null` を渡してもスローしない。#183 で StripLineLeadingBom
+        // の前段に CRLF 正規化を入れたため、helper 側 IsNullOrEmpty まで届かず
+        // `null` を逆参照してしまう回帰を防ぐ。Closes #183.
+        Assert.Empty(ReferenceExtractor.Extract(1, "csharp", null!, Array.Empty<CodeIndex.Models.SymbolRecord>()));
+    }
+
+    [Fact]
+    public void Extract_EmptyContent_ReturnsEmpty()
+    {
+        // Empty content returns no references and does not throw. Closes #183.
+        // 空入力は参照 0 個で、例外にならない。Closes #183.
+        Assert.Empty(ReferenceExtractor.Extract(1, "csharp", string.Empty, Array.Empty<CodeIndex.Models.SymbolRecord>()));
+    }
+
+    [Fact]
+    public void Extract_Csharp_CrlfLeadingBom_ExtractsReferencesOnFirstLine()
+    {
+        // Direct-call input with CRLF line endings AND a leading BOM: the CRLF → LF
+        // normalization must run before StripLineLeadingBom so call sites on mid-file
+        // BOM lines are still captured. Closes #183.
+        // CRLF 改行 + 先頭 BOM の direct call: CRLF → LF 正規化を helper より先に通す
+        // ことで、mid-file 行頭 BOM 直後の呼び出しも参照として拾える。Closes #183.
+        const string content = "\uFEFFnamespace BomRefCrlf;\r\npublic class C\r\n{\r\n    public void Run()\r\n    {\r\n\uFEFF        Helper();\r\n    }\r\n    public void Helper() { }\r\n}\r\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var helperRef = Assert.Single(references.Where(r => r.SymbolName == "Helper"));
+        Assert.Equal(6, helperRef.Line);
+    }
+
+    [Fact]
+    public void Extract_Csharp_BareCrLeadingBom_ExtractsReferenceOnBomLine()
+    {
+        // Bare-`\r` direct-call input with a leading BOM + mid-file line-leading
+        // BOM in front of the call site: the in-extractor `\r` → `\n`
+        // normalization must run so `StripLineLeadingBom` (which treats `\n` as
+        // the sole line separator) still sees the mid-file BOM as line-leading
+        // and strips it, letting the regex capture the call site on the
+        // BOM-prefixed line. Closes #183.
+        // bare `\r` 改行 + 先頭 BOM + 呼び出し行頭 BOM の direct call: `\r` → `\n`
+        // 正規化を helper より先に通し、classic-Mac 改行でも BOM 行の呼び出し
+        // 参照が拾えることを固定。Closes #183.
+        const string content = "\uFEFFnamespace BomRefBareCr;\rpublic class C\r{\r    public void Run()\r    {\r\uFEFF        Helper();\r    }\r    public void Helper() { }\r}\r";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var helperRef = Assert.Single(references.Where(r => r.SymbolName == "Helper"));
+        Assert.Equal(6, helperRef.Line);
+    }
+
+    [Fact]
+    public void Extract_Csharp_MixedLineEndingsLeadingBom_ExtractsReferenceOnBomLine()
+    {
+        // Mixed line endings (`\r\n`, bare `\r`, bare `\n`) interleaved with a
+        // leading BOM and a mid-file line-leading BOM positioned immediately
+        // after a real `\r\n\r` boundary (the blank line uses bare `\r`, so the
+        // BOM follows `\r\n` + `\r`). The call site on the BOM-prefixed line is
+        // only captured when the normalization collapses `\r\n` AND bare `\r`
+        // to `\n` before `StripLineLeadingBom` runs — otherwise the `\r`
+        // immediately preceding the mid-file BOM would keep the BOM
+        // non-line-leading (helper treats `\n` as the sole line separator).
+        // Line 7 assertion accounts for the blank line inserted by that extra
+        // `\r`. Closes #183.
+        // 混在改行（`\r\n` / bare `\r` / bare `\n`）+ 先頭 BOM + `\r\n\r` 境界直後の
+        // mid-file 行頭 BOM の direct call: `\r\n` と bare `\r` の双方を `\n` に
+        // 正規化してからでないと、BOM 直前の `\r` のせいで helper からは BOM が
+        // 行頭扱いされず呼び出し参照が拾えない。bare `\r` による空行が挟まる分、
+        // Helper は行 7。Closes #183.
+        const string content = "\uFEFFnamespace BomRefMixed;\r\npublic class C\r{\n    public void Run()\r\n    {\r\n\r\uFEFF        Helper();\n    }\r    public void Helper() { }\r\n}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var helperRef = Assert.Single(references.Where(r => r.SymbolName == "Helper"));
+        Assert.Equal(7, helperRef.Line);
     }
 }

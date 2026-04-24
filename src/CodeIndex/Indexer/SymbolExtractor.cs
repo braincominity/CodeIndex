@@ -17,17 +17,23 @@ public static class SymbolExtractor
     // (`(int, int)[]`, `(int, int)?`, `(int, int)[][]`, `(int, int)[,]`, and whitespaced
     // variants like `(int, int) []` / `(int, int) ?`) so tuple-array and nullable-tuple
     // return types are captured on methods, properties, indexers, and explicit interface
-    // implementations. Delegate and event declarations with tuple-array returns remain
-    // blocked by pre-existing pattern-order / generic-over-tuple issues (#340, #241) and are
-    // out of scope for this loop. The identifier branch already absorbs these characters via
-    // its char class, but keeping the suffix loop outside both branches is harmless and
-    // makes the tuple branch's responsibilities explicit.
+    // implementations. The shared segment matcher also allows tuple groups inside generic
+    // arguments (`Task<(int, int)>`, `Dictionary<string, (int x, int y)>`,
+    // `List<(int, int)> IFoo.GetList()`), so ordinary methods and explicit-interface
+    // implementations stay aligned. Delegate and event declarations with tuple-array returns
+    // remain blocked by the pre-existing pattern-order issue (#340); the identifier branch
+    // already absorbs non-tuple suffix characters via its char class, but keeping the suffix
+    // loop outside both branches is harmless and makes the tuple branch's responsibilities
+    // explicit.
     // 戻り値型のクラスに `*` を含め、ポインタ / 関数ポインタ戻り値型（`int*` / `void**` / `delegate*<int, int>` / `int*[]`）を取りこぼさない。
     // 末尾の CSharpTupleSuffixPattern で tuple 分岐にも `[]` / `?` / `[][]` / `[,]` と、
     // `(int, int) []` / `(int, int) ?` のような空白を挟んだ整形バリエーションまで許容し、
     // tuple-array / nullable-tuple 戻り値をメソッド・プロパティ・インデクサ・明示的
-    // インターフェース実装で捕捉できるようにする。delegate / event 宣言で tuple-array 戻り値を
-    // 扱う件はパターン評価順や generic-over-tuple 側の既存バグ（#340、#241）が残っており、この
+    // インターフェース実装で捕捉できるようにする。共有の segment matcher により
+    // `Task<(int, int)>` / `Dictionary<string, (int x, int y)>` /
+    // `List<(int, int)> IFoo.GetList()` のような generic-over-tuple も通常メソッドと
+    // 明示的インターフェース実装の両方で同じ経路で扱える。delegate / event 宣言で
+    // tuple-array 戻り値を扱う件は既存のパターン評価順問題 (#340) が残っており、この
     // ループの範囲外。識別子側の分岐は文字クラスに `[`/`]`/`?` を既に含むため無害な冗長だが、
     // tuple 分岐側の責務が明確になる。
     // Tuple / array / nullable suffix tokens that may trail a C# return type. Each iteration
@@ -48,7 +54,30 @@ public static class SymbolExtractor
     // 否定先読みで ctor 形状として弾きつつ、上流の property / method 行で本来のシンボルとして
     // 拾えるようにする。#349 のフォローアップ。
     private const string CSharpTupleSuffixPattern = @"(?:\s*(?:\?|\[[\],\s]*\]))*";
-    private const string CSharpTypePattern = @"(?:(?:\([^)]+\)|(?:global::)?[\w?.<>\[\],:*]+(?:\s+[\w?.<>\[\],:*]+)*)" + CSharpTupleSuffixPattern + @")";
+    // Embedded tuple groups must contain a comma at the OUTER tuple level so ordinary
+    // call/ctor parens (`Make()`, `Parent(value)`) keep falling through, while real tuple
+    // segments inside generics can nest arbitrarily deep (`Task<((int A, int B), string Name)>`,
+    // `Task<(((int A, int B), int C), string Name)>`). The balancing-group variant tracks nested
+    // parens and only records commas seen at depth 0.
+    // 埋め込み tuple group は最外 tuple レベルの comma を必須にし、`Make()` / `Parent(value)` の
+    // ような通常の call/ctor 括弧列は従来どおり不一致に落としつつ、generic 内の実 tuple segment
+    // は `Task<((int A, int B), string Name)>` / `Task<(((int A, int B), int C), string Name)>`
+    // のような深い入れ子まで通せるようにする。balancing-group 版で入れ子括弧を追跡し、
+    // 深さ 0 で見えた comma だけを tuple 判定に使う。
+    private const string CSharpTupleGroupPattern =
+        @"\((?>(?:[^(),]+|\((?<TupleDepth>)|\)(?<-TupleDepth>)|(?(TupleDepth),|(?<TupleComma>,))))*(?(TupleDepth)(?!))(?(TupleComma)|(?!))\)";
+    private const string CSharpIdentifierPattern = @"@?[_\p{L}]\w*";
+    private const string CSharpNamespacePattern = CSharpIdentifierPattern + @"(?:\." + CSharpIdentifierPattern + @")*";
+    private const string CSharpTypeTokenCharsPattern = @"[\w@?.<>\[\],:*]";
+    private const string SqlQualifiedIdentifierSegmentPattern = @"(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)";
+    private const string SqlQualifiedIdentifierPattern =
+        @"(?:" + SqlQualifiedIdentifierSegmentPattern + @")(?:\s*\.\s*(?:" + SqlQualifiedIdentifierSegmentPattern + @"))*";
+    private const string CSharpTypeSegmentPattern =
+        @"(?:" + CSharpTypeTokenCharsPattern + @"+(?:" + CSharpTupleGroupPattern + CSharpTypeTokenCharsPattern + @"*)*|" + CSharpTupleGroupPattern + CSharpTypeTokenCharsPattern + @"*)";
+    private const string CSharpTypePattern =
+        @"(?:(?:global::)?(?:" + CSharpTypeSegmentPattern + @")(?:\s+(?:" + CSharpTypeSegmentPattern + @"))*" + CSharpTupleSuffixPattern + @")";
+    private const string CSharpMethodTypeParameterListPattern =
+        @"(?:<(?:(?>[^<>]+)|<(?<CSharpMethodTypeParameterDepth>)|>(?<-CSharpMethodTypeParameterDepth>))*(?(CSharpMethodTypeParameterDepth)(?!))>\s*)?";
     // `delegate` is a non-type keyword only when it is NOT followed by `*` — `delegate*<...>` is a valid return type.
     // `delegate` は `*` を伴わないときだけ非型キーワード扱い。`delegate*<...>` は戻り値型として有効。
     private const string CSharpNonTypeKeywordPattern = @"(?:(?:public|private|protected|internal|static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|required|ref)\b|delegate\b(?!\s*\*))";
@@ -61,6 +90,7 @@ public static class SymbolExtractor
         Indent,
         RubyEnd,
         VisualBasicEnd,
+        SqlProcBody,
     }
 
     private sealed record SymbolPattern(
@@ -173,6 +203,13 @@ public static class SymbolExtractor
         int? SignatureLastLineExclusiveEndColumn = null,
         int? ExpressionBodyEndLineIndex = null);
 
+    private enum CSharpAccessorProbeStatus
+    {
+        Pending,
+        Found,
+        Rejected
+    }
+
     private readonly record struct RecordPrimaryComponent(
         string Name,
         string Type,
@@ -208,9 +245,29 @@ public static class SymbolExtractor
         "public", "private", "protected", "static", "readonly", "abstract", "override", "async", "get", "set"
     ];
 
-    private static readonly Regex CSharpEnumDeclarationRegex = new(@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+|(?:file)\s+)*enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    // Enum declaration — visibility optional; modifier order is free. Accepts `file` (file-scoped
+    // enum) and `new` (member-hiding nested enum in a derived type) as non-visibility modifiers.
+    // Closes #353.
+    // enum 宣言 — visibility は任意で、修飾子の順序は自由。非 visibility 修飾子として `file`
+    // （ファイルスコープ enum）と `new`（派生型でのネスト enum 隠蔽）を受け付ける。Closes #353.
+    private static readonly Regex CSharpEnumDeclarationRegex = new($@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+|(?:file|new)\s+)*enum\s+(?<name>{CSharpIdentifierPattern})", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpEnumMemberRegex = new(@"^\s*(?<name>@?[_\p{L}]\w*)\s*(?:=\s*(?:-?\d|0x|@?[_\p{L}]\w*(?:\s*\|\s*@?[_\p{L}]\w*)*)[^""']*)?,?\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpEnumMemberNameRegex = new(@"^\s*(?<name>@?[_\p{L}]\w*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex JavaCompactConstructorRegex = new(
+        @"^\s*(?:(?<visibility>public|private|protected)\s+)?(?<name>\w+)\s*(?=\{|$)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpSameLinePropertyStatementStartRegex = new(
+        $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?:ref(?:\s+readonly)?)\s+)?(?:{CSharpTypePattern})\s+(?:{CSharpExplicitInterfaceQualifierPattern}\.)?{CSharpIdentifierPattern}\s*(?:\{{|=>\s*)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpSameLineEventStatementStartRegex = new(
+        $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern|virtual|override|abstract|sealed|new|partial|file)\s+)*event\s+(?:{CSharpTypePattern})\s+{CSharpIdentifierPattern}\s*(?:[;=]|\{{)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpSameLineDelegateStatementStartRegex = new(
+        $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|unsafe|file|new)\s+)*delegate\s+(?:{CSharpTypePattern})\s+{CSharpIdentifierPattern}\s*[\(<]",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CSharpSameLineEventOrDelegateStatementStartRegex = new(
+        $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern|virtual|override|abstract|sealed|new|partial|file)\s+)*(?:event\s+(?:{CSharpTypePattern})\s+{CSharpIdentifierPattern}\s*(?:[;=]|\{{)|delegate\s+(?:{CSharpTypePattern})\s+{CSharpIdentifierPattern}\s*[\(<])",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly HashSet<string> JavaScriptTypeScriptControlFlowHeaderKeywords =
     [
@@ -358,22 +415,34 @@ public static class SymbolExtractor
         ],
         ["csharp"] =
         [
-            new("namespace", new Regex(@"^\s*namespace\s+(?<name>[\w.]+)\s*;", RegexOptions.Compiled), BodyStyle.None),  // file-scoped namespace (C# 10+)
-            new("namespace", new Regex(@"^\s*namespace\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.Brace),  // block-scoped namespace
+            new("namespace", new Regex($@"^\s*namespace\s+(?<name>{CSharpNamespacePattern})\s*;", RegexOptions.Compiled), BodyStyle.None),  // file-scoped namespace (C# 10+)
+            new("namespace", new Regex($@"^\s*namespace\s+(?<name>{CSharpNamespacePattern})", RegexOptions.Compiled), BodyStyle.Brace),  // block-scoped namespace
             // extern alias (must precede using directives per C# spec) — captures assembly-alias reconciliation
             // extern alias — C# 仕様上 using より前に置かれるファイル先頭宣言。アセンブリエイリアス用
-            new("import",    new Regex(@"^\s*extern\s+alias\s+(?<name>\w+)\s*;", RegexOptions.Compiled), BodyStyle.None),
+            new("import",    new Regex($@"^\s*extern\s+alias\s+(?<name>{CSharpIdentifierPattern})\s*;", RegexOptions.Compiled), BodyStyle.None),
             // using alias (using X = Y;) — must come before general using to capture alias name
             // using エイリアス — 一般 using より前に配置しエイリアス名を取得
-            new("import",    new Regex(@"^\s*(?:global\s+)?using\s+(?<name>\w+)\s*=\s*[^;]+;", RegexOptions.Compiled), BodyStyle.None),
+            new("import",    new Regex($@"^\s*(?:global\s+)?using\s+(?<name>{CSharpIdentifierPattern})\s*=\s*[^;]+;", RegexOptions.Compiled), BodyStyle.None),
             new("import",    new Regex(@"^\s*(?:global\s+)?using\s+(?:static\s+)?(?<name>[^;=]+);", RegexOptions.Compiled), BodyStyle.None),
             // Const field — must come before class/method patterns to avoid misclassification.
             // Modifier order is free: visibility may appear anywhere in the modifier sequence,
             // so `new public const` and `public new const` are both captured. Closes #355.
+            // returnType uses the shared CSharpTypePattern (same token the method / property /
+            // indexer / delegate / event rows already use) so tuple / named-tuple /
+            // nullable-tuple / generic-over-tuple / global::-qualified / tuple-array const field
+            // types are captured instead of silently dropped. The legacy hand-rolled char class
+            // had no `(`, `)`, or `\s`, so `public const (int, int) Pair = (1, 2);` failed the
+            // returnType group and fell through every subsequent row. Closes #346.
             // const フィールド — クラス/メソッドパターンより前に配置し誤分類を防ぐ。
             // 修飾子順序は自由で、visibility は修飾子列の任意位置に現れてよい（例: `new public const` /
             // `public new const`）。Closes #355.
-            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:new|static)\s+)*const\s+(?<returnType>[\w?.<>\[\],:]+)\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            // returnType は method / property / indexer / delegate / event 行で既に使っている共有
+            // トークン CSharpTypePattern を使う。これにより tuple / 名前付き tuple / nullable tuple /
+            // generic-over-tuple / `global::` 修飾 / tuple-array を戻り値型とする const フィールドを
+            // 取りこぼさない。従来の手書き文字クラスには `(` / `)` / `\s` が無く、
+            // `public const (int, int) Pair = (1, 2);` は returnType 群で失敗し、以降のどの行にも
+            // マッチしなかった。Closes #346.
+            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:new|static)\s+)*const\s+(?<returnType>{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             // Static readonly field / static readonly フィールド
             // Modifier order is free: `static` and `readonly` may appear in any order, and `new`
             // (member hiding) may appear anywhere in the modifier sequence. Visibility is also
@@ -389,7 +458,7 @@ public static class SymbolExtractor
               + $@"(?=(?:(?:{CSharpVisibilityPattern}|new|static|readonly)\s+)*static\s+)"
               + $@"(?=(?:(?:{CSharpVisibilityPattern}|new|static|readonly)\s+)*readonly\s+)"
               + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:new|static|readonly)\s+)+"
-              + @"(?<returnType>[\w?.<>\[\],:\s]+?)\s+(?<name>\w+)\s*[=;]",
+              + @"(?<returnType>[\w@?.<>\[\],:\s]+?)\s+(?<name>" + CSharpIdentifierPattern + @")\s*[=;]",
                 RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             // Plain field (instance, readonly, volatile, plain static, etc.) — kind `property`.
             // Must come AFTER the `const` and `static readonly` patterns (which take priority
@@ -416,7 +485,7 @@ public static class SymbolExtractor
                 $@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|readonly|volatile|new|unsafe|extern|required)\s+)*"
               + @"(?!(?:public|private|protected|internal|static|readonly|volatile|new|unsafe|extern|required|abstract|virtual|override|sealed|async|partial|file|ref|var|class|struct|interface|enum|record|namespace|delegate\b(?!\*)|event|const|using|return|throw|yield|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await|try|do|typeof|sizeof|nameof|default|operator|this|base)\b)"
               + $@"(?<returnType>{CSharpTypePattern})\s+"
-              + @"(?<name>[A-Za-z_]\w*)\s*(?:=(?![=>])|;)",
+              + @"(?<name>" + CSharpIdentifierPattern + @")\s*(?:=(?![=>])|;)",
                 RegexOptions.Compiled),
                 BodyStyle.None, "visibility", "returnType"),
             // Interface — visibility optional; modifier order is free, so visibility may appear
@@ -424,7 +493,7 @@ public static class SymbolExtractor
             // `new public interface` for nested types). Closes #355.
             // インターフェース — visibility 省略可。修飾子順序は自由
             // （例: `partial public interface`、`file interface`、ネスト型向けの `new public interface`）。Closes #355.
-            new("interface", new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:partial|unsafe|file|new)\s+)*interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("interface", new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:partial|unsafe|file|new)\s+)*interface\s+(?<name>{CSharpIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Enum — visibility optional / enum — visibility 省略可
             new("enum",      CSharpEnumDeclarationRegex, BodyStyle.Brace, "visibility"),
             // Struct (including record struct, ref struct, readonly struct) — visibility optional;
@@ -433,32 +502,48 @@ public static class SymbolExtractor
             // 構造体（record struct, ref struct, readonly struct を含む）— visibility 省略可。
             // 修飾子順序は自由で、visibility は任意位置に置いてよい（例: `readonly public struct`、
             // `ref public struct`）。Closes #355.
-            new("struct",    new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|partial|readonly|file|new|ref|unsafe)\s+)*(?:record\s+)?struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("struct",    new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|partial|readonly|file|new|ref|unsafe)\s+)*(?:record\s+)?struct\s+(?<name>{CSharpIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Class (including record, record class) — visibility optional (defaults to internal
             // for top-level); modifier order is free, so visibility may appear anywhere in the
             // modifier sequence (e.g. `abstract public class`, `sealed public class`). Closes #355.
             // クラス（record, record class を含む）— visibility は省略可能（トップレベルでは internal がデフォルト）。
             // 修飾子順序は自由で、visibility は任意位置に置いてよい（例: `abstract public class`、
             // `sealed public class`）。Closes #355.
-            new("class",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*(?:record\s+class\s+|record\s+|class\s+)(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("class",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|partial|abstract|sealed|readonly|file|new|unsafe)\s+)*(?:record\s+class\s+|record\s+|class\s+)(?<name>{CSharpIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Implicit/explicit conversion operator — must come before general operator pattern.
             // Visibility may appear before or after `static` / `unsafe` / `extern`. Closes #355.
+            // Modifier slot also accepts `abstract|virtual|sealed|override|new` so C# 11
+            // `static abstract` / `abstract static` interface conversion operators (generic
+            // math: `System.Numerics.INumber<TSelf>` etc.) and default-implementation /
+            // member-hiding forms on interfaces are not silently dropped. Closes #244.
             // 暗黙的/明示的変換演算子 — 一般のoperatorパターンより先に配置。
             // visibility は `static` / `unsafe` / `extern` のどちら側にも置ける。Closes #355.
+            // 修飾子スロットは `abstract|virtual|sealed|override|new` も受け付ける。
+            // これにより C# 11 の `static abstract` / `abstract static` interface 変換演算子
+            // （generic math: `System.Numerics.INumber<TSelf>` など）と、interface 上の
+            // default implementation / member hiding 形態を黙って取りこぼさない。Closes #244.
             new("function",  new Regex(
                 $@"^\s*"
-              + $@"(?=(?:(?:{CSharpVisibilityPattern}|static|unsafe|extern)\s+)*static\s+)"
-              + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern)\s+)+"
+              + $@"(?=(?:(?:{CSharpVisibilityPattern}|static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)*static\s+)"
+              + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)+"
               + $@"(?<conversionKind>implicit|explicit)\s+operator\b",
                 RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Operator overload (+ - * / == != < > etc.) — must come before method pattern.
             // Visibility may appear before or after `static`. Closes #355.
+            // Modifier slot also accepts `abstract|virtual|sealed|override|new` so C# 11
+            // `static abstract` / `abstract static` interface operators (generic math:
+            // `IAdditionOperators<T>`, `IComparisonOperators<T>`, etc.) are not silently
+            // dropped. Closes #244.
             // 演算子オーバーロード — メソッドパターンより前に配置。
             // visibility は `static` のどちら側にも置ける。Closes #355.
+            // 修飾子スロットは `abstract|virtual|sealed|override|new` も受け付ける。
+            // これにより C# 11 の `static abstract` / `abstract static` interface 演算子
+            // （generic math: `IAdditionOperators<T>`、`IComparisonOperators<T>` など）を
+            // 黙って取りこぼさない。Closes #244.
             new("function",  new Regex(
                 $@"^\s*"
-              + $@"(?=(?:(?:{CSharpVisibilityPattern}|static|unsafe|extern)\s+)*static\s+)"
-              + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern)\s+)+"
+              + $@"(?=(?:(?:{CSharpVisibilityPattern}|static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)*static\s+)"
+              + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)+"
               + @".+?\s+(?<name>operator\s+(?:checked\s+)?\S+)\s*\(",
                 RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Method with return type — visibility optional for explicit interface impl and nested members.
@@ -483,7 +568,7 @@ public static class SymbolExtractor
             // コンストラクタ初期化子 (`: base(...)` / `: this(...)`) が phantom `function base` / `function this`
             // として漏れないよう二重化する。Closes #331.
             // 注意: `new` は除外しない。`new void Hidden()` は C# のメンバー隠蔽宣言として有効。
-            new("function",  new Regex($@"^\s*(?!\[\s*(?:assembly|module|type|return|param|field|property|event|method)\s*:)(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\s*(?:(?:{CSharpVisibilityPattern}|static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*delegate\b(?!\s*\*))(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*(?!{CSharpNonTypeKeywordPattern})(?<returnType>{CSharpTypePattern})\s+(?!(?:base|this)\b)(?<name>\w+)\s*(?:<[^>]+>\s*)?\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("function",  new Regex($@"^\s*(?!\[\s*(?:assembly|module|type|return|param|field|property|event|method)\s*:)(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\s*(?:(?:{CSharpVisibilityPattern}|static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*delegate\b(?!\s*\*))(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*(?!{CSharpNonTypeKeywordPattern})(?<returnType>{CSharpTypePattern})\s+(?!(?:base|this)\b)(?<name>{CSharpIdentifierPattern})\s*{CSharpMethodTypeParameterListPattern}\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Constructor (no return type, name followed by parenthesis) — needs visibility.
             // `unsafe` / `extern` can appear before or after visibility so declarations like
             // `unsafe public S(int* p) {}` and `extern public S(int x);` are still captured
@@ -533,7 +618,19 @@ public static class SymbolExtractor
             // 現在行に `)` が出ないため lookahead が発動せずそのままマッチする。
             // CSharpTupleSuffixPattern を CSharpTypePattern と共有することで、ctor 否定先読みと上流の
             // property / method / plain-field 行が tuple サフィックス戻り値の受理形について常に一致する。Closes #349.
-            new("function",  new Regex($@"^\s*(?:(?:unsafe|extern)\s+)*(?<visibility>{CSharpVisibilityPattern})\s+(?:(?:unsafe|extern)\s+)*(?<name>\w+)\s*\((?!.*\){CSharpTupleSuffixPattern}\s*\w+\s*(?:[{{(;]|=>|=(?![=>])))", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function",  new Regex($@"^\s*(?:(?:unsafe|extern)\s+)*(?<visibility>{CSharpVisibilityPattern})\s+(?:(?:unsafe|extern)\s+)*(?<name>{CSharpIdentifierPattern})\s*\((?!.*\){CSharpTupleSuffixPattern}\s*{CSharpIdentifierPattern}\s*(?:[{{(;]|=>|=(?![=>])))", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Static constructor / 静的コンストラクタ
+            // Keep this ahead of the property rows so same-line compact bodies such as
+            // `class C { static C() { } public int P { get; set; } }` emit the static ctor
+            // before the later property match short-circuits the pattern scan. The shape is
+            // specific enough that it does not overlap with normal methods (no return type,
+            // empty parameter list, optional `unsafe` around `static`). Closes #478.
+            // 同一行のコンパクトな型本体
+            // (`class C { static C() { } public int P { get; set; } }`) では、後続 property が
+            // pattern scan を打ち切る前に static ctor を先に拾う必要があるため、property 行より前に置く。
+            // この形は「戻り値型なし・引数なし・`static` 前後の任意 `unsafe`」に限定されるため、
+            // 通常メソッドとは重ならない。Closes #478.
+            new("function",  new Regex($@"^\s*(?:unsafe\s+)?static\s+(?:unsafe\s+)?(?<name>{CSharpIdentifierPattern})\s*\(\s*\)\s*\{{?", RegexOptions.Compiled), BodyStyle.Brace),
             // Property with get/set/init — visibility optional
             // Reject statement keywords (return/throw/switch/...) as the return type so that
             // multi-line statement fragments merged by BuildCSharpPropertyMatchLine — e.g.
@@ -543,7 +640,7 @@ public static class SymbolExtractor
             // `return o switch` のような複数行にまたがる文断片が `BuildCSharpPropertyMatchLine`
             // で結合された結果、property として誤判定されるのを防ぐため、戻り値型として
             // ステートメントキーワードを拒否する。Closes #233.
-            new("property",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*\{{", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("property",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?<returnType>{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*\{{", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Expression-bodied property (public int X => ...) — must come before delegate.
             // Uses BodyStyle.Brace so FindCSharpBraceRange detects '=>' and assigns a body
             // range covering the declaration line through the terminating ';', which
@@ -556,31 +653,66 @@ public static class SymbolExtractor
             // ReferenceExtractor.FindInnermostContainer が accessor 内呼び出しを外側
             // クラスではなく property に帰属させるために必要。
             // Closes #233.
-            new("property",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*=>\s*", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("property",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?<returnType>{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*=>\s*", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Delegate — visibility optional; modifier order is free. Accepts `static` / `unsafe` /
             // `file` (file-scoped delegate) / `new` (nested delegate hiding). Closes #355.
             // デリゲート — visibility 省略可。修飾子順序は自由。`static` / `unsafe` /
             // `file`（file スコープ delegate）/ `new`（ネスト delegate の隠蔽）を受け付ける。Closes #355.
-            new("delegate",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|file|new)\s+)*delegate\s+(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            new("delegate",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|file|new)\s+)*delegate\s+(?<returnType>{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*[\(<]", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             // Event — visibility optional; modifier order is free. Accepts `static` / `unsafe` /
             // `extern` plus inheritance modifiers (`virtual` / `override` / `abstract` / `sealed` / `new`)
-            // which are all legal on event declarations per the C# spec. Closes #355.
+            // which are all legal on event declarations per the C# spec. `partial` is also legal on
+            // events (C# 14 field-like partial events, and extended partial member support on accessor
+            // events), so accept it as well — otherwise every `partial event` declaration would be
+            // silently dropped from symbols / definition / outline. Closes #350.
             // イベント — visibility 省略可。修飾子順序は自由。`static` / `unsafe` / `extern` に加え、
             // C# 仕様で event 宣言に有効な継承修飾子 (`virtual` / `override` / `abstract` / `sealed` / `new`)
-            // も受け付ける。Closes #355.
-            new("event",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern|virtual|override|abstract|sealed|new)\s+)*event\s+(?<returnType>{CSharpTypePattern})\s+(?<name>\w+)\s*(?:[;=]|\{{)", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            // も受け付ける。event には `partial` も合法 (C# 14 field-like partial event、およびアクセサ
+            // ベースの partial member 拡張) なので、ここでも受け付けないと `partial event` 宣言が
+            // symbols / definition / outline から無言で欠落する。Closes #350.
+            new("event",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern|virtual|override|abstract|sealed|new|partial)\s+)*event\s+(?<returnType>{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*(?:[;=]|\{{)", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            // Explicit interface event implementation (e.g. event EventHandler IFoo.Changed)
+            // must capture the trailing member name rather than dropping the declaration or
+            // inventing the qualifier as the event name. BodyStyle.Brace lets accessor blocks
+            // on the same line or following lines share the normal brace-range path.
+            // 明示的インターフェース event 実装 (例: event EventHandler IFoo.Changed) は、
+            // qualifier 側ではなく末尾のメンバー名を event 名として捕捉しなければならない。
+            // BodyStyle.Brace を使い、同一行/次行どちらの accessor block も通常の brace-range
+            // 経路で扱う。
+            new("event",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern|virtual|override|abstract|sealed|new|partial)\s+)*event\s+(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\s*\.\s*(?<name>{CSharpIdentifierPattern})\b", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Explicit interface implementation (e.g. void IDisposable.Dispose())
             // Requires a valid return type (not a statement keyword) and interface name before the dot.
             // Reject named-argument labels only when they are followed by a qualified call site,
             // so alias-qualified types like `global::System.String` and `Alias::Type` still match.
             // LINQ query-expression keywords are also excluded from the negative lookahead so that
             // continuation lines like `where Validator.Check(x)` / `select Mapper.Convert(x)` /
-            // `orderby Math.Abs(x)` do not match as `returnType + interface.member`. Closes #377.
+            // `orderby Math.Abs(x)` do not match as `returnType + interface.member`. `new` is also
+            // excluded so expression statements like `new System.Text.StringBuilder().Append(...)`
+            // or `new Outer.Inner().Consume()` do not masquerade as an explicit interface method
+            // (returnType=`new`, interface=the dot-chain qualifier preceding the constructed type
+            // — which may be a namespace prefix like `System.Text`, an enclosing-type chain like
+            // `Outer` in `new Outer.Inner()` where `Outer` is an outer class, or a mix of both
+            // like `MyApp.Outer` in `new MyApp.Outer.Inner()` where `MyApp` is a namespace and
+            // `Outer` is an enclosing type; the regex does not distinguish which segments are
+            // namespaces and which are enclosing types at this position — and name=the
+            // identifier right before the first `(`, i.e. the type being constructed:
+            // `StringBuilder` / `Inner`; the trailing `.Append(...)` / `.Consume()` chain is
+            // never part of the capture because the regex stops at the first `(`).
+            // Closes #362, #377.
             // 明示的インターフェース実装 (例: void IDisposable.Dispose())
             // 有効な戻り値型（ステートメントキーワードではない）とドット前のインターフェース名を要求。
             // qualified call site を伴う named-argument label のみ除外し、
             // `global::System.String` や `Alias::Type` のような alias-qualified 型は許可する。
-            new("function",  new Regex($@"^\s*(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\w+\s*:\s*(?:global::)?[\w.<>:]+\.\w+\s*(?:<[^>]+>\s*)?[\(\[])(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>\w+)\s*(?:<[^>]+>\s*)?[\(\[]", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            // `new` も除外して、`new System.Text.StringBuilder().Append(...)` や
+            // `new Outer.Inner().Consume()` のような式文が、returnType=`new` /
+            // interface=構築型の手前のドット連鎖修飾子（namespace `System.Text` / 外側クラス
+            // `Outer` のみ / namespace と外側型の混在 `MyApp.Outer`（`MyApp` が namespace、
+            // `Outer` が外側型）のいずれでもよく、正規表現はこの位置で namespace と外側型を
+            // 区別しない）/ name=構築される型（最初の `(` の直前の識別子、例: `StringBuilder`
+            // / `Inner`。正規表現は最初の `(` で止まるので、末尾の `.Append(...)` /
+            // `.Consume()` チェーンはキャプチャされない）として
+            // 明示的インターフェースメソッドに化けないようにする。
+            new("function",  new Regex($@"^\s*(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|new|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\w+\s*:\s*(?:global::)?[\w@.<>:]+\.\w+\s*{CSharpMethodTypeParameterListPattern}[\(\[])(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>{CSharpIdentifierPattern})\s*{CSharpMethodTypeParameterListPattern}[\(\[]", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             // Explicit interface property implementation (brace body), e.g. int IThing.Value { get; set; }
             // Mirrors the explicit-interface method row above: the qualifier is non-capturing so the
             // short property name (Value) is recorded as name, consistent with how the method row
@@ -589,18 +721,20 @@ public static class SymbolExtractor
             // 上の明示的インターフェースメソッド行と同じ構造で、修飾子は非キャプチャにしてショート名
             // (Value) のみを name として記録する。メソッド側が Dispose / CompareTo を返すのと揃える。
             // Closes #333.
-            new("property",  new Regex($@"^\s*(?![?:])(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>\w+)\s*\{{", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("property",  new Regex($@"^\s*(?![?:])(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>{CSharpIdentifierPattern})\s*\{{", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             // Explicit interface property implementation (expression body), e.g. string IThing.Name => "x";
             // 明示的インターフェースプロパティ実装（式本体）。例: string IThing.Name => "x";
-            new("property",  new Regex($@"^\s*(?![?:])(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>\w+)\s*=>\s*", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
-            // Indexer (this[...]) / インデクサ (this[...])
-            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?<returnType>{CSharpTypePattern})\s+(?<name>this)\s*\[", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
-            // Static constructor / 静的コンストラクタ
-            // `unsafe` can appear before or after `static` (`unsafe static S()` ≡ `static unsafe S()`). Closes #355.
-            // `unsafe` は `static` の前後どちらにも置ける（`unsafe static S()` ≡ `static unsafe S()`）。Closes #355.
-            new("function",  new Regex(@"^\s*(?:unsafe\s+)?static\s+(?:unsafe\s+)?(?<name>\w+)\s*\(\s*\)\s*\{?", RegexOptions.Compiled), BodyStyle.Brace),
+            new("property",  new Regex($@"^\s*(?![?:])(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>{CSharpIdentifierPattern})\s*=>\s*", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            // Indexer (this[...]) — `partial` is legal on indexers since C# 13 (extended partial
+            // member support), so accept it alongside the other modifiers. Otherwise every
+            // `partial` indexer declaration would be silently dropped from symbols / definition /
+            // outline. Closes #350.
+            // インデクサ (this[...]) — C# 13 で indexer に対しても `partial` が使える (partial
+            // member 拡張) ため、他の修飾子と並べて受け付ける。そうしないと `partial` indexer 宣言
+            // が symbols / definition / outline から無言で欠落する。Closes #350.
+            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|readonly|unsafe|extern|partial|ref(?:\s+readonly)?)\s+)*(?<returnType>{CSharpTypePattern})\s+(?<name>this)\s*\[", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Finalizer (destructor) / ファイナライザ（デストラクタ）
-            new("function",  new Regex(@"^\s*~(?<name>\w+)\s*\(\s*\)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function",  new Regex($@"^\s*~(?<name>{CSharpIdentifierPattern})\s*\(\s*\)", RegexOptions.Compiled), BodyStyle.Brace),
             // Enum member (e.g. Red, Green = 1,) — requires 4+ spaces indent, name only,
             // and optional = with numeric/hex/identifier value. Does NOT match string/object assignments.
             // enum メンバー（例: Red, Green = 1,）— 4+スペースインデント必須、名前のみ、
@@ -643,22 +777,22 @@ public static class SymbolExtractor
         ["java"] =
         [
             // Annotation type (@interface) / アノテーション型
-            new("class",    new Regex(@"^\s*(?<visibility>public|private|protected)?\s*@interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex(@"^\s*(?<visibility>public|private|protected)?\s*@interface\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
             // record (Java 16+) — must come before general class pattern / record は一般クラスパターンの前に配置
-            new("class",    new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*record\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*record\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
             // Interface / インターフェース
-            new("interface", new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|abstract|sealed|non-sealed|strictfp)\s+)*interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("interface", new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|abstract|sealed|non-sealed|strictfp)\s+)*interface\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
             // Enum / enum
-            new("enum",     new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|strictfp)\s+)*enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("enum",     new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|strictfp)\s+)*enum\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
             // Class — with extended modifiers (final, sealed, static, abstract, strictfp)
             // クラス — 拡張修飾子対応（final, sealed, static, abstract, strictfp）
-            new("class",    new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*class\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
             // Static final field (Java equivalent of C# const) — order-flexible (static final or final static), generic types with spaces
             // static final フィールド — 語順柔軟（static final / final static）、スペース含むジェネリック型対応
-            new("function", new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final)\s+){2}(?<returnType>[\w?.<>\[\],\s]+?)\s+(?<name>[A-Z_]\w*)\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            new("function", new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final)\s+){2}(?<returnType>[\w?.<>\[\],\s]+?)\s+(?<name>[A-Z_]\w*)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, "visibility", "returnType"),
             // Method with return type — expanded modifiers (default, native, synchronized, final)
             // 戻り値型付きメソッド — 拡張修飾子対応（default, native, synchronized, final）
-            new("function", new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|abstract|synchronized|final|default|native|strictfp)\s+)*(?<returnType>\w+(?:<[^>]+>)?(?:\[\])?)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("function", new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|abstract|synchronized|final|default|native|strictfp)\s+)*(?<returnType>\w+(?:<[^>]+>)?(?:\[\])?)\s+(?<name>\w+)\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility", "returnType"),
             // Enum members are extracted by ExtractJavaEnumMembers using a body-scoped scanner,
             // which handles any indent style (tab, 2-space, 4-space) and skips member-like lines
             // outside the enum body (e.g. `\tRED();` method calls inside a class body).
@@ -670,7 +804,7 @@ public static class SymbolExtractor
         ["kotlin"] =
         [
             // Companion object / コンパニオンオブジェクト
-            new("class",    new Regex(@"^\s*companion\s+object\s*(?<name>\w*)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*companion\s+object(?:\s+(?<name>\w+))?", RegexOptions.Compiled), BodyStyle.Brace),
             // Interface / インターフェース
             new("interface", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:sealed|expect|actual)\s+)*interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Enum class / enum クラス
@@ -838,32 +972,53 @@ public static class SymbolExtractor
         ],
         ["sql"] =
         [
-            // Identifier shape accepts PG double-quoted ("name"), T-SQL bracketed ([name]), or bare (\w+),
-            // optionally qualified with dots (schema.name, [dbo].[sp_X], "s"."n").
-            // 識別子形式は PG の "name"、T-SQL の [name]、裸 (\w+) を受け入れ、ドットで修飾可能
+            // Identifier shape accepts PG double-quoted ("name"), T-SQL bracketed ([name]), or bare
+            // ([\w$#]+) to cover Oracle identifiers such as SYS$LINK / USER#1, optionally qualified
+            // with dots (schema.name, [dbo].[sp_X], "s"."n").
+            // 識別子形式は PG の "name"、T-SQL の [name]、裸 ([\w$#]+) を受け入れる。裸 ID は
+            // SYS$LINK / USER#1 のような Oracle 識別子も拾える。ドットで修飾可能
             //（schema.name、[dbo].[sp_X]、"s"."n"）。
             // CREATE TABLE / VIEW — Postgres TEMP/UNLOGGED + MATERIALIZED VIEW, T-SQL `CREATE OR ALTER` (2016+)
             // CREATE TABLE / VIEW — Postgres の TEMP/UNLOGGED や MATERIALIZED VIEW、T-SQL の `CREATE OR ALTER`（2016+）に対応
-            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:(?:(?:GLOBAL|LOCAL)\s+)?(?:TEMP|TEMPORARY)\s+|UNLOGGED\s+)?(?:TABLE|(?:MATERIALIZED\s+)?VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex($@"^\s*CREATE\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:(?:(?:GLOBAL|LOCAL)\s+)?(?:TEMP|TEMPORARY)\s+|UNLOGGED\s+)?(?:TABLE|(?:MATERIALIZED\s+)?VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // CREATE PROCEDURE / PROC / FUNCTION / TRIGGER — Postgres `OR REPLACE` and T-SQL `OR ALTER` / `PROC` short form
+            // Uses BodyStyle.SqlProcBody so the body range covers the BEGIN...END / dollar-quoted body,
+            // letting ReferenceExtractor.ResolveContainerForCall attribute calls inside the body to the
+            // enclosing procedure (see issue #429).
             // CREATE PROCEDURE / PROC / FUNCTION / TRIGGER — Postgres の `OR REPLACE` と T-SQL の `OR ALTER` / 短縮形 `PROC` に対応
-            new("function", new Regex(@"^\s*CREATE\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:PROCEDURE|PROC|FUNCTION|TRIGGER)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("enum",     new Regex(@"^\s*CREATE\s+TYPE\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)\s+AS\s+ENUM\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*CREATE\s+TYPE\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("namespace", new Regex(@"^\s*CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:(?<name>(?!AUTHORIZATION\b)(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)|AUTHORIZATION\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*))", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*CREATE\s+(?:SEQUENCE|DOMAIN)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("import",   new Regex(@"^\s*CREATE\s+EXTENSION\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            // T-SQL SYNONYM
-            new("class",    new Regex(@"^\s*CREATE\s+SYNONYM\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            // T-SQL server-level / database-level principals and objects
-            // T-SQL のサーバ/データベースレベルのプリンシパル・オブジェクト
-            new("class",    new Regex(@"^\s*CREATE\s+(?:DATABASE|LOGIN|USER|ROLE|CERTIFICATE)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // BodyStyle.SqlProcBody により BEGIN...END / dollar-quoted の本体範囲を求め、ReferenceExtractor の
+            // ResolveContainerForCall が本体内の呼び出しを外側のプロシージャに帰属させられるようにする（issue #429）。
+            new("function", new Regex($@"^\s*CREATE\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:PROCEDURE|PROC|FUNCTION|TRIGGER)\b\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.SqlProcBody),
+            new("enum",     new Regex($@"^\s*CREATE\s+TYPE\s+(?<name>{SqlQualifiedIdentifierPattern})\s+AS\s+ENUM\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // Oracle: CREATE [OR REPLACE] TYPE BODY <name> and CREATE [OR REPLACE] PACKAGE [BODY] <name>.
+            // These must precede the bare CREATE TYPE / CREATE PACKAGE rows so the `BODY` keyword is
+            // not absorbed as the object name.
+            // Oracle: CREATE [OR REPLACE] TYPE BODY <name> と CREATE [OR REPLACE] PACKAGE [BODY] <name>。
+            // 裸の CREATE TYPE / CREATE PACKAGE 行より前に置き、`BODY` キーワードを name として
+            // 飲み込まないようにする。
+            new("class",    new Regex($@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?TYPE\s+BODY\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex($@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:EDITIONABLE\s+|NONEDITIONABLE\s+)?PACKAGE\s+BODY\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex($@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:EDITIONABLE\s+|NONEDITIONABLE\s+)?PACKAGE\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex($@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?TYPE\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("namespace", new Regex($@"^\s*CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:(?<name>(?!AUTHORIZATION\b){SqlQualifiedIdentifierPattern})|AUTHORIZATION\s+(?<name>{SqlQualifiedIdentifierPattern}))", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex($@"^\s*CREATE\s+(?:SEQUENCE|DOMAIN)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("import",   new Regex($@"^\s*CREATE\s+EXTENSION\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // T-SQL SYNONYM (also Oracle / DB2)
+            new("class",    new Regex($@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:PUBLIC\s+)?SYNONYM\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // Oracle: CREATE [SHARED] [PUBLIC] DATABASE LINK <name> — must precede the bare CREATE DATABASE row
+            // so the `LINK` token is not taken as a name. SHARED and PUBLIC may appear together in that order.
+            // Oracle: CREATE [SHARED] [PUBLIC] DATABASE LINK <name> — 裸の CREATE DATABASE 行より前に置き、
+            // `LINK` を name として飲み込まないようにする。SHARED と PUBLIC はこの順で 2 語並ぶことがある。
+            new("class",    new Regex($@"^\s*CREATE\s+(?:SHARED\s+)?(?:PUBLIC\s+)?DATABASE\s+LINK\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // T-SQL server-level / database-level principals and objects, plus Oracle-only DIRECTORY / CONTEXT / PROFILE.
+            // T-SQL のサーバ/データベースレベルのプリンシパル・オブジェクトと、Oracle 固有の DIRECTORY / CONTEXT / PROFILE。
+            new("class",    new Regex($@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:DATABASE|LOGIN|USER|ROLE|CERTIFICATE|DIRECTORY|CONTEXT|PROFILE)\b\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // T-SQL partitioning and full-text catalogs
             // T-SQL のパーティション関連と全文検索カタログ
-            new("function", new Regex(@"^\s*CREATE\s+PARTITION\s+FUNCTION\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*CREATE\s+PARTITION\s+SCHEME\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*CREATE\s+FULLTEXT\s+CATALOG\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(?!ON\b)(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("function", new Regex($@"^\s*CREATE\s+PARTITION\s+FUNCTION\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex($@"^\s*CREATE\s+PARTITION\s+SCHEME\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex($@"^\s*CREATE\s+FULLTEXT\s+CATALOG\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex($@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(?!ON\b)(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // ALTER covers the same object kinds we create above, so migration scripts remain visible.
             // Kinds are split to match the CREATE side (procedure-like → function, schema → namespace,
             // extension → import, everything else → class) so `symbols --kind` / `definition` / `inspect`
@@ -872,10 +1027,26 @@ public static class SymbolExtractor
             // CREATE 側に合わせて kind を分割し（プロシージャ類 → function、SCHEMA → namespace、
             // EXTENSION → import、その他 → class）、同じオブジェクトに対する CREATE と ALTER で
             // `symbols --kind` / `definition` / `inspect` の種別が揃うようにする。
-            new("function", new Regex(@"^\s*ALTER\s+(?:PROCEDURE|PROC|FUNCTION|TRIGGER|PARTITION\s+FUNCTION)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("namespace", new Regex(@"^\s*ALTER\s+SCHEMA\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("import",   new Regex(@"^\s*ALTER\s+EXTENSION\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*ALTER\s+(?:TABLE|(?:MATERIALIZED\s+)?VIEW|SEQUENCE|SYNONYM|LOGIN|USER|ROLE|DATABASE|CERTIFICATE|INDEX|TYPE|DOMAIN|PARTITION\s+SCHEME|FULLTEXT\s+CATALOG)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|\w+)(?:\.(?:\[[^\]]+\]|""[^""]+""|\w+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // ALTER PROCEDURE / PROC / FUNCTION / TRIGGER share the body shape with CREATE so they
+            // also get BodyStyle.SqlProcBody. ALTER PARTITION FUNCTION is body-less (it modifies the
+            // partition boundary, not code), so it keeps BodyStyle.None via a separate pattern below.
+            // ALTER PROCEDURE / PROC / FUNCTION / TRIGGER は CREATE と同じ本体形状を持つため
+            // BodyStyle.SqlProcBody を使う。ALTER PARTITION FUNCTION は本体を持たない
+            // （パーティション境界の変更のみ）ため、下の別パターンで BodyStyle.None のままにする。
+            new("function", new Regex($@"^\s*ALTER\s+(?:PROCEDURE|PROC|FUNCTION|TRIGGER)\b\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.SqlProcBody),
+            new("function", new Regex($@"^\s*ALTER\s+PARTITION\s+FUNCTION\b\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("namespace", new Regex($@"^\s*ALTER\s+SCHEMA\b\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("import",   new Regex($@"^\s*ALTER\s+EXTENSION\b\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // Oracle: ALTER DATABASE LINK <name> — must precede the bare ALTER DATABASE row so `LINK`
+            // is not absorbed as the object name. Real Oracle body compilation is expressed as
+            // `ALTER PACKAGE <name> COMPILE BODY` / `ALTER TYPE <name> COMPILE BODY` and falls through
+            // to the generic ALTER row below; there is no `ALTER PACKAGE BODY <name>` syntax in Oracle.
+            // Oracle: ALTER DATABASE LINK <name> — 裸の ALTER DATABASE 行より前に置き `LINK` を name
+            // として飲み込まないようにする。Oracle の body コンパイルは実際には
+            // `ALTER PACKAGE <name> COMPILE BODY` / `ALTER TYPE <name> COMPILE BODY` の形で、下の
+            // generic ALTER 行で拾う。`ALTER PACKAGE BODY <name>` のような構文は Oracle に存在しない。
+            new("class",    new Regex($@"^\s*ALTER\s+DATABASE\s+LINK\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex($@"^\s*ALTER\s+(?:TABLE|(?:MATERIALIZED\s+)?VIEW|SEQUENCE|SYNONYM|LOGIN|USER|ROLE|DATABASE|CERTIFICATE|INDEX|PACKAGE|TYPE|DOMAIN|DIRECTORY|PROFILE|PARTITION\s+SCHEME|FULLTEXT\s+CATALOG)\b\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
         ],
         ["terraform"] =
         [
@@ -939,6 +1110,45 @@ public static class SymbolExtractor
             // Import-Module / using module / モジュールインポート
             new("import",   new Regex(@"^\s*(?:Import-Module|using\s+module)\s+(?<name>\S+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
         ],
+        ["batch"] =
+        [
+            // Labels — goto :X / call :X targets, the only navigation anchors in a batch script.
+            // `::` comment form has no label name, so the name character class naturally rejects it.
+            // Dotted labels like `:build.release` are real batch label names, so accept `.` too.
+            // `:EOF` is a reserved batch target used by `goto :EOF` / `call :EOF`, not a user-defined
+            // label, so exclude it — but only the literal full-name `eof`. Labels that merely begin
+            // with `eof` such as `:eof2` / `:eofish` / `:end-of-file` / `:eof.x` must still surface,
+            // which is why the negative lookahead checks for name-terminating characters instead of `\b`.
+            // ラベル — goto :X / call :X の着地点であり、batch スクリプト内で唯一のナビゲーションアンカー。
+            // `::` コメント形式はラベル名を持たないため名前文字クラスが自然に弾く。
+            // `:build.release` のようなドット付きラベルも正規のラベル名として受け入れる。
+            // `:EOF` は `goto :EOF` / `call :EOF` 用の予約ターゲットであってユーザー定義ラベルではないため除外するが、
+            // 除外するのは名前全体が `eof` のときだけ。`:eof2` / `:eofish` / `:end-of-file` / `:eof.x` のように
+            // 単に `eof` で始まるだけのラベルは通す必要があるため、`\b` ではなく名前終端文字を見る negative lookahead を使う。
+            new("function", new Regex(@"^\s*:(?!eof(?![\w.-]))(?<name>[\w.\-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            // Variable assignment — set VAR=value, set /a VAR=expr, set /p VAR=prompt, set "VAR=value".
+            // Also handles `@set VAR=...` (echo suppression prefix), `set /a VAR+=1` (compound
+            // assignment operators), `if ... set VAR=...` (inline assignment inside a one-line
+            // control statement), and same-line multi-statement forms `set A=1 & set B=2`,
+            // `( set X=1 )`, `if ... ( set P=1 ) else set Q=2`, `for ... do set LOOPVAR=...`.
+            // Boundary alternation: line-leading `^`, or after `&` / `(` / `\belse` / `\bdo` so
+            // the regex (paired with the batch multi-match advance in the extractor loop) can
+            // emit one symbol per `set` occurrence on the same line instead of dropping every
+            // assignment after the first match. `rem` / `@rem` / `::` comment lines can also
+            // contain those boundary tokens (e.g. `REM & set FAKE=1`), so they are short-
+            // circuited by `IsBatchCommentLine` before this pattern ever runs — the boundary
+            // alternation alone is not enough to keep comment bodies out of the capture.
+            // 変数代入 — set VAR=value、set /a VAR=expr、set /p VAR=prompt、set "VAR=value" に対応。
+            // 併せて `@set VAR=...` (echo 抑止プレフィクス) 、`set /a VAR+=1` (複合代入演算子) 、
+            // `if ... set VAR=...` (1 行制御文内の代入) 、および `set A=1 & set B=2` / `( set X=1 )` /
+            // `if ... ( set P=1 ) else set Q=2` / `for ... do set LOOPVAR=...` のような同一行複数ステートメント形も拾う。
+            // 境界は `^` / `&` / `(` / `\belse` / `\bdo` のいずれかで、extractor 側の batch 専用
+            // multi-match advance と組み合わせて 1 行中の `set` ごとに 1 シンボルを出す。
+            // `rem` / `@rem` / `::` コメント行にもこれらの境界トークンが入りうる
+            // (`REM & set FAKE=1` 等) ため、この正規表現が走る前に `IsBatchCommentLine` で
+            // 行ごと早期スキップしている — 境界 alternation だけではコメント本文を弾ききれない。
+            new("property", new Regex(@"(?:(?:^|&|\()\s*|(?:\belse|\bdo)\s+)(?:@\s*)?(?:if\s+.+?\s+)?set\s+(?:/[aApP]\s+)?""?(?<name>[A-Za-z_][\w]*)\s*(?:[+\-*/%&^|]|<<|>>)?=", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+        ],
         ["zig"] =
         [
             // Public and private function declarations / 公開・非公開の関数宣言
@@ -964,7 +1174,7 @@ public static class SymbolExtractor
 
     private static readonly HashSet<string> ContainerKinds =
     [
-        "class", "namespace", "enum"
+        "class", "struct", "interface", "namespace", "enum"
     ];
 
     private static readonly Regex RubyBlockStartRegex = new(@"^\s*(?:class|module|def|if|unless|case|begin|do|while|until|for)\b", RegexOptions.Compiled);
@@ -985,7 +1195,7 @@ public static class SymbolExtractor
     // を通せるように CSharpTypePattern と同じトークン集合へ揃え、generic 引数リスト内の
     // `,` + 空白の組み合わせを落とさないようにする。
     private const string CSharpExplicitInterfaceQualifierPattern =
-        @"(?:global::)?(?:[A-Z_]\w*|[A-Za-z_]\w*::\w+)[\w?.<>\[\],:*]*(?:\s+[\w?.<>\[\],:*]+)*";
+        @"(?:global::)?(?:" + CSharpIdentifierPattern + @"|" + CSharpIdentifierPattern + @"::" + CSharpIdentifierPattern + @")[\w@?.<>\[\],:*]*(?:\s+[\w@?.<>\[\],:*]+)*";
     private static readonly Regex CssFontFaceDeclarationRegex = new(@"(?:^|[;{])\s*font-family\s*:", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CssInlineCustomPropertyRegex = new(@"(?<name>--[\w-]+)\s*:", RegexOptions.Compiled);
     // Accepts `Type Name`, `Type`, and `Type Name {` (bare brace at end of declaration
@@ -1008,7 +1218,25 @@ public static class SymbolExtractor
     // + 次行 `Map = new();` や `new public const int` + 次行 `C = 1;` のような
     // 複数行宣言も 1 つのマッチ行に結合できるようにする。複数行 const フィールド向けに
     // `const` も他の field 対応修飾子と一緒に列挙する。Closes #355.
-    private static readonly Regex CSharpPropertyHeaderPrefixRegex = new($@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|volatile|unsafe|extern|const|ref(?:\s+readonly)?)\s+)*(?:{CSharpTypePattern})\s*(?:\w+)?\s*\{{?\s*$", RegexOptions.Compiled);
+    private static readonly Regex CSharpPropertyHeaderPrefixRegex = new($@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|volatile|unsafe|extern|const|ref(?:\s+readonly)?)\s+)*(?:{CSharpTypePattern})\s*(?:{CSharpIdentifierPattern})?\s*\{{?\s*$", RegexOptions.Compiled);
+    // Limit only the lightweight confirmation phase. Once a candidate looks like a real
+    // declaration (`name =`, or a named member header before `{`), BuildCSharpPropertyMatchLine
+    // switches to a linear terminator/accessor scan so long raw strings / initializers are not
+    // truncated. The cap exists solely to stop false-positive statement fragments such as
+    // `return o switch` from repeatedly re-normalizing the rest of a large file. Closes #447.
+    // 上限は軽量な確認フェーズにだけ適用する。候補が実際の宣言らしく見えた時点
+    // （`name =`、または `{` 前まで到達した named member header）で
+    // BuildCSharpPropertyMatchLine は線形な終端 / accessor 走査へ切り替え、長い raw string /
+    // initializer を途中で切らない。上限の目的は `return o switch` のような false positive 文断片が
+    // 大きいファイルの残り全体を何度も再正規化するのを止めることだけ。Closes #447.
+    private const int CSharpPropertyMatchLookaheadLineLimit = 16;
+    private const int CSharpPropertyMatchLookaheadCharLimit = 4096;
+    private static readonly Regex CSharpConfirmedMemberPrefixRegex = new(
+        $@"^\s*(?:(?:{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|volatile|unsafe|extern|const|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate\b(?!\*)|event|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await|try|do|operator|this|base)\b)(?:{CSharpTypePattern})\s+(?:{CSharpExplicitInterfaceQualifierPattern}\s*\.\s*)?(?:{CSharpIdentifierPattern})\s*\{{?\s*$",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpStandaloneAccessorRegex = new(
+        @"^\s*(?:(?:protected\s+internal|private\s+protected|protected|internal|private|public)\s+)*(?:readonly\s+)*(?:get|set|init)\b",
+        RegexOptions.Compiled);
 
     // Detect physical lines that consist solely of C# modifier keywords (no identifier,
     // no parentheses, no punctuation). Used by TryFindCSharpWrappedHeaderModifier to
@@ -1039,6 +1267,32 @@ public static class SymbolExtractor
         if (lang == null || !PatternCache.TryGetValue(lang, out var patterns))
             return [];
 
+        // Null / empty fast path — keep the direct-call null-safe contract that
+        // FileIndexer.StripLineLeadingBom's IsNullOrEmpty check used to provide
+        // before the CRLF normalization step was added in front of it. Closes #183.
+        // null / 空入力は早期 return。CRLF 正規化を StripLineLeadingBom の前に
+        // 入れたことで helper 側の IsNullOrEmpty による null 許容が効かなくなる
+        // ため、direct call の null セーフ契約をここで復元する。Closes #183.
+        if (string.IsNullOrEmpty(content))
+            return [];
+
+        // Normalize CRLF / CR to LF first so direct callers that bypass FileIndexer
+        // still present a `\n`-only content stream, and then strip line-leading
+        // UTF-8 BOM (U+FEFF) defensively so `^\s*`-anchored patterns match on
+        // line 1 and on any mid-file line that begins with a BOM (e.g. from file
+        // concatenation or tool insertion). StripLineLeadingBom assumes `\n` is
+        // the sole line separator, so the CRLF pass must come first. Non-line-
+        // leading U+FEFF is preserved so content with intentional ZWNBSP inside
+        // a string literal stays verbatim. Closes #183.
+        // まず CRLF / CR を LF に正規化する。StripLineLeadingBom は `\n` を唯一の
+        // 行区切りとして行頭判定するので、FileIndexer を経由しない direct call
+        // でも CRLF 正規化を済ませてから呼ばないと mid-file の行頭 BOM を剥がし
+        // 損なう。続いて行頭 U+FEFF のみ剥がし、1 行目と mid-file の行頭 BOM 両方
+        // で `^\s*` 固定パターンを成立させる。行頭以外の U+FEFF (文字列リテラル中
+        // の意図的な ZWNBSP 等) はそのまま保持する。Closes #183.
+        if (content.Contains('\r'))
+            content = content.Replace("\r\n", "\n").Replace("\r", "\n");
+        content = FileIndexer.StripLineLeadingBom(content);
         var lines = content.Split('\n');
 
         // HTML has no brace/indent-scoped bodies, so the generic pattern loop's
@@ -1062,7 +1316,10 @@ public static class SymbolExtractor
             : null;
         int[]?[] csharpMatchColumnToRaw = null!;
         var csharpMatchLines = lang == "csharp"
-            ? BuildCSharpMatchLines(structuralLines, out csharpMatchColumnToRaw)
+            ? BuildCSharpMatchLines(lines, out csharpMatchColumnToRaw)
+            : null;
+        var csharpLineStartStates = lang == "csharp"
+            ? BuildCSharpLineStartStates(lines)
             : null;
         var privateScopeColumns = lang is "javascript" or "typescript"
             ? BuildJavaScriptTypeScriptPrivateScopeColumns(lines, lang)
@@ -1106,97 +1363,192 @@ public static class SymbolExtractor
                 matchLine = csharpMatchLines![i];
             }
 
-            var stopAfterFirstPatternMatch = false;
-            foreach (var pattern in patterns)
+            // Batch `rem` / `@rem` / `::` comment lines contain the same `&` / `(` / `else` /
+            // `do` boundary tokens that the property regex now accepts for inline `set`
+            // capture, so `REM & set FAKE=1` or `:: else set FAKE=2` would otherwise leak a
+            // phantom property. Short-circuit those lines before any pattern fires — batch
+            // labels never match on `::` / `rem` lines anyway because the label regex
+            // requires `:<name-char>`, not `::` or `r`.
+            // batch の `rem` / `@rem` / `::` コメント行は、inline `set` 捕捉のために property 正規表現が
+            // 受け付ける `&` / `(` / `else` / `do` の境界トークンを含みうるため、`REM & set FAKE=1` や
+            // `:: else set FAKE=2` が偽 property を出す恐れがある。パターン適用前に当該行ごと
+            // 早期スキップする — batch ラベル側は `::` / `rem` 行ではそもそも `:<名前文字>` の要件を
+            // 満たさないため影響を受けない。
+            if (lang == "batch" && IsBatchCommentLine(line))
+                continue;
+
+            var patternStartOffset = lang is "javascript" or "typescript"
+                ? FindNextJavaScriptTypeScriptStatementStart(matchLine, 0)
+                : 0;
+            if (lang == "csharp" && patternStartOffset == 0)
             {
-                if (lang == "csharp" && ReferenceEquals(pattern.Regex, CSharpEnumMemberRegex))
-                    continue;
-                // Merge multi-line field headers for C# regardless of kind. Kind "property" (plain
-                // fields) and kind "function" (const / static readonly fields) both need the
-                // merge. Non-field function patterns (methods, constructors, operators, indexers)
-                // are unaffected because CSharpPropertyHeaderPrefixRegex requires the line to end
-                // before `(` or `{`, so lines like `public int Foo()` never satisfy the header
-                // prefix and the merger returns the original line. Closes #355.
-                // C# の複数行フィールドヘッダ結合は kind に依らず適用する。kind "property"（通常
-                // フィールド）と kind "function"（`const` / `static readonly` フィールド）の両方で
-                // 結合が必要。method / constructor / operator / indexer のような非フィールド
-                // function パターンは `CSharpPropertyHeaderPrefixRegex` が `(` や `{` を含む行を
-                // 受け付けないため影響を受けず、merger は元の行をそのまま返す。Closes #355.
-                var csharpPropertyCandidate = lang == "csharp" && pattern.Kind is "property" or "function"
-                    ? BuildCSharpPropertyMatchLine(lines, csharpMatchLines!, i)
-                    : new CSharpPropertyMatchCandidate(matchLine, i, i);
-                var patternMatchLine = csharpPropertyCandidate.MatchLine;
-                var lineOffset = lang is "javascript" or "typescript"
-                    ? FindNextJavaScriptTypeScriptStatementStart(patternMatchLine, 0)
-                    : 0;
-                string? csharpWrappedModifierPrefix = null;
-                while (lineOffset >= 0 && lineOffset < patternMatchLine.Length)
+                var firstNonWhitespace = 0;
+                while (firstNonWhitespace < matchLine.Length && char.IsWhiteSpace(matchLine[firstNonWhitespace]))
+                    firstNonWhitespace++;
+
+                if (firstNonWhitespace < matchLine.Length
+                    && matchLine[firstNonWhitespace] is '}' or ';' or '"')
+                    patternStartOffset = FindNextSameLineNonClosingBraceStatementStart(matchLine, firstNonWhitespace + 1, lang);
+            }
+            while (patternStartOffset >= 0 && patternStartOffset < matchLine.Length)
+            {
+                var stopAfterFirstPatternMatch = false;
+                var restartPatternScanOffset = -1;
+                foreach (var pattern in patterns)
                 {
-                    var match = pattern.Regex.Match(patternMatchLine[lineOffset..]);
-                    if (!match.Success
-                        && lang == "csharp"
-                        && pattern.Kind == "function"
-                        && lineOffset == 0
-                        && csharpMatchLines != null
-                        && csharpWrappedModifierPrefix == null)
+                    if (lang == "csharp" && ReferenceEquals(pattern.Regex, CSharpEnumMemberRegex))
+                        continue;
+                    // Merge multi-line field headers for C# regardless of kind. Kind "property" (plain
+                    // fields) and kind "function" (const / static readonly fields) both need the
+                    // merge. Non-field function patterns (methods, constructors, operators, indexers)
+                    // are unaffected because CSharpPropertyHeaderPrefixRegex requires the line to end
+                    // before `(` or `{`, so lines like `public int Foo()` never satisfy the header
+                    // prefix and the merger returns the original line. Closes #355.
+                    // C# の複数行フィールドヘッダ結合は kind に依らず適用する。kind "property"（通常
+                    // フィールド）と kind "function"（`const` / `static readonly` フィールド）の両方で
+                    // 結合が必要。method / constructor / operator / indexer のような非フィールド
+                    // function パターンは `CSharpPropertyHeaderPrefixRegex` が `(` や `{` を含む行を
+                    // 受け付けないため影響を受けず、merger は元の行をそのまま返す。Closes #355.
+                    var csharpPropertyCandidate = lang == "csharp" && pattern.Kind is "property" or "function"
+                        ? BuildCSharpPropertyMatchLine(lines, csharpMatchLines!, i)
+                        : new CSharpPropertyMatchCandidate(matchLine, i, i);
+                    var patternMatchLine = csharpPropertyCandidate.MatchLine;
+                    var lineOffset = patternStartOffset;
+                    string? csharpWrappedModifierPrefix = null;
+                    while (lineOffset >= 0 && lineOffset < patternMatchLine.Length)
                     {
-                        // Wrapped leading modifier recovery: when a C# function-kind pattern
-                        // fails at column 0 of the identifier line, try prepending the
-                        // modifier prefix accumulated from preceding modifier-only lines
-                        // (`static\nFoo() { ... }`, `public\nBar() { ... }`, etc.) and retry.
-                        // The method regex already tolerates an omitted modifier run, so it
-                        // matches on the identifier line alone — this branch only fires for
-                        // constructor / static-constructor shapes that require the modifier
-                        // on the same line as the name. Closes #348.
-                        // ラップされた先頭モディファイアの救済: C# の function 系パターンが
-                        // 識別子行の先頭マッチに失敗した場合、直前のモディファイアのみ行
-                        // （`static\nFoo() { ... }` や `public\nBar() { ... }` 等）から
-                        // 再構築した prefix を付け直して再試行する。メソッド regex は
-                        // 先頭モディファイアが無くても識別子行単体でマッチするため、この
-                        // 分岐は修飾子が識別子と同行に必要な constructor / static ctor
-                        // シェイプでのみ発火する。Closes #348.
-                        var wrappedInfo = TryFindCSharpWrappedHeaderModifier(csharpMatchLines!, i);
-                        if (wrappedInfo != null)
+                        var javaLeadingAnnotationOffset = 0;
+                        var match = lang == "java"
+                            ? (TryMatchJavaDeclarationSegment(pattern.Regex, patternMatchLine[lineOffset..], out var javaMatch, out javaLeadingAnnotationOffset)
+                                ? javaMatch
+                                : pattern.Regex.Match(patternMatchLine[lineOffset..]))
+                            : pattern.Regex.Match(patternMatchLine[lineOffset..]);
+                        if (!match.Success
+                            && lang == "csharp"
+                            && pattern.Kind == "function"
+                            && lineOffset == 0
+                            && csharpMatchLines != null
+                            && csharpWrappedModifierPrefix == null)
                         {
-                            foreach (var candidatePrefix in EnumerateCSharpWrappedModifierCandidates(wrappedInfo.Value.Prefix))
+                            // Wrapped leading modifier recovery: when a C# function-kind pattern
+                            // fails at column 0 of the identifier line, try prepending the
+                            // modifier prefix accumulated from preceding modifier-only lines
+                            // (`static\nFoo() { ... }`, `public\nBar() { ... }`, etc.) and retry.
+                            // The method regex already tolerates an omitted modifier run, so it
+                            // matches on the identifier line alone — this branch only fires for
+                            // constructor / static-constructor shapes that require the modifier
+                            // on the same line as the name. Closes #348.
+                            // ラップされた先頭モディファイアの救済: C# の function 系パターンが
+                            // 識別子行の先頭マッチに失敗した場合、直前のモディファイアのみ行
+                            // （`static\nFoo() { ... }` や `public\nBar() { ... }` 等）から
+                            // 再構築した prefix を付け直して再試行する。メソッド regex は
+                            // 先頭モディファイアが無くても識別子行単体でマッチするため、この
+                            // 分岐は修飾子が識別子と同行に必要な constructor / static ctor
+                            // シェイプでのみ発火する。Closes #348.
+                            var wrappedInfo = TryFindCSharpWrappedHeaderModifier(csharpMatchLines!, i);
+                            if (wrappedInfo != null)
                             {
-                                var wrappedMatchLine = candidatePrefix + " " + patternMatchLine.TrimStart();
-                                var wrappedMatch = pattern.Regex.Match(wrappedMatchLine);
-                                if (wrappedMatch.Success)
+                                foreach (var candidatePrefix in EnumerateCSharpWrappedModifierCandidates(wrappedInfo.Value.Prefix))
                                 {
-                                    match = wrappedMatch;
-                                    patternMatchLine = wrappedMatchLine;
-                                    // Preserve the full prefix in the stored signature so
-                                    // declarations like `public\nstatic\nP1()` retain
-                                    // `public static P1()`, even when the matching regex
-                                    // variant only accepted `static P1()`. Closes #348.
-                                    // シグネチャには完全な prefix を残し、`public\nstatic\nP1()`
-                                    // のような宣言を `public static P1()` として保存する。
-                                    // マッチした regex 変種が `static P1()` 形だけを受け付けた
-                                    // 場合でも、保存シグネチャは完全な prefix を保持する。Closes #348.
-                                    csharpWrappedModifierPrefix = wrappedInfo.Value.Prefix;
-                                    break;
+                                    var wrappedMatchLine = candidatePrefix + " " + patternMatchLine.TrimStart();
+                                    var wrappedMatch = pattern.Regex.Match(wrappedMatchLine);
+                                    if (wrappedMatch.Success)
+                                    {
+                                        match = wrappedMatch;
+                                        patternMatchLine = wrappedMatchLine;
+                                        // Preserve the full prefix in the stored signature so
+                                        // declarations like `public\nstatic\nP1()` retain
+                                        // `public static P1()`, even when the matching regex
+                                        // variant only accepted `static P1()`. Closes #348.
+                                        // シグネチャには完全な prefix を残し、`public\nstatic\nP1()`
+                                        // のような宣言を `public static P1()` として保存する。
+                                        // マッチした regex 変種が `static P1()` 形だけを受け付けた
+                                        // 場合でも、保存シグネチャは完全な prefix を保持する。Closes #348.
+                                        csharpWrappedModifierPrefix = wrappedInfo.Value.Prefix;
+                                        break;
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    if (!match.Success)
-                    {
-                        if (lang is "javascript" or "typescript" or "csharp" or "css")
+                        if (!match.Success)
                         {
-                            lineOffset = FindNextSameLineBraceStatementStart(matchLine, lineOffset + 1, lang);
-                            continue;
+                            if (lang == "csharp"
+                                && pattern.Kind == "property"
+                                && pattern.BodyStyle == BodyStyle.Brace
+                                && ShouldDeferCSharpBracePropertySameLineAdvance(matchLine, lineOffset))
+                            {
+                                break;
+                            }
+
+                            if (lang == "csharp"
+                                && pattern.Kind == "function"
+                                && ShouldDeferCSharpFunctionSameLineAdvance(matchLine, lineOffset))
+                            {
+                                break;
+                            }
+
+                            if (lang == "csharp"
+                                && pattern.Kind is "event" or "delegate"
+                                && pattern.BodyStyle == BodyStyle.None
+                                && ShouldDeferCSharpEventOrDelegateSameLineAdvance(matchLine, lineOffset, pattern.Kind))
+                            {
+                                break;
+                            }
+
+                            if (lang is "javascript" or "typescript" or "css" or "java"
+                                || (lang == "csharp"
+                                    && pattern.Kind == "enum"
+                                    && pattern.BodyStyle == BodyStyle.Brace
+                                    && patternStartOffset > 0)
+                                || (lang == "csharp"
+                                    && pattern.Kind == "property"
+                                    && pattern.BodyStyle == BodyStyle.None
+                                    && !TryMatchAnyRecoverableCSharpPattern(
+                                        matchLine[lineOffset..],
+                                        insideEnumBody: false,
+                                        attributeParenDepth: 0)))
+                            {
+                                lineOffset = FindNextSameLineBraceStatementStart(matchLine, lineOffset + 1, lang);
+                                continue;
+                            }
+
+                            break;
                         }
 
-                        break;
+                        var absoluteStartColumn = lineOffset + match.Index;
+                        if (lang == "java" && javaLeadingAnnotationOffset > 0)
+                            absoluteStartColumn = lineOffset + javaLeadingAnnotationOffset;
+                        var nextSameLineOffsetAfterRejectedCSharpProperty = -1;
+                    if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, patternMatchLine, csharpSwitchExpressionLines, i)
+                        || TrySkipCSharpBracePropertyCandidate(
+                            lang,
+                            pattern,
+                            patternMatchLine,
+                            absoluteStartColumn,
+                            match.Value.Contains("=>", StringComparison.Ordinal),
+                            out nextSameLineOffsetAfterRejectedCSharpProperty))
+                    {
+                        // False-positive C# property matches can happen at the start of a
+                        // same-line type header (`public class C { ... }`) because the
+                        // property regex allows omitted visibility/modifier runs and can
+                        // initially treat the header as `returnType + name + {`. Do not break
+                        // the whole same-line scan on that rejection — advance to the next
+                        // brace-delimited statement so a real nested property later on the
+                        // same physical line still gets a chance to match. Closes #470.
+                        // C# の property 正規表現は visibility / modifier 省略を許すため、
+                        // 同一行の型ヘッダ先頭 (`public class C { ... }`) を一旦
+                        // `returnType + name + {` と誤認することがある。この偽候補を弾いた
+                        // ときに同一行スキャン全体を break せず、次の brace 区切り宣言へ進めて
+                        // 後続の本物 property にもマッチ機会を残す。Closes #470.
+                        lineOffset = nextSameLineOffsetAfterRejectedCSharpProperty >= 0
+                            ? nextSameLineOffsetAfterRejectedCSharpProperty
+                            : FindNextSameLineBraceStatementStart(
+                                matchLine,
+                                absoluteStartColumn + Math.Max(1, match.Length),
+                                lang);
+                        continue;
                     }
-
-                    if (ShouldSkipCSharpSwitchExpressionPropertyCandidate(lang, pattern, patternMatchLine, csharpSwitchExpressionLines, i))
-                        break;
-
-                    if (ShouldSkipCSharpBracePropertyCandidate(lang, pattern, patternMatchLine))
-                        break;
 
                     // Gate the C# plain-field pattern (kind `property`, BodyStyle.None) to
                     // lines that sit directly inside a type body. Without this gate, local
@@ -1213,7 +1565,6 @@ public static class SymbolExtractor
                     if (ShouldSkipCssNestedSelectorCandidate(lang, pattern, patternMatchLine, cssQualifiedRuleAncestors, i))
                         break;
 
-                    var absoluteStartColumn = lineOffset + match.Index;
                     // For C#, collapsed-space column (from CollapseCSharpGenericTypeWhitespace)
                     // has to be translated back to raw-space before it can be compared against
                     // CSharpTypeBodyScope's per-line transitions, which were built from
@@ -1227,7 +1578,10 @@ public static class SymbolExtractor
                     // raw 列へ戻す必要がある。複数行を結合した match では単一行の map が
                     // 使えないため、単一行ケース（per-line collapsed line そのものにマッチした
                     // 場合）だけ変換する。Closes #400.
-                    var csharpGateRawStartColumn = absoluteStartColumn;
+                    var csharpNormalizedStartColumn = lang == "csharp"
+                        ? SkipWhitespace(patternMatchLine, absoluteStartColumn)
+                        : absoluteStartColumn;
+                    var csharpGateRawStartColumn = csharpNormalizedStartColumn;
                     if (lang == "csharp"
                         && csharpMatchLines != null
                         && ReferenceEquals(patternMatchLine, csharpMatchLines[i]))
@@ -1235,13 +1589,13 @@ public static class SymbolExtractor
                         csharpGateRawStartColumn = TranslateCSharpCollapsedColumnToRaw(
                             csharpMatchColumnToRaw,
                             i,
-                            absoluteStartColumn,
+                            csharpNormalizedStartColumn,
                             line.Length);
                     }
 
                     if (lang == "csharp"
-                        && pattern.Kind == "property"
                         && pattern.BodyStyle == BodyStyle.None
+                        && (pattern.Kind == "property" || IsCSharpFieldLikeFunctionPattern(pattern))
                         && csharpInsideTypeBody != null
                         && !csharpInsideTypeBody.IsInsideTypeBodyAt(i, csharpGateRawStartColumn))
                     {
@@ -1255,6 +1609,21 @@ public static class SymbolExtractor
                         // 後ろにある実フィールド）を取りこぼさないよう、次の候補探索
                         // 位置へ進める。この進行が無いと最初の拒否で while ループが
                         // 行を抜けてしまい、後続候補が失われる。Closes #400.
+                        lineOffset = FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang);
+                        continue;
+                    }
+                    var rawReturnType = TryGetGroup(match, pattern.ReturnTypeGroup);
+                    if (lang == "csharp"
+                        && pattern.ReturnTypeGroup != null
+                        && HasInvalidCSharpReturnTypeSuffix(rawReturnType))
+                    {
+                        lineOffset = FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang);
+                        continue;
+                    }
+                    if (lang == "csharp"
+                        && pattern.Kind == "property"
+                        && IsStandaloneCSharpAccessorCandidate(patternMatchLine))
+                    {
                         lineOffset = FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang);
                         continue;
                     }
@@ -1298,7 +1667,7 @@ public static class SymbolExtractor
                     var name = match.Groups["name"].Success
                         ? match.Groups["name"].Value.Trim()
                         : match.Value.Trim();
-                    name = NormalizeCSharpSymbolName(lang, name, match, matchLine);
+                    name = NormalizeExtractedSymbolName(lang, name, match, matchLine);
 
                     var rangeLines = lang == "css" && cssScannerLines != null
                         ? cssScannerLines
@@ -1338,10 +1707,70 @@ public static class SymbolExtractor
                         break;
                     }
 
+                    var csharpSingleLineCollapsedMatch = lang == "csharp"
+                        && csharpMatchLines != null
+                        && ReferenceEquals(patternMatchLine, csharpMatchLines[i]);
+                    var csharpSignatureRawStartColumn = csharpGateRawStartColumn;
+                    var csharpSameLineBraceStartColumn = csharpSingleLineCollapsedMatch
+                        ? absoluteStartColumn
+                        : csharpSignatureRawStartColumn;
                     var sameLineEndColumn = pattern.BodyStyle == BodyStyle.Brace
                         && bodyEndLine == startLine
-                        ? FindSameLineBraceEndColumn(line, absoluteStartColumn, lang, kind)
+                        ? (lang == "csharp" && csharpSingleLineCollapsedMatch
+                            ? FindCSharpSameLineBraceEndColumnFromSanitized(patternMatchLine, csharpSameLineBraceStartColumn)
+                            : FindSameLineBraceEndColumn(line, csharpSameLineBraceStartColumn, lang, kind))
                         : -1;
+                    var sameLineEndUsesRawColumns = pattern.BodyStyle == BodyStyle.Brace
+                        && bodyEndLine == startLine
+                        && !(lang == "csharp" && csharpSingleLineCollapsedMatch);
+                    if (lang == "csharp"
+                        && csharpSingleLineCollapsedMatch
+                        && CanUseCSharpSameLineSemicolonEndColumn(kind))
+                    {
+                        var semicolonEndColumn = FindCSharpSameLineSemicolonEndColumn(patternMatchLine, absoluteStartColumn);
+                        if (semicolonEndColumn >= absoluteStartColumn
+                            && (sameLineEndColumn < absoluteStartColumn || semicolonEndColumn < sameLineEndColumn))
+                        {
+                            sameLineEndColumn = semicolonEndColumn;
+                            sameLineEndUsesRawColumns = false;
+                        }
+                    }
+                    if (lang == "csharp"
+                        && kind == "event"
+                        && pattern.BodyStyle == BodyStyle.None
+                        && HasCSharpEventAccessorStart(patternMatchLine[absoluteStartColumn..]))
+                    {
+                        // Same-line accessor events (`event E { add {} remove {} }`) share the
+                        // sibling-stream requirement with semicolon-bodied members: their
+                        // signature must stop at the accessor block so later same-line siblings
+                        // can restart the full pattern scan. Without this brace clamp, the
+                        // stored event signature swallows the following declaration and the
+                        // later sibling never reaches earlier patterns such as property.
+                        // Closes #520.
+                        // 同一行 accessor event (`event E { add {} remove {} }`) も semicolon 系
+                        // member と同様に sibling stream として扱う必要がある。そのため
+                        // accessor block の閉じ `}` で signature を切り、後続の same-line
+                        // sibling が property など先頭側 pattern へ再到達できるようにする。
+                        // これが無いと event signature が後続宣言を飲み込み、後続 sibling が
+                        // earlier pattern に届かない。Closes #520.
+                        var braceEndColumn = csharpSingleLineCollapsedMatch
+                            ? FindCSharpSameLineBraceEndColumnFromSanitized(patternMatchLine, csharpSameLineBraceStartColumn)
+                            : FindSameLineBraceEndColumn(line, csharpSameLineBraceStartColumn, lang, kind);
+                        if (braceEndColumn >= absoluteStartColumn
+                            && (sameLineEndColumn < absoluteStartColumn || braceEndColumn < sameLineEndColumn))
+                        {
+                            sameLineEndColumn = braceEndColumn;
+                            sameLineEndUsesRawColumns = !(lang == "csharp" && csharpSingleLineCollapsedMatch);
+                        }
+                    }
+                    if (sameLineEndColumn < absoluteStartColumn
+                        && lang == "csharp"
+                        && kind == "enum"
+                        && pattern.BodyStyle == BodyStyle.None)
+                    {
+                        sameLineEndColumn = FindCSharpSameLineEnumMemberEndColumn(patternMatchLine, absoluteStartColumn);
+                        sameLineEndUsesRawColumns = false;
+                    }
                     string signature;
                     if (csharpWrappedModifierPrefix != null)
                     {
@@ -1355,21 +1784,81 @@ public static class SymbolExtractor
                         // (`static Foo() { ... }`) を保存する。同一行に brace 本体が閉じる
                         // ケースではその末尾で切り詰め、シグネチャが本体全体を飲み込まない
                         // ようにする。Closes #348.
+                        var nameLineStartColumn = csharpSingleLineCollapsedMatch
+                            ? (sameLineEndUsesRawColumns
+                                ? csharpSignatureRawStartColumn
+                                : csharpSignatureRawStartColumn)
+                            : absoluteStartColumn;
+                        var nameLineEndExclusive = sameLineEndColumn >= absoluteStartColumn
+                            ? (sameLineEndUsesRawColumns
+                                ? Math.Min(sameLineEndColumn + 1, line.Length)
+                                : Math.Min(
+                                    TranslateCSharpCollapsedColumnToRaw(
+                                        csharpMatchColumnToRaw,
+                                        i,
+                                        sameLineEndColumn,
+                                        line.Length) + 1,
+                                    line.Length))
+                            : line.Length;
                         var nameLineContent = sameLineEndColumn >= absoluteStartColumn
-                            ? line[absoluteStartColumn..(sameLineEndColumn + 1)]
-                            : line[absoluteStartColumn..];
+                            ? line[nameLineStartColumn..nameLineEndExclusive]
+                            : line[nameLineStartColumn..];
                         signature = (csharpWrappedModifierPrefix + " " + nameLineContent.TrimStart()).Trim();
                     }
                     else if (sameLineEndColumn >= absoluteStartColumn)
                     {
-                        signature = line[absoluteStartColumn..(sameLineEndColumn + 1)].Trim();
+                        if (lang == "csharp"
+                            && csharpSingleLineCollapsedMatch)
+                        {
+                            var rawStart = csharpSignatureRawStartColumn;
+                            var rawEndInclusive = sameLineEndUsesRawColumns
+                                ? sameLineEndColumn
+                                : TranslateCSharpCollapsedColumnToRaw(
+                                    csharpMatchColumnToRaw,
+                                    i,
+                                    sameLineEndColumn,
+                                    line.Length);
+                            var rawEndExclusive = Math.Min(rawEndInclusive + 1, line.Length);
+                            if (rawStart > line.Length)
+                                rawStart = line.Length;
+                            if (rawEndExclusive <= rawStart)
+                                rawEndExclusive = Math.Min(rawStart + Math.Max(1, match.Length), line.Length);
+                            signature = line[rawStart..rawEndExclusive].Trim();
+                        }
+                        else
+                        {
+                            var signatureStartColumn = csharpSingleLineCollapsedMatch && sameLineEndUsesRawColumns
+                                ? csharpSignatureRawStartColumn
+                                : absoluteStartColumn;
+                            var signatureEndExclusive = Math.Min(sameLineEndColumn + 1, line.Length);
+                            if (signatureEndExclusive <= signatureStartColumn)
+                                signatureEndExclusive = Math.Min(signatureStartColumn + Math.Max(1, match.Length), line.Length);
+                            signature = line[signatureStartColumn..signatureEndExclusive].Trim();
+                        }
                     }
-                    else if (lang == "csharp" && pattern.Kind == "property" && csharpPropertyCandidate.LastConsumedLineIndex > i)
+                    else if (lang == "csharp"
+                        && pattern.BodyStyle == BodyStyle.None
+                        && TryFindCSharpFieldSignatureExtent(
+                            lines,
+                            i,
+                            csharpGateRawStartColumn,
+                            out var csharpFieldSignatureLastLineIndex,
+                            out var csharpFieldSignatureLastLineExclusiveEndColumn)
+                        && csharpFieldSignatureLastLineIndex > i)
                     {
                         signature = BuildCSharpMultilineSignature(
                             lines,
                             i,
-                            absoluteStartColumn,
+                            csharpGateRawStartColumn,
+                            csharpFieldSignatureLastLineIndex,
+                            csharpFieldSignatureLastLineExclusiveEndColumn);
+                    }
+                    else if (lang == "csharp" && csharpPropertyCandidate.LastConsumedLineIndex > i)
+                    {
+                        signature = BuildCSharpMultilineSignature(
+                            lines,
+                            i,
+                            csharpSignatureRawStartColumn,
                             csharpPropertyCandidate.SignatureLastLineIndex,
                             csharpPropertyCandidate.SignatureLastLineExclusiveEndColumn);
                     }
@@ -1378,7 +1867,7 @@ public static class SymbolExtractor
                         && TryFindCSharpTypeHeaderExtent(
                             lines,
                             i,
-                            absoluteStartColumn,
+                            csharpSignatureRawStartColumn,
                             out var csharpTypeHeaderLastLineIndex,
                             out var csharpTypeHeaderLastLineExclusiveEndColumn)
                         && csharpTypeHeaderLastLineIndex > i)
@@ -1399,9 +1888,43 @@ public static class SymbolExtractor
                         signature = BuildCSharpTypeHeaderSignature(
                             lines,
                             i,
-                            absoluteStartColumn,
+                            csharpSignatureRawStartColumn,
                             csharpTypeHeaderLastLineIndex,
                             csharpTypeHeaderLastLineExclusiveEndColumn);
+                    }
+                    else if (lang == "csharp"
+                        && pattern.Kind is "event" or "delegate"
+                        && pattern.BodyStyle == BodyStyle.None)
+                    {
+                        // Same-line C# semicolon-style declarations such as
+                        // `event EventHandler E; }` or `delegate void D(); }` must stop at the
+                        // declaration terminator instead of absorbing the enclosing type's
+                        // closing brace into the stored signature. Reuse the same statement-end
+                        // scanner as plain fields so nested `{}` inside accessor-style events
+                        // still stay balanced while the outer `}` remains excluded.
+                        // Closes #473 follow-up.
+                        // `event EventHandler E; }` や `delegate void D(); }` のような
+                        // 同一行 C# のセミコロン終端宣言は、囲む型本体の `}` を signature に
+                        // 含めてはならない。plain field と同じ statement-end scanner を再利用し、
+                        // アクセサ式 event 内部の `{}` は釣り合いを保ったまま、外側 `}` だけを
+                        // 除外する。Closes #473 follow-up.
+                        var statementEnd = FindCSharpSameLineStatementEnd(patternMatchLine, absoluteStartColumn);
+                        if (statementEnd > line.Length)
+                            statementEnd = line.Length;
+                        if (statementEnd <= absoluteStartColumn)
+                            statementEnd = Math.Min(absoluteStartColumn + Math.Max(1, match.Length), line.Length);
+                        signature = line[absoluteStartColumn..statementEnd].Trim();
+                    }
+                    else if (lang == "java"
+                        && pattern.BodyStyle == BodyStyle.Brace
+                        && bodyStartLine == null)
+                    {
+                        var statementEnd = FindJavaSameLineStatementEnd(line, absoluteStartColumn);
+                        if (statementEnd > line.Length)
+                            statementEnd = line.Length;
+                        if (statementEnd <= absoluteStartColumn)
+                            statementEnd = Math.Min(absoluteStartColumn + Math.Max(1, match.Length), line.Length);
+                        signature = line[absoluteStartColumn..statementEnd].Trim();
                     }
                     else if (lang == "csharp"
                         && pattern.Kind == "property"
@@ -1426,7 +1949,7 @@ public static class SymbolExtractor
                         // trailing `} }` が signature に混入せず、AssignContainers の
                         // ContainsSymbol 判定が正しく動いて X が Inner ではなく Outer に
                         // ぶら下がる事故が起きない。Closes #400.
-                        var statementEnd = FindCSharpPlainFieldStatementEnd(patternMatchLine, absoluteStartColumn);
+                        var statementEnd = FindCSharpSameLineStatementEnd(patternMatchLine, absoluteStartColumn);
                         if (csharpMatchLines != null
                             && ReferenceEquals(patternMatchLine, csharpMatchLines[i]))
                         {
@@ -1495,13 +2018,17 @@ public static class SymbolExtractor
                                     Name = entry.Name,
                                     Line = startLine,
                                     StartLine = startLine,
+                                    StartColumn = csharpSingleLineCollapsedMatch
+                                        ? csharpSignatureRawStartColumn
+                                        : absoluteStartColumn,
                                     EndLine = Math.Max(startLine, endLine),
                                     BodyStartLine = bodyStartLine,
                                     BodyEndLine = bodyEndLine,
                                     Signature = signature,
                                     Visibility = TryGetGroup(match, pattern.VisibilityGroup),
                                     ReturnType = NormalizeMetadata(entry.ReturnType),
-                                });
+                                },
+                                line);
                         }
                     }
                     else
@@ -1517,13 +2044,17 @@ public static class SymbolExtractor
                                 Name = name,
                                 Line = startLine,
                                 StartLine = startLine,
+                                StartColumn = csharpSingleLineCollapsedMatch
+                                    ? csharpSignatureRawStartColumn
+                                    : absoluteStartColumn,
                                 EndLine = Math.Max(startLine, endLine),
                                 BodyStartLine = bodyStartLine,
                                 BodyEndLine = bodyEndLine,
                                 Signature = signature,
                                 Visibility = TryGetGroup(match, pattern.VisibilityGroup),
-                                ReturnType = NormalizeMetadata(TryGetGroup(match, pattern.ReturnTypeGroup)),
-                            });
+                                ReturnType = NormalizeMetadata(rawReturnType),
+                            },
+                            line);
                     }
 
                     if (lang == "csharp"
@@ -1531,6 +2062,33 @@ public static class SymbolExtractor
                         && csharpPropertyCandidate.ExpressionBodyEndLineIndex.HasValue)
                     {
                         csharpSuppressedContinuationUntil = Math.Max(csharpSuppressedContinuationUntil, csharpPropertyCandidate.ExpressionBodyEndLineIndex.Value);
+                    }
+
+                    if (lang == "csharp"
+                        && pattern.Kind is "event" or "delegate"
+                        && pattern.BodyStyle == BodyStyle.None
+                        && (TryGetCSharpSameLineEventSiblingOffset(patternMatchLine, absoluteStartColumn, out var nextSemicolonSiblingOffset)
+                            || TryGetCSharpSameLineSemicolonSiblingOffset(patternMatchLine, absoluteStartColumn, out nextSemicolonSiblingOffset)))
+                    {
+                        restartPatternScanOffset = nextSemicolonSiblingOffset;
+                        break;
+                    }
+
+                    if (lang == "java"
+                        && pattern.BodyStyle == BodyStyle.Brace
+                        && bodyStartLine == null
+                        && TryGetJavaSameLineSemicolonSiblingOffset(patternMatchLine, absoluteStartColumn, out var nextJavaSiblingOffset))
+                    {
+                        // Body-less Java members inside `interface` / `@interface` / abstract-style
+                        // declarations can share one physical line (`String[] value(); int age();`).
+                        // Restart at the next sibling after the top-level `;` instead of stopping at
+                        // the first match, or later members on the same line disappear. Closes #788.
+                        // Java の body-less member（`interface` / `@interface` / abstract 形）は
+                        // `String[] value(); int age();` のように 1 行へ並ぶ。top-level `;`
+                        // の直後から sibling へ再開しないと、同一行の後続 member が最初の 1 個で
+                        // 途切れて消える。Closes #788.
+                        restartPatternScanOffset = nextJavaSiblingOffset;
+                        break;
                     }
 
                     CollectRecordPrimaryComponentSymbols(
@@ -1591,7 +2149,7 @@ public static class SymbolExtractor
                         // `;` より先に囲む型本体の閉じ `}`（深さ 0）に到達した場合は、
                         // `stopAfterFirstPatternMatch` を立てずに break して同一行の他
                         // パターン（class 等）へ機会を残す。Closes #400.
-                        var statementEnd = FindCSharpPlainFieldStatementEnd(patternMatchLine, absoluteStartColumn);
+                        var statementEnd = FindCSharpSameLineStatementEnd(patternMatchLine, absoluteStartColumn);
                         if (statementEnd < patternMatchLine.Length
                             && patternMatchLine[statementEnd] == '}')
                         {
@@ -1642,6 +2200,106 @@ public static class SymbolExtractor
 
                     if (!CanContinueScanningSameLineBraceBody(lang, kind, pattern.BodyStyle, bodyEndLine, startLine, sameLineEndColumn, absoluteStartColumn))
                     {
+                        if (lang == "csharp"
+                            && pattern.BodyStyle == BodyStyle.Brace
+                            && bodyStartLine == startLine
+                            && kind is "class" or "struct" or "interface" or "enum" or "namespace")
+                        {
+                            // Hybrid same-line C# type headers can open the body on the header
+                            // line and still close on a later line (`class C { int P { get; }`
+                            // + next-line `}`). They are not compact same-line bodies, so the
+                            // generic same-line brace-body path does not restart inside them.
+                            // Explicitly restart just after the opening `{` so the first member
+                            // that shares the header line is still visible to the full pattern
+                            // list. Closes #580.
+                            // ハイブリッドな C# の same-line 型ヘッダは、本体開始 `{` がヘッダ行に
+                            // ありつつ閉じ `}` は後続行に置かれうる (`class C { int P { get; }`
+                            // + 次行 `}`)。これは compact な same-line body ではないため、
+                            // 既定の same-line brace-body 経路だけでは本体内へ再開できない。
+                            // そこで開始 `{` の直後から明示的に再開し、ヘッダ行を共有する最初の
+                            // member も通常の pattern 列で拾えるようにする。Closes #580.
+                            var nextHeaderLineMemberOffset = FindNextSameLineNonClosingBraceStatementStart(
+                                matchLine,
+                                absoluteStartColumn + Math.Max(1, match.Length),
+                                lang);
+                            if (nextHeaderLineMemberOffset > absoluteStartColumn
+                                && nextHeaderLineMemberOffset < matchLine.Length)
+                            {
+                                restartPatternScanOffset = nextHeaderLineMemberOffset;
+                                break;
+                            }
+                        }
+
+                        if (lang == "csharp"
+                            && sameLineEndColumn >= absoluteStartColumn
+                            && CanRestartCSharpSameLineSiblingScan(kind))
+                        {
+                            // Compact same-line C# members form a sibling stream rather than a
+                            // single terminal match: after `event E;`, `void M();`, or
+                            // `int P { get; set; }`, later same-line declarations still need
+                            // to reach earlier patterns in the list. Restart from the next
+                            // top-level statement boundary so mixed-kind siblings like
+                            // `event + property`, `method + property`, and `property + event`
+                            // are all visible. When there is no later statement, keep the old
+                            // stop-after-first-match behavior to avoid reopening duplicate
+                            // paths on ordinary single-declaration lines. Closes #470 / #473.
+                            // 同一行のコンパクトな C# member は 1 回限りの terminal match ではなく、
+                            // sibling 宣言のストリームとして扱う。`event E;` や `void M();`、
+                            // `int P { get; set; }` の後ろに続く宣言も、pattern 列の先頭側にある
+                            // property などへ到達できる必要がある。そこで次の top-level 文境界から
+                            // pattern 列全体を再走査し、`event + property`、`method + property`、
+                            // `property + event` のような mixed-kind sibling をすべて可視化する。
+                            // 後続宣言が無い行では従来どおり stop-after-first-match を維持し、
+                            // 通常の単独宣言行で duplicate 経路を再び開かない。Closes #470 / #473.
+                            if (csharpSingleLineCollapsedMatch && sameLineEndUsesRawColumns)
+                            {
+                                var rawNextSiblingOffset = FindNextSameLineNonClosingBraceStatementStart(line, sameLineEndColumn + 1, lang);
+                                if (rawNextSiblingOffset > sameLineEndColumn)
+                                {
+                                    restartPatternScanOffset = TranslateCSharpRawColumnToCollapsed(
+                                        csharpMatchColumnToRaw,
+                                        i,
+                                        rawNextSiblingOffset,
+                                        matchLine.Length,
+                                        line.Length);
+                                    break;
+                                }
+                            }
+                            else
+                            {
+                                var nextSiblingOffset = FindNextSameLineNonClosingBraceStatementStart(matchLine, sameLineEndColumn + 1, lang);
+                                if (nextSiblingOffset > sameLineEndColumn
+                                    && nextSiblingOffset < matchLine.Length)
+                                {
+                                    restartPatternScanOffset = nextSiblingOffset;
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Batch `set` assignments can legitimately repeat on a single line via
+                        // `&` command-chaining (`set A=1 & set B=2`), parenthesized grouping
+                        // (`if ... ( set P=1 ) else set Q=2`), or `for`-loop bodies
+                        // (`for %%I in (1) do set LOOPVAR=%%I`). The brace-body rescan path
+                        // above is JS/TS/CSS/C#-only, so drive the advance explicitly for the
+                        // batch property pattern instead of short-circuiting after the first
+                        // match. Forward progress is guaranteed because `match.Length >= 1`
+                        // (the regex requires a literal `set\s+NAME=` tail).
+                        // batch の `set` 代入は `&` 連結や `( ... ) else ... `、`for ... do ...` で
+                        // 1 行に複数回現れうる。上の brace-body 再スキャンは JS/TS/CSS/C# 限定なので、
+                        // batch の property パターンだけは explicit に advance して追加マッチも拾う。
+                        // 前進は `match.Length >= 1` (正規表現が `set\s+NAME=` を要求するため) で保証される。
+                        if (lang == "batch"
+                            && pattern.BodyStyle == BodyStyle.None
+                            && pattern.Kind == "property")
+                        {
+                            var nextBatchOffset = absoluteStartColumn + Math.Max(1, match.Length);
+                            if (nextBatchOffset <= lineOffset)
+                                break;
+                            lineOffset = nextBatchOffset;
+                            continue;
+                        }
+
                         // Stop after first match per line to avoid duplicate symbols
                         // (e.g. C# method pattern + constructor pattern both matching)
                         // 1行につき最初のマッチのみ採用し重複を防ぐ
@@ -1662,13 +2320,92 @@ public static class SymbolExtractor
                     // の Inner）を拾えるようにする。JavaScript/TypeScript は class body の
                     // member 抽出を専用 lexer/state machine で行うため従来通り終端の後ろへ
                     // 進め、同一行 sibling（`class A {} class B {}` など）だけを扱う。Closes #400.
-                    lineOffset = lang == "csharp" && kind is "class" or "struct" or "interface" or "enum" or "namespace"
-                        ? FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang)
-                        : FindNextSameLineBraceStatementStart(matchLine, sameLineEndColumn + 1, lang);
+                    var sameLineRestartComparisonColumn = csharpSingleLineCollapsedMatch && sameLineEndUsesRawColumns
+                        ? TranslateCSharpRawColumnToCollapsed(
+                            csharpMatchColumnToRaw,
+                            i,
+                            sameLineEndColumn,
+                            matchLine.Length,
+                            line.Length)
+                        : sameLineEndColumn;
+                    if (lang == "csharp" && kind is "class" or "struct" or "interface" or "enum" or "namespace")
+                    {
+                        var nextTypeBodyOffset = FindNextSameLineNonClosingBraceStatementStart(
+                            matchLine,
+                            absoluteStartColumn + Math.Max(1, match.Length),
+                            lang);
+                        if (nextTypeBodyOffset > absoluteStartColumn
+                            && nextTypeBodyOffset < sameLineRestartComparisonColumn
+                            && (nextTypeBodyOffset >= matchLine.Length || matchLine[nextTypeBodyOffset] != '}'))
+                        {
+                            restartPatternScanOffset = nextTypeBodyOffset;
+                            break;
+                        }
+                    }
+
+                    var nextSameLineOffset = -1;
+                    if (csharpSingleLineCollapsedMatch && sameLineEndUsesRawColumns)
+                    {
+                        var rawNextSameLineOffset = FindNextSameLineNonClosingBraceStatementStart(line, sameLineEndColumn + 1, lang);
+                        if (rawNextSameLineOffset > sameLineEndColumn)
+                        {
+                            nextSameLineOffset = TranslateCSharpRawColumnToCollapsed(
+                                csharpMatchColumnToRaw,
+                                i,
+                                rawNextSameLineOffset,
+                                matchLine.Length,
+                                line.Length);
+                        }
+                    }
+                    else
+                    {
+                        nextSameLineOffset = FindNextSameLineNonClosingBraceStatementStart(matchLine, sameLineEndColumn + 1, lang);
+                    }
+                    var sameLineAdvanceComparisonColumn = sameLineRestartComparisonColumn;
+                    if (lang == "csharp"
+                        && kind is "class" or "struct" or "interface" or "enum" or "namespace"
+                        && nextSameLineOffset > sameLineAdvanceComparisonColumn
+                        && nextSameLineOffset < matchLine.Length
+                        && matchLine[nextSameLineOffset] != '}')
+                    {
+                        restartPatternScanOffset = nextSameLineOffset;
+                        break;
+                    }
+                    if (lang == "csharp"
+                        && kind == "property"
+                        && pattern.BodyStyle == BodyStyle.Brace
+                        && nextSameLineOffset > sameLineAdvanceComparisonColumn
+                        && nextSameLineOffset < matchLine.Length)
+                    {
+                        // A same-line brace-body property that is followed by another sibling
+                        // declaration (`P { get; set; } public void M() { }`) must hand control
+                        // back to the whole pattern list at the next statement start, otherwise
+                        // earlier rows like the C# method regex never get a chance to see the
+                        // trailing sibling and mixed-kind lines lose one side.
+                        // Closes #473 follow-up.
+                        // 後続 sibling 宣言を伴う same-line brace-body property
+                        // (`P { get; set; } public void M() { }`) は、次の文開始位置から
+                        // pattern 全体へ制御を戻す必要がある。そうしないと、C# method regex
+                        // のような earlier row が後続 sibling を見られず、mixed-kind の
+                        // 同一行で片側が欠落する。Closes #473 follow-up.
+                        restartPatternScanOffset = nextSameLineOffset;
+                        break;
+                    }
+
+                    lineOffset = nextSameLineOffset;
                 }
 
-                if (stopAfterFirstPatternMatch)
+                if (restartPatternScanOffset >= 0 || stopAfterFirstPatternMatch)
                     break;
+                }
+
+                if (restartPatternScanOffset >= 0)
+                {
+                    patternStartOffset = restartPatternScanOffset;
+                    continue;
+                }
+
+                break;
             }
 
             if (lang == "css" && cssScannerLine != null)
@@ -1712,9 +2449,12 @@ public static class SymbolExtractor
         else if (lang == "csharp")
             ExtractCSharpEnumMembers(fileId, lines, structuralLines, csharpMatchLines!, symbols);
         else if (lang == "java")
+        {
             ExtractJavaEnumMembers(fileId, lines, symbols);
+            ExtractJavaCompactConstructors(fileId, lines, symbols);
+        }
 
-        AssignContainers(symbols);
+        AssignContainers(symbols, lines, csharpLineStartStates);
         MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
         PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
@@ -2604,7 +3344,7 @@ public static class SymbolExtractor
             pos = cursor < maskedText.Length ? cursor + 1 : cursor;
         }
 
-        AssignContainers(symbols);
+        AssignContainers(symbols, lines, null);
         PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
     }
@@ -2673,6 +3413,204 @@ public static class SymbolExtractor
         }
     }
 
+    private static void ExtractJavaCompactConstructors(long fileId, string[] rawLines, List<SymbolRecord> symbols)
+    {
+        var recordDeclarations = symbols
+            .Where(symbol =>
+                symbol.FileId == fileId
+                && symbol.Kind == "class"
+                && symbol.BodyStartLine != null
+                && symbol.BodyEndLine != null
+                && IsJavaRecordSymbol(rawLines, symbol))
+            .OrderBy(symbol => symbol.StartLine)
+            .ThenByDescending(symbol => symbol.EndLine)
+            .ToList();
+
+        foreach (var recordSymbol in recordDeclarations)
+        {
+            if (!TryFindJavaSymbolBodyBounds(rawLines, recordSymbol, out var bodyStartLineIndex, out var bodyStartColumn, out var bodyEndLineIndex, out var bodyEndColumnExclusive))
+                continue;
+
+            var mode = JavaScanMode.Normal;
+            var braceDepth = 0;
+            for (int i = bodyStartLineIndex; i <= bodyEndLineIndex; i++)
+            {
+                if (mode == JavaScanMode.LineComment)
+                    mode = JavaScanMode.Normal;
+
+                var line = rawLines[i];
+                var segmentStart = i == bodyStartLineIndex
+                    ? Math.Min(bodyStartColumn, line.Length)
+                    : 0;
+                var segmentEndExclusive = i == bodyEndLineIndex
+                    ? Math.Min(bodyEndColumnExclusive, line.Length)
+                    : line.Length;
+                var lineStartBraceDepth = braceDepth;
+                var lineStartMode = mode;
+
+                if (lineStartBraceDepth == 0
+                    && lineStartMode == JavaScanMode.Normal
+                    && segmentStart < segmentEndExclusive)
+                {
+                    var segment = line[segmentStart..segmentEndExclusive];
+                    if (TryMatchJavaDeclarationSegment(JavaCompactConstructorRegex, segment, out var match, out var javaLeadingAnnotationOffset)
+                        && match.Groups["name"].Value == recordSymbol.Name)
+                    {
+                        var absoluteStartColumn = segmentStart + javaLeadingAnnotationOffset + match.Index;
+                        var visibility = TryGetGroup(match, "visibility");
+                        var (endLine, bodyStartLine, bodyEndLine) = ResolveRange(rawLines, i, BodyStyle.Brace, "java", absoluteStartColumn);
+                        var sameLineEndColumn = bodyEndLine == i + 1
+                            ? FindSameLineBraceEndColumn(line, absoluteStartColumn, "java", "function")
+                            : -1;
+                        var existingSymbols = symbols
+                            .Where(symbol =>
+                                symbol.FileId == fileId
+                                && symbol.Kind == "function"
+                                && symbol.Name == recordSymbol.Name
+                                && symbol.StartLine == i + 1
+                                && (symbol.ContainerName == null || symbol.ContainerName == recordSymbol.Name)
+                                && (symbol.ContainerKind == null || symbol.ContainerKind == "class"))
+                            .ToList();
+                        foreach (var existingSymbol in existingSymbols)
+                        {
+                            if (LooksLikeJavaCompactConstructorSymbol(existingSymbol, recordSymbol.Name))
+                                continue;
+                            symbols.Remove(existingSymbol);
+                        }
+
+                        if (!symbols.Any(symbol => LooksLikeJavaCompactConstructorSymbol(symbol, recordSymbol.Name)
+                                && symbol.FileId == fileId
+                                && symbol.StartLine == i + 1))
+                        {
+                            symbols.Add(new SymbolRecord
+                            {
+                                FileId = fileId,
+                                Kind = "function",
+                                Name = recordSymbol.Name,
+                                Line = i + 1,
+                                StartLine = i + 1,
+                                StartColumn = absoluteStartColumn,
+                                EndLine = Math.Max(i + 1, endLine),
+                                BodyStartLine = bodyStartLine,
+                                BodyEndLine = bodyEndLine,
+                                Signature = sameLineEndColumn >= absoluteStartColumn
+                                    ? line[absoluteStartColumn..(sameLineEndColumn + 1)].Trim()
+                                    : line[absoluteStartColumn..].Trim(),
+                                ContainerKind = "class",
+                                ContainerName = recordSymbol.Name,
+                                Visibility = visibility,
+                            });
+                        }
+                    }
+                }
+
+                var column = segmentStart;
+                while (column < segmentEndExclusive)
+                {
+                    if (TryConsumeJavaNonCode(line, ref column, ref mode))
+                        continue;
+
+                    var ch = line[column];
+                    if (ch == '{')
+                        braceDepth++;
+                    else if (ch == '}' && braceDepth > 0)
+                        braceDepth--;
+
+                    column++;
+                }
+            }
+        }
+    }
+
+    private static bool LooksLikeJavaCompactConstructorSymbol(SymbolRecord symbol, string recordName)
+    {
+        if (symbol.Kind != "function"
+            || symbol.Name != recordName
+            || symbol.ContainerKind != "class"
+            || symbol.ContainerName != recordName)
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(symbol.ReturnType))
+            return false;
+
+        var signature = symbol.Signature?.TrimStart();
+        if (string.IsNullOrWhiteSpace(signature))
+            return false;
+
+        if (signature.Contains(" record ", StringComparison.Ordinal)
+            || signature.StartsWith("record ", StringComparison.Ordinal)
+            || signature.StartsWith("@", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return signature.Contains($"{recordName} {{", StringComparison.Ordinal);
+    }
+
+    private static bool IsJavaRecordSymbol(string[] rawLines, SymbolRecord symbol)
+    {
+        var declarationLineIndex = symbol.StartLine - 1;
+        if (declarationLineIndex < 0 || declarationLineIndex >= rawLines.Length)
+            return false;
+
+        return TryMatchJavaDeclarationSegment(
+            GetCurrentDeclarationRecordRegex("java", symbol.Kind, symbol.Name),
+            rawLines[declarationLineIndex],
+            out _,
+            out _);
+    }
+
+    private static bool TryFindJavaSymbolBodyBounds(
+        string[] rawLines,
+        SymbolRecord containerSymbol,
+        out int bodyStartLineIndex,
+        out int bodyStartColumn,
+        out int bodyEndLineIndex,
+        out int bodyEndColumnExclusive)
+    {
+        bodyStartLineIndex = 0;
+        bodyStartColumn = 0;
+        bodyEndLineIndex = 0;
+        bodyEndColumnExclusive = 0;
+
+        var declarationLineIndex = containerSymbol.StartLine - 1;
+        if (declarationLineIndex < 0 || declarationLineIndex >= rawLines.Length)
+            return false;
+
+        var scanEndLineIndex = Math.Min(containerSymbol.EndLine, rawLines.Length) - 1;
+        if (scanEndLineIndex < declarationLineIndex)
+            return false;
+
+        return TryFindJavaBraceDelimitedBodyBounds(
+            rawLines,
+            declarationLineIndex,
+            scanEndLineIndex,
+            ignoreLeadingAnnotationArrayBraces: true,
+            out bodyStartLineIndex,
+            out bodyStartColumn,
+            out bodyEndLineIndex,
+            out bodyEndColumnExclusive);
+    }
+
+    private static bool TryFindJavaEnumBodyBounds(
+        string[] rawLines,
+        SymbolRecord enumSymbol,
+        out int bodyStartLineIndex,
+        out int bodyStartColumn,
+        out int bodyEndLineIndex,
+        out int bodyEndColumnExclusive)
+    {
+        return TryFindJavaSymbolBodyBounds(
+            rawLines,
+            enumSymbol,
+            out bodyStartLineIndex,
+            out bodyStartColumn,
+            out bodyEndLineIndex,
+            out bodyEndColumnExclusive);
+    }
+
     // Track Java source-code scanner state (strings, char literals, comments, text blocks).
     // Java ソース scanner の state（文字列・char literal・コメント・text block）を表す。
     private enum JavaScanMode
@@ -2685,9 +3623,11 @@ public static class SymbolExtractor
         Char,
     }
 
-    private static bool TryFindJavaEnumBodyBounds(
+    private static bool TryFindJavaBraceDelimitedBodyBounds(
         string[] rawLines,
-        SymbolRecord enumSymbol,
+        int declarationLineIndex,
+        int scanEndLineIndex,
+        bool ignoreLeadingAnnotationArrayBraces,
         out int bodyStartLineIndex,
         out int bodyStartColumn,
         out int bodyEndLineIndex,
@@ -2698,16 +3638,10 @@ public static class SymbolExtractor
         bodyEndLineIndex = 0;
         bodyEndColumnExclusive = 0;
 
-        var declarationLineIndex = enumSymbol.StartLine - 1;
-        if (declarationLineIndex < 0 || declarationLineIndex >= rawLines.Length)
-            return false;
-
-        var scanEndLineIndex = Math.Min(enumSymbol.EndLine, rawLines.Length) - 1;
-        if (scanEndLineIndex < declarationLineIndex)
-            return false;
-
         var mode = JavaScanMode.Normal;
         var depth = 0;
+        var parenDepth = 0;
+        var bracketDepth = 0;
         var opened = false;
 
         var lineIndex = declarationLineIndex;
@@ -2724,14 +3658,40 @@ public static class SymbolExtractor
                     continue;
 
                 var ch = line[column];
-                if (ch == '{')
+                if (ch == '(')
                 {
-                    depth++;
+                    parenDepth++;
+                }
+                else if (ch == ')' && parenDepth > 0)
+                {
+                    parenDepth--;
+                }
+                else if (ch == '[')
+                {
+                    bracketDepth++;
+                }
+                else if (ch == ']' && bracketDepth > 0)
+                {
+                    bracketDepth--;
+                }
+                else if (ch == '{')
+                {
                     if (!opened)
                     {
+                        if (ignoreLeadingAnnotationArrayBraces && (parenDepth > 0 || bracketDepth > 0))
+                        {
+                            column++;
+                            continue;
+                        }
+
                         opened = true;
+                        depth = 1;
                         bodyStartLineIndex = lineIndex;
                         bodyStartColumn = column + 1;
+                    }
+                    else
+                    {
+                        depth++;
                     }
                 }
                 else if (ch == '}' && opened)
@@ -2744,6 +3704,7 @@ public static class SymbolExtractor
                         return true;
                     }
                 }
+
                 column++;
             }
 
@@ -3117,6 +4078,14 @@ public static class SymbolExtractor
         if (string.IsNullOrEmpty(name))
             return;
 
+        int? bodyStartLine = null;
+        int? bodyEndLine = null;
+        if (TryFindJavaEnumMemberBodyBounds(rawLines, start, endExclusive, out var anonymousBodyStartLine, out var anonymousBodyEndLine))
+        {
+            bodyStartLine = anonymousBodyStartLine;
+            bodyEndLine = anonymousBodyEndLine;
+        }
+
         symbols.Add(new SymbolRecord
         {
             FileId = fileId,
@@ -3124,11 +4093,92 @@ public static class SymbolExtractor
             Name = name,
             Line = start.LineIndex + 1,
             StartLine = start.LineIndex + 1,
+            StartColumn = start.Column,
             EndLine = endExclusive.LineIndex + 1,
+            BodyStartLine = bodyStartLine,
+            BodyEndLine = bodyEndLine,
             Signature = rawSignature,
             ContainerKind = "enum",
             ContainerName = enumSymbol.Name,
         });
+    }
+
+    private static bool TryFindJavaEnumMemberBodyBounds(
+        string[] rawLines,
+        (int LineIndex, int Column) start,
+        (int LineIndex, int Column) endExclusive,
+        out int bodyStartLine,
+        out int bodyEndLine)
+    {
+        bodyStartLine = 0;
+        bodyEndLine = 0;
+
+        var mode = JavaScanMode.Normal;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var foundBody = false;
+
+        for (int lineIndex = start.LineIndex; lineIndex <= endExclusive.LineIndex && lineIndex < rawLines.Length; lineIndex++)
+        {
+            if (mode == JavaScanMode.LineComment)
+                mode = JavaScanMode.Normal;
+
+            var line = rawLines[lineIndex];
+            var column = lineIndex == start.LineIndex
+                ? start.Column
+                : 0;
+            var scanEndColumnExclusive = lineIndex == endExclusive.LineIndex
+                ? Math.Min(endExclusive.Column, line.Length)
+                : line.Length;
+
+            while (column < scanEndColumnExclusive)
+            {
+                if (TryConsumeJavaNonCode(line, ref column, ref mode))
+                    continue;
+
+                var ch = line[column];
+                if (ch == '(')
+                {
+                    parenDepth++;
+                }
+                else if (ch == ')' && parenDepth > 0)
+                {
+                    parenDepth--;
+                }
+                else if (ch == '[')
+                {
+                    bracketDepth++;
+                }
+                else if (ch == ']' && bracketDepth > 0)
+                {
+                    bracketDepth--;
+                }
+                else if (ch == '{')
+                {
+                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                    {
+                        foundBody = true;
+                        bodyStartLine = lineIndex + 1;
+                    }
+
+                    braceDepth++;
+                }
+                else if (ch == '}' && braceDepth > 0)
+                {
+                    braceDepth--;
+                    if (foundBody && braceDepth == 0)
+                    {
+                        bodyEndLine = lineIndex + 1;
+                        return true;
+                    }
+                }
+
+                column++;
+            }
+        }
+
+        return false;
     }
 
     private static int SkipLeadingJavaAnnotations(string span)
@@ -3170,6 +4220,30 @@ public static class SymbolExtractor
         }
 
         return index;
+    }
+
+    private static bool TryMatchJavaDeclarationSegment(
+        Regex regex,
+        string segment,
+        out Match match,
+        out int leadingAnnotationOffset)
+    {
+        match = regex.Match(segment);
+        leadingAnnotationOffset = 0;
+        if (match.Success)
+            return true;
+
+        var skippedOffset = SkipLeadingJavaAnnotations(segment);
+        if (skippedOffset <= 0 || skippedOffset >= segment.Length)
+            return false;
+
+        var strippedMatch = regex.Match(segment[skippedOffset..]);
+        if (!strippedMatch.Success)
+            return false;
+
+        match = strippedMatch;
+        leadingAnnotationOffset = skippedOffset;
+        return true;
     }
 
     // Walk whitespace, comments, and newlines in a multi-line span until the next non-whitespace code position.
@@ -6480,8 +7554,12 @@ public static class SymbolExtractor
         List<SymbolRecord> symbols,
         HashSet<string>? cssSeenSymbols,
         int lineNumber,
-        SymbolRecord symbol)
+        SymbolRecord symbol,
+        string? rawLine = null)
     {
+        if (string.IsNullOrWhiteSpace(symbol.Name))
+            return;
+
         if (cssSeenSymbols != null)
         {
             var key = $"{lineNumber}:{symbol.Kind}:{symbol.Name}";
@@ -6489,7 +7567,91 @@ public static class SymbolExtractor
                 return;
         }
 
+        symbol.SameLineSignatureOccurrenceIndex = GetSameLineSignatureOccurrenceIndex(symbols, symbol);
+
+        // Same-line restart paths can legitimately revisit the same declaration from a
+        // different regex row or restart offset. Suppress only exact duplicate symbol
+        // records so mixed-kind recovery does not emit the same declaration twice while
+        // still allowing legitimate overloads / siblings with the same short name but
+        // different ranges or signatures. Closes #472 / #473 follow-up.
+        // same-line の restart 経路では、別 regex 行や別 restart offset から同じ宣言を
+        // 再訪しうる。ここでは exact duplicate の `SymbolRecord` だけを抑止し、
+        // mixed-kind 回復で同じ宣言が二重出力されるのを防ぎつつ、範囲や signature が
+        // 異なる正当な overload / sibling はそのまま残す。Closes #472 / #473 follow-up.
+        var duplicateCount = symbols.Count(existing =>
+                existing.Kind == symbol.Kind
+                && existing.Name == symbol.Name
+                && existing.Line == symbol.Line
+                && existing.StartLine == symbol.StartLine
+                && existing.StartColumn == symbol.StartColumn
+                && existing.EndLine == symbol.EndLine
+                && existing.BodyStartLine == symbol.BodyStartLine
+                && existing.BodyEndLine == symbol.BodyEndLine
+                && existing.Signature == symbol.Signature
+                && existing.Visibility == symbol.Visibility
+                && existing.ReturnType == symbol.ReturnType);
+        if (duplicateCount > 0
+            && !HasRemainingSameLineSignatureOccurrence(symbol, rawLine, duplicateCount))
+        {
+            return;
+        }
+
         symbols.Add(symbol);
+    }
+
+    private static int? GetSameLineSignatureOccurrenceIndex(List<SymbolRecord> symbols, SymbolRecord symbol)
+    {
+        if (symbol.Signature == null
+            || symbol.StartLine != symbol.EndLine
+            || symbol.Line != symbol.StartLine)
+        {
+            return null;
+        }
+
+        return symbols.Count(existing =>
+            existing.Line == symbol.Line
+            && existing.StartLine == symbol.StartLine
+            && existing.Signature == symbol.Signature);
+    }
+
+    // Some compact same-line C# fixtures can legitimately contain two distinct siblings with
+    // the same short signature on the same physical line
+    // (`Child { } } public partial class Child { }`). Allow as many identical rows as the raw
+    // line actually contains, and suppress only the true restart duplicates beyond that. Closes #552.
+    // compact な同一行 C# fixture では、同じ短い signature を持つ別 sibling が同じ物理行に
+    // 実在しうる (`Child { } } public partial class Child { }`)。raw 行に実在する出現回数までは
+    // 許容し、それを超える restart 由来の真の duplicate だけを抑止する。Closes #552.
+    private static bool HasRemainingSameLineSignatureOccurrence(SymbolRecord symbol, string? rawLine, int duplicateCount)
+    {
+        if (rawLine == null
+            || symbol.Signature == null
+            || symbol.StartLine != symbol.EndLine
+            || symbol.Line != symbol.StartLine)
+        {
+            return false;
+        }
+
+        return CountNonOverlappingOccurrences(rawLine, symbol.Signature) > duplicateCount;
+    }
+
+    private static int CountNonOverlappingOccurrences(string text, string value)
+    {
+        if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(value))
+            return 0;
+
+        var count = 0;
+        var startIndex = 0;
+        while (startIndex < text.Length)
+        {
+            var index = text.IndexOf(value, startIndex, StringComparison.Ordinal);
+            if (index < 0)
+                break;
+
+            count++;
+            startIndex = index + value.Length;
+        }
+
+        return count;
     }
 
     private static void ExtractCssInlineGroupingSelectors(
@@ -6611,6 +7773,7 @@ public static class SymbolExtractor
             BodyStyle.Indent => FindIndentRange(lines, startIndex),
             BodyStyle.RubyEnd => FindRubyRange(lines, startIndex),
             BodyStyle.VisualBasicEnd => FindVisualBasicRange(lines, startIndex),
+            BodyStyle.SqlProcBody => FindSqlProcBodyRange(lines, startIndex),
             _ => (startIndex + 1, null, null),
         };
     }
@@ -7086,6 +8249,8 @@ public static class SymbolExtractor
                         column++;
                         continue;
                     }
+                    if (ch == ';')
+                        return (i + 1, null, null);
                 }
 
                 if (ch == '{')
@@ -7130,6 +8295,26 @@ public static class SymbolExtractor
         bool expressionBody = false;
         int parenDepth = 0;
         int bracketDepth = 0;
+        // `;` early-return safety check. Required so the new top-level `;` clamp
+        // only fires once we have observed a parameter list (`(`), which body-less
+        // function-like declarations (`void M();`, ctor signatures) always carry.
+        // Without this guard, the column-space mismatch where `absoluteStartColumn`
+        // arrives in collapsed-generic / attribute-stripped match-line space and is
+        // sliced into raw `structuralLines` can place an unrelated leading `;` (the
+        // sibling member that came before this declaration, e.g. `event ... E;`
+        // ahead of a same-line `class Wrapped<T>`) at scan position 0 and trick the
+        // clamp into ending the body range before the real declaration even
+        // begins. Function/delegate signatures by definition pass through `(` first.
+        // Closes #515 review follow-up.
+        // `;` 早期 return 用の安全ガード。新たに追加する top-level `;` クランプは
+        // パラメータリスト `(` を一度でも見たあとでのみ発火するようにする。これは
+        // body-less な関数系宣言 (`void M();`、コンストラクタ等) は必ず `(` を通る
+        // ため安全であり、逆に column-space mismatch (collapsed-generic 列や
+        // attribute-strip された match-line 列を raw な `structuralLines` に
+        // スライスするケース) で scan 位置 0 が直前 sibling の `;` (例: same-line
+        // `class Wrapped<T>` 直前の `event ... E;`) に重なってしまった場合に、
+        // 宣言が始まる前にクランプが暴発するのを防ぐ。Closes #515 review follow-up.
+        bool sawOpenParen = false;
         var lexState = new CSharpLexState();
 
         for (int i = startIndex; i < lines.Length; i++)
@@ -7162,7 +8347,7 @@ public static class SymbolExtractor
                     continue;
                 }
 
-                if (c == '(') { parenDepth++; continue; }
+                if (c == '(') { parenDepth++; sawOpenParen = true; continue; }
                 if (c == ')' && parenDepth > 0) { parenDepth--; continue; }
                 if (c == '[') { bracketDepth++; continue; }
                 if (c == ']' && bracketDepth > 0) { bracketDepth--; continue; }
@@ -7182,9 +8367,43 @@ public static class SymbolExtractor
                 {
                     depth--;
                     if (depth == 0)
-                        return (i + 1, bodyStartLine, i + 1);
+                    {
+                        var trailingSiblingOffset = FindNextSameLineNonClosingBraceStatementStart(scanLine, j + 1, "csharp");
+                        var bodyEndLine = trailingSiblingOffset >= 0
+                            && bodyStartLine.HasValue
+                            && bodyStartLine.Value < i + 1
+                            ? i
+                            : i + 1;
+                        return (i + 1, bodyStartLine, bodyEndLine);
+                    }
                     continue;
                 }
+
+                // Top-level `;` after a parameter list and before any block body opened
+                // terminates a body-less function-like declaration (`void M();`,
+                // ctor signatures, etc.). Without this in-loop guard, recovery for
+                // same-line siblings whose own line ends with the enclosing type's `}`
+                // (`{ int P { get; } void M(); }`) falls through the trailing
+                // `EndsWith(';')` fallback because the physical line ends with `}`,
+                // then the scanner bleeds into later lines and attributes their brace
+                // ranges to this body-less symbol. The `sawOpenParen` guard keeps the
+                // clamp inert when `absoluteStartColumn` arrived in collapsed-generic
+                // / attribute-stripped column space and slid the scan onto an earlier
+                // sibling's `;`, since real function-like signatures always pass
+                // through `(` before `;`. Closes #515.
+                // ブロック本体が開く前に、かつパラメータリスト `(` を通過したあとで
+                // 出現した top-level `;` は、本体を持たない関数系宣言
+                // (`void M();`、コンストラクタ等) の終端としてその場で確定する。
+                // これがないと、`{ int P { get; } void M(); }` のように物理行末が
+                // `}` で閉じる same-line sibling 復元では末尾の `EndsWith(';')`
+                // フォールバックが効かず、次行以降の brace を本体と誤認して
+                // body-less symbol に取り込んでしまう。`sawOpenParen` ガードに
+                // よって、`absoluteStartColumn` が collapsed-generic / attribute-strip
+                // 後の列で渡って raw `structuralLines` 上の直前 sibling の `;` に
+                // 落ち込むケースでもクランプが暴発しない (関数系シグネチャは必ず
+                // `(` を通過するため)。Closes #515.
+                if (c == ';' && sawOpenParen && !opened && parenDepth == 0 && bracketDepth == 0)
+                    return (i + 1, null, null);
 
                 // Detect '=>' at top level (outside any (), [], {}) before any block body opened.
                 // This marks an expression-bodied member; body spans the declaration line
@@ -9356,6 +10575,286 @@ public static class SymbolExtractor
             : (lines.Length, bodyStartLine, lines.Length);
     }
 
+    // Regex helpers for SQL procedure body scanning / SQL プロシージャ本体走査用の正規表現ヘルパー
+    private static readonly Regex SqlGoSeparatorRegex = new(
+        @"^\s*GO\s*(?:;[\s;]*)?(?:--.*)?$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // Only close a SQL proc body when the next top-level statement looks like another proc-like
+    // header (`CREATE|ALTER|DROP PROCEDURE|PROC|FUNCTION|TRIGGER`, optionally with `OR REPLACE` for
+    // PostgreSQL or `OR ALTER` for T-SQL / SQL Server 2016+). Body-internal `CREATE TABLE` /
+    // `ALTER TABLE` / `GRANT` / `USE` etc. must not prematurely close the enclosing procedure body.
+    // The `OR REPLACE` / `OR ALTER` alternation must match the CREATE-side symbol regex above so a
+    // `CREATE OR ALTER PROCEDURE` sibling actually terminates the previous body range. See issue #429.
+    // 次のトップレベル文が別の proc 系ヘッダ（`CREATE|ALTER|DROP` + `PROCEDURE|PROC|FUNCTION|TRIGGER`、
+    // PostgreSQL の `OR REPLACE` / T-SQL・SQL Server 2016+ の `OR ALTER` 付きも許容）だった場合のみ
+    // SQL の proc 本体を閉じる。本体内の `CREATE TABLE` / `ALTER TABLE` / `GRANT` / `USE` などで
+    // 先走って閉じないこと。`OR REPLACE` / `OR ALTER` の分岐は上の CREATE 側シンボル正規表現と揃え、
+    // `CREATE OR ALTER PROCEDURE` の隣接宣言でも前の body 範囲を確実に終端させる。issue #429 参照。
+    private static readonly Regex SqlTopLevelDdlStartRegex = new(
+        @"^\s*(?:CREATE|ALTER|DROP)\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:PROCEDURE|PROC|FUNCTION|TRIGGER)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // Dollar-quoted body tags: `$$` or `$tagname$` (PostgreSQL). Tag must be empty or an identifier.
+    // Dollar-quoted の本体タグ: `$$` または `$タグ名$`（PostgreSQL）。タグは空か識別子のみ。
+    private static readonly Regex SqlDollarTagRegex = new(
+        @"\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$",
+        RegexOptions.Compiled);
+
+    /// <summary>
+    /// Resolve the body range of a SQL `CREATE|ALTER PROCEDURE|FUNCTION|TRIGGER` symbol.
+    /// Closes the body at: balanced dollar-quoted (`$$ ... $$`), `GO` batch separator at line start,
+    /// a new top-level DDL statement (`CREATE`/`ALTER`/`DROP`/...) at line start, or end-of-file.
+    /// Multi-line scanning respects SQL string literals (`'...'` / `"..."`) and line/block comments
+    /// so terminators embedded in comments or strings do not prematurely close the body.
+    /// Body boundaries are best-effort — they only need to contain calls inside the procedure for
+    /// ReferenceExtractor's container attribution, not reconstruct the exact parser-level body.
+    /// See issue #429.
+    /// SQL の `CREATE|ALTER PROCEDURE|FUNCTION|TRIGGER` シンボルの本体範囲を求める。
+    /// 本体は、`$$ ... $$` 等のドル引用の閉じ、行頭の `GO` バッチ区切り、行頭の新たなトップレベル DDL
+    /// （`CREATE`/`ALTER`/`DROP`/...）、または EOF で閉じる。文字列リテラル（`'...'` / `"..."`）と
+    /// 行/ブロックコメントは尊重するため、これらの中に入った終端語で誤って閉じない。
+    /// 本体境界は ReferenceExtractor のコンテナ帰属のためにプロシージャ内部の呼び出しを包含できれば
+    /// 十分で、パーサレベルの正確な本体を再構築する必要はない。issue #429 参照。
+    /// </summary>
+    private static (int EndLine, int? BodyStartLine, int? BodyEndLine) FindSqlProcBodyRange(string[] lines, int startIndex)
+    {
+        int bodyStartLine = startIndex + 1;
+        int endLine = startIndex + 1;
+        string? openDollarTag = null;
+        int blockCommentDepth = 0;
+
+        for (int i = startIndex; i < lines.Length; i++)
+        {
+            var raw = lines[i];
+
+            if (openDollarTag != null)
+            {
+                // Inside a dollar-quoted body; look for the matching close tag on any column.
+                // ドル引用ボディ内。どの列にあっても閉じタグを探す。
+                if (raw.IndexOf(openDollarTag, StringComparison.Ordinal) >= 0)
+                {
+                    openDollarTag = null;
+                    endLine = i + 1;
+                    return (endLine, bodyStartLine, endLine);
+                }
+                endLine = i + 1;
+                continue;
+            }
+
+            var masked = MaskSqlLineForBodyScan(raw, ref blockCommentDepth);
+
+            // Detect any unpaired dollar-quote opening on this line. Paired openings on the same
+            // line (e.g. `AS $$ SELECT 1 $$`) are consumed without opening cross-line state.
+            // 同一行でペアにならない dollar-quote 開きを検出する。同じ行で開閉が揃う（`AS $$ SELECT 1 $$`）
+            // 場合はクロス行状態を開かずそのまま消費する。
+            var dollarMatches = SqlDollarTagRegex.Matches(masked);
+            if (dollarMatches.Count > 0)
+            {
+                var tagCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+                foreach (Match m in dollarMatches)
+                    tagCounts[m.Value] = tagCounts.TryGetValue(m.Value, out var c) ? c + 1 : 1;
+
+                string? stillOpen = null;
+                foreach (var kv in tagCounts)
+                {
+                    if (kv.Value % 2 != 0)
+                    {
+                        stillOpen = kv.Key;
+                        break;
+                    }
+                }
+
+                if (stillOpen != null)
+                {
+                    openDollarTag = stillOpen;
+                    endLine = i + 1;
+                    continue;
+                }
+            }
+
+            if (i > startIndex)
+            {
+                // Use `masked` for GO detection too so a bare `GO` appearing inside a multi-line
+                // block comment does not prematurely close the body (the mask blanks out
+                // comment-interior content). See issue #429 follow-up.
+                // `GO` 判定にも `masked` を使い、複数行ブロックコメント内の `GO` 単独行で本体を
+                // 早期終了させない（マスクでコメント内部は空白化される）。issue #429 追補参照。
+                if (SqlGoSeparatorRegex.IsMatch(masked))
+                {
+                    // `GO` is a T-SQL batch separator that is not part of the body; close at the
+                    // previous line so the `GO` line itself is outside the procedure.
+                    // `GO` は本体の一部ではない T-SQL のバッチ区切り。前行で本体を閉じ、`GO` 行自体は
+                    // プロシージャの外に置く。
+                    return (i, bodyStartLine, i);
+                }
+
+                if (SqlTopLevelDdlStartRegex.IsMatch(masked))
+                {
+                    // A new top-level DDL statement on the next line always closes the previous
+                    // procedure's body (even without `GO`).
+                    // 次の行に新しいトップレベル DDL が来たら、`GO` が無くても前のプロシージャ本体は
+                    // ここで閉じる。
+                    return (i, bodyStartLine, i);
+                }
+            }
+
+            endLine = i + 1;
+        }
+
+        return (endLine, bodyStartLine, endLine);
+    }
+
+    /// <summary>
+    /// Strip SQL line comments (`--`), block comments (`/* ... */`, including multi-line and
+    /// PostgreSQL-style nested `/* /* ... */ ... */`), and string literals (`'...'` / `"..."`)
+    /// from a single line so body-terminator checks do not trip on text inside comments or
+    /// strings. Bracket identifiers (`[name]`) and backtick identifiers (`` `name` ``) are left
+    /// untouched since they never contain SQL tokens.
+    /// `blockCommentDepth` is threaded across lines by the caller so a `/* ... */` block opened on
+    /// one line continues to mask terminators like bare `GO` / `CREATE` appearing on subsequent
+    /// lines until all open `/*` are balanced. PostgreSQL allows nested block comments; T-SQL /
+    /// MySQL / Oracle do not, but using depth here is strictly safer for the dialects that do not
+    /// (every outer `*/` still closes when depth returns to 0). See issue #429 follow-up.
+    /// SQL の行コメント（`--`）、ブロックコメント（`/* ... */`、複数行にまたがるものと PostgreSQL 風の
+    /// ネスト `/* /* ... */ ... */` を含む）、および文字列リテラル（`'...'` / `"..."`）を除去して、
+    /// コメントや文字列中の語で本体終端が誤検出されないようにする。角括弧識別子 `[name]` と
+    /// バッククォート識別子 `` `name` `` はそのまま残す（SQL トークンを含まないため）。
+    /// `blockCommentDepth` は呼び出し側で行間に持ち越し、ある行で開いた `/* ... */` がすべての `/*`
+    /// と均衡するまで、後続行の `GO` / `CREATE` のような終端語をマスクし続ける。PostgreSQL は
+    /// ブロックコメントのネストを許容する一方、T-SQL / MySQL / Oracle は許容しないが、ここで depth を
+    /// 使っても後者では単に外側の `*/` で depth が 0 に戻って閉じるだけなので、厳密に safer。
+    /// issue #429 追補参照。
+    /// </summary>
+    private static string MaskSqlLineForBodyScan(string line, ref int blockCommentDepth)
+    {
+        if (string.IsNullOrEmpty(line))
+            return line;
+
+        var sb = new StringBuilder(line.Length);
+        bool inSingle = false;
+        bool inDouble = false;
+        int i = 0;
+
+        while (i < line.Length)
+        {
+            if (blockCommentDepth > 0)
+            {
+                // Inside a (possibly nested) block comment. Look for the next `/*` (increases depth)
+                // or `*/` (decreases depth), whichever comes first. Blank every column until we
+                // either close back to depth 0 or hit end of line.
+                // ブロックコメント内（ネスト可）。次に来る `/*`（深さ増）か `*/`（深さ減）のうち早い方を探し、
+                // depth が 0 に戻るか行末に到達するまで各列を空白化する。
+                int open = line.IndexOf("/*", i, StringComparison.Ordinal);
+                int close = line.IndexOf("*/", i, StringComparison.Ordinal);
+
+                if (close < 0 && open < 0)
+                {
+                    for (int k = i; k < line.Length; k++)
+                        sb.Append(' ');
+                    return sb.ToString();
+                }
+
+                if (close >= 0 && (open < 0 || close < open))
+                {
+                    for (int k = i; k <= close + 1; k++)
+                        sb.Append(' ');
+                    blockCommentDepth--;
+                    i = close + 2;
+                    continue;
+                }
+
+                // `/*` comes first (or is tied — but `close < open` already handles the tie in favor
+                // of `*/`, so here we know `open <= close` strictly and `/*` is the next token).
+                // `/*` が先に現れる（`close < open` の場合は close 優先で既に分岐済みなので、ここでは
+                // `open <= close` かつ `/*` が次のトークン）。
+                for (int k = i; k <= open + 1; k++)
+                    sb.Append(' ');
+                blockCommentDepth++;
+                i = open + 2;
+                continue;
+            }
+
+            char c = line[i];
+
+            if (!inSingle && !inDouble)
+            {
+                if (c == '-' && i + 1 < line.Length && line[i + 1] == '-')
+                {
+                    for (int k = i; k < line.Length; k++)
+                        sb.Append(' ');
+                    return sb.ToString();
+                }
+                if (c == '/' && i + 1 < line.Length && line[i + 1] == '*')
+                {
+                    // Open a block comment; let the `blockCommentDepth > 0` branch close it on this
+                    // or a later line.
+                    // ブロックコメントを開始する。閉じ処理は `blockCommentDepth > 0` 分岐で同じ行か
+                    // 後続行のどちらかが担当する。
+                    sb.Append(' ');
+                    sb.Append(' ');
+                    blockCommentDepth = 1;
+                    i += 2;
+                    continue;
+                }
+                if (c == '\'')
+                {
+                    inSingle = true;
+                    sb.Append(' ');
+                    i++;
+                    continue;
+                }
+                if (c == '"')
+                {
+                    inDouble = true;
+                    sb.Append(' ');
+                    i++;
+                    continue;
+                }
+                sb.Append(c);
+                i++;
+            }
+            else if (inSingle)
+            {
+                if (c == '\'' && i + 1 < line.Length && line[i + 1] == '\'')
+                {
+                    sb.Append(' ');
+                    sb.Append(' ');
+                    i += 2;
+                    continue;
+                }
+                if (c == '\'')
+                {
+                    inSingle = false;
+                    sb.Append(' ');
+                    i++;
+                    continue;
+                }
+                sb.Append(' ');
+                i++;
+            }
+            else
+            {
+                if (c == '"' && i + 1 < line.Length && line[i + 1] == '"')
+                {
+                    sb.Append(' ');
+                    sb.Append(' ');
+                    i += 2;
+                    continue;
+                }
+                if (c == '"')
+                {
+                    inDouble = false;
+                    sb.Append(' ');
+                    i++;
+                    continue;
+                }
+                sb.Append(' ');
+                i++;
+            }
+        }
+
+        return sb.ToString();
+    }
+
     private static string StripLeadingCSharpAttributeLists(
         string line,
         ref bool inLeadingAttributeBlock,
@@ -9469,6 +10968,67 @@ public static class SymbolExtractor
             && CSharpEnumMemberNameRegex.IsMatch(line);
     }
 
+    /// <summary>
+    /// Return true when a batch (.bat / .cmd) line is a comment, i.e. `::` / `:::` / `rem` /
+    /// `@rem` (with optional leading whitespace and case-insensitive `rem`). Comment lines
+    /// must not contribute `set` property symbols even when they contain the boundary tokens
+    /// (`&`, `(`, `else`, `do`) that the new inline-set-capture regex accepts.
+    /// batch (.bat / .cmd) のコメント行 (`::` / `:::` / `rem` / `@rem`、先頭空白可、`rem` は大小文字不問) のときに
+    /// true を返す。新しい inline `set` 捕捉正規表現が受け付ける境界トークン (`&` / `(` / `else` / `do`) を
+    /// 含んでいても、コメント行からは `set` property を拾わない。
+    /// </summary>
+    private static bool IsBatchCommentLine(string line)
+    {
+        var i = 0;
+        while (i < line.Length && (line[i] == ' ' || line[i] == '\t'))
+            i++;
+
+        if (i >= line.Length)
+            return false;
+
+        // `::` (and therefore also `:::`, `::: ...`) opens a batch comment that consumes the
+        // rest of the line. The label regex does not match these because it requires a name
+        // char after the first `:`, but the property regex could match their inline tokens.
+        // `::` 以降はコメント (`:::`、`::: ...` も同様)。ラベル正規表現は `:` の後ろに名前文字を
+        // 要求するため影響を受けないが、property 正規表現は inline トークンを拾ってしまう。
+        if (line[i] == ':' && i + 1 < line.Length && line[i + 1] == ':')
+            return true;
+
+        // `@rem` (echo-suppression prefix + rem). Accept optional whitespace between `@` and
+        // `rem` to mirror how the property regex tolerates `@ set`.
+        // `@rem` (echo 抑止プレフィクス + rem) 。property 正規表現が `@ set` を許すのに合わせて
+        // `@` と `rem` の間の空白も許容する。
+        if (line[i] == '@')
+        {
+            var j = i + 1;
+            while (j < line.Length && (line[j] == ' ' || line[j] == '\t'))
+                j++;
+            return IsBatchRemKeyword(line, j);
+        }
+
+        return IsBatchRemKeyword(line, i);
+    }
+
+    private static bool IsBatchRemKeyword(string line, int start)
+    {
+        // A bare `rem` or `rem` followed by whitespace / end-of-line is a comment.
+        // Case-insensitive: `REM`, `rem`, `Rem`, `rEM`, etc. are all comments.
+        // 単独の `rem` または `rem` の直後が空白か行末ならコメント扱い。
+        // 大小文字不問 — `REM` / `rem` / `Rem` / `rEM` などすべてコメント。
+        if (start + 3 > line.Length)
+            return false;
+        if ((line[start] | 0x20) != 'r')
+            return false;
+        if ((line[start + 1] | 0x20) != 'e')
+            return false;
+        if ((line[start + 2] | 0x20) != 'm')
+            return false;
+        if (start + 3 == line.Length)
+            return true;
+        var next = line[start + 3];
+        return next == ' ' || next == '\t' || next == '\r' || next == '\n';
+    }
+
     private static bool CanContinueScanningSameLineBraceBody(
         string? lang,
         string kind,
@@ -9481,8 +11041,44 @@ public static class SymbolExtractor
         if (bodyStyle != BodyStyle.Brace || endLine != startLine || sameLineEndColumn < absoluteStartColumn)
             return false;
 
-        return lang is "javascript" or "typescript" or "css"
+        return lang is "javascript" or "typescript" or "css" or "java"
             || (lang == "csharp" && CanContinueScanningSameLineCSharpBraceBody(kind));
+    }
+
+    private static bool IsCSharpFieldLikeFunctionPattern(SymbolPattern pattern)
+        => pattern.Kind == "function"
+            && pattern.BodyStyle == BodyStyle.None
+            && pattern.ReturnTypeGroup != null;
+
+    private static bool HasInvalidCSharpReturnTypeSuffix(string? returnType)
+    {
+        if (string.IsNullOrWhiteSpace(returnType))
+            return true;
+
+        var trimmed = returnType.TrimEnd();
+        if (trimmed.Length == 0)
+            return true;
+
+        var lastChar = trimmed[^1];
+        if (lastChar is '<' or '=' or ':' or '+' or '-' or '/' or '%' or '!' or '&' or '|' or '^' or '~' or '.')
+            return true;
+
+        var tokenStart = trimmed.Length - 1;
+        while (tokenStart > 0
+            && (char.IsLetterOrDigit(trimmed[tokenStart - 1]) || trimmed[tokenStart - 1] == '_'))
+        {
+            tokenStart--;
+        }
+
+        if (tokenStart > 0
+            && trimmed[tokenStart - 1] == '@'
+            && IsCSharpVerbatimIdentifierPrefix(trimmed, tokenStart - 1))
+        {
+            return false;
+        }
+
+        var lastToken = trimmed[tokenStart..];
+        return lastToken is "as" or "is" or "return" or "throw" or "new";
     }
 
     private static int FindNextSameLineBraceStatementStart(string matchLine, int startIndex, string? lang)
@@ -9490,6 +11086,29 @@ public static class SymbolExtractor
         return lang is "javascript" or "typescript"
             ? FindNextJavaScriptTypeScriptStatementStart(matchLine, startIndex)
             : FindNextBraceStatementStart(matchLine, startIndex);
+    }
+
+    // C# same-line restarts can legitimately hit a container-closing `}`, an empty
+    // statement `;`, or a carried verbatim-string closing `"` before the next real sibling
+    // declaration (`... P { get; } } public int Q { get; }`, or a carried multiline string
+    // continuation like `"; public class Child { }`). Keep advancing until we reach a
+    // non-`}` / non-`;` / non-`"` statement start so the later real declaration stays visible.
+    // C# の同一行再開は、次の実 sibling 宣言の前に container を閉じる `}`、空文の `;`、
+    // あるいは継続 verbatim string の閉じ `"` に当たりうる（`... P { get; } } public int Q { get; }`
+    // や、`"; public class Child { }` のような継続文字列の閉じ直後）。後続の実宣言を落とさないよう、
+    // 非 `}` / 非 `;` / 非 `"` の statement start に当たるまで再開位置を進める。
+    private static int FindNextSameLineNonClosingBraceStatementStart(string matchLine, int startIndex, string? lang)
+    {
+        var nextOffset = FindNextSameLineBraceStatementStart(matchLine, startIndex, lang);
+        while (lang == "csharp"
+               && nextOffset >= 0
+               && nextOffset < matchLine.Length
+               && matchLine[nextOffset] is '}' or ';' or '"')
+        {
+            nextOffset = FindNextSameLineBraceStatementStart(matchLine, nextOffset + 1, lang);
+        }
+
+        return nextOffset;
     }
 
     private static int FindNextBraceStatementStart(string line, int startIndex)
@@ -9535,7 +11154,7 @@ public static class SymbolExtractor
     // 閉じ括弧）は、その位置をそのまま返すため signature と advance の両方がラッパー
     // 終端の手前で止まる。入力は構造的にマスク済みのマッチ行を想定し、文字列リテラル内の
     // `{` / `;` が深さトラッカを誤認させないようにしている。
-    private static int FindCSharpPlainFieldStatementEnd(string maskedLine, int startIndex)
+    private static int FindCSharpSameLineStatementEnd(string maskedLine, int startIndex)
     {
         int parenDepth = 0;
         int bracketDepth = 0;
@@ -9586,6 +11205,76 @@ public static class SymbolExtractor
         return maskedLine.Length;
     }
 
+    // Reuse the same top-level `;` scan as plain fields for other compact same-line C#
+    // members (`event E;`, interface/abstract methods like `void M();`, delegates, etc.).
+    // Returns the inclusive `;` column when one exists on the same physical line and -1
+    // when the declaration instead runs into the enclosing `}` or simply has no same-line
+    // semicolon terminator. Closes #473.
+    // 通常フィールドと同じ top-level `;` 探索を、他のコンパクトな同一行 C# member
+    // (`event E;`、`void M();` 形の interface/abstract method、delegate など) にも
+    // 再利用する。同一物理行に `;` があればその包含列を返し、囲み `}` にぶつかる、
+    // あるいは同一行終端 `;` 自体が無い場合は -1 を返す。Closes #473.
+    private static int FindCSharpSameLineSemicolonEndColumn(string maskedLine, int startIndex)
+    {
+        var statementEnd = FindCSharpSameLineStatementEnd(maskedLine, startIndex);
+        var semicolonIndex = statementEnd - 1;
+        return semicolonIndex >= startIndex
+            && semicolonIndex < maskedLine.Length
+            && maskedLine[semicolonIndex] == ';'
+            ? semicolonIndex
+            : -1;
+    }
+
+    private static int FindCSharpSameLineEnumMemberEndColumn(string maskedLine, int startIndex)
+    {
+        int parenDepth = 0;
+        int bracketDepth = 0;
+        int braceDepth = 0;
+        for (var index = Math.Max(0, startIndex); index < maskedLine.Length; index++)
+        {
+            var ch = maskedLine[index];
+            if (ch == '(')
+            {
+                parenDepth++;
+            }
+            else if (ch == ')')
+            {
+                if (parenDepth > 0)
+                    parenDepth--;
+            }
+            else if (ch == '[')
+            {
+                bracketDepth++;
+            }
+            else if (ch == ']')
+            {
+                if (bracketDepth > 0)
+                    bracketDepth--;
+            }
+            else if (ch == '{')
+            {
+                braceDepth++;
+            }
+            else if (ch == '}')
+            {
+                if (braceDepth > 0)
+                {
+                    braceDepth--;
+                }
+                else
+                {
+                    return index;
+                }
+            }
+            else if (ch == ',' && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
     private static int FindSameLineBraceEndColumn(string line, int startColumn, string? lang, string kind)
     {
         return lang switch
@@ -9593,8 +11282,94 @@ public static class SymbolExtractor
             "javascript" or "typescript" => FindJavaScriptTypeScriptSameLineBraceEndColumn(line, startColumn, lang),
             "css" => FindCssSameLineBraceEndColumn(line, startColumn),
             "csharp" => FindCSharpSameLineBraceEndColumn(line, startColumn),
+            "java" => FindJavaSameLineBraceEndColumn(line, startColumn),
             _ => -1,
         };
+    }
+
+    private static int FindJavaSameLineBraceEndColumn(string line, int startColumn)
+    {
+        var mode = JavaScanMode.Normal;
+        var depth = 0;
+        var opened = false;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var angleDepth = 0;
+        var column = Math.Max(0, startColumn);
+
+        while (column < line.Length)
+        {
+            if (TryConsumeJavaNonCode(line, ref column, ref mode))
+                continue;
+
+            var ch = line[column];
+            if (!opened)
+            {
+                if (ch == '(')
+                {
+                    parenDepth++;
+                    column++;
+                    continue;
+                }
+
+                if (ch == ')' && parenDepth > 0)
+                {
+                    parenDepth--;
+                    column++;
+                    continue;
+                }
+
+                if (ch == '[')
+                {
+                    bracketDepth++;
+                    column++;
+                    continue;
+                }
+
+                if (ch == ']' && bracketDepth > 0)
+                {
+                    bracketDepth--;
+                    column++;
+                    continue;
+                }
+
+                if (ch == '<')
+                {
+                    angleDepth++;
+                    column++;
+                    continue;
+                }
+
+                if (ch == '>' && angleDepth > 0)
+                {
+                    angleDepth--;
+                    column++;
+                    continue;
+                }
+
+                if (parenDepth > 0 || bracketDepth > 0 || angleDepth > 0)
+                {
+                    column++;
+                    continue;
+                }
+            }
+
+            if (ch == '{')
+            {
+                depth++;
+                opened = true;
+            }
+            else if (ch == '}' && opened)
+            {
+                depth--;
+                if (depth == 0)
+                    return column;
+            }
+
+            column++;
+        }
+
+        return -1;
     }
 
     private static int FindCssSameLineBraceEndColumn(string line, int startColumn)
@@ -9624,32 +11399,186 @@ public static class SymbolExtractor
 
     private static bool CanContinueScanningSameLineCSharpBraceBody(string kind)
     {
-        return kind is "namespace" or "class" or "struct" or "interface" or "enum";
+        return kind is "namespace" or "class" or "struct" or "interface" or "enum" or "property";
+    }
+
+    private static bool CanUseCSharpSameLineSemicolonEndColumn(string kind)
+    {
+        return kind is "function" or "event" or "delegate";
+    }
+
+    private static bool CanRestartCSharpSameLineSiblingScan(string kind)
+    {
+        return kind is "function" or "property" or "event" or "delegate" or "enum";
     }
 
     private static int FindCSharpSameLineBraceEndColumn(string line, int startColumn)
     {
-        var sanitizedLine = LexCSharpLine(line, new CSharpLexState()).SanitizedLine;
+        return FindCSharpSameLineBraceEndColumnFromSanitized(
+            LexCSharpLine(line, new CSharpLexState()).SanitizedLine,
+            startColumn);
+    }
+
+    private static int FindCSharpSameLineBraceEndColumnFromSanitized(string sanitizedLine, int startColumn)
+    {
         var depth = 0;
         var opened = false;
+        var expressionBody = false;
+        var parenDepth = 0;
+        var bracketDepth = 0;
 
         for (var index = Math.Max(0, startColumn); index < sanitizedLine.Length; index++)
         {
             var ch = sanitizedLine[index];
-            if (ch == '{')
+
+            if (expressionBody)
+            {
+                if (ch == '(')
+                    parenDepth++;
+                else if (ch == ')' && parenDepth > 0)
+                    parenDepth--;
+                else if (ch == '[')
+                    bracketDepth++;
+                else if (ch == ']' && bracketDepth > 0)
+                    bracketDepth--;
+                else if (ch == '{')
+                    depth++;
+                else if (ch == '}' && depth > 0)
+                    depth--;
+                else if (ch == ';' && parenDepth == 0 && bracketDepth == 0 && depth == 0)
+                    return index;
+
+                continue;
+            }
+
+            if (ch == '(')
+            {
+                parenDepth++;
+                continue;
+            }
+
+            if (ch == ')' && parenDepth > 0)
+            {
+                parenDepth--;
+                continue;
+            }
+
+            if (ch == '[')
+            {
+                bracketDepth++;
+                continue;
+            }
+
+            if (ch == ']' && bracketDepth > 0)
+            {
+                bracketDepth--;
+                continue;
+            }
+
+            if (ch == '{' && parenDepth == 0 && bracketDepth == 0)
             {
                 depth++;
                 opened = true;
+                continue;
             }
-            else if (ch == '}' && opened)
+
+            if (ch == '}' && opened && parenDepth == 0 && bracketDepth == 0)
             {
                 depth--;
                 if (depth == 0)
                     return index;
+
+                continue;
+            }
+
+            // Expression-bodied members (`=> expr;`) have no surrounding `{}` to anchor the
+            // same-line end column. Detect the top-level `=>` so later sibling declarations
+            // on the same physical line are not swallowed into the current signature / body
+            // extent. Closes #470 review follow-up.
+            // 式本体 member (`=> expr;`) には `{}` が無いため、same-line 終端列を
+            // top-level の `=>` から `;` までで判定する。これにより、同じ物理行の後続
+            // sibling 宣言を現在の signature / body 範囲へ飲み込まないようにする。
+            // Closes #470 review follow-up.
+            if (ch == '='
+                && index + 1 < sanitizedLine.Length
+                && sanitizedLine[index + 1] == '>'
+                && !opened
+                && parenDepth == 0
+                && bracketDepth == 0)
+            {
+                expressionBody = true;
+                index++;
             }
         }
 
         return -1;
+    }
+
+    // Body-less Java members (`void a();`, `String[] value();`, `int[] v() default {1};`) need a
+    // same-line statement-end scanner so later siblings on the same physical line stay reachable.
+    // Track comments / strings / text blocks with the Java lexer and balance `()`, `[]`, and
+    // annotation/default-value braces. If the enclosing `}` arrives before a top-level `;`, return
+    // that `}` position so callers can stop without absorbing the wrapper close.
+    // Java の body-less member（`void a();` / `String[] value();` / `int[] v() default {1};`）向けの
+    // same-line statement-end scanner。Java lexer で comment / 文字列 / text block を避けつつ、
+    // `()` / `[]` / annotation / default 値の `{}` を釣り合わせる。top-level `;` より先に
+    // 囲み `}` が来た場合はその位置を返し、呼び出し側が wrapper close を飲み込まず止まれるようにする。
+    private static int FindJavaSameLineStatementEnd(string line, int startColumn)
+    {
+        var mode = JavaScanMode.Normal;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var column = Math.Max(0, startColumn);
+        while (column < line.Length)
+        {
+            if (TryConsumeJavaNonCode(line, ref column, ref mode))
+                continue;
+
+            var ch = line[column];
+            if (ch == '(')
+            {
+                parenDepth++;
+            }
+            else if (ch == ')' && parenDepth > 0)
+            {
+                parenDepth--;
+            }
+            else if (ch == '[')
+            {
+                bracketDepth++;
+            }
+            else if (ch == ']' && bracketDepth > 0)
+            {
+                bracketDepth--;
+            }
+            else if (ch == '{')
+            {
+                braceDepth++;
+            }
+            else if (ch == '}')
+            {
+                if (braceDepth > 0)
+                {
+                    braceDepth--;
+                }
+                else
+                {
+                    return column;
+                }
+            }
+            else if (ch == ';'
+                && parenDepth == 0
+                && bracketDepth == 0
+                && braceDepth == 0)
+            {
+                return column + 1;
+            }
+
+            column++;
+        }
+
+        return line.Length;
     }
 
     // Walk upward from the identifier line looking for a contiguous run of modifier-only
@@ -9872,11 +11801,29 @@ public static class SymbolExtractor
             ? ResolveCSharpBraceColumn(lines[startLineIndex], csharpMatchLines[startLineIndex]) + 1
             : (int?)null;
 
-        for (int i = startLineIndex + 1; i < csharpMatchLines.Length; i++)
+        if (HasCSharpTopLevelFieldInitializer(matchLine)
+            || openBraceLineIndex >= 0 && CSharpConfirmedMemberPrefixRegex.IsMatch(matchLine))
+        {
+            return ContinueConfirmedCSharpPropertyMatch(
+                lines,
+                csharpMatchLines,
+                builder,
+                startLineIndex,
+                startLineIndex,
+                matchLine,
+                openBraceLineIndex,
+                openBraceExclusiveEndColumn);
+        }
+
+        var lookaheadLimitExclusive = Math.Min(csharpMatchLines.Length, startLineIndex + CSharpPropertyMatchLookaheadLineLimit + 1);
+        for (int i = startLineIndex + 1; i < lookaheadLimitExclusive; i++)
         {
             var nextLine = csharpMatchLines[i].Trim();
             if (nextLine.Length == 0)
                 continue;
+
+            if (builder.Length + 1 + nextLine.Length > CSharpPropertyMatchLookaheadCharLimit)
+                break;
 
             builder.Append(' ').Append(nextLine);
             var normalizedCombined = CollapseCSharpGenericTypeWhitespace(builder.ToString());
@@ -9918,11 +11865,106 @@ public static class SymbolExtractor
                 return new CSharpPropertyMatchCandidate(normalizedCombined, i, i);
             }
 
+            if (HasCSharpTopLevelFieldInitializer(normalizedCombined)
+                || openBraceLineIndex >= 0 && CSharpConfirmedMemberPrefixRegex.IsMatch(normalizedCombined))
+            {
+                return ContinueConfirmedCSharpPropertyMatch(
+                    lines,
+                    csharpMatchLines,
+                    builder,
+                    startLineIndex,
+                    i,
+                    normalizedCombined,
+                    openBraceLineIndex,
+                    openBraceExclusiveEndColumn);
+            }
+
             if (nextLine.StartsWith(";", StringComparison.Ordinal))
                 break;
         }
 
         return new CSharpPropertyMatchCandidate(matchLine, startLineIndex, startLineIndex);
+    }
+
+    private static CSharpPropertyMatchCandidate ContinueConfirmedCSharpPropertyMatch(
+        string[] lines,
+        string[] csharpMatchLines,
+        StringBuilder builder,
+        int startLineIndex,
+        int currentLineIndex,
+        string normalizedCombined,
+        int openBraceLineIndex,
+        int? openBraceExclusiveEndColumn)
+    {
+        var semicolonTracker = new CSharpTopLevelSemicolonTracker();
+        semicolonTracker.Scan(normalizedCombined);
+
+        StringBuilder? accessorProbeBuilder = null;
+        var accessorProbeStatus = CSharpAccessorProbeStatus.Rejected;
+        if (openBraceLineIndex >= 0 && openBraceExclusiveEndColumn.HasValue)
+        {
+            accessorProbeBuilder = BuildCSharpAccessorProbeBuilder(
+                csharpMatchLines,
+                openBraceLineIndex,
+                openBraceExclusiveEndColumn.Value,
+                currentLineIndex);
+            accessorProbeStatus = ClassifyCSharpAccessorProbe(accessorProbeBuilder.ToString());
+            if (accessorProbeStatus == CSharpAccessorProbeStatus.Found)
+            {
+                return new CSharpPropertyMatchCandidate(
+                    normalizedCombined,
+                    currentLineIndex,
+                    openBraceLineIndex,
+                    openBraceExclusiveEndColumn);
+            }
+        }
+
+        for (int i = currentLineIndex + 1; i < csharpMatchLines.Length; i++)
+        {
+            var nextLine = csharpMatchLines[i].Trim();
+            if (nextLine.Length == 0)
+                continue;
+
+            builder.Append(' ').Append(nextLine);
+            semicolonTracker.Scan(nextLine);
+
+            if (openBraceLineIndex < 0 && csharpMatchLines[i].IndexOf('{') >= 0)
+            {
+                openBraceLineIndex = i;
+                openBraceExclusiveEndColumn = ResolveCSharpBraceColumn(lines[i], csharpMatchLines[i]) + 1;
+                accessorProbeBuilder = BuildCSharpAccessorProbeBuilder(
+                    csharpMatchLines,
+                    openBraceLineIndex,
+                    openBraceExclusiveEndColumn.Value,
+                    i);
+                accessorProbeStatus = ClassifyCSharpAccessorProbe(accessorProbeBuilder.ToString());
+            }
+            else if (accessorProbeBuilder != null
+                && accessorProbeStatus == CSharpAccessorProbeStatus.Pending)
+            {
+                AppendCSharpAccessorProbeLine(accessorProbeBuilder, csharpMatchLines[i], null);
+                accessorProbeStatus = ClassifyCSharpAccessorProbe(accessorProbeBuilder.ToString());
+            }
+
+            if (accessorProbeStatus == CSharpAccessorProbeStatus.Found)
+            {
+                return new CSharpPropertyMatchCandidate(
+                    CollapseCSharpGenericTypeWhitespace(builder.ToString()),
+                    i,
+                    openBraceLineIndex,
+                    openBraceExclusiveEndColumn);
+            }
+
+            if (semicolonTracker.HasTopLevelSemicolon)
+            {
+                return new CSharpPropertyMatchCandidate(
+                    CollapseCSharpGenericTypeWhitespace(builder.ToString()),
+                    i,
+                    i);
+            }
+        }
+
+        return new CSharpPropertyMatchCandidate(normalizedCombined, currentLineIndex, currentLineIndex);
     }
 
     // Prefer the raw line's `{` column (to preserve original positioning for body slicing),
@@ -9952,8 +11994,203 @@ public static class SymbolExtractor
         cursor = SkipWhitespace(text, cursor);
         if (TrySkipCSharpAccessorAccessibility(text, ref cursor))
             cursor = SkipWhitespace(text, cursor);
+        while (TrySkipCSharpAccessorModifier(text, ref cursor))
+            cursor = SkipWhitespace(text, cursor);
 
         return StartsWithCSharpAccessorKeyword(text, cursor);
+    }
+
+    private static bool HasCSharpEventAccessorStart(string text)
+    {
+        var braceIndex = text.IndexOf('{');
+        if (braceIndex < 0)
+            return false;
+
+        var cursor = SkipWhitespace(text, braceIndex + 1);
+        while (TrySkipCSharpAttributeList(text, ref cursor))
+            cursor = SkipWhitespace(text, cursor);
+
+        return StartsWithCSharpEventAccessorKeyword(text, cursor);
+    }
+
+    private static bool ShouldDeferCSharpFunctionSameLineAdvance(string matchLine, int startColumn)
+    {
+        if (startColumn < 0 || startColumn >= matchLine.Length)
+            return false;
+
+        var remaining = matchLine[startColumn..];
+        return !CSharpTypeBodyDeclarationMarker.IsMatch(remaining)
+            && (CSharpSameLinePropertyStatementStartRegex.IsMatch(remaining)
+                || CSharpSameLineEventOrDelegateStatementStartRegex.IsMatch(remaining));
+    }
+
+    private static bool ShouldDeferCSharpBracePropertySameLineAdvance(string matchLine, int startColumn)
+    {
+        if (startColumn < 0 || startColumn >= matchLine.Length)
+            return false;
+
+        var remaining = matchLine[startColumn..];
+        return !CSharpTypeBodyDeclarationMarker.IsMatch(remaining)
+            && !HasCSharpPropertyAccessorStart(remaining)
+            && CSharpSameLinePropertyStatementStartRegex.IsMatch(remaining);
+    }
+
+    private static bool ShouldDeferCSharpEventOrDelegateSameLineAdvance(string matchLine, int startColumn, string kind)
+    {
+        if (startColumn < 0 || startColumn >= matchLine.Length)
+            return false;
+
+        var remaining = matchLine[startColumn..];
+        if (CSharpTypeBodyDeclarationMarker.IsMatch(remaining))
+            return false;
+
+        return kind switch
+        {
+            "event" => CSharpSameLineDelegateStatementStartRegex.IsMatch(remaining),
+            "delegate" => CSharpSameLineEventStatementStartRegex.IsMatch(remaining),
+            _ => false,
+        };
+    }
+
+    private static bool TryGetCSharpSameLineSemicolonSiblingOffset(string matchLine, int startColumn, out int nextSameLineOffset)
+    {
+        nextSameLineOffset = -1;
+        if (startColumn < 0 || startColumn >= matchLine.Length)
+            return false;
+
+        var statementEnd = FindCSharpSameLineStatementEnd(matchLine, startColumn);
+        if (statementEnd <= startColumn)
+            return false;
+
+        var nextOffset = FindNextSameLineNonClosingBraceStatementStart(matchLine, statementEnd, "csharp");
+        if (nextOffset <= statementEnd
+            || nextOffset >= matchLine.Length)
+        {
+            return false;
+        }
+
+        nextSameLineOffset = nextOffset;
+        return true;
+    }
+
+    private static bool TryGetJavaSameLineSemicolonSiblingOffset(string matchLine, int startColumn, out int nextSameLineOffset)
+    {
+        nextSameLineOffset = -1;
+        if (startColumn < 0 || startColumn >= matchLine.Length)
+            return false;
+
+        var statementEnd = FindJavaSameLineStatementEnd(matchLine, startColumn);
+        var semicolonIndex = statementEnd - 1;
+        if (semicolonIndex < startColumn
+            || semicolonIndex >= matchLine.Length
+            || matchLine[semicolonIndex] != ';')
+        {
+            return false;
+        }
+
+        var nextOffset = FindNextSameLineBraceStatementStart(matchLine, statementEnd, "java");
+        while (nextOffset >= 0
+            && nextOffset < matchLine.Length
+            && matchLine[nextOffset] == '}')
+        {
+            nextOffset = FindNextSameLineBraceStatementStart(matchLine, nextOffset + 1, "java");
+        }
+
+        if (nextOffset <= statementEnd
+            || nextOffset >= matchLine.Length)
+        {
+            return false;
+        }
+
+        nextSameLineOffset = nextOffset;
+        return true;
+    }
+
+    private static bool TryGetCSharpSameLineEventSiblingOffset(string matchLine, int startColumn, out int nextSameLineOffset)
+    {
+        nextSameLineOffset = -1;
+        if (startColumn < 0 || startColumn >= matchLine.Length)
+            return false;
+
+        var remaining = matchLine[startColumn..];
+        if (!CSharpSameLineEventStatementStartRegex.IsMatch(remaining)
+            || !HasCSharpEventAccessorStart(remaining))
+            return false;
+
+        var bodyEnd = FindCSharpSameLineBraceEndColumnFromSanitized(matchLine, startColumn);
+        if (bodyEnd < startColumn)
+            return false;
+
+        var nextOffset = FindNextSameLineNonClosingBraceStatementStart(matchLine, bodyEnd + 1, "csharp");
+        if (nextOffset <= bodyEnd
+            || nextOffset >= matchLine.Length)
+        {
+            return false;
+        }
+
+        nextSameLineOffset = nextOffset;
+        return true;
+    }
+
+    private static bool StartsWithCSharpEventAccessorKeyword(string text, int start)
+    {
+        return StartsWithCSharpEventAccessorKeyword(text, start, "add")
+            || StartsWithCSharpEventAccessorKeyword(text, start, "remove");
+    }
+
+    private static bool StartsWithCSharpEventAccessorKeyword(string text, int start, string keyword)
+    {
+        if (start < 0)
+            return false;
+        if (start + keyword.Length > text.Length)
+            return false;
+        if (!text.AsSpan(start, keyword.Length).SequenceEqual(keyword))
+            return false;
+
+        var end = start + keyword.Length;
+        return end >= text.Length || !char.IsLetterOrDigit(text[end]) && text[end] != '_';
+    }
+
+    private static bool HasCSharpTopLevelFieldInitializer(string text)
+    {
+        int paren = 0, bracket = 0, brace = 0;
+        for (int i = 0; i < text.Length; i++)
+        {
+            var ch = text[i];
+            switch (ch)
+            {
+                case '(':
+                    paren++;
+                    continue;
+                case ')' when paren > 0:
+                    paren--;
+                    continue;
+                case '[':
+                    bracket++;
+                    continue;
+                case ']' when bracket > 0:
+                    bracket--;
+                    continue;
+                case '{':
+                    brace++;
+                    continue;
+                case '}' when brace > 0:
+                    brace--;
+                    continue;
+                case '=' when paren == 0 && bracket == 0 && brace == 0:
+                    var previous = i > 0 ? text[i - 1] : '\0';
+                    var next = i + 1 < text.Length ? text[i + 1] : '\0';
+                    if (previous is not ('=' or '!' or '<' or '>')
+                        && next is not ('=' or '>'))
+                    {
+                        return true;
+                    }
+
+                    continue;
+            }
+        }
+
+        return false;
     }
 
     private static int SkipWhitespace(string text, int cursor)
@@ -10007,6 +12244,15 @@ public static class SymbolExtractor
         return false;
     }
 
+    private static bool TrySkipCSharpAccessorModifier(string text, ref int cursor)
+    {
+        if (!StartsWithWord(text, cursor, "readonly"))
+            return false;
+
+        cursor += "readonly".Length;
+        return true;
+    }
+
     private static bool StartsWithCSharpAccessorKeyword(string text, int cursor) =>
         StartsWithWord(text, cursor, "get")
         || StartsWithWord(text, cursor, "set")
@@ -10022,6 +12268,119 @@ public static class SymbolExtractor
 
         var end = cursor + word.Length;
         return end >= text.Length || !char.IsLetterOrDigit(text[end]) && text[end] != '_';
+    }
+
+    private static StringBuilder BuildCSharpAccessorProbeBuilder(
+        string[] csharpMatchLines,
+        int openBraceLineIndex,
+        int openBraceExclusiveEndColumn,
+        int endLineIndex)
+    {
+        var builder = new StringBuilder();
+        var openBraceColumn = Math.Max(0, openBraceExclusiveEndColumn - 1);
+        for (int i = openBraceLineIndex; i <= endLineIndex && i < csharpMatchLines.Length; i++)
+        {
+            AppendCSharpAccessorProbeLine(
+                builder,
+                csharpMatchLines[i],
+                i == openBraceLineIndex ? openBraceColumn : null);
+        }
+
+        return builder;
+    }
+
+    private static void AppendCSharpAccessorProbeLine(StringBuilder builder, string sanitizedLine, int? startColumn)
+    {
+        var start = Math.Clamp(startColumn ?? 0, 0, sanitizedLine.Length);
+        var trimmed = sanitizedLine[start..].Trim();
+        if (trimmed.Length == 0)
+            return;
+
+        if (builder.Length > 0)
+            builder.Append(' ');
+        builder.Append(trimmed);
+    }
+
+    private static CSharpAccessorProbeStatus ClassifyCSharpAccessorProbe(string text)
+    {
+        var braceIndex = text.IndexOf('{');
+        if (braceIndex < 0)
+            return CSharpAccessorProbeStatus.Rejected;
+
+        var cursor = SkipWhitespace(text, braceIndex + 1);
+        while (true)
+        {
+            while (TrySkipCSharpAttributeList(text, ref cursor))
+                cursor = SkipWhitespace(text, cursor);
+
+            if (cursor >= text.Length)
+                return CSharpAccessorProbeStatus.Pending;
+
+            if (TrySkipCSharpAccessorAccessibility(text, ref cursor))
+            {
+                cursor = SkipWhitespace(text, cursor);
+                if (cursor >= text.Length)
+                    return CSharpAccessorProbeStatus.Pending;
+            }
+            while (TrySkipCSharpAccessorModifier(text, ref cursor))
+            {
+                cursor = SkipWhitespace(text, cursor);
+                if (cursor >= text.Length)
+                    return CSharpAccessorProbeStatus.Pending;
+            }
+
+            break;
+        }
+
+        return StartsWithCSharpAccessorKeyword(text, cursor)
+            ? CSharpAccessorProbeStatus.Found
+            : CSharpAccessorProbeStatus.Rejected;
+    }
+
+    private static bool IsStandaloneCSharpAccessorCandidate(string text) =>
+        CSharpStandaloneAccessorRegex.IsMatch(text);
+
+    private struct CSharpTopLevelSemicolonTracker
+    {
+        private int _parenDepth;
+        private int _bracketDepth;
+        private int _braceDepth;
+
+        public bool HasTopLevelSemicolon { get; private set; }
+
+        public void Scan(string text)
+        {
+            if (HasTopLevelSemicolon)
+                return;
+
+            for (int i = 0; i < text.Length; i++)
+            {
+                switch (text[i])
+                {
+                    case '(':
+                        _parenDepth++;
+                        break;
+                    case ')' when _parenDepth > 0:
+                        _parenDepth--;
+                        break;
+                    case '[':
+                        _bracketDepth++;
+                        break;
+                    case ']' when _bracketDepth > 0:
+                        _bracketDepth--;
+                        break;
+                    case '{':
+                        _braceDepth++;
+                        break;
+                    case '}' when _braceDepth > 0:
+                        _braceDepth--;
+                        break;
+                    case ';' when _parenDepth == 0 && _bracketDepth == 0 && _braceDepth == 0:
+                        HasTopLevelSemicolon = true;
+                        return;
+                }
+            }
+        }
     }
 
     private static bool TryFindCSharpExpressionArrow(string[] lines, int startLineIndex, int endLineIndex, out int arrowLineIndex, out int arrowColumn)
@@ -10118,6 +12477,66 @@ public static class SymbolExtractor
         }
 
         return builder.ToString().Trim();
+    }
+
+    private static bool TryFindCSharpFieldSignatureExtent(
+        string[] lines,
+        int startLineIndex,
+        int startColumn,
+        out int lastLineIndex,
+        out int? lastLineExclusiveEndColumn)
+    {
+        var lexState = new CSharpLexState();
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+
+        for (int i = startLineIndex; i < lines.Length; i++)
+        {
+            var lexedLine = LexCSharpLine(lines[i], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+            var fromColumn = i == startLineIndex
+                ? Math.Min(Math.Max(0, startColumn), sanitizedLine.Length)
+                : 0;
+
+            for (int column = fromColumn; column < sanitizedLine.Length; column++)
+            {
+                switch (sanitizedLine[column])
+                {
+                    case '(':
+                        parenDepth++;
+                        break;
+                    case ')' when parenDepth > 0:
+                        parenDepth--;
+                        break;
+                    case '[':
+                        bracketDepth++;
+                        break;
+                    case ']' when bracketDepth > 0:
+                        bracketDepth--;
+                        break;
+                    case '{':
+                        braceDepth++;
+                        break;
+                    case '}' when braceDepth > 0:
+                        braceDepth--;
+                        break;
+                    case '}' when parenDepth == 0 && bracketDepth == 0 && braceDepth == 0:
+                        lastLineIndex = i;
+                        lastLineExclusiveEndColumn = column;
+                        return true;
+                    case ';' when parenDepth == 0 && bracketDepth == 0 && braceDepth == 0:
+                        lastLineIndex = i;
+                        lastLineExclusiveEndColumn = column + 1;
+                        return true;
+                }
+            }
+        }
+
+        lastLineIndex = startLineIndex;
+        lastLineExclusiveEndColumn = null;
+        return false;
     }
 
     // Scan forward from a C# type declaration header (`class` / `struct` / `interface` /
@@ -10786,6 +13205,19 @@ public static class SymbolExtractor
         return matchLines;
     }
 
+    private static CSharpLexState[] BuildCSharpLineStartStates(string[] lines)
+    {
+        var result = new CSharpLexState[lines.Length];
+        var state = new CSharpLexState();
+        for (var i = 0; i < lines.Length; i++)
+        {
+            result[i] = state;
+            state = LexCSharpLine(lines[i], state).EndState;
+        }
+
+        return result;
+    }
+
     // Translate a column in a CollapseCSharpGenericTypeWhitespace-collapsed match line back
     // to the matching column in the raw source line. Used by the plain-field scope gate and
     // signature clamp so `public class C<T1, T2>{int X;}` does not misalign the type-body
@@ -10811,6 +13243,53 @@ public static class SymbolExtractor
         return map[collapsedColumn];
     }
 
+    // Convert a raw-line column back into the per-line collapsed C# match-line domain.
+    // Same-line brace-bodied generic members now keep raw columns for signature slicing,
+    // but sibling rescan still runs on `csharpMatchLines[i]` (collapsed). Map the
+    // closing-brace column back before calling `FindNextSameLineBraceStatementStart`, or
+    // a raw column shifted right by removed generic whitespace can restart inside/past the
+    // next compact sibling and make later declarations disappear. Closes #533.
+    // raw 行の列を、per-line collapsed な C# match 行の列へ戻す。same-line の
+    // brace-bodied generic member は signature 切り出しのため raw 列を保持するが、
+    // sibling 再スキャン自体は `csharpMatchLines[i]`（collapsed）上で動く。そこで
+    // `FindNextSameLineBraceStatementStart` に渡す前に閉じ brace 列を collapsed 側へ戻し、
+    // generic 内で消えた空白ぶん右へずれた raw 列が次 sibling の途中/後ろから再開して
+    // 後続宣言を落とすのを防ぐ。Closes #533.
+    private static int TranslateCSharpRawColumnToCollapsed(int[]?[] mapPerLine, int lineIndex, int rawColumn, int collapsedLength, int rawLength)
+    {
+        if (mapPerLine == null || lineIndex < 0 || lineIndex >= mapPerLine.Length)
+            return rawColumn;
+        var map = mapPerLine[lineIndex];
+        if (map == null)
+            return rawColumn;
+        if (rawColumn <= 0)
+            return 0;
+        if (map.Length == 0)
+            return Math.Clamp(rawColumn, 0, collapsedLength);
+        if (rawColumn >= rawLength)
+            return collapsedLength;
+
+        var lo = 0;
+        var hi = map.Length - 1;
+        while (lo <= hi)
+        {
+            var mid = lo + ((hi - lo) / 2);
+            var mappedRaw = map[mid];
+            if (mappedRaw == rawColumn)
+                return mid;
+            if (mappedRaw < rawColumn)
+                lo = mid + 1;
+            else
+                hi = mid - 1;
+        }
+
+        if (hi < 0)
+            return 0;
+        if (hi >= map.Length)
+            return collapsedLength;
+        return hi;
+    }
+
     // Gate only the block-bodied property pattern (requires `{ get|set|init ... }`).
     // Expression-bodied properties (`Name => expr;`) now also use BodyStyle.Brace so
     // FindCSharpBraceRange can detect `=>` and compute a body range, but they never
@@ -10820,15 +13299,58 @@ public static class SymbolExtractor
     // 式本体プロパティ（`Name => expr;`）も FindCSharpBraceRange で '=>' 本体範囲を
     // 取るため BodyStyle.Brace を使うが、match 行に `{ get|set|init` は来ないので
     // ここで弾くと式本体プロパティが全滅してしまう。Closes #233.
-    private static bool ShouldSkipCSharpBracePropertyCandidate(
+    private static bool TrySkipCSharpBracePropertyCandidate(
         string? lang,
         SymbolPattern pattern,
-        string matchLine) =>
-        lang == "csharp"
-        && pattern.Kind == "property"
-        && pattern.BodyStyle == BodyStyle.Brace
-        && !matchLine.Contains("=>", StringComparison.Ordinal)
-        && !HasCSharpPropertyAccessorStart(matchLine);
+        string matchLine,
+        int matchStartColumn,
+        bool matchedExpressionArrow,
+        out int nextSameLineOffset)
+    {
+        nextSameLineOffset = -1;
+        if (lang != "csharp"
+            || pattern.Kind != "property"
+            || pattern.BodyStyle != BodyStyle.Brace)
+        {
+            return false;
+        }
+
+        if (matchStartColumn < 0)
+            matchStartColumn = 0;
+        if (matchStartColumn > matchLine.Length)
+            matchStartColumn = matchLine.Length;
+
+        // Same-line type headers can still false-positive as brace properties because the
+        // C# property regex accepts omitted visibility/modifier runs. Detect a real
+        // class/struct/interface/record header up front and restart from the first member
+        // inside that type body, rather than from the regex match tail. The regex tail can
+        // overrun into a later sibling expression-bodied property (`A => 1`) or brace-body
+        // property (`P { get; set; }`), which would otherwise skip the real member that
+        // should be matched next. Closes #472.
+        // 同一行の型ヘッダは、visibility / modifier 省略を許す C# property regex により
+        // brace-property 偽陽性になりうる。ここでは実際の
+        // class/struct/interface/record ヘッダを先に検出し、regex マッチ末尾ではなく
+        // 型本体の最初の member 位置から再開する。regex 末尾基準だと後続の
+        // 式本体 property (`A => 1`) や brace-body property (`P { get; set; }`) まで
+        // 飛び越してしまい、次に取るべき本物の member をスキップしてしまう。Closes #472.
+        var matchedDeclaration = matchLine[matchStartColumn..];
+        if (CSharpTypeBodyDeclarationMarker.IsMatch(matchedDeclaration))
+        {
+            var typeBodyOpenBrace = matchedDeclaration.IndexOf('{');
+            if (typeBodyOpenBrace >= 0)
+            {
+                nextSameLineOffset = FindNextSameLineNonClosingBraceStatementStart(
+                    matchLine,
+                    matchStartColumn + typeBodyOpenBrace + 1,
+                    lang);
+            }
+
+            return true;
+        }
+
+        return !matchedExpressionArrow
+            && !HasCSharpPropertyAccessorStart(matchedDeclaration);
+    }
 
     // Mark every line that sits directly inside a C# type body (class / struct /
     // interface / record / enum). Used to gate the plain-field pattern so that
@@ -11869,11 +14391,18 @@ public static class SymbolExtractor
             return false;
 
         var recordRegex = GetCurrentDeclarationRecordRegex(lang, kind, recordName);
-        var recordMatch = recordRegex.Match(declaration);
+        var javaLeadingAnnotationOffset = 0;
+        var recordMatch = lang == "java"
+            ? (TryMatchJavaDeclarationSegment(recordRegex, declaration, out var javaRecordMatch, out javaLeadingAnnotationOffset)
+                ? javaRecordMatch
+                : recordRegex.Match(declaration))
+            : recordRegex.Match(declaration);
         if (!recordMatch.Success)
             return false;
 
-        var parameterOpenIndex = FindRecordPrimaryComponentListStart(declaration, recordMatch.Index + recordMatch.Length);
+        var parameterOpenIndex = FindRecordPrimaryComponentListStart(
+            declaration,
+            recordMatch.Index + recordMatch.Length + javaLeadingAnnotationOffset);
         if (parameterOpenIndex < 0)
             return false;
 
@@ -13037,12 +15566,20 @@ public static class SymbolExtractor
         }
     }
 
-    private static void AssignContainers(List<SymbolRecord> symbols)
+    private static void AssignContainers(
+        List<SymbolRecord> symbols,
+        string[]? rawLines = null,
+        CSharpLexState[]? csharpLineStartStates = null)
     {
         var ordered = symbols
-            .OrderBy(s => s.StartLine)
-            .ThenByDescending(s => s.EndLine)
-            .ThenByDescending(s => s.Signature?.Length ?? 0)
+            .Select((symbol, originalIndex) => new { Symbol = symbol, OriginalIndex = originalIndex })
+            .OrderBy(entry => entry.Symbol.StartLine)
+            .ThenBy(entry => entry.Symbol.StartColumn.HasValue ? 0 : 1)
+            .ThenBy(entry => entry.Symbol.StartColumn ?? int.MaxValue)
+            .ThenByDescending(entry => entry.Symbol.EndLine)
+            .ThenByDescending(entry => entry.Symbol.Signature?.Length ?? 0)
+            .ThenBy(entry => entry.OriginalIndex)
+            .Select(entry => entry.Symbol)
             .ToList();
 
         var stack = new Stack<SymbolRecord>();
@@ -13051,53 +15588,90 @@ public static class SymbolExtractor
             while (stack.Count > 0 && !IsFileScopedNamespace(stack.Peek()) && symbol.StartLine > stack.Peek().EndLine)
                 stack.Pop();
 
-            while (stack.Count > 0 && !ContainsSymbol(stack.Peek(), symbol))
-                stack.Pop();
+            var containerPath = GetEffectiveContainerPath(stack, symbol, rawLines, csharpLineStartStates);
 
-            if (stack.Count > 0)
+            if (containerPath.Count > 0)
             {
-                var containerPath = GetEffectiveContainerPath(stack, symbol);
+                var effectiveContainer = containerPath[^1];
                 if (symbol.ContainerKind != null && symbol.ContainerName != null)
                 {
-                    var explicitContainerAlreadyPresent = containerPath.Count > 0
-                        && containerPath[^1].Kind == symbol.ContainerKind
-                        && containerPath[^1].Name == symbol.ContainerName;
-                    var parentQualifiedName = BuildQualifiedContainerName(containerPath);
-                    symbol.ContainerQualifiedName ??= explicitContainerAlreadyPresent
-                        ? parentQualifiedName
-                        : string.IsNullOrWhiteSpace(parentQualifiedName)
-                            ? symbol.ContainerName
-                            : $"{parentQualifiedName}.{symbol.ContainerName}";
+                    var explicitContainerIndex = -1;
+                    for (var i = containerPath.Count - 1; i >= 0; i--)
+                    {
+                        var container = containerPath[i];
+                        if (container.Kind == symbol.ContainerKind
+                            && container.Name == symbol.ContainerName)
+                        {
+                            explicitContainerIndex = i;
+                            break;
+                        }
+                    }
+
+                    var shouldPromoteToMoreSpecificContainer =
+                        symbol.ContainerKind == "enum"
+                        && explicitContainerIndex >= 0
+                        && explicitContainerIndex < containerPath.Count - 1
+                        && effectiveContainer.Kind == "function"
+                        && effectiveContainer.ContainerKind == "enum";
+
+                    if (shouldPromoteToMoreSpecificContainer)
+                    {
+                        effectiveContainer = containerPath[^1];
+                        symbol.ContainerKind = effectiveContainer.Kind;
+                        symbol.ContainerName = effectiveContainer.Name;
+                        var effectiveParentPath = containerPath.Take(containerPath.Count - 1);
+                        symbol.ContainerQualifiedName = BuildQualifiedContainerName(effectiveParentPath);
+                    }
+                    else
+                    {
+                        var explicitContainerAlreadyPresent = explicitContainerIndex == containerPath.Count - 1;
+                        var parentQualifiedName = BuildQualifiedContainerName(containerPath);
+                        symbol.ContainerQualifiedName ??= explicitContainerAlreadyPresent
+                            ? parentQualifiedName
+                            : string.IsNullOrWhiteSpace(parentQualifiedName)
+                                ? symbol.ContainerName
+                                : $"{parentQualifiedName}.{symbol.ContainerName}";
+                    }
                 }
                 else
                 {
-                    var container = containerPath[^1];
-                    symbol.ContainerKind ??= container.Kind;
-                    symbol.ContainerName ??= container.Name;
+                    symbol.ContainerKind ??= effectiveContainer.Kind;
+                    symbol.ContainerName ??= effectiveContainer.Name;
                     var qualifiedContainerName = BuildQualifiedContainerName(containerPath);
                     symbol.ContainerQualifiedName = qualifiedContainerName;
-                    symbol.FamilyKey = BuildInheritedFamilyKey(container, qualifiedContainerName);
+                    symbol.FamilyKey = BuildInheritedFamilyKey(effectiveContainer, qualifiedContainerName);
                 }
             }
 
-            symbol.FamilyKey ??= BuildSelfFamilyKey(symbol, stack);
+            symbol.FamilyKey ??= BuildSelfFamilyKey(symbol, containerPath);
 
             if (CanContainSymbols(symbol))
                 stack.Push(symbol);
         }
     }
 
-    private static IReadOnlyList<SymbolRecord> GetEffectiveContainerPath(IEnumerable<SymbolRecord> containers, SymbolRecord symbol)
+    private static IReadOnlyList<SymbolRecord> GetEffectiveContainerPath(
+        IEnumerable<SymbolRecord> containers,
+        SymbolRecord symbol,
+        string[]? rawLines = null,
+        CSharpLexState[]? csharpLineStartStates = null)
     {
         var orderedContainers = containers.Reverse().ToList();
+        var containingContainers = orderedContainers
+            .Where(container => ContainsSymbol(container, symbol, rawLines, csharpLineStartStates))
+            .ToList();
+
+        if (containingContainers.Count == 0)
+            return [];
+
         if (symbol.Kind == "enum" && symbol.BodyStartLine == null)
         {
-            var enumIndex = orderedContainers.FindLastIndex(container => container.Kind == "enum");
+            var enumIndex = containingContainers.FindLastIndex(container => container.Kind == "enum");
             if (enumIndex >= 0)
-                return orderedContainers.Take(enumIndex + 1).ToList();
+                return containingContainers.Take(enumIndex + 1).ToList();
         }
 
-        return orderedContainers;
+        return containingContainers;
     }
 
     private static string? BuildQualifiedContainerName(IEnumerable<SymbolRecord> containers)
@@ -13123,7 +15697,6 @@ public static class SymbolExtractor
             return null;
 
         var names = containers
-            .Reverse()
             .Select(container => container.Name)
             .Where(name => !string.IsNullOrWhiteSpace(name))
             .Append(symbol.Name)
@@ -13141,6 +15714,14 @@ public static class SymbolExtractor
 
     private static bool CanContainSymbols(SymbolRecord symbol)
     {
+        if (symbol.Kind == "function"
+            && symbol.ContainerKind == "enum"
+            && symbol.BodyStartLine != null
+            && symbol.BodyEndLine != null)
+        {
+            return true;
+        }
+
         if (!ContainerKinds.Contains(symbol.Kind))
             return false;
 
@@ -13150,7 +15731,11 @@ public static class SymbolExtractor
         return symbol.BodyStartLine != null && symbol.BodyEndLine != null;
     }
 
-    private static bool ContainsSymbol(SymbolRecord container, SymbolRecord candidate)
+    private static bool ContainsSymbol(
+        SymbolRecord container,
+        SymbolRecord candidate,
+        string[]? rawLines = null,
+        CSharpLexState[]? csharpLineStartStates = null)
     {
         if (IsFileScopedNamespace(container))
             return candidate.StartLine > container.StartLine;
@@ -13160,21 +15745,252 @@ public static class SymbolExtractor
 
         if (candidate.StartLine == container.StartLine)
         {
+            if (TryContainsCSharpSameLineSymbolByRawLine(container, candidate, rawLines, csharpLineStartStates, out var containsSameLineSymbol))
+                return containsSameLineSymbol;
+
             return CanContainSameLineSymbol(container, candidate)
                 && container.Signature != null
                 && candidate.Signature != null
                 && container.Signature.Contains(candidate.Signature, StringComparison.Ordinal);
         }
 
-        return candidate.StartLine >= container.BodyStartLine
+        if (candidate.StartLine >= container.BodyStartLine
             && candidate.StartLine <= container.BodyEndLine
-            && candidate.StartLine > container.StartLine;
+            && candidate.StartLine > container.StartLine)
+        {
+            return true;
+        }
+
+        return IsInsideCSharpClosingBraceLineContainer(container, candidate, rawLines, csharpLineStartStates);
+    }
+
+    private static bool TryContainsCSharpSameLineSymbolByRawLine(
+        SymbolRecord container,
+        SymbolRecord candidate,
+        string[]? rawLines,
+        CSharpLexState[]? csharpLineStartStates,
+        out bool contains)
+    {
+        contains = false;
+        if (rawLines == null
+            || container.Signature == null
+            || candidate.Signature == null
+            || container.StartLine != candidate.StartLine
+            || container.StartLine <= 0
+            || container.StartLine > rawLines.Length
+            || csharpLineStartStates == null
+            || container.StartLine > csharpLineStartStates.Length
+            || !CanContainSameLineSymbol(container, candidate))
+        {
+            return false;
+        }
+
+        var lineIndex = container.StartLine - 1;
+        var rawLine = rawLines[lineIndex];
+        var lineStartState = csharpLineStartStates[lineIndex];
+        var containerStartColumn = FindSignatureOccurrenceStartColumn(
+            rawLine,
+            container.Signature,
+            container.SameLineSignatureOccurrenceIndex ?? 0,
+            lineStartState);
+        var candidateStartColumn = FindSignatureOccurrenceStartColumn(
+            rawLine,
+            candidate.Signature,
+            candidate.SameLineSignatureOccurrenceIndex ?? 0,
+            lineStartState);
+        if (containerStartColumn < 0 || candidateStartColumn < 0)
+            return false;
+
+        if (container.BodyStartLine == container.StartLine
+            && container.EndLine == container.StartLine)
+        {
+            var closingBraceColumn = FindCSharpSameLineContainerClosingBraceColumn(rawLine, containerStartColumn, lineStartState);
+            if (closingBraceColumn < 0)
+                return false;
+
+            contains = candidateStartColumn > containerStartColumn
+                && candidateStartColumn < closingBraceColumn;
+            return true;
+        }
+
+        return false;
+    }
+
+    // A wrapped C# type can deliberately end its body one line earlier when the closing
+    // brace line also starts an outer sibling (`} public int Q { get; }`). That keeps the
+    // later outer sibling out of the inner container, but the last inner member may still
+    // live earlier on that same closing-brace line (`public int P { get; } } public int Q`).
+    // Reconstruct the matching closing-brace column on the raw end line and treat only the
+    // declarations that start before that brace as inner members. Closes #549.
+    // wrapped な C# type は、閉じ brace 行に outer sibling (`} public int Q { get; }`)
+    // が続くとき、本体終端を 1 行手前へ倒して後続 sibling を inner container から外す。
+    // ただし最後の inner member 自体が同じ閉じ brace 行の前半に載ることがあり
+    // (`public int P { get; } } public int Q`)、そのままだと inner member まで外へ漏れる。
+    // そこで raw end line 上で対応する closing brace 列を再構築し、その brace より前に
+    // 始まる宣言だけを inner member として扱う。Closes #549.
+    private static bool IsInsideCSharpClosingBraceLineContainer(
+        SymbolRecord container,
+        SymbolRecord candidate,
+        string[]? rawLines,
+        CSharpLexState[]? csharpLineStartStates)
+    {
+        if (rawLines == null
+            || container.BodyStartLine == null
+            || container.BodyEndLine == null
+            || container.BodyEndLine.Value >= container.EndLine
+            || candidate.Signature == null
+            || candidate.StartLine != container.EndLine
+            || candidate.StartLine <= container.StartLine)
+        {
+            return false;
+        }
+
+        var lineIndex = container.EndLine - 1;
+        if (lineIndex < 0 || lineIndex >= rawLines.Length)
+            return false;
+
+        var closingBraceColumn = FindCSharpClosingBraceColumnOnContainerEndLine(container, rawLines);
+        if (closingBraceColumn < 0)
+            return false;
+
+        var candidateColumn = FindSignatureOccurrenceStartColumn(
+            rawLines[lineIndex],
+            candidate.Signature,
+            candidate.SameLineSignatureOccurrenceIndex ?? 0,
+            csharpLineStartStates != null && lineIndex < csharpLineStartStates.Length
+                ? csharpLineStartStates[lineIndex]
+                : new CSharpLexState());
+        return candidateColumn >= 0 && candidateColumn < closingBraceColumn;
+    }
+
+    private static int FindCSharpClosingBraceColumnOnContainerEndLine(SymbolRecord container, string[] rawLines)
+    {
+        if (container.BodyStartLine == null
+            || container.EndLine <= 0
+            || container.EndLine > rawLines.Length
+            || container.BodyStartLine.Value <= 0
+            || container.BodyStartLine.Value > container.EndLine)
+        {
+            return -1;
+        }
+
+        var lexState = new CSharpLexState();
+        var depth = 0;
+        var endLineIndex = container.EndLine - 1;
+        for (var lineIndex = container.BodyStartLine.Value - 1; lineIndex < endLineIndex; lineIndex++)
+        {
+            var lineResult = LexCSharpLine(rawLines[lineIndex], lexState);
+            lexState = lineResult.EndState;
+
+            foreach (var ch in lineResult.SanitizedLine)
+            {
+                if (ch == '{')
+                {
+                    depth++;
+                }
+                else if (ch == '}')
+                {
+                    depth--;
+                }
+            }
+        }
+
+        var sanitizedLine = LexCSharpLine(rawLines[endLineIndex], lexState).SanitizedLine;
+        if (depth <= 0)
+            return -1;
+
+        for (var i = 0; i < sanitizedLine.Length; i++)
+        {
+            var ch = sanitizedLine[i];
+            if (ch == '{')
+            {
+                depth++;
+            }
+            else if (ch == '}')
+            {
+                depth--;
+                if (depth == 0)
+                    return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int FindSignatureOccurrenceStartColumn(
+        string rawLine,
+        string signature,
+        int occurrenceIndex,
+        CSharpLexState lineStartState)
+    {
+        if (occurrenceIndex < 0 || string.IsNullOrEmpty(rawLine) || string.IsNullOrEmpty(signature))
+            return -1;
+
+        // Same-line C# occurrence tracking must ignore declaration lookalikes inside string
+        // literals and comments, or the nth "real" declaration is mapped onto an earlier
+        // quoted/commented copy of the same signature. LexCSharpLine preserves original
+        // columns while blanking those regions, so the resulting indices still line up with
+        // the raw line. Closes #558.
+        // same-line C# の occurrence tracking は、文字列リテラルやコメント中の見かけ上の
+        // 宣言を数えてはいけない。そうしないと n 個目の「本物の」宣言が、より前にある
+        // quoted/commented な同一 signature へ誤対応付けされる。LexCSharpLine は元の列を
+        // 保ったまま当該領域だけ空白化するので、得られる index は raw line と整合したまま使える。
+        var searchLine = LexCSharpLine(rawLine, lineStartState).SanitizedLine;
+        var currentOccurrence = 0;
+        var searchStart = 0;
+        while (searchStart < searchLine.Length)
+        {
+            var matchIndex = searchLine.IndexOf(signature, searchStart, StringComparison.Ordinal);
+            if (matchIndex < 0)
+                return -1;
+
+            if (currentOccurrence == occurrenceIndex)
+                return matchIndex;
+
+            currentOccurrence++;
+            searchStart = matchIndex + signature.Length;
+        }
+
+        return -1;
+    }
+
+    private static int FindCSharpSameLineContainerClosingBraceColumn(
+        string rawLine,
+        int containerStartColumn,
+        CSharpLexState lineStartState)
+    {
+        if (containerStartColumn < 0 || containerStartColumn >= rawLine.Length)
+            return -1;
+
+        var sanitizedLine = LexCSharpLine(rawLine, lineStartState).SanitizedLine;
+        var openBraceColumn = sanitizedLine.IndexOf('{', containerStartColumn);
+        if (openBraceColumn < 0)
+            return -1;
+
+        var depth = 0;
+        for (var i = openBraceColumn; i < sanitizedLine.Length; i++)
+        {
+            var ch = sanitizedLine[i];
+            if (ch == '{')
+            {
+                depth++;
+            }
+            else if (ch == '}')
+            {
+                depth--;
+                if (depth == 0)
+                    return i;
+            }
+        }
+
+        return -1;
     }
 
     private static bool CanContainSameLineSymbol(SymbolRecord container, SymbolRecord candidate)
     {
         return (container.Kind, candidate.Kind) switch
         {
+            ("function", _) when container.ContainerKind == "enum" && container.BodyStartLine != null && container.BodyEndLine != null => true,
             ("enum", "enum") => true,
             ("namespace", _) => true,
             ("class", _) => true,
@@ -13237,9 +16053,20 @@ public static class SymbolExtractor
         return value.Trim();
     }
 
-    private static string NormalizeCSharpSymbolName(string? lang, string name, Match match, string matchLine)
+    private static string NormalizeExtractedSymbolName(string? lang, string name, Match match, string matchLine)
     {
-        if (lang != "csharp")
+        return lang switch
+        {
+            "csharp" => NormalizeCSharpSymbolName(name, match, matchLine),
+            "kotlin" => NormalizeKotlinSymbolName(name, matchLine),
+            "sql" => NormalizeSqlSymbolName(name),
+            _ => name,
+        };
+    }
+
+    private static string NormalizeCSharpSymbolName(string name, Match match, string matchLine)
+    {
+        if (string.IsNullOrWhiteSpace(name))
             return name;
 
         if (match.Groups["conversionKind"].Success
@@ -13251,7 +16078,99 @@ public static class SymbolExtractor
         if (name == "this" && match.Value.Contains("this", StringComparison.Ordinal) && match.Value.Contains('[', StringComparison.Ordinal))
             return "Item";
 
-        return name;
+        return NormalizeCSharpVerbatimIdentifiers(name);
+    }
+
+    private static string NormalizeKotlinSymbolName(string name, string matchLine)
+    {
+        var trimmedLine = matchLine.TrimStart();
+        if (!trimmedLine.StartsWith("companion object", StringComparison.Ordinal))
+            return name;
+
+        var trimmedName = name.Trim();
+        return string.IsNullOrWhiteSpace(trimmedName)
+            || string.Equals(trimmedName, "companion object", StringComparison.Ordinal)
+            ? "Companion"
+            : name;
+    }
+
+    private static string NormalizeSqlSymbolName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return name;
+
+        var trimmed = name.Trim();
+        var normalized = new StringBuilder(trimmed.Length);
+        char quote = '\0';
+        var pendingWhitespace = false;
+
+        for (var i = 0; i < trimmed.Length; i++)
+        {
+            var ch = trimmed[i];
+            if (quote != '\0')
+            {
+                normalized.Append(ch);
+                if (quote == '[')
+                {
+                    if (ch == ']')
+                    {
+                        if (i + 1 < trimmed.Length && trimmed[i + 1] == ']')
+                        {
+                            normalized.Append(']');
+                            i++;
+                        }
+                        else
+                        {
+                            quote = '\0';
+                        }
+                    }
+                }
+                else if (ch == quote)
+                {
+                    if (i + 1 < trimmed.Length && trimmed[i + 1] == quote)
+                    {
+                        normalized.Append(quote);
+                        i++;
+                    }
+                    else
+                    {
+                        quote = '\0';
+                    }
+                }
+
+                continue;
+            }
+
+            if (char.IsWhiteSpace(ch))
+            {
+                pendingWhitespace = normalized.Length > 0;
+                continue;
+            }
+
+            if (ch == '.')
+            {
+                if (normalized.Length == 0 || normalized[^1] == '.')
+                    continue;
+
+                normalized.Append('.');
+                pendingWhitespace = false;
+                while (i + 1 < trimmed.Length && char.IsWhiteSpace(trimmed[i + 1]))
+                    i++;
+                continue;
+            }
+
+            if (pendingWhitespace)
+            {
+                normalized.Append(' ');
+                pendingWhitespace = false;
+            }
+
+            normalized.Append(ch);
+            if (ch is '[' or '"' or '`')
+                quote = ch;
+        }
+
+        return normalized.ToString();
     }
 
     private static bool TryReadCSharpConversionOperatorName(Match match, string matchLine, out string name)
@@ -13374,8 +16293,50 @@ public static class SymbolExtractor
         var normalized = CSharpTypeWhitespaceRegex.Replace(typeName.Trim(), " ");
         normalized = CSharpTypeDoubleColonWhitespaceRegex.Replace(normalized, "::");
         normalized = CSharpTypeDotWhitespaceRegex.Replace(normalized, ".");
-        return NormalizeCSharpTypeTokenSpacing(normalized);
+        normalized = NormalizeCSharpTypeTokenSpacing(normalized);
+        return NormalizeCSharpVerbatimIdentifiers(normalized);
     }
+
+    private static string NormalizeCSharpVerbatimIdentifiers(string value)
+    {
+        if (string.IsNullOrEmpty(value) || value.IndexOf('@', StringComparison.Ordinal) < 0)
+            return value;
+
+        StringBuilder? builder = null;
+        var segmentStart = 0;
+
+        for (var index = 0; index < value.Length; index++)
+        {
+            if (!IsCSharpVerbatimIdentifierPrefix(value, index))
+                continue;
+
+            builder ??= new StringBuilder(value.Length);
+            if (index > segmentStart)
+                builder.Append(value, segmentStart, index - segmentStart);
+            segmentStart = index + 1;
+        }
+
+        if (builder is null)
+            return value;
+
+        if (segmentStart < value.Length)
+            builder.Append(value, segmentStart, value.Length - segmentStart);
+        return builder.ToString();
+    }
+
+    private static bool IsCSharpVerbatimIdentifierPrefix(string value, int index)
+    {
+        if (value[index] != '@' || index + 1 >= value.Length || !IsCSharpIdentifierStart(value[index + 1]))
+            return false;
+
+        return index == 0 || !IsCSharpIdentifierChar(value[index - 1]);
+    }
+
+    private static bool IsCSharpIdentifierStart(char ch) =>
+        ch == '_' || char.IsLetter(ch);
+
+    private static bool IsCSharpIdentifierChar(char ch) =>
+        ch == '_' || char.IsLetterOrDigit(ch);
 
     private static string NormalizeCSharpTypeTokenSpacing(string typeName)
     {

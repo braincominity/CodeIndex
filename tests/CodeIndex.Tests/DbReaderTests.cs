@@ -1,3 +1,4 @@
+using System.Text;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
@@ -1414,6 +1415,64 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetCallers_CSharpTopLevelStatementCallSurfacesSyntheticTopLevelCaller()
+    {
+        InsertIndexedFile("src/Program.cs", "csharp",
+            """
+            using System;
+
+            Console.WriteLine("boot");
+
+            int Add(int a, int b) => a + b;
+            void Run()
+            {
+                Console.WriteLine(Add(1, 2));
+            }
+
+            Run();
+            """);
+
+        var callers = _reader.GetCallers("Run", lang: "csharp", exact: true, pathPatterns: ["Program.cs"]);
+
+        var caller = Assert.Single(callers);
+        Assert.Equal("src/Program.cs", caller.Path);
+        Assert.Equal("function", caller.CallerKind);
+        Assert.Equal("<top-level>", caller.CallerName);
+        Assert.Equal("Run", caller.CalleeName);
+        Assert.Equal(1, caller.ReferenceCount);
+        Assert.Equal(1, _reader.CountCallers("Run", lang: "csharp", exact: true, pathPatterns: ["Program.cs"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCallersTotal("Run", lang: "csharp", exact: true, pathPatterns: ["Program.cs"]));
+    }
+
+    [Fact]
+    public void GetCallers_CSharpTopLevelStatementCallWithExplicitKindSurfacesSyntheticTopLevelCaller()
+    {
+        InsertIndexedFile("src/Program.cs", "csharp",
+            """
+            using System;
+
+            Console.WriteLine("boot");
+
+            void Run()
+            {
+                Console.WriteLine("inside");
+            }
+
+            Run();
+            """);
+
+        var callers = _reader.GetCallers("Run", lang: "csharp", referenceKind: "call", exact: true, pathPatterns: ["Program.cs"]);
+
+        var caller = Assert.Single(callers);
+        Assert.Equal("src/Program.cs", caller.Path);
+        Assert.Equal("function", caller.CallerKind);
+        Assert.Equal("<top-level>", caller.CallerName);
+        Assert.Equal("Run", caller.CalleeName);
+        Assert.Equal("call", caller.ReferenceKind);
+        Assert.Equal(1, caller.ReferenceCount);
+    }
+
+    [Fact]
     public void GetCallees_ReturnsReferencedSymbolsForCaller()
     {
         InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return authenticate(user, password)\n");
@@ -2540,6 +2599,35 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetTransitiveCallers_CSharpTopLevelStatementCallSurfacesSyntheticTopLevelCallerWithoutRecursing()
+    {
+        InsertIndexedFile("src/Program.cs", "csharp",
+            """
+            using System;
+
+            Console.WriteLine("boot");
+
+            void Run()
+            {
+                Console.WriteLine("inside");
+            }
+
+            Run();
+            """);
+
+        var (results, truncated) = _reader.GetTransitiveCallers("Run", maxDepth: 3, limit: 10, lang: "csharp", pathPatterns: ["Program.cs"]);
+
+        Assert.False(truncated);
+        var caller = Assert.Single(results);
+        Assert.Equal("src/Program.cs", caller.Path);
+        Assert.Equal("function", caller.CallerKind);
+        Assert.Equal("<top-level>", caller.CallerName);
+        Assert.Equal("Run", caller.CalleeName);
+        Assert.Equal(1, caller.Depth);
+        Assert.Equal(1, caller.ReferenceCount);
+    }
+
+    [Fact]
     public void GetDefinitions_ExactMatchesNameEquality()
     {
         var extraFileId = _writer.UpsertFile(new FileRecord
@@ -2763,6 +2851,981 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_AlignGraphReadersHotspotsAndUnused()
+    {
+        InsertIndexedFile("src/sql_name_mismatch_fixture.sql", "sql",
+            """
+            CREATE FUNCTION dbo.fn_GetOrderItems(@orderId INT)
+            RETURNS TABLE
+            AS
+            RETURN (SELECT * FROM dbo.OrderItems WHERE OrderId = @orderId);
+            GO
+
+            CREATE PROCEDURE dbo.usp_GetOrders
+            AS
+            BEGIN
+                SELECT *
+                FROM dbo.Orders o
+                CROSS APPLY dbo.fn_GetOrderItems(o.OrderId) fi;
+            END
+            GO
+            """);
+
+        var bareRefs = _reader.SearchReferences("fn_GetOrderItems", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]);
+        var qualifiedRefs = _reader.SearchReferences("dbo.fn_GetOrderItems", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]);
+        Assert.Equal(12, Assert.Single(bareRefs).Line);
+        Assert.Equal(12, Assert.Single(qualifiedRefs).Line);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.fn_GetOrderItems", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]));
+
+        var bareCaller = Assert.Single(_reader.GetCallers("fn_GetOrderItems", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]));
+        var qualifiedCaller = Assert.Single(_reader.GetCallers("dbo.fn_GetOrderItems", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]));
+        Assert.Equal("dbo.usp_GetOrders", bareCaller.CallerName);
+        Assert.Equal("dbo.usp_GetOrders", qualifiedCaller.CallerName);
+        Assert.Equal(1, _reader.CountCallers("dbo.fn_GetOrderItems", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]));
+
+        var bareCallee = Assert.Single(_reader.GetCallees("usp_GetOrders", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]));
+        var qualifiedCallee = Assert.Single(_reader.GetCallees("dbo.usp_GetOrders", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]));
+        Assert.Equal("fn_GetOrderItems", bareCallee.CalleeName);
+        Assert.Equal("fn_GetOrderItems", qualifiedCallee.CalleeName);
+        Assert.Equal(1, _reader.CountCallees("usp_GetOrders", lang: "sql", exact: true, pathPatterns: ["sql_name_mismatch_fixture"]));
+
+        var (bareImpact, bareTruncated) = _reader.GetTransitiveCallers("fn_GetOrderItems", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_name_mismatch_fixture"]);
+        var (qualifiedImpact, qualifiedTruncated) = _reader.GetTransitiveCallers("dbo.fn_GetOrderItems", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_name_mismatch_fixture"]);
+        Assert.False(bareTruncated);
+        Assert.False(qualifiedTruncated);
+        Assert.Equal("dbo.usp_GetOrders", Assert.Single(bareImpact).CallerName);
+        Assert.Equal("dbo.usp_GetOrders", Assert.Single(qualifiedImpact).CallerName);
+
+        var hotspot = Assert.Single(
+            _reader.GetSymbolHotspots(10, "function", "sql", ["sql_name_mismatch_fixture"], null, false),
+            item => item.Symbol.Name == "dbo.fn_GetOrderItems");
+        Assert.Equal(1, hotspot.ReferenceCount);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "function", lang: "sql",
+            pathPatterns: ["sql_name_mismatch_fixture"], excludePathPatterns: null, excludeTests: false);
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "dbo.fn_GetOrderItems");
+        Assert.Equal((1, 1), _reader.CountUnusedSymbols(kind: "function", lang: "sql",
+            pathPatterns: ["sql_name_mismatch_fixture"], excludePathPatterns: null, excludeTests: false));
+    }
+
+    [Fact]
+    public void SqlBareCalls_AlignAggregateReadersWithLeafFallback()
+    {
+        InsertIndexedFile("src/sql_bare_call_caller.sql", "sql",
+            """
+            CREATE PROCEDURE sales.host
+            AS
+            BEGIN
+                EXEC fn_Target;
+            END
+            GO
+            """);
+        InsertIndexedFile("src/sql_bare_call_target.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.fn_Target
+            AS
+            BEGIN
+                SELECT 1;
+            END
+            GO
+            """);
+
+        var caller = Assert.Single(_reader.GetCallers("fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_bare_call_"]));
+        Assert.Equal("sales.host", caller.CallerName);
+        Assert.Equal(1, caller.ReferenceCount);
+
+        var dependencies = _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_bare_call_"], excludePathPatterns: null, excludeTests: false);
+        var dependency = Assert.Single(dependencies);
+        Assert.Equal("src/sql_bare_call_caller.sql", dependency.SourcePath);
+        Assert.Equal("src/sql_bare_call_target.sql", dependency.TargetPath);
+        Assert.Equal(1, dependency.ReferenceCount);
+
+        var hotspot = Assert.Single(
+            _reader.GetSymbolHotspots(10, "function", "sql", ["sql_bare_call_"], null, false),
+            item => item.Symbol.Name == "dbo.fn_Target");
+        Assert.Equal(1, hotspot.ReferenceCount);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "function", lang: "sql",
+            pathPatterns: ["sql_bare_call_"], excludePathPatterns: null, excludeTests: false);
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "dbo.fn_Target");
+        Assert.Contains(unused, symbol => symbol.Name == "sales.host");
+        Assert.Equal((1, 1), _reader.CountUnusedSymbols(kind: "function", lang: "sql",
+            pathPatterns: ["sql_bare_call_"], excludePathPatterns: null, excludeTests: false));
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_DownstreamReadersDoNotPromoteUnqualifiedRowsFromLaterTokens()
+    {
+        InsertIndexedFile("src/sql_unqualified_row_targets.sql", "sql",
+            """
+            CREATE FUNCTION dbo.fn_Target()
+            RETURNS INT
+            AS
+            BEGIN
+                RETURN 1;
+            END
+            GO
+
+            CREATE FUNCTION sales.fn_Target()
+            RETURNS INT
+            AS
+            BEGIN
+                RETURN 2;
+            END
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_unqualified_row_comment.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.CommentCaller
+            AS
+            BEGIN
+                EXEC fn_Target; -- sales.fn_Target
+            END
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_unqualified_row_string.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.StringCaller
+            AS
+            BEGIN
+                EXEC fn_Target; SELECT 'sales.fn_Target';
+            END
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_unqualified_row_mixed_calls.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.MixedCaller
+            AS
+            BEGIN
+                EXEC fn_Target; EXEC sales.fn_Target;
+            END
+            GO
+            """);
+
+        var commentDependency = Assert.Single(
+            _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_unqualified_row_comment.sql"], excludePathPatterns: null, excludeTests: false));
+        Assert.Equal("src/sql_unqualified_row_comment.sql", commentDependency.SourcePath);
+        Assert.Equal("src/sql_unqualified_row_targets.sql", commentDependency.TargetPath);
+        Assert.Equal(1, commentDependency.ReferenceCount);
+        Assert.Equal("dbo.fn_Target", commentDependency.Symbols);
+
+        var stringDependency = Assert.Single(
+            _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_unqualified_row_string.sql"], excludePathPatterns: null, excludeTests: false));
+        Assert.Equal("src/sql_unqualified_row_string.sql", stringDependency.SourcePath);
+        Assert.Equal("src/sql_unqualified_row_targets.sql", stringDependency.TargetPath);
+        Assert.Equal(1, stringDependency.ReferenceCount);
+        Assert.Equal("dbo.fn_Target", stringDependency.Symbols);
+
+        var mixedDependency = Assert.Single(
+            _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_unqualified_row_mixed_calls.sql"], excludePathPatterns: null, excludeTests: false));
+        Assert.Equal("src/sql_unqualified_row_mixed_calls.sql", mixedDependency.SourcePath);
+        Assert.Equal("src/sql_unqualified_row_targets.sql", mixedDependency.TargetPath);
+        Assert.Equal(2, mixedDependency.ReferenceCount);
+        Assert.Equal("dbo.fn_Target,sales.fn_Target", mixedDependency.Symbols);
+
+        var hotspots = _reader.GetSymbolHotspots(10, "function", "sql", ["sql_unqualified_row"], null, false);
+        var dboHotspot = Assert.Single(hotspots, item => item.Symbol.Name == "dbo.fn_Target");
+        var salesHotspot = Assert.Single(hotspots, item => item.Symbol.Name == "sales.fn_Target");
+        Assert.Equal(3, dboHotspot.ReferenceCount);
+        Assert.Equal(1, salesHotspot.ReferenceCount);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "function", lang: "sql",
+            pathPatterns: ["sql_unqualified_row"], excludePathPatterns: null, excludeTests: false);
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "dbo.fn_Target");
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "sales.fn_Target");
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_AlignDepsEdges()
+    {
+        InsertIndexedFile("src/sql_deps_target.sql", "sql",
+            """
+            CREATE FUNCTION dbo.fn_GetOrderItems(@orderId INT)
+            RETURNS TABLE
+            AS
+            RETURN (SELECT * FROM dbo.OrderItems WHERE OrderId = @orderId);
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_deps_caller.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.usp_GetOrders
+            AS
+            BEGIN
+                SELECT *
+                FROM dbo.Orders o
+                CROSS APPLY dbo.fn_GetOrderItems(o.OrderId) fi;
+            END
+            GO
+            """);
+
+        var dependency = Assert.Single(
+            _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_deps_caller.sql"], excludePathPatterns: null, excludeTests: false));
+        Assert.Equal("src/sql_deps_caller.sql", dependency.SourcePath);
+        Assert.Equal("src/sql_deps_target.sql", dependency.TargetPath);
+        Assert.Equal(1, dependency.ReferenceCount);
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_SameLineCrossSchemaCallStillReachesReaders()
+    {
+        InsertIndexedFile("src/sql_same_line_cross_schema.sql", "sql",
+            """
+            CREATE PROCEDURE sales.fn_Target AS EXEC dbo.fn_Target;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_cross_schema"]));
+        Assert.Equal(1, reference.Line);
+        Assert.Equal("sales.fn_Target", reference.ContainerName);
+
+        var caller = Assert.Single(
+            _reader.GetCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_cross_schema"]));
+        Assert.Equal("sales.fn_Target", caller.CallerName);
+        Assert.Equal(1, caller.ReferenceCount);
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_SameLineQualifiedCallAfterStringLiteralStillReachesReaders()
+    {
+        InsertIndexedFile("src/sql_same_line_string_literal.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.fn_Target
+            AS
+            SELECT 1;
+            GO
+
+            CREATE PROCEDURE sales.host
+            AS
+            BEGIN
+                SELECT 'prefix'; EXEC dbo.fn_Target;
+            END
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_string_literal"]));
+        Assert.Equal(9, reference.Line);
+        Assert.Equal("sales.host", reference.ContainerName);
+
+        var caller = Assert.Single(
+            _reader.GetCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_string_literal"]));
+        Assert.Equal("sales.host", caller.CallerName);
+        Assert.Equal(1, caller.ReferenceCount);
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_SameLineQualifiedCallAfterInlineBlockCommentStillReachesReaders()
+    {
+        InsertIndexedFile("src/sql_same_line_block_comment.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.fn_Target
+            AS
+            SELECT 1;
+            GO
+
+            CREATE PROCEDURE sales.host
+            AS
+            BEGIN
+                SELECT /*note*/ 1; EXEC dbo.fn_Target;
+            END
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_block_comment"]));
+        Assert.Equal(9, reference.Line);
+        Assert.Equal("sales.host", reference.ContainerName);
+
+        var caller = Assert.Single(
+            _reader.GetCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_block_comment"]));
+        Assert.Equal("sales.host", caller.CallerName);
+        Assert.Equal(1, caller.ReferenceCount);
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_ResolveQuotedDefinitionsFromUnquotedQualifiedQueries()
+    {
+        InsertIndexedFile("src/sql_quoted_definition_target.sql", "sql",
+            """
+            CREATE PROCEDURE [dbo].[fn_Target]
+            AS
+            SELECT 1;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_quoted_definition_caller.sql", "sql",
+            """
+            CREATE PROCEDURE [sales].[fn_Target]
+            AS
+            EXEC [dbo].[fn_Target];
+            GO
+            """);
+
+        var definition = Assert.Single(
+            _reader.GetDefinitions("dbo.fn_Target", limit: 10, lang: "sql", pathPatterns: ["sql_quoted_definition"]));
+        Assert.Equal("[dbo].[fn_Target]", definition.Name);
+
+        var exactDefinition = Assert.Single(
+            _reader.GetDefinitions("dbo.fn_Target", limit: 10, lang: "sql", pathPatterns: ["sql_quoted_definition"], exact: true));
+        Assert.Equal("[dbo].[fn_Target]", exactDefinition.Name);
+
+        var analysis = _reader.AnalyzeSymbol("dbo.fn_Target", limit: 10, lang: "sql", pathPatterns: ["sql_quoted_definition"]);
+        Assert.Equal("[dbo].[fn_Target]", Assert.Single(analysis.Definitions).Name);
+
+        var exactAnalysis = _reader.AnalyzeSymbol("dbo.fn_Target", limit: 10, lang: "sql", pathPatterns: ["sql_quoted_definition"], exact: true);
+        Assert.Equal("[dbo].[fn_Target]", Assert.Single(exactAnalysis.Definitions).Name);
+
+        var impact = _reader.AnalyzeImpact("dbo.fn_Target", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_quoted_definition"]);
+        Assert.Equal(1, impact.DefinitionCount);
+        Assert.Equal("[dbo].[fn_Target]", Assert.Single(impact.Definitions).Name);
+        Assert.Equal("[sales].[fn_Target]", Assert.Single(impact.Callers).CallerName);
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_DoubleQuotedCallsResolveFromUnquotedQualifiedQueries()
+    {
+        InsertIndexedFile("src/sql_double_quoted_target.sql", "sql",
+            """
+            CREATE PROCEDURE "sales"."proc_name"
+            AS
+            SELECT 1;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_double_quoted_caller.sql", "sql",
+            """
+            CREATE PROCEDURE sales.caller
+            AS
+            BEGIN
+                CALL "sales"."proc_name";
+            END
+            GO
+            """);
+
+        var references = _reader.SearchReferences("sales.proc_name", lang: "sql", exact: true, pathPatterns: ["sql_double_quoted"]);
+        var reference = Assert.Single(references);
+        Assert.Equal(4, reference.Line);
+        Assert.Equal("sales.caller", reference.ContainerName);
+
+        var callers = _reader.GetCallers("sales.proc_name", lang: "sql", exact: true, pathPatterns: ["sql_double_quoted"]);
+        var caller = Assert.Single(callers);
+        Assert.Equal("sales.caller", caller.CallerName);
+        Assert.Equal(1, caller.ReferenceCount);
+
+        var impact = _reader.AnalyzeImpact("sales.proc_name", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_double_quoted"]);
+        Assert.Equal("\"sales\".\"proc_name\"", Assert.Single(impact.Definitions).Name);
+        Assert.Equal("sales.caller", Assert.Single(impact.Callers).CallerName);
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_ExactLookups_DoNotConflateQuotedSingleIdentifierDotsWithQualifiedNames()
+    {
+        InsertIndexedFile("src/sql_dotted_identifier_collision.sql", "sql",
+            """
+            CREATE PROCEDURE sales.fn_Target
+            AS
+            SELECT 1;
+            GO
+
+            CREATE PROCEDURE "sales.fn_Target"
+            AS
+            SELECT 2;
+            GO
+            """);
+
+        var qualifiedDefinition = Assert.Single(
+            _reader.GetDefinitions("sales.fn_Target", limit: 10, lang: "sql", pathPatterns: ["sql_dotted_identifier_collision"], exact: true));
+        Assert.Equal("sales.fn_Target", qualifiedDefinition.Name);
+
+        var quotedDefinition = Assert.Single(
+            _reader.GetDefinitions("\"sales.fn_Target\"", limit: 10, lang: "sql", pathPatterns: ["sql_dotted_identifier_collision"], exact: true));
+        Assert.Equal("\"sales.fn_Target\"", quotedDefinition.Name);
+
+        var qualifiedAnalysis = _reader.AnalyzeSymbol("sales.fn_Target", limit: 10, lang: "sql", pathPatterns: ["sql_dotted_identifier_collision"], exact: true);
+        Assert.Equal("sales.fn_Target", Assert.Single(qualifiedAnalysis.Definitions).Name);
+
+        var quotedAnalysis = _reader.AnalyzeSymbol("\"sales.fn_Target\"", limit: 10, lang: "sql", pathPatterns: ["sql_dotted_identifier_collision"], exact: true);
+        Assert.Equal("\"sales.fn_Target\"", Assert.Single(quotedAnalysis.Definitions).Name);
+
+        var qualifiedImpact = _reader.AnalyzeImpact("sales.fn_Target", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_dotted_identifier_collision"]);
+        Assert.Equal(1, qualifiedImpact.DefinitionCount);
+        Assert.Equal("sales.fn_Target", Assert.Single(qualifiedImpact.Definitions).Name);
+
+        var quotedImpact = _reader.AnalyzeImpact("\"sales.fn_Target\"", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_dotted_identifier_collision"]);
+        Assert.Equal(1, quotedImpact.DefinitionCount);
+        Assert.Equal("\"sales.fn_Target\"", Assert.Single(quotedImpact.Definitions).Name);
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_ExactGraphReadersDoNotConflateQuotedSingleIdentifierDotsWithQualifiedNames()
+    {
+        InsertIndexedFile("src/sql_dotted_identifier_graph_targets.sql", "sql",
+            """
+            CREATE PROCEDURE sales.fn_Target
+            AS
+            SELECT 1;
+            GO
+
+            CREATE PROCEDURE "sales.fn_Target"
+            AS
+            SELECT 2;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_dotted_identifier_graph_callers.sql", "sql",
+            """
+            CREATE PROCEDURE sales.caller
+            AS
+            BEGIN
+                EXEC sales.fn_Target;
+            END
+            GO
+
+            CREATE PROCEDURE quoted.caller
+            AS
+            BEGIN
+                CALL "sales.fn_Target";
+            END
+            GO
+            """);
+
+        var references = _reader.SearchReferences("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]);
+        var reference = Assert.Single(references);
+        Assert.Equal("sales.caller", reference.ContainerName);
+        Assert.Equal(4, reference.Line);
+        Assert.Equal(1, _reader.CountSearchReferences("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountSearchReferencesTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
+
+        var callers = _reader.GetCallers("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]);
+        var caller = Assert.Single(callers);
+        Assert.Equal("sales.caller", caller.CallerName);
+        Assert.Equal(1, caller.ReferenceCount);
+        Assert.Equal(1, _reader.CountCallers("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCallersTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
+
+        var impact = _reader.AnalyzeImpact("sales.fn_Target", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_dotted_identifier_graph"]);
+        Assert.Equal("sales.fn_Target", Assert.Single(impact.Definitions).Name);
+        Assert.Equal("sales.caller", Assert.Single(impact.Callers).CallerName);
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_AggregatesDoNotConflateQuotedSingleIdentifierDotsWithQualifiedNames()
+    {
+        InsertIndexedFile("src/sql_dotted_identifier_deps_target.sql", "sql",
+            """
+            CREATE PROCEDURE sales.fn_Target
+            AS
+            SELECT 1;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_dotted_identifier_deps_quoted.sql", "sql",
+            """
+            CREATE PROCEDURE "sales.fn_Target"
+            AS
+            SELECT 2;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_dotted_identifier_deps_caller.sql", "sql",
+            """
+            CREATE PROCEDURE sales.caller
+            AS
+            BEGIN
+                EXEC sales.fn_Target;
+            END
+            GO
+            """);
+
+        var dependency = Assert.Single(
+            _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_dotted_identifier_deps"], excludePathPatterns: null, excludeTests: false));
+        Assert.Equal("src/sql_dotted_identifier_deps_caller.sql", dependency.SourcePath);
+        Assert.Equal("src/sql_dotted_identifier_deps_target.sql", dependency.TargetPath);
+        Assert.Equal(1, dependency.ReferenceCount);
+        Assert.Equal("sales.fn_Target", dependency.Symbols);
+
+        var hotspots = _reader.GetSymbolHotspots(10, "function", "sql", ["sql_dotted_identifier_deps"], null, false);
+        Assert.Equal(1, Assert.Single(hotspots, item => item.Symbol.Name == "sales.fn_Target").ReferenceCount);
+        Assert.DoesNotContain(hotspots, item => item.Symbol.Name == "\"sales.fn_Target\"");
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "function", lang: "sql",
+            pathPatterns: ["sql_dotted_identifier_deps"], excludePathPatterns: null, excludeTests: false);
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "sales.fn_Target");
+        Assert.Contains(unused, symbol => symbol.Name == "\"sales.fn_Target\"");
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_QuotedSingleIdentifierContainersDoNotDonateFakeQualifiersToLeafFallback()
+    {
+        InsertIndexedFile("src/sql_quoted_container_leaf_fallback_schema_target.sql", "sql",
+            """
+            CREATE PROCEDURE sales.fn_Target
+            AS
+            SELECT 1;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_quoted_container_leaf_fallback_quoted_target.sql", "sql",
+            """
+            CREATE PROCEDURE "fn_Target"
+            AS
+            SELECT 2;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_quoted_container_leaf_fallback_caller.sql", "sql",
+            """
+            CREATE PROCEDURE "sales.Caller"
+            AS
+            BEGIN
+                EXEC fn_Target;
+            END
+            GO
+            """);
+
+        Assert.Empty(_reader.GetCallers("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_quoted_container_leaf_fallback"]));
+        Assert.Equal(0, _reader.CountCallers("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_quoted_container_leaf_fallback"]));
+        Assert.Equal(new QueryCountResult(0, 0), _reader.CountCallersTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_quoted_container_leaf_fallback"]));
+
+        var leafCaller = Assert.Single(_reader.GetCallers("fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_quoted_container_leaf_fallback"]));
+        Assert.Equal("\"sales.Caller\"", leafCaller.CallerName);
+        Assert.Equal(1, leafCaller.ReferenceCount);
+
+        var dependency = Assert.Single(
+            _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_quoted_container_leaf_fallback"], excludePathPatterns: null, excludeTests: false));
+        Assert.Equal("src/sql_quoted_container_leaf_fallback_caller.sql", dependency.SourcePath);
+        Assert.Equal("src/sql_quoted_container_leaf_fallback_quoted_target.sql", dependency.TargetPath);
+        Assert.Equal(1, dependency.ReferenceCount);
+        Assert.Equal("fn_Target", dependency.Symbols);
+
+        var hotspots = _reader.GetSymbolHotspots(10, "function", "sql", ["sql_quoted_container_leaf_fallback"], null, false);
+        Assert.Equal(1, Assert.Single(hotspots, item => item.Symbol.Name == "\"fn_Target\"").ReferenceCount);
+        Assert.DoesNotContain(hotspots, item => item.Symbol.Name == "sales.fn_Target");
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "function", lang: "sql",
+            pathPatterns: ["sql_quoted_container_leaf_fallback"], excludePathPatterns: null, excludeTests: false);
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "\"fn_Target\"");
+        Assert.Contains(unused, symbol => symbol.Name == "sales.fn_Target");
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_UnicodeExactGraphReadersPreserveFoldedLeafFallback()
+    {
+        InsertIndexedFile("src/sql_unicode_exact_leaf_fallback.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.Äpfel
+            AS
+            SELECT 1;
+            GO
+
+            CREATE PROCEDURE dbo.Caller
+            AS
+            EXEC dbo.äpfel;
+            GO
+
+            CREATE PROCEDURE dbo.ÄCaller
+            AS
+            EXEC dbo.Äpfel;
+            GO
+            """);
+
+        var references = _reader.SearchReferences("dbo.Äpfel", lang: "sql", exact: true, pathPatterns: ["sql_unicode_exact_leaf_fallback"]);
+        Assert.Equal(2, references.Count);
+        Assert.Contains(references, reference => reference.ContainerName == "dbo.Caller" && reference.Line == 8);
+        Assert.Contains(references, reference => reference.ContainerName == "dbo.ÄCaller" && reference.Line == 13);
+        Assert.Equal(2, _reader.CountSearchReferences("dbo.Äpfel", lang: "sql", exact: true, pathPatterns: ["sql_unicode_exact_leaf_fallback"]));
+
+        var callers = _reader.GetCallers("dbo.Äpfel", lang: "sql", exact: true, pathPatterns: ["sql_unicode_exact_leaf_fallback"]);
+        Assert.Equal(2, callers.Count);
+        Assert.Contains(callers, item => item.CallerName == "dbo.Caller");
+        Assert.Contains(callers, item => item.CallerName == "dbo.ÄCaller");
+        Assert.Equal(2, _reader.CountCallers("dbo.Äpfel", lang: "sql", exact: true, pathPatterns: ["sql_unicode_exact_leaf_fallback"]));
+
+        var callee = Assert.Single(_reader.GetCallees("äcaller", lang: "sql", exact: true, pathPatterns: ["sql_unicode_exact_leaf_fallback"]));
+        Assert.Equal("Äpfel", callee.CalleeName);
+        Assert.Equal(1, _reader.CountCallees("äcaller", lang: "sql", exact: true, pathPatterns: ["sql_unicode_exact_leaf_fallback"]));
+
+        var impact = _reader.AnalyzeImpact("dbo.Äpfel", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_unicode_exact_leaf_fallback"]);
+        Assert.Equal(2, impact.Callers.Count);
+        Assert.Contains(impact.Callers, item => item.CallerName == "dbo.Caller");
+        Assert.Contains(impact.Callers, item => item.CallerName == "dbo.ÄCaller");
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_QualifiedSqlReadersStaySchemaScoped()
+    {
+        InsertIndexedFile("src/sql_schema_scoped_target_dbo.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.fn_Target
+            AS
+            SELECT 1;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_schema_scoped_target_sales.sql", "sql",
+            """
+            CREATE PROCEDURE sales.fn_Target
+            AS
+            SELECT 2;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_schema_scoped_caller.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.Caller
+            AS
+            EXEC dbo.fn_Target;
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
+        Assert.Equal("dbo.Caller", reference.ContainerName);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountSearchReferencesTotal("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
+
+        var caller = Assert.Single(
+            _reader.GetCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
+        Assert.Equal("dbo.Caller", caller.CallerName);
+        Assert.Equal(1, _reader.CountCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCallersTotal("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
+
+        var impact = _reader.AnalyzeImpact("dbo.fn_Target", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_schema_scoped"]);
+        Assert.Equal("dbo.Caller", Assert.Single(impact.Callers).CallerName);
+
+        var dependency = Assert.Single(
+            _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_schema_scoped_caller.sql"], excludePathPatterns: null, excludeTests: false));
+        Assert.Equal("src/sql_schema_scoped_caller.sql", dependency.SourcePath);
+        Assert.Equal("src/sql_schema_scoped_target_dbo.sql", dependency.TargetPath);
+        Assert.Equal(1, dependency.ReferenceCount);
+
+        var hotspots = _reader.GetSymbolHotspots(10, "function", "sql", ["sql_schema_scoped"], null, false);
+        var hotspot = Assert.Single(hotspots, item => item.Symbol.Name == "dbo.fn_Target");
+        Assert.Equal(1, hotspot.ReferenceCount);
+        Assert.DoesNotContain(hotspots, item => item.Symbol.Name == "sales.fn_Target");
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "function", lang: "sql",
+            pathPatterns: ["sql_schema_scoped"], excludePathPatterns: null, excludeTests: false);
+        Assert.Contains(unused, symbol => symbol.Name == "sales.fn_Target");
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "dbo.fn_Target");
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_SameLineMultipleQualifiedCallsStayColumnScoped()
+    {
+        InsertIndexedFile("src/sql_same_line_multi_target_dbo.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.fn_Target
+            AS
+            SELECT 1;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_same_line_multi_target_sales.sql", "sql",
+            """
+            CREATE PROCEDURE sales.fn_Target
+            AS
+            SELECT 2;
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_same_line_multi_caller.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.Caller
+            AS
+            BEGIN
+                EXEC dbo.fn_Target; EXEC sales.fn_Target;
+            END
+            GO
+            """);
+
+        var dboReference = Assert.Single(
+            _reader.SearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal("dbo.Caller", dboReference.ContainerName);
+        Assert.Equal(1, _reader.CountSearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountSearchReferencesTotal("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+
+        var salesReference = Assert.Single(
+            _reader.SearchReferences("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal("dbo.Caller", salesReference.ContainerName);
+        Assert.Equal(1, _reader.CountSearchReferences("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountSearchReferencesTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+
+        var dboCaller = Assert.Single(
+            _reader.GetCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal("dbo.Caller", dboCaller.CallerName);
+        Assert.Equal(1, dboCaller.ReferenceCount);
+        Assert.Equal(1, _reader.CountCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCallersTotal("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+
+        var salesCaller = Assert.Single(
+            _reader.GetCallers("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal("dbo.Caller", salesCaller.CallerName);
+        Assert.Equal(1, salesCaller.ReferenceCount);
+        Assert.Equal(1, _reader.CountCallers("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCallersTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+
+        var dependencies = _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_same_line_multi"], excludePathPatterns: null, excludeTests: false)
+            .OrderBy(edge => edge.TargetPath, StringComparer.Ordinal)
+            .ToList();
+        Assert.Equal(2, dependencies.Count);
+        Assert.Collection(dependencies,
+            edge =>
+            {
+                Assert.Equal("src/sql_same_line_multi_caller.sql", edge.SourcePath);
+                Assert.Equal("src/sql_same_line_multi_target_dbo.sql", edge.TargetPath);
+                Assert.Equal(1, edge.ReferenceCount);
+            },
+            edge =>
+            {
+                Assert.Equal("src/sql_same_line_multi_caller.sql", edge.SourcePath);
+                Assert.Equal("src/sql_same_line_multi_target_sales.sql", edge.TargetPath);
+                Assert.Equal(1, edge.ReferenceCount);
+            });
+
+        var hotspots = _reader.GetSymbolHotspots(10, "function", "sql", ["sql_same_line_multi"], null, false);
+        Assert.Equal(1, Assert.Single(hotspots, item => item.Symbol.Name == "dbo.fn_Target").ReferenceCount);
+        Assert.Equal(1, Assert.Single(hotspots, item => item.Symbol.Name == "sales.fn_Target").ReferenceCount);
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_ExactCalleesStaySchemaScoped()
+    {
+        InsertIndexedFile("src/sql_callee_schema_scoped.sql", "sql",
+            """
+            CREATE FUNCTION dbo.fn_A()
+            RETURNS INT
+            AS
+            BEGIN
+                RETURN 1;
+            END
+            GO
+
+            CREATE FUNCTION sales.fn_B()
+            RETURNS INT
+            AS
+            BEGIN
+                RETURN 2;
+            END
+            GO
+
+            CREATE PROCEDURE dbo.usp_GetOrders
+            AS
+            BEGIN
+                SELECT dbo.fn_A();
+            END
+            GO
+
+            CREATE PROCEDURE sales.usp_GetOrders
+            AS
+            BEGIN
+                SELECT sales.fn_B();
+            END
+            GO
+            """);
+
+        var callee = Assert.Single(_reader.GetCallees("dbo.usp_GetOrders", lang: "sql", exact: true, pathPatterns: ["sql_callee_schema_scoped"]));
+        Assert.Equal("fn_A", callee.CalleeName);
+        Assert.Equal("dbo.usp_GetOrders", callee.CallerName);
+        Assert.Equal(1, _reader.CountCallees("dbo.usp_GetOrders", lang: "sql", exact: true, pathPatterns: ["sql_callee_schema_scoped"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCalleesTotal("dbo.usp_GetOrders", lang: "sql", exact: true, pathPatterns: ["sql_callee_schema_scoped"]));
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_NonExactQualifiedReadersStaySchemaScoped()
+    {
+        InsertIndexedFile("src/sql_nonexact_schema_scoped_targets.sql", "sql",
+            """
+            CREATE FUNCTION dbo.fn_Target()
+            RETURNS INT
+            AS
+            BEGIN
+                RETURN 1;
+            END
+            GO
+
+            CREATE FUNCTION sales.fn_Target()
+            RETURNS INT
+            AS
+            BEGIN
+                RETURN 2;
+            END
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_nonexact_schema_scoped_callers.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.Caller
+            AS
+            BEGIN
+                EXEC dbo.fn_Target;
+            END
+            GO
+
+            CREATE PROCEDURE sales.Caller
+            AS
+            BEGIN
+                EXEC sales.fn_Target;
+            END
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("sales.fn_Target", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+        Assert.Equal("sales.Caller", reference.ContainerName);
+        Assert.Equal(1, _reader.CountSearchReferences("sales.fn_Target", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountSearchReferencesTotal("sales.fn_Target", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+
+        var caller = Assert.Single(
+            _reader.GetCallers("sales.fn_Target", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+        Assert.Equal("sales.Caller", caller.CallerName);
+        Assert.Equal(1, caller.ReferenceCount);
+        Assert.Equal(1, _reader.CountCallers("sales.fn_Target", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCallersTotal("sales.fn_Target", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+
+        var callee = Assert.Single(
+            _reader.GetCallees("sales.Caller", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+        Assert.Equal("fn_Target", callee.CalleeName);
+        Assert.Equal("sales.Caller", callee.CallerName);
+        Assert.Equal(1, _reader.CountCallees("sales.Caller", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCalleesTotal("sales.Caller", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_ExactCalleesNormalizeBracketedCallerNames()
+    {
+        InsertIndexedFile("src/sql_exact_bracketed_callee_targets.sql", "sql",
+            """
+            CREATE PROCEDURE [dbo].[fn_Target]
+            AS
+            BEGIN
+                SELECT 1;
+            END
+            GO
+
+            CREATE PROCEDURE [sales].[fn_Target]
+            AS
+            BEGIN
+                EXEC [sales].[fn_Target];
+                EXEC fn_Target;
+            END
+            GO
+            """);
+
+        var normalizedCallee = Assert.Single(
+            _reader.GetCallees("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_exact_bracketed_callee"]));
+        Assert.Equal("[sales].[fn_Target]", normalizedCallee.CallerName);
+        Assert.Equal("fn_Target", normalizedCallee.CalleeName);
+        Assert.Equal(2, normalizedCallee.ReferenceCount);
+        Assert.Equal(1, _reader.CountCallees("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_exact_bracketed_callee"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCalleesTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_exact_bracketed_callee"]));
+
+        var bracketedCallee = Assert.Single(
+            _reader.GetCallees("[sales].[fn_Target]", lang: "sql", exact: true, pathPatterns: ["sql_exact_bracketed_callee"]));
+        Assert.Equal("[sales].[fn_Target]", bracketedCallee.CallerName);
+        Assert.Equal("fn_Target", bracketedCallee.CalleeName);
+
+        Assert.DoesNotContain(
+            _reader.GetCallees("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_exact_bracketed_callee"]),
+            item => item.CallerName == "[sales].[fn_Target]");
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_WhitespaceAroundDotsStillResolvesDefinitionsAndSameLineCalls()
+    {
+        InsertIndexedFile("src/sql_spaced_qualified_names.sql", "sql",
+            """
+            CREATE PROCEDURE [dbo].[fn_Target]
+            AS
+            SELECT 1;
+            GO
+
+            CREATE PROCEDURE [sales] . [fn_Target] AS EXEC [dbo] . [fn_Target];
+            GO
+            """);
+
+        var definition = Assert.Single(
+            _reader.GetDefinitions("sales.fn_Target", limit: 10, lang: "sql", pathPatterns: ["sql_spaced_qualified_names"], exact: true));
+        Assert.Contains("fn_Target", definition.Name, StringComparison.Ordinal);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_spaced_qualified_names"]));
+        Assert.Contains("fn_Target", reference.ContainerName ?? string.Empty, StringComparison.Ordinal);
+
+        var caller = Assert.Single(
+            _reader.GetCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_spaced_qualified_names"]));
+        Assert.Contains("fn_Target", caller.CallerName ?? string.Empty, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_QuotedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
+    {
+        InsertIndexedFile("src/sql_quoted_unicode_exact_definition.sql", "sql",
+            """
+            CREATE PROCEDURE [dbo].[Äpfel]
+            AS
+            SELECT 1;
+            GO
+
+            CREATE PROCEDURE [dbo].[Caller]
+            AS
+            EXEC [dbo].[äpfel];
+            GO
+            """);
+
+        Assert.Equal(1, _reader.CountSearchSymbols(["dbo.äpfel"], lang: "sql", pathPatterns: ["sql_quoted_unicode_exact_definition"], exact: true));
+
+        var symbol = Assert.Single(_reader.SearchSymbols(["dbo.äpfel"], limit: 10, lang: "sql", pathPatterns: ["sql_quoted_unicode_exact_definition"], exact: true));
+        Assert.Equal("[dbo].[Äpfel]", symbol.Name);
+
+        var definition = Assert.Single(_reader.GetDefinitions("dbo.äpfel", limit: 10, lang: "sql", pathPatterns: ["sql_quoted_unicode_exact_definition"], exact: true));
+        Assert.Equal("[dbo].[Äpfel]", definition.Name);
+
+        var analysis = _reader.AnalyzeSymbol("dbo.äpfel", limit: 10, lang: "sql", pathPatterns: ["sql_quoted_unicode_exact_definition"], exact: true);
+        Assert.Equal("[dbo].[Äpfel]", Assert.Single(analysis.Definitions).Name);
+        Assert.Equal("[dbo].[Caller]", Assert.Single(analysis.Callers).CallerName);
+
+        var impact = _reader.AnalyzeImpact("dbo.äpfel", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_quoted_unicode_exact_definition"]);
+        Assert.Equal(1, impact.DefinitionCount);
+        Assert.Equal("[dbo].[Äpfel]", Assert.Single(impact.Definitions).Name);
+        Assert.Equal("[dbo].[Caller]", Assert.Single(impact.Callers).CallerName);
+    }
+
+    [Fact]
+    public void SqlQualifiedNames_UnqualifiedUnicodeExactDefinitionsStayAlignedWithGraphReaders()
+    {
+        InsertIndexedFile("src/sql_unqualified_unicode_exact_definition.sql", "sql",
+            """
+            CREATE PROCEDURE dbo.Äpfel
+            AS
+            SELECT 1;
+            GO
+
+            CREATE PROCEDURE dbo.Caller
+            AS
+            EXEC dbo.äpfel;
+            GO
+            """);
+
+        Assert.Equal(1, _reader.CountSearchSymbols(["äpfel"], lang: "sql", pathPatterns: ["sql_unqualified_unicode_exact_definition"], exact: true));
+
+        var symbol = Assert.Single(_reader.SearchSymbols(["äpfel"], limit: 10, lang: "sql", pathPatterns: ["sql_unqualified_unicode_exact_definition"], exact: true));
+        Assert.Equal("dbo.Äpfel", symbol.Name);
+
+        var definition = Assert.Single(_reader.GetDefinitions("äpfel", limit: 10, lang: "sql", pathPatterns: ["sql_unqualified_unicode_exact_definition"], exact: true));
+        Assert.Equal("dbo.Äpfel", definition.Name);
+
+        var analysis = _reader.AnalyzeSymbol("äpfel", limit: 10, lang: "sql", pathPatterns: ["sql_unqualified_unicode_exact_definition"], exact: true);
+        Assert.Equal("dbo.Äpfel", Assert.Single(analysis.Definitions).Name);
+        Assert.Equal("dbo.Caller", Assert.Single(analysis.Callers).CallerName);
+    }
+
+    [Fact]
     public void GetFileDependencies_DoesNotJoinSameNameTargetsAcrossLanguages()
     {
         InsertIndexedFile("src/Foo.cs", "csharp",
@@ -2798,7 +3861,7 @@ public class DbReaderTests : IDisposable
         var dependency = Assert.Single(dependencies);
         Assert.Equal("src/Caller.cs", dependency.SourcePath);
         Assert.Equal("src/Foo.cs", dependency.TargetPath);
-        Assert.Equal(1, dependency.ReferenceCount);
+        Assert.Equal(2, dependency.ReferenceCount);
         Assert.DoesNotContain("foo.py", dependency.TargetPath, StringComparison.Ordinal);
     }
 
@@ -4235,6 +5298,153 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchReferences_ExactCSharpUsingStaticFilter_PaginatesPastSuppressedRows()
+    {
+        InsertIndexedFile("src/Defs.cs", "csharp",
+            """
+            namespace Probe;
+
+            public enum Color
+            {
+                Red,
+                Blue
+            }
+            """);
+        InsertIndexedFile("src/Use.cs", "csharp",
+            """
+            using static Probe.Color;
+
+            namespace Probe;
+
+            class Demo
+            {
+                object? Match(object value)
+                {
+                    return value is Red ? value : null;
+                }
+            }
+            """);
+
+        const int suppressedReferenceCount = 65_537;
+        const int callReferenceLine = suppressedReferenceCount + 10;
+
+        using (var updateFileCmd = _db.Connection.CreateCommand())
+        {
+            updateFileCmd.CommandText = "UPDATE files SET lines = @lines WHERE path = 'src/Use.cs'";
+            updateFileCmd.Parameters.AddWithValue("@lines", callReferenceLine + 5);
+            updateFileCmd.ExecuteNonQuery();
+        }
+
+        long useFileId;
+        using (var fileIdCmd = _db.Connection.CreateCommand())
+        {
+            fileIdCmd.CommandText = "SELECT id FROM files WHERE path = 'src/Use.cs'";
+            useFileId = (long)fileIdCmd.ExecuteScalar()!;
+        }
+
+        int suppressedReferenceColumn;
+        string suppressedReferenceContext;
+        using (var templateCmd = _db.Connection.CreateCommand())
+        {
+            templateCmd.CommandText = """
+                SELECT r.column_number, r.context
+                FROM symbol_references r
+                JOIN files f ON r.file_id = f.id
+                WHERE f.path = 'src/Use.cs'
+                  AND r.symbol_name = 'Red'
+                  AND r.reference_kind = 'type_reference'
+                LIMIT 1
+                """;
+            using var templateReader = templateCmd.ExecuteReader();
+            Assert.True(templateReader.Read());
+            suppressedReferenceColumn = templateReader.GetInt32(0);
+            suppressedReferenceContext = templateReader.GetString(1);
+        }
+
+        var syntheticReferences = new List<ReferenceRecord>(suppressedReferenceCount + 1);
+        for (int line = 10; line < callReferenceLine; line++)
+        {
+            syntheticReferences.Add(new ReferenceRecord
+            {
+                FileId = useFileId,
+                SymbolName = "Red",
+                ReferenceKind = "type_reference",
+                Line = line,
+                Column = suppressedReferenceColumn,
+                Context = suppressedReferenceContext,
+                ContainerKind = "function",
+                ContainerName = "Match",
+            });
+        }
+
+        syntheticReferences.Add(new ReferenceRecord
+        {
+            FileId = useFileId,
+            SymbolName = "Red",
+            ReferenceKind = "call",
+            Line = callReferenceLine,
+            Column = 9,
+            Context = "        Red();",
+            ContainerKind = "function",
+            ContainerName = "Match",
+        });
+        _writer.InsertReferences(syntheticReferences);
+
+        var result = Assert.Single(_reader.SearchReferences("Red", limit: 1, lang: "csharp", exact: true, pathPatterns: ["src/Use.cs"]));
+        Assert.Equal("call", result.ReferenceKind);
+        Assert.Equal(callReferenceLine, result.Line);
+        Assert.Equal(1, _reader.CountSearchReferences("Red", limit: 1, lang: "csharp", exact: true, pathPatterns: ["src/Use.cs"]));
+    }
+
+    [Fact]
+    public void SearchReferences_ExactSameLineResults_AreOrderedByColumn()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reference_order.py",
+            Lang = "python",
+            Size = 32,
+            Lines = 10,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 10,
+                Content = "def outer():\n    pass\n",
+            }
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Target",
+                ReferenceKind = "call",
+                Line = 5,
+                Column = 20,
+                Context = "target_late() target_early()",
+            },
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Target",
+                ReferenceKind = "call",
+                Line = 5,
+                Column = 5,
+                Context = "target_early() target_late()",
+            },
+        ]);
+
+        var results = _reader.SearchReferences("Target", limit: 2, lang: "python", exact: true, pathPatterns: ["src/reference_order.py"]);
+        Assert.Collection(results,
+            first => Assert.Equal(5, first.Column),
+            second => Assert.Equal(20, second.Column));
+    }
+
+    [Fact]
     public void GraphQueries_DefaultGraphQueriesKeepSubscribeRowsVisible()
     {
         InsertIndexedFile("src/event_publisher.cs", "csharp",
@@ -4998,8 +6208,8 @@ public class DbReaderTests : IDisposable
 
         Assert.Equal("file_dependency_hints", analysis.ImpactMode);
         var edge = Assert.Single(analysis.FileImpacts);
-        Assert.Equal(3, edge.ReferenceCount);
-        Assert.Equal("ExecuteFolderDiffAsync", edge.Symbols);
+        Assert.Equal(4, edge.ReferenceCount);
+        Assert.Equal("ExecuteFolderDiffAsync,FolderDiffService", edge.Symbols);
     }
 
     [Fact]
@@ -6843,6 +8053,123 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetUnusedSymbols_CSharpEnumMembersAreIncludedWhenUnreferenced()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/unused_enum_members_fixture.cs",
+            Lang = "csharp",
+            Size = 180,
+            Lines = 8,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "Color",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 4,
+                Signature = "public enum Color",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "Red",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "Red,",
+                ContainerKind = "enum",
+                ContainerName = "Color",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "Blue",
+                Line = 4,
+                StartLine = 4,
+                EndLine = 4,
+                Signature = "Blue",
+                ContainerKind = "enum",
+                ContainerName = "Color",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "TrulyUnused",
+                Line = 6,
+                StartLine = 6,
+                EndLine = 8,
+                Signature = "public enum TrulyUnused",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "Green",
+                Line = 8,
+                StartLine = 8,
+                EndLine = 8,
+                Signature = "Green",
+                ContainerKind = "enum",
+                ContainerName = "TrulyUnused",
+            },
+        ]);
+        _writer.InsertReferences(
+        [
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Color",
+                ReferenceKind = "type_reference",
+                Line = 10,
+                Column = 12,
+                Context = "public Color Shade => Color.Red;",
+            },
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Red",
+                ReferenceKind = "call",
+                Line = 10,
+                Column = 30,
+                Context = "public Color Shade => Color.Red;",
+            },
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Blue",
+                ReferenceKind = "call",
+                Line = 11,
+                Column = 30,
+                Context = "public Color Next => Color.Blue;",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "enum", lang: "csharp",
+            pathPatterns: ["unused_enum_members_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+        var count = _reader.CountUnusedSymbols(kind: "enum", lang: "csharp",
+            pathPatterns: ["unused_enum_members_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        Assert.Contains(unused, symbol => symbol.Name == "TrulyUnused");
+        Assert.Contains(unused, symbol => symbol.Name == "Green");
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "Color");
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "Red");
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "Blue");
+        Assert.Equal(2, count.Count);
+        Assert.Equal(1, count.FileCount);
+    }
+
+    [Fact]
     public void GetUnusedSymbols_IgnoreAttributes_DoNotClassifyAsSuspect()
     {
         var fileId = _writer.UpsertFile(new FileRecord
@@ -7759,5 +9086,117 @@ public class DbReaderTests : IDisposable
 
         var oldSummary = _reader.CountDefinitionsTotal("countdef_only_old", since: since);
         Assert.Equal(0, oldSummary.Count);
+    }
+
+    [Fact]
+    public void EndToEnd_BomBearingFile_StripLineLeadingBomPreserveMidLineZwnbsp()
+    {
+        // End-to-end #183 vertical: real bytes on disk → FileIndexer.BuildRecord →
+        // ChunkSplitter.Split → SymbolExtractor.Extract + ReferenceExtractor.Extract
+        // → DbWriter → DbReader.Search + GetExcerpt + GetDefinitions +
+        // SearchReferences. Pins five invariants at once so the CHANGELOG claim
+        // of covering `search` / `excerpt` / `definition` / `references` surfaces
+        // is actually tested:
+        //   1. Leading BOM at offset 0 is stripped: search + definition find the
+        //      line-1 symbol (`^\s*`-anchored indexing succeeds).
+        //   2. A BOM that immediately follows `\n` is stripped: definition of the
+        //      mid-file symbol is found, and excerpt of the affected line does
+        //      not emit a phantom U+FEFF.
+        //   3. Excerpt of lines never starts with a phantom U+FEFF.
+        //   4. Non-line-leading U+FEFF (intentional ZWNBSP inside a string literal)
+        //      is preserved verbatim — the narrowing iteration of the fix must not
+        //      silently corrupt intentional mid-line ZWNBSP use.
+        //   5. A call-site reference on a BOM-bearing source is captured end-to-end,
+        //      pinning the `references` / `callers` surface through the same
+        //      pipeline rather than claiming coverage via CHANGELOG alone.
+        // Closes #183.
+        // #183 のエンドツーエンド縦串テスト: 実バイトから FileIndexer.BuildRecord →
+        // ChunkSplitter.Split → SymbolExtractor.Extract + ReferenceExtractor.Extract
+        // → DbWriter → DbReader.Search + GetExcerpt + GetDefinitions +
+        // SearchReferences まで通す。CHANGELOG が主張する search / excerpt /
+        // definition / references の全サーフェスが実際にテストされていることを
+        // 保証する 5 つの不変条件を同時に pin する:
+        //   1. オフセット 0 の先頭 BOM は剥がす。1 行目のシンボルが search /
+        //      definition で見つかる (`^\s*` 固定パターンが成立する)。
+        //   2. `\n` の直後の BOM は剥がす。該当 mid-file シンボルが definition で
+        //      見つかり、excerpt に幽霊 U+FEFF を含めない。
+        //   3. excerpt の各行は幽霊 U+FEFF で始まらない。
+        //   4. 行頭以外の U+FEFF (文字列リテラル内の意図的 ZWNBSP) はそのまま保持する。
+        //   5. BOM 付きソース中の call-site 参照がエンドツーエンドで抽出され、
+        //      references / callers 経路を同じパイプラインで pin する。
+        // Closes #183.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_bom_e2e_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var source =
+                "\uFEFFnamespace BomE2E;\n" +
+                "\n" +
+                "\uFEFFpublic class PhraseHolder\n" +
+                "{\n" +
+                "    public const string Phrase = \"A\uFEFFB\";\n" +
+                "    public void Greet() { System.Console.WriteLine(Phrase); }\n" +
+                "}\n";
+            var bytes = Encoding.UTF8.GetBytes(source);
+            var filePath = Path.Combine(tempDir, "bom_e2e.cs");
+            File.WriteAllBytes(filePath, bytes);
+
+            var indexer = new FileIndexer(tempDir);
+            var (record, content, _, _) = indexer.BuildRecordWithRawBytes(filePath);
+
+            // Line-leading BOMs are stripped; mid-line ZWNBSP inside the string literal is preserved.
+            // 行頭 BOM は剥がし、文字列リテラル内の mid-line ZWNBSP は保持されている。
+            Assert.DoesNotContain('\uFEFF', new string(content.Split('\n')[0].ToCharArray()));
+            Assert.Contains("\"A\uFEFFB\"", content);
+
+            var fileId = _writer.UpsertFile(record);
+            _writer.InsertChunks(ChunkSplitter.Split(fileId, content));
+            var symbols = SymbolExtractor.Extract(fileId, "csharp", content);
+            _writer.InsertSymbols(symbols);
+            _writer.InsertReferences(ReferenceExtractor.Extract(fileId, "csharp", content, symbols));
+
+            // 1. search finds the line-1 namespace declaration.
+            // 1. search が 1 行目の namespace 宣言を発見する。
+            var searchResults = _reader.Search("BomE2E");
+            Assert.Contains(searchResults, r => r.Path == record.Path);
+
+            // 2. GetDefinitions resolves both the line-1 namespace and the mid-file class / method.
+            // 2. GetDefinitions が 1 行目の namespace と mid-file の class / method を解決する。
+            var nsDefs = _reader.GetDefinitions("BomE2E");
+            Assert.Contains(nsDefs, d => d.Path == record.Path && d.Name == "BomE2E" && d.Line == 1);
+            var classDefs = _reader.GetDefinitions("PhraseHolder");
+            Assert.Contains(classDefs, d => d.Path == record.Path && d.Name == "PhraseHolder" && d.Line == 3);
+            var methodDefs = _reader.GetDefinitions("Greet");
+            Assert.Contains(methodDefs, d => d.Path == record.Path && d.Name == "Greet");
+
+            // 3. Excerpt of lines 1-3 never has a phantom U+FEFF at line start.
+            // 3. 1〜3 行目の excerpt には、行頭の幽霊 U+FEFF が含まれない。
+            var headExcerpt = _reader.GetExcerpt(record.Path, startLine: 1, endLine: 3);
+            Assert.NotNull(headExcerpt);
+            foreach (var line in headExcerpt!.Content.Split('\n'))
+            {
+                if (line.Length == 0) continue;
+                Assert.NotEqual('\uFEFF', line[0]);
+            }
+            Assert.Contains("namespace BomE2E;", headExcerpt.Content);
+            Assert.Contains("public class PhraseHolder", headExcerpt.Content);
+
+            // 4. Excerpt of the const-string line still carries the intentional mid-line ZWNBSP.
+            // 4. const 文字列行の excerpt には、意図的な mid-line ZWNBSP がそのまま残る。
+            var literalExcerpt = _reader.GetExcerpt(record.Path, startLine: 5, endLine: 5);
+            Assert.NotNull(literalExcerpt);
+            Assert.Contains("\"A\uFEFFB\"", literalExcerpt!.Content);
+
+            // 5. SearchReferences finds the call-site reference on the BOM-bearing file,
+            //    pinning the references / callers surface end-to-end.
+            // 5. SearchReferences が BOM 付きファイルの call-site 参照を発見し、
+            //    references / callers 経路をエンドツーエンドで pin する。
+            var refs = _reader.SearchReferences("WriteLine", lang: "csharp");
+            Assert.Contains(refs, r => r.Path == record.Path);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
     }
 }
