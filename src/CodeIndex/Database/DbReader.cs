@@ -1420,6 +1420,9 @@ public partial class DbReader
         if (string.IsNullOrWhiteSpace(path) || string.IsNullOrWhiteSpace(symbolName))
             return false;
 
+        if (TryResolveActiveCSharpUsingAliasScope(path, lineNumber, symbolName, requireTypeAlias: true, out _))
+            return true;
+
         if (!_csharpUsingAliasScopesByPath.TryGetValue(path, out var scopes))
         {
             scopes = LoadCSharpUsingAliasScopes(path);
