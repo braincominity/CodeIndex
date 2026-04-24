@@ -86,7 +86,7 @@ internal sealed class RepoMapBuilder
         // 維持し、並行インデックス時にワークスペースのタイムスタンプがスコープ付き
         // タイムスタンプより古くならないようにする。
         var fileStats = GetFileStats(lang, pathPatterns, excludePathPatterns, excludeTests);
-        ApplyJavaModuleGrouping(fileStats);
+        ApplyJavaModuleGrouping(fileStats, LoadJavaModuleDescriptors());
         var freshness = getFreshness();
         return new RepoMapResult
         {
@@ -174,14 +174,6 @@ internal sealed class RepoMapBuilder
             : "0";
         var sql = $@"
             SELECT f.path, f.lang, f.size, f.lines,
-                   (SELECT s.name
-                    FROM symbols s
-                    WHERE s.file_id = f.id
-                      AND f.lang = 'java'
-                      AND (f.path = 'module-info.java' OR f.path LIKE '%/module-info.java')
-                      AND s.kind = 'namespace'
-                    ORDER BY s.line
-                    LIMIT 1) AS module_name,
                    (SELECT COUNT(*) FROM symbols s WHERE s.file_id = f.id) AS symbol_count,
                    {refCountExpr} AS reference_count,
                    {GetFileColumnSql("checksum")} AS checksum,
@@ -210,26 +202,48 @@ internal sealed class RepoMapBuilder
                 Lang = DbReader.GetNullableString(reader, 1),
                 Size = reader.GetInt64(2),
                 Lines = reader.GetInt32(3),
-                ModuleName = DbReader.GetNullableString(reader, 4),
-                SymbolCount = reader.GetInt32(5),
-                ReferenceCount = reader.GetInt32(6),
-                Checksum = DbReader.GetNullableString(reader, 7),
-                Modified = DbReader.GetNullableDateTime(reader, 8),
-                IndexedAt = DbReader.GetNullableDateTime(reader, 9),
+                SymbolCount = reader.GetInt32(4),
+                ReferenceCount = reader.GetInt32(5),
+                Checksum = DbReader.GetNullableString(reader, 6),
+                Modified = DbReader.GetNullableDateTime(reader, 7),
+                IndexedAt = DbReader.GetNullableDateTime(reader, 8),
             });
         }
 
         return results;
     }
 
-    private static void ApplyJavaModuleGrouping(List<RepoFileStat> fileStats)
+    private Dictionary<string, string> LoadJavaModuleDescriptors()
     {
-        var moduleByDescriptorPath = fileStats
-            .Where(file => string.Equals(file.Lang, "java", StringComparison.OrdinalIgnoreCase) &&
-                           string.Equals(Path.GetFileName(file.Path), "module-info.java", StringComparison.OrdinalIgnoreCase) &&
-                           !string.IsNullOrWhiteSpace(file.ModuleName))
-            .ToDictionary(file => file.Path, file => file.ModuleName!, StringComparer.Ordinal);
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT f.path, s.name
+            FROM files f
+            JOIN symbols s ON s.file_id = f.id
+            WHERE f.lang = 'java'
+              AND (f.path = 'module-info.java' OR f.path LIKE '%/module-info.java')
+              AND s.kind = 'namespace'
+            ORDER BY f.path, s.line
+            """;
 
+        var moduleByDescriptorPath = new Dictionary<string, string>(StringComparer.Ordinal);
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var descriptorPath = reader.GetString(0);
+            if (moduleByDescriptorPath.ContainsKey(descriptorPath))
+                continue;
+
+            var moduleName = reader.GetString(1);
+            if (!string.IsNullOrWhiteSpace(moduleName))
+                moduleByDescriptorPath[descriptorPath] = moduleName;
+        }
+
+        return moduleByDescriptorPath;
+    }
+
+    private static void ApplyJavaModuleGrouping(List<RepoFileStat> fileStats, IReadOnlyDictionary<string, string> moduleByDescriptorPath)
+    {
         if (moduleByDescriptorPath.Count == 0)
             return;
 

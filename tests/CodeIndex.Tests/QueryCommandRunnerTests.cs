@@ -22467,6 +22467,60 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunMap_WithJson_PathFilteredJavaModuleFileKeepsModuleDeclarationAsModuleKey()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_java_module_filtered");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "com", "example", "app"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "module-info.java"),
+                """
+                module com.example.app {
+                    requires java.base;
+                    exports com.example.api;
+                }
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "com", "example", "app", "App.java"),
+                """
+                package com.example.app;
+
+                public class App
+                {
+                    public static void main(String[] args) {}
+                }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--json", "--path", "com/example/app/App.java"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var modules = document.RootElement.GetProperty("modules").EnumerateArray().ToList();
+            var topFiles = document.RootElement.GetProperty("top_files").EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var javaModule = Assert.Single(modules);
+            Assert.Equal("com.example.app", javaModule.GetProperty("module").GetString());
+            Assert.Equal(1, javaModule.GetProperty("files").GetInt32());
+            var topFile = Assert.Single(topFiles);
+            Assert.Equal("com/example/app/App.java", topFile.GetProperty("path").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_Json_CSharpNestedRawStringInsideInterpolationDoesNotCreatePhantomSymbols()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_nested_raw_fixture");
