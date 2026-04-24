@@ -245,7 +245,12 @@ public static class SymbolExtractor
         "public", "private", "protected", "static", "readonly", "abstract", "override", "async", "get", "set"
     ];
 
-    private static readonly Regex CSharpEnumDeclarationRegex = new($@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+|(?:file)\s+)*enum\s+(?<name>{CSharpIdentifierPattern})", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    // Enum declaration — visibility optional; modifier order is free. Accepts `file` (file-scoped
+    // enum) and `new` (member-hiding nested enum in a derived type) as non-visibility modifiers.
+    // Closes #353.
+    // enum 宣言 — visibility は任意で、修飾子の順序は自由。非 visibility 修飾子として `file`
+    // （ファイルスコープ enum）と `new`（派生型でのネスト enum 隠蔽）を受け付ける。Closes #353.
+    private static readonly Regex CSharpEnumDeclarationRegex = new($@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+|(?:file|new)\s+)*enum\s+(?<name>{CSharpIdentifierPattern})", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpEnumMemberRegex = new(@"^\s*(?<name>@?[_\p{L}]\w*)\s*(?:=\s*(?:-?\d|0x|@?[_\p{L}]\w*(?:\s*\|\s*@?[_\p{L}]\w*)*)[^""']*)?,?\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpEnumMemberNameRegex = new(@"^\s*(?<name>@?[_\p{L}]\w*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex JavaCompactConstructorRegex = new(
@@ -278,7 +283,13 @@ public static class SymbolExtractor
         int? ReturnTypeStartColumn = null,
         int? ReturnTypeEndColumn = null,
         int? HeaderEndColumn = null,
-        bool HasBody = true);
+        bool HasBody = true,
+        // For class-field arrow properties with an expression body (`handleClick = () => 42;`),
+        // this marks the inclusive column of the last expression char (before `;`) in the
+        // accumulated sanitized header. Null means brace body or no expression body was detected.
+        // クラスフィールド矢印プロパティが式本体を持つ場合 (`handleClick = () => 42;`)、
+        // 終端記号 `;` の直前にある式末尾の inclusive 列位置。null は block body か式本体非検出。
+        int? ExpressionBodyEndColumn = null);
 
     private readonly record struct JavaScriptTypeScriptMethodHeaderCapture(
         string SourceHeader,
@@ -286,7 +297,12 @@ public static class SymbolExtractor
         int HeaderEndLineIndex,
         int HeaderEndColumn,
         int BodyStartLineIndex,
-        int BodyStartColumn);
+        int BodyStartColumn,
+        // For expression-body arrow fields, these are the source line/col of the last
+        // expression char (`;` の直前). Null for brace-body arrow fields.
+        // 式本体矢印 field の場合の式末尾 source 位置 (終端 `;` の直前)。block body は null。
+        int? BodyEndLineIndex = null,
+        int? BodyEndColumn = null);
 
     private struct JavaScriptTypeScriptFunctionHeaderState
     {
@@ -332,6 +348,31 @@ public static class SymbolExtractor
         @"^\s*export\s*=",
         RegexOptions.Compiled);
 
+    // Matches the binding portion of object-literal declarations: LHS identifier plus the `=`
+    // assignment. The opening `{` is intentionally NOT required on the same line so multi-line
+    // forms like `const obj =\n{\n ... }` are still detected. Callers locate the `{` via
+    // TryFindJavaScriptTypeScriptObjectLiteralOpenBrace (lex-state aware), then hand the resulting
+    // (lineOfBrace, columnOfBrace) to ResolveRange(BodyStyle.Brace). Recognizes
+    // const/let/var/export plus CommonJS module.exports / exports.NAME assignments.
+    // オブジェクトリテラル宣言の binding 部分（LHS 識別子と `=`）に一致させる。右辺の `{` を同一行に
+    // 要求しないのは、`const obj =\n{\n ... }` のような複数行スタイルも拾うため。`{` の位置は
+    // TryFindJavaScriptTypeScriptObjectLiteralOpenBrace が lex 状態を引き継ぎつつ別途走査し、
+    // 見つけた (lineOfBrace, columnOfBrace) を ResolveRange(BodyStyle.Brace) に渡す。const/let/var/export
+    // に加え、CommonJS の module.exports / exports.NAME 代入経路にも対応する。
+    private static readonly Regex JavaScriptTypeScriptObjectLiteralBindingRegex = new(
+        $@"^\s*(?:(?<visibility>export)\s+)?(?:(?<bindingKind>const|let|var)\s+(?<alias>{JavaScriptTypeScriptIdentifierPattern})|exports\.(?<exportsAlias>{JavaScriptTypeScriptIdentifierPattern})|module\.exports\.(?<moduleExportsAlias>{JavaScriptTypeScriptIdentifierPattern})|(?<moduleExports>module\.exports))(?:\s*:\s*[^=]+?)?\s*=\s*",
+        RegexOptions.Compiled);
+
+    // Matches `export default` at start of line. `export default { ... }` is an anonymous object
+    // that becomes the module's default export; its method-shorthand members are attached to a
+    // virtual "default" container. Uses the same lex-aware `{` scan as the binding regex.
+    // 行頭の `export default` に一致。`export default { ... }` は無名オブジェクトでモジュールの
+    // 既定エクスポートになり、そのメソッド省略記法のメンバは仮想コンテナ "default" に紐付ける。
+    // 後続の `{` の位置は binding 用と同じ lex-aware 走査で特定する。
+    private static readonly Regex JavaScriptTypeScriptExportDefaultObjectLiteralRegex = new(
+        @"^\s*export\s+default\s*",
+        RegexOptions.Compiled);
+
     private const string VbVisibilityPattern = @"(?:Public|Private|Protected|Friend)(?:\s+(?:Protected|Friend))?";
     private const string VbTypeModifierPattern = @"(?:Partial|MustInherit|NotInheritable)";
     private const string VbMemberModifierPattern = @"(?:Shared|Overrides|Overridable|MustOverride|Async|Partial)";
@@ -348,14 +389,18 @@ public static class SymbolExtractor
         ],
         ["javascript"] =
         [
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:async\s+)?function\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Include optional `*` between `function` and name for generator functions (e.g. `function* gen()`, `async function* asyncGen()`)
+            // `function` と名前の間に任意の `*` を許容し、ジェネレータ関数 (`function* gen()`, `async function* asyncGen()`) にも対応
+            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:async\s+)?function(?:\s+|\s*\*\s*)(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:default\s+)?class\s+(?<name>(?!extends\b)\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+?)\s+from\s+", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["typescript"] =
         [
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:async\s+)?function\s+(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            // Include optional `*` between `function` and name for generator functions (e.g. `function* gen()`, `async function* asyncGen()`)
+            // `function` と名前の間に任意の `*` を許容し、ジェネレータ関数 (`function* gen()`, `async function* asyncGen()`) にも対応
+            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:async\s+)?function(?:\s+|\s*\*\s*)(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Abstract class, declare class / 抽象クラス、declare クラス
             new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:default\s+)?(?:(?:abstract|declare)\s+)*class\s+(?<name>(?!(?:extends|implements)\b)\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
@@ -382,10 +427,22 @@ public static class SymbolExtractor
             // Const field — must come before class/method patterns to avoid misclassification.
             // Modifier order is free: visibility may appear anywhere in the modifier sequence,
             // so `new public const` and `public new const` are both captured. Closes #355.
+            // returnType uses the shared CSharpTypePattern (same token the method / property /
+            // indexer / delegate / event rows already use) so tuple / named-tuple /
+            // nullable-tuple / generic-over-tuple / global::-qualified / tuple-array const field
+            // types are captured instead of silently dropped. The legacy hand-rolled char class
+            // had no `(`, `)`, or `\s`, so `public const (int, int) Pair = (1, 2);` failed the
+            // returnType group and fell through every subsequent row. Closes #346.
             // const フィールド — クラス/メソッドパターンより前に配置し誤分類を防ぐ。
             // 修飾子順序は自由で、visibility は修飾子列の任意位置に現れてよい（例: `new public const` /
             // `public new const`）。Closes #355.
-            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:new|static)\s+)*const\s+(?<returnType>[\w@?.<>\[\],:]+)\s+(?<name>{CSharpIdentifierPattern})\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            // returnType は method / property / indexer / delegate / event 行で既に使っている共有
+            // トークン CSharpTypePattern を使う。これにより tuple / 名前付き tuple / nullable tuple /
+            // generic-over-tuple / `global::` 修飾 / tuple-array を戻り値型とする const フィールドを
+            // 取りこぼさない。従来の手書き文字クラスには `(` / `)` / `\s` が無く、
+            // `public const (int, int) Pair = (1, 2);` は returnType 群で失敗し、以降のどの行にも
+            // マッチしなかった。Closes #346.
+            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:new|static)\s+)*const\s+(?<returnType>{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             // Static readonly field / static readonly フィールド
             // Modifier order is free: `static` and `readonly` may appear in any order, and `new`
             // (member hiding) may appear anywhere in the modifier sequence. Visibility is also
@@ -629,11 +686,32 @@ public static class SymbolExtractor
             // so alias-qualified types like `global::System.String` and `Alias::Type` still match.
             // LINQ query-expression keywords are also excluded from the negative lookahead so that
             // continuation lines like `where Validator.Check(x)` / `select Mapper.Convert(x)` /
-            // `orderby Math.Abs(x)` do not match as `returnType + interface.member`. Closes #377.
+            // `orderby Math.Abs(x)` do not match as `returnType + interface.member`. `new` is also
+            // excluded so expression statements like `new System.Text.StringBuilder().Append(...)`
+            // or `new Outer.Inner().Consume()` do not masquerade as an explicit interface method
+            // (returnType=`new`, interface=the dot-chain qualifier preceding the constructed type
+            // — which may be a namespace prefix like `System.Text`, an enclosing-type chain like
+            // `Outer` in `new Outer.Inner()` where `Outer` is an outer class, or a mix of both
+            // like `MyApp.Outer` in `new MyApp.Outer.Inner()` where `MyApp` is a namespace and
+            // `Outer` is an enclosing type; the regex does not distinguish which segments are
+            // namespaces and which are enclosing types at this position — and name=the
+            // identifier right before the first `(`, i.e. the type being constructed:
+            // `StringBuilder` / `Inner`; the trailing `.Append(...)` / `.Consume()` chain is
+            // never part of the capture because the regex stops at the first `(`).
+            // Closes #362, #377.
             // 明示的インターフェース実装 (例: void IDisposable.Dispose())
             // 有効な戻り値型（ステートメントキーワードではない）とドット前のインターフェース名を要求。
             // qualified call site を伴う named-argument label のみ除外し、
             // `global::System.String` や `Alias::Type` のような alias-qualified 型は許可する。
+            // `new` も除外して、`new System.Text.StringBuilder().Append(...)` や
+            // `new Outer.Inner().Consume()` のような式文が、returnType=`new` /
+            // interface=構築型の手前のドット連鎖修飾子（namespace `System.Text` / 外側クラス
+            // `Outer` のみ / namespace と外側型の混在 `MyApp.Outer`（`MyApp` が namespace、
+            // `Outer` が外側型）のいずれでもよく、正規表現はこの位置で namespace と外側型を
+            // 区別しない）/ name=構築される型（最初の `(` の直前の識別子、例: `StringBuilder`
+            // / `Inner`。正規表現は最初の `(` で止まるので、末尾の `.Append(...)` /
+            // `.Consume()` チェーンはキャプチャされない）として
+            // 明示的インターフェースメソッドに化けないようにする。
             new("function",  new Regex($@"^\s*(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|new|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\w+\s*:\s*(?:global::)?[\w@.<>:]+\.\w+\s*{CSharpMethodTypeParameterListPattern}[\(\[])(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>{CSharpIdentifierPattern})\s*{CSharpMethodTypeParameterListPattern}[\(\[]", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             // Explicit interface property implementation (brace body), e.g. int IThing.Value { get; set; }
             // Mirrors the explicit-interface method row above: the qualifier is non-capturing so the
@@ -1189,6 +1267,32 @@ public static class SymbolExtractor
         if (lang == null || !PatternCache.TryGetValue(lang, out var patterns))
             return [];
 
+        // Null / empty fast path — keep the direct-call null-safe contract that
+        // FileIndexer.StripLineLeadingBom's IsNullOrEmpty check used to provide
+        // before the CRLF normalization step was added in front of it. Closes #183.
+        // null / 空入力は早期 return。CRLF 正規化を StripLineLeadingBom の前に
+        // 入れたことで helper 側の IsNullOrEmpty による null 許容が効かなくなる
+        // ため、direct call の null セーフ契約をここで復元する。Closes #183.
+        if (string.IsNullOrEmpty(content))
+            return [];
+
+        // Normalize CRLF / CR to LF first so direct callers that bypass FileIndexer
+        // still present a `\n`-only content stream, and then strip line-leading
+        // UTF-8 BOM (U+FEFF) defensively so `^\s*`-anchored patterns match on
+        // line 1 and on any mid-file line that begins with a BOM (e.g. from file
+        // concatenation or tool insertion). StripLineLeadingBom assumes `\n` is
+        // the sole line separator, so the CRLF pass must come first. Non-line-
+        // leading U+FEFF is preserved so content with intentional ZWNBSP inside
+        // a string literal stays verbatim. Closes #183.
+        // まず CRLF / CR を LF に正規化する。StripLineLeadingBom は `\n` を唯一の
+        // 行区切りとして行頭判定するので、FileIndexer を経由しない direct call
+        // でも CRLF 正規化を済ませてから呼ばないと mid-file の行頭 BOM を剥がし
+        // 損なう。続いて行頭 U+FEFF のみ剥がし、1 行目と mid-file の行頭 BOM 両方
+        // で `^\s*` 固定パターンを成立させる。行頭以外の U+FEFF (文字列リテラル中
+        // の意図的な ZWNBSP 等) はそのまま保持する。Closes #183.
+        if (content.Contains('\r'))
+            content = content.Replace("\r\n", "\n").Replace("\r", "\n");
+        content = FileIndexer.StripLineLeadingBom(content);
         var lines = content.Split('\n');
 
         // HTML has no brace/indent-scoped bodies, so the generic pattern loop's
@@ -1487,6 +1591,28 @@ public static class SymbolExtractor
                             i,
                             csharpNormalizedStartColumn,
                             line.Length);
+                    }
+
+                    // C# candidates that only become visible after string-literal content is
+                    // blanked (for example, code inside an interpolation hole of an outer
+                    // string) must not be emitted as declarations. A real declaration starts in
+                    // root code, not in nested interpolation code. Gate on the raw-line start
+                    // column so exact definition / inspect lookups do not pick up call-site
+                    // fragments from interpolated log strings. Closes #790.
+                    // C# では、外側文字列本文を空白化した結果として見えるようになった候補
+                    // （例: 補間文字列ホール内のコード）を宣言として emit してはならない。
+                    // 本物の宣言は root code から始まり、入れ子の補間コードからは始まらない。
+                    // raw 行上の開始列でゲートし、補間ログ文字列内の呼び出し断片が
+                    // exact definition / inspect に混入しないようにする。Closes #790.
+                    if (lang == "csharp"
+                        && csharpLineStartStates != null
+                        && !IsCSharpRootCodePosition(line, csharpLineStartStates[i], csharpGateRawStartColumn))
+                    {
+                        lineOffset = FindNextSameLineBraceStatementStart(
+                            matchLine,
+                            absoluteStartColumn + Math.Max(1, match.Length),
+                            lang);
+                        continue;
                     }
 
                     if (lang == "csharp"
@@ -4560,6 +4686,183 @@ public static class SymbolExtractor
 
         var syntheticClassTargets = CollectJavaScriptTypeScriptSyntheticClassScanTargets(fileId, lang, lines, symbols, privateScopeColumns);
         ExtractJavaScriptTypeScriptBareMethodsInTargets(fileId, lang, lines, symbols, syntheticClassTargets);
+
+        var objectLiteralTargets = CollectJavaScriptTypeScriptObjectLiteralScanTargets(lang, lines, privateScopeColumns);
+        ExtractJavaScriptTypeScriptBareMethodsInTargets(fileId, lang, lines, symbols, objectLiteralTargets);
+    }
+
+    // Scans for object literal declarations (`const obj = { ... }`, `module.exports = { ... }`
+    // etc.) and builds class-body scan targets with ContainerKind="object". The class-body
+    // scanner already handles method shorthand (`name()`, `get/set name()`, `*name()`,
+    // `async name()`), so routing object literals through the same scanner picks up those
+    // members without a separate pass. Nested function/class scopes are skipped via
+    // privateScopeColumns so method bodies don't leak inner-object methods back to the top level.
+    // `const obj = { ... }` や `module.exports = { ... }` 等のオブジェクトリテラル宣言を走査し、
+    // ContainerKind="object" のクラスボディ用スキャンターゲットを構築する。クラスボディスキャナは
+    // 既に method shorthand (`name()`, `get/set name()`, `*name()`, `async name()`) を扱うため、
+    // 同じスキャナ経由でオブジェクトリテラルのメンバを抽出できる。ネストされた function/class
+    // スコープは privateScopeColumns で弾き、内側のオブジェクトメンバをトップレベルに漏らさない。
+    private static List<JavaScriptClassScanTarget> CollectJavaScriptTypeScriptObjectLiteralScanTargets(
+        string lang,
+        string[] lines,
+        JavaScriptScopePrivacyFlags[][] privateScopeColumns)
+    {
+        var targets = new List<JavaScriptClassScanTarget>();
+        var lexState = new JavaScriptLexState();
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var lexedLine = LexJavaScriptLine(lines[i], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+
+            var bindingMatch = JavaScriptTypeScriptObjectLiteralBindingRegex.Match(sanitizedLine);
+            Match? exportDefaultMatch = null;
+            if (!bindingMatch.Success)
+            {
+                var edm = JavaScriptTypeScriptExportDefaultObjectLiteralRegex.Match(sanitizedLine);
+                if (!edm.Success)
+                    continue;
+                exportDefaultMatch = edm;
+            }
+            var match = exportDefaultMatch ?? bindingMatch;
+            var isExportDefault = exportDefaultMatch != null;
+
+            // Skip declarations nested inside a function/class body, and — for non-exported
+            // const/let bindings — also inside block scopes or namespace scopes. The object
+            // literal itself may be legitimate, but its method-shorthand members are already
+            // reachable via the enclosing scope, and emitting them would leak non-public names
+            // to the top level. `var` stays function-scoped so block-scope skip is not applied;
+            // `module.exports` / `exports.X` / `export const` / `export default` are treated as
+            // exported and kept.
+            // function/class 本体内のネストした宣言はスキップする。加えて非 export の const/let は
+            // ブロックスコープや namespace スコープも private 扱いにする。var は function スコープのため
+            // ブロックスコープは除外せず、module.exports / exports.X / export const / export default は
+            // export 扱いで維持する。
+            var includeBlockScope = !isExportDefault
+                && bindingMatch.Groups["bindingKind"].Success
+                && bindingMatch.Groups["bindingKind"].Value is "const" or "let";
+            if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, i, match.Index, sanitizedLine, includeBlockScope))
+                continue;
+
+            var isExported = isExportDefault
+                || TryGetGroup(bindingMatch, "visibility") == "export"
+                || bindingMatch.Groups["exportsAlias"].Success
+                || bindingMatch.Groups["moduleExportsAlias"].Success
+                || bindingMatch.Groups["moduleExports"].Success;
+            if (!isExported
+                && IsJavaScriptTypeScriptMatchInNamespaceScope(privateScopeColumns, i, match.Index, sanitizedLine))
+            {
+                continue;
+            }
+
+            if (!TryFindJavaScriptTypeScriptObjectLiteralOpenBrace(
+                    lines,
+                    i,
+                    match.Index + match.Length,
+                    sanitizedLine,
+                    lexState,
+                    out var openBraceLineIndex,
+                    out var openBraceColumn))
+            {
+                continue;
+            }
+
+            var (_, bodyStartLine, bodyEndLine) = ResolveRange(lines, openBraceLineIndex, BodyStyle.Brace, lang, openBraceColumn);
+            if (bodyStartLine == null || bodyEndLine == null)
+                continue;
+
+            var containerName = isExportDefault
+                ? "default"
+                : (TryGetGroup(bindingMatch, "alias")
+                    ?? TryGetGroup(bindingMatch, "exportsAlias")
+                    ?? TryGetGroup(bindingMatch, "moduleExportsAlias")
+                    ?? (bindingMatch.Groups["moduleExports"].Success ? "module.exports" : null)
+                    ?? "object");
+
+            var candidate = CreateJavaScriptClassScanTarget(
+                lines,
+                lang,
+                i,
+                match.Index,
+                bodyStartLine,
+                bodyEndLine,
+                containerKind: "object",
+                containerName: containerName);
+
+            if (!targets.Any(t => t.StartIndex == candidate.StartIndex
+                && t.ScanStartIndex == candidate.ScanStartIndex
+                && t.ScanEndExclusive == candidate.ScanEndExclusive
+                && t.ContainerName == candidate.ContainerName))
+            {
+                targets.Add(candidate);
+            }
+        }
+
+        return targets
+            .OrderBy(t => t.StartIndex)
+            .ThenByDescending(t => t.ScanEndExclusive)
+            .ToList();
+    }
+
+    // Scans forward from (`startLineIndex`, `startColumn`) through the lex-sanitized source for
+    // the first `{`, hopping across lines when only whitespace (including newlines) remains. The
+    // passed `sanitizedStartLine` is the already-sanitized version of lines[startLineIndex] and
+    // `lineEndState` is the lexer state AFTER that line. Any non-whitespace, non-`{` character
+    // aborts the scan (returns false) so we don't misclassify arbitrary RHS expressions as object
+    // literals. Strings / comments stay masked because we drive the scan through LexJavaScriptLine.
+    // (`startLineIndex`, `startColumn`) から lex sanitized のソースを前方に走査し、最初の `{` を探す。
+    // 空白 (改行を含む) だけなら行を跨いで続行する。`sanitizedStartLine` は lines[startLineIndex] の
+    // sanitized 版で、`lineEndState` はそのライン終了時の lexer state。`{` 以外の非空白文字が現れた時点で
+    // 走査を打ち切る (false を返す) ので、オブジェクトリテラルでない右辺を誤って拾わない。
+    // LexJavaScriptLine を介するため、文字列・コメントは常にマスクされた状態で判定できる。
+    private static bool TryFindJavaScriptTypeScriptObjectLiteralOpenBrace(
+        string[] lines,
+        int startLineIndex,
+        int startColumn,
+        string sanitizedStartLine,
+        JavaScriptLexState lineEndState,
+        out int openBraceLineIndex,
+        out int openBraceColumn)
+    {
+        openBraceLineIndex = -1;
+        openBraceColumn = -1;
+
+        for (int c = Math.Max(0, startColumn); c < sanitizedStartLine.Length; c++)
+        {
+            var ch = sanitizedStartLine[c];
+            if (char.IsWhiteSpace(ch))
+                continue;
+            if (ch == '{')
+            {
+                openBraceLineIndex = startLineIndex;
+                openBraceColumn = c;
+                return true;
+            }
+            return false;
+        }
+
+        var lexState = lineEndState;
+        for (int li = startLineIndex + 1; li < lines.Length; li++)
+        {
+            var lexed = LexJavaScriptLine(lines[li], lexState);
+            lexState = lexed.EndState;
+            var nextSan = lexed.SanitizedLine;
+            for (int c = 0; c < nextSan.Length; c++)
+            {
+                var ch = nextSan[c];
+                if (char.IsWhiteSpace(ch))
+                    continue;
+                if (ch == '{')
+                {
+                    openBraceLineIndex = li;
+                    openBraceColumn = c;
+                    return true;
+                }
+                return false;
+            }
+        }
+
+        return false;
     }
 
     private static List<JavaScriptClassScanTarget> GetJavaScriptTypeScriptExistingClassScanTargets(string lang, string[] lines, List<SymbolRecord> symbols)
@@ -6185,6 +6488,119 @@ public static class SymbolExtractor
                             && methodCapture.BodyStartColumn < sanitizedLine.Length)
                         {
                             nestedBraceDepth += CountBraces(sanitizedLine[methodCapture.BodyStartColumn..]);
+                            if (nestedBraceDepth < 0)
+                                nestedBraceDepth = 0;
+                            break;
+                        }
+
+                        column++;
+                        continue;
+                    }
+
+                    // Fallback: class-field arrow function (`handleClick = () => { ... }`).
+                    // The method-header parser rejects these because they have no method-style
+                    // parameter list before the body; handle them with a dedicated arrow parser so
+                    // they still surface as function symbols instead of being consumed by the
+                    // field-initializer state machine.
+                    // クラスフィールドのアロー関数 (`handleClick = () => { ... }`) のフォールバック。
+                    // メソッドヘッダーパーサは body 直前に method 形式の引数リストが来ないことを理由に
+                    // これを弾くため、専用パーサで処理してフィールド初期化子ステートに吸われる前に
+                    // function シンボルとして emit する。
+                    if (TryCaptureJavaScriptTypeScriptClassFieldArrow(
+                        lines,
+                        i,
+                        column,
+                        scanEndExclusive,
+                        sanitizedLine,
+                        lexState,
+                        lang,
+                        out var arrowCapture))
+                    {
+                        var arrowHeader = arrowCapture.HeaderInfo;
+                        var arrowStartLine = i + 1;
+                        var isExpressionBody = arrowHeader.ExpressionBodyEndColumn != null
+                            && arrowCapture.BodyEndLineIndex != null
+                            && arrowCapture.BodyEndColumn != null;
+                        if (seenMethodStarts.Add((arrowStartLine, column)))
+                        {
+                            int arrowEndLine;
+                            int? arrowBodyStartLine;
+                            int? arrowBodyEndLine;
+                            int arrowSameLineEndColumn;
+                            if (isExpressionBody)
+                            {
+                                arrowBodyStartLine = arrowCapture.BodyStartLineIndex + 1;
+                                arrowBodyEndLine = arrowCapture.BodyEndLineIndex!.Value + 1;
+                                arrowEndLine = arrowBodyEndLine.Value;
+                                arrowSameLineEndColumn = arrowBodyEndLine == arrowStartLine
+                                    ? arrowCapture.BodyEndColumn!.Value
+                                    : -1;
+                            }
+                            else
+                            {
+                                (arrowEndLine, arrowBodyStartLine, arrowBodyEndLine) = ResolveRange(
+                                    lines, i, BodyStyle.Brace, lang, arrowCapture.BodyStartColumn);
+                                arrowSameLineEndColumn = arrowBodyEndLine == arrowStartLine
+                                    ? FindJavaScriptSameLineArrowBodyEndColumn(line, arrowCapture.BodyStartColumn)
+                                    : -1;
+                            }
+                            symbols.Add(new SymbolRecord
+                            {
+                                FileId = fileId,
+                                Kind = "function",
+                                Name = arrowHeader.Name,
+                                Line = arrowStartLine,
+                                StartLine = arrowStartLine,
+                                EndLine = Math.Max(arrowStartLine, arrowEndLine),
+                                BodyStartLine = arrowBodyStartLine,
+                                BodyEndLine = arrowBodyEndLine,
+                                Signature = BuildJavaScriptTypeScriptClassFieldArrowSignature(
+                                    lines,
+                                    i,
+                                    column,
+                                    arrowBodyEndLine,
+                                    arrowSameLineEndColumn,
+                                    arrowCapture),
+                                ContainerKind = classScanTarget.ContainerKind,
+                                ContainerName = classScanTarget.ContainerName,
+                                Visibility = arrowHeader.Visibility,
+                                ReturnType = GetJavaScriptTypeScriptBareMethodReturnType(arrowCapture.SourceHeader, arrowHeader, lang),
+                            });
+
+                            if (arrowSameLineEndColumn >= column)
+                            {
+                                column = arrowSameLineEndColumn + 1;
+                                continue;
+                            }
+
+                            if (isExpressionBody)
+                            {
+                                // Expression-body spanned multiple lines; resume scanning just
+                                // after the terminating `;` using the header-end pending channel
+                                // (which only skips columns up to the sentinel, never entire lines)
+                                // so the next field declaration on a subsequent line is still scanned.
+                                // 式本体が複数行にまたがった場合、pendingHeaderEndLineIndex / Column で
+                                // 終端 `;` 直後から再開する。列単位のスキップしかしないため、直後の行に
+                                // ある field 宣言 (`runInline = ...`) を取りこぼさない。
+                                pendingHeaderEndLineIndex = arrowCapture.BodyEndLineIndex!.Value;
+                                pendingHeaderEndColumn = arrowCapture.BodyEndColumn!.Value;
+                                break;
+                            }
+
+                            if (arrowCapture.BodyStartLineIndex > i)
+                            {
+                                pendingBodyStartLineIndex = arrowCapture.BodyStartLineIndex;
+                                pendingBodyStartColumn = arrowCapture.BodyStartColumn;
+                                break;
+                            }
+                        }
+
+                        if (!isExpressionBody
+                            && arrowCapture.BodyStartLineIndex == i
+                            && arrowCapture.BodyStartColumn >= 0
+                            && arrowCapture.BodyStartColumn < sanitizedLine.Length)
+                        {
+                            nestedBraceDepth += CountBraces(sanitizedLine[arrowCapture.BodyStartColumn..]);
                             if (nestedBraceDepth < 0)
                                 nestedBraceDepth = 0;
                             break;
@@ -7901,6 +8317,26 @@ public static class SymbolExtractor
         bool expressionBody = false;
         int parenDepth = 0;
         int bracketDepth = 0;
+        // `;` early-return safety check. Required so the new top-level `;` clamp
+        // only fires once we have observed a parameter list (`(`), which body-less
+        // function-like declarations (`void M();`, ctor signatures) always carry.
+        // Without this guard, the column-space mismatch where `absoluteStartColumn`
+        // arrives in collapsed-generic / attribute-stripped match-line space and is
+        // sliced into raw `structuralLines` can place an unrelated leading `;` (the
+        // sibling member that came before this declaration, e.g. `event ... E;`
+        // ahead of a same-line `class Wrapped<T>`) at scan position 0 and trick the
+        // clamp into ending the body range before the real declaration even
+        // begins. Function/delegate signatures by definition pass through `(` first.
+        // Closes #515 review follow-up.
+        // `;` 早期 return 用の安全ガード。新たに追加する top-level `;` クランプは
+        // パラメータリスト `(` を一度でも見たあとでのみ発火するようにする。これは
+        // body-less な関数系宣言 (`void M();`、コンストラクタ等) は必ず `(` を通る
+        // ため安全であり、逆に column-space mismatch (collapsed-generic 列や
+        // attribute-strip された match-line 列を raw な `structuralLines` に
+        // スライスするケース) で scan 位置 0 が直前 sibling の `;` (例: same-line
+        // `class Wrapped<T>` 直前の `event ... E;`) に重なってしまった場合に、
+        // 宣言が始まる前にクランプが暴発するのを防ぐ。Closes #515 review follow-up.
+        bool sawOpenParen = false;
         var lexState = new CSharpLexState();
 
         for (int i = startIndex; i < lines.Length; i++)
@@ -7933,7 +8369,7 @@ public static class SymbolExtractor
                     continue;
                 }
 
-                if (c == '(') { parenDepth++; continue; }
+                if (c == '(') { parenDepth++; sawOpenParen = true; continue; }
                 if (c == ')' && parenDepth > 0) { parenDepth--; continue; }
                 if (c == '[') { bracketDepth++; continue; }
                 if (c == ']' && bracketDepth > 0) { bracketDepth--; continue; }
@@ -7964,6 +8400,32 @@ public static class SymbolExtractor
                     }
                     continue;
                 }
+
+                // Top-level `;` after a parameter list and before any block body opened
+                // terminates a body-less function-like declaration (`void M();`,
+                // ctor signatures, etc.). Without this in-loop guard, recovery for
+                // same-line siblings whose own line ends with the enclosing type's `}`
+                // (`{ int P { get; } void M(); }`) falls through the trailing
+                // `EndsWith(';')` fallback because the physical line ends with `}`,
+                // then the scanner bleeds into later lines and attributes their brace
+                // ranges to this body-less symbol. The `sawOpenParen` guard keeps the
+                // clamp inert when `absoluteStartColumn` arrived in collapsed-generic
+                // / attribute-stripped column space and slid the scan onto an earlier
+                // sibling's `;`, since real function-like signatures always pass
+                // through `(` before `;`. Closes #515.
+                // ブロック本体が開く前に、かつパラメータリスト `(` を通過したあとで
+                // 出現した top-level `;` は、本体を持たない関数系宣言
+                // (`void M();`、コンストラクタ等) の終端としてその場で確定する。
+                // これがないと、`{ int P { get; } void M(); }` のように物理行末が
+                // `}` で閉じる same-line sibling 復元では末尾の `EndsWith(';')`
+                // フォールバックが効かず、次行以降の brace を本体と誤認して
+                // body-less symbol に取り込んでしまう。`sawOpenParen` ガードに
+                // よって、`absoluteStartColumn` が collapsed-generic / attribute-strip
+                // 後の列で渡って raw `structuralLines` 上の直前 sibling の `;` に
+                // 落ち込むケースでもクランプが暴発しない (関数系シグネチャは必ず
+                // `(` を通過するため)。Closes #515.
+                if (c == ';' && sawOpenParen && !opened && parenDepth == 0 && bracketDepth == 0)
+                    return (i + 1, null, null);
 
                 // Detect '=>' at top level (outside any (), [], {}) before any block body opened.
                 // This marks an expression-bodied member; body spans the declaration line
@@ -8096,10 +8558,26 @@ public static class SymbolExtractor
         if (!TryParseJavaScriptTypeScriptMethodHeader(sanitizedLine, startColumn, lang, out var methodHeader))
             return -1;
 
+        return FindJavaScriptSameLineBraceBodyEndColumn(sanitizedLine, methodHeader.BodyStartColumn);
+    }
+
+    // Same-line body end finder for class-field arrow functions. The scanner already knows the
+    // sanitized body-open column from the arrow capture, so we walk braces from that column
+    // without re-parsing the header (which the method-header parser would reject).
+    // クラスフィールドのアロー関数向けの同一行 body 終了列探索。スキャナが arrow capture の段階で
+    // sanitized 上の body 開始列を把握しているので、ヘッダを再パースせずそこから brace を辿る。
+    private static int FindJavaScriptSameLineArrowBodyEndColumn(string line, int bodyStartColumn)
+    {
+        var sanitizedLine = LexJavaScriptLine(line, new JavaScriptLexState()).SanitizedLine;
+        return FindJavaScriptSameLineBraceBodyEndColumn(sanitizedLine, bodyStartColumn);
+    }
+
+    private static int FindJavaScriptSameLineBraceBodyEndColumn(string sanitizedLine, int bodyStartColumn)
+    {
         var depth = 0;
         var opened = false;
 
-        for (int column = Math.Max(0, methodHeader.BodyStartColumn); column < sanitizedLine.Length; column++)
+        for (int column = Math.Max(0, bodyStartColumn); column < sanitizedLine.Length; column++)
         {
             var ch = sanitizedLine[column];
             if (ch == '{')
@@ -8274,6 +8752,511 @@ public static class SymbolExtractor
         }
 
         return new string(chars);
+    }
+
+    // Class-field arrow like `handleClick = () => { ... }` is not matched by the method-header
+    // parser because the identifier is followed by `=` instead of `(`. This parser handles that
+    // shape (with optional TS modifiers, field type annotation, generics, and return type).
+    // 正規表現や method-header パーサは `name = ... =>` 形式のクラスフィールド矢印関数を拾えないため、
+    // 専用パーサでそのシェイプだけ（修飾子・フィールド型注釈・ジェネリクス・戻り値型を含む）をパースする。
+    private static bool TryParseJavaScriptTypeScriptClassFieldArrowHeader(
+        string sanitizedHeader,
+        int startColumn,
+        string? lang,
+        out JavaScriptTypeScriptMethodHeaderInfo arrowInfo)
+    {
+        arrowInfo = default;
+        var index = Math.Max(0, startColumn);
+        string? visibility = null;
+
+        while (index < sanitizedHeader.Length && char.IsWhiteSpace(sanitizedHeader[index]))
+            index++;
+
+        string? candidateName = null;
+        while (index < sanitizedHeader.Length)
+        {
+            if (!TryReadJavaScriptTypeScriptMethodToken(sanitizedHeader, ref index, out var token))
+                return false;
+
+            if (token == "*")
+                return false;
+
+            while (index < sanitizedHeader.Length && char.IsWhiteSpace(sanitizedHeader[index]))
+                index++;
+
+            if (TypeScriptBareMethodModifiers.Contains(token)
+                && CanTreatJavaScriptTypeScriptMethodTokenAsModifier(sanitizedHeader, index))
+            {
+                // `get`/`set`/`async`/`abstract` as leading modifier here would turn the construct
+                // back into a method (not an arrow field); bail so the method-header parser owns it.
+                // `get`/`set`/`async`/`abstract` が先頭修飾子に来るケースは arrow field ではなく
+                // method なので、method-header パーサ側に委ねるためここで諦める。
+                if (token is "get" or "set" or "async" or "abstract")
+                    return false;
+                if (token is "public" or "private" or "protected")
+                    visibility = token;
+                continue;
+            }
+
+            candidateName = token;
+            break;
+        }
+
+        if (candidateName == null)
+            return false;
+
+        if (index < sanitizedHeader.Length && (sanitizedHeader[index] == '?' || sanitizedHeader[index] == '!'))
+        {
+            index++;
+            while (index < sanitizedHeader.Length && char.IsWhiteSpace(sanitizedHeader[index]))
+                index++;
+        }
+
+        if (lang == "typescript" && index < sanitizedHeader.Length && sanitizedHeader[index] == ':')
+        {
+            if (!TrySkipJavaScriptTypeScriptTypeAnnotationUntilFieldEquals(sanitizedHeader, ref index))
+                return false;
+            while (index < sanitizedHeader.Length && char.IsWhiteSpace(sanitizedHeader[index]))
+                index++;
+        }
+
+        if (index >= sanitizedHeader.Length || sanitizedHeader[index] != '=')
+            return false;
+        if (index + 1 < sanitizedHeader.Length && (sanitizedHeader[index + 1] == '=' || sanitizedHeader[index + 1] == '>'))
+            return false;
+        index++;
+        while (index < sanitizedHeader.Length && char.IsWhiteSpace(sanitizedHeader[index]))
+            index++;
+
+        if (index + 5 <= sanitizedHeader.Length
+            && string.CompareOrdinal(sanitizedHeader, index, "async", 0, 5) == 0
+            && (index + 5 == sanitizedHeader.Length || !IsJavaScriptTypeScriptIdentifierPart(sanitizedHeader[index + 5])))
+        {
+            index += 5;
+            while (index < sanitizedHeader.Length && char.IsWhiteSpace(sanitizedHeader[index]))
+                index++;
+        }
+
+        int? genericStartColumn = null;
+        int? genericEndColumn = null;
+        if (lang == "typescript" && index < sanitizedHeader.Length && sanitizedHeader[index] == '<')
+        {
+            genericStartColumn = index;
+            var angleDepth = 0;
+            while (index < sanitizedHeader.Length)
+            {
+                var ch = sanitizedHeader[index];
+                if (ch == '<')
+                {
+                    angleDepth++;
+                }
+                else if (ch == '=' && index + 1 < sanitizedHeader.Length && sanitizedHeader[index + 1] == '>')
+                {
+                    index += 2;
+                    continue;
+                }
+                else if (ch == '>')
+                {
+                    angleDepth--;
+                    if (angleDepth == 0)
+                    {
+                        genericEndColumn = index;
+                        index++;
+                        break;
+                    }
+                }
+                index++;
+            }
+            if (genericEndColumn == null)
+                return false;
+            while (index < sanitizedHeader.Length && char.IsWhiteSpace(sanitizedHeader[index]))
+                index++;
+        }
+
+        if (index >= sanitizedHeader.Length)
+            return false;
+
+        if (sanitizedHeader[index] == '(')
+        {
+            var parenDepth = 0;
+            while (index < sanitizedHeader.Length)
+            {
+                var ch = sanitizedHeader[index];
+                if (ch == '(')
+                {
+                    parenDepth++;
+                }
+                else if (ch == ')')
+                {
+                    parenDepth--;
+                    if (parenDepth == 0)
+                    {
+                        index++;
+                        break;
+                    }
+                }
+                index++;
+            }
+            if (parenDepth != 0)
+                return false;
+        }
+        else if (IsJavaScriptTypeScriptIdentifierStart(sanitizedHeader[index]))
+        {
+            index++;
+            while (index < sanitizedHeader.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedHeader[index]))
+                index++;
+        }
+        else
+        {
+            return false;
+        }
+
+        while (index < sanitizedHeader.Length && char.IsWhiteSpace(sanitizedHeader[index]))
+            index++;
+
+        int? returnTypeStartColumn = null;
+        int? returnTypeEndColumn = null;
+        if (lang == "typescript" && index < sanitizedHeader.Length && sanitizedHeader[index] == ':')
+        {
+            returnTypeStartColumn = index;
+            if (!TrySkipJavaScriptTypeScriptTypeAnnotationUntilArrow(sanitizedHeader, ref index, out var rtEnd))
+                return false;
+            returnTypeEndColumn = rtEnd;
+            while (index < sanitizedHeader.Length && char.IsWhiteSpace(sanitizedHeader[index]))
+                index++;
+        }
+
+        if (index + 1 >= sanitizedHeader.Length
+            || sanitizedHeader[index] != '='
+            || sanitizedHeader[index + 1] != '>')
+            return false;
+
+        index += 2;
+        while (index < sanitizedHeader.Length && char.IsWhiteSpace(sanitizedHeader[index]))
+            index++;
+
+        if (index >= sanitizedHeader.Length)
+            return false;
+
+        // Block-body arrow (`=> { ... }`). HeaderEndColumn == BodyStartColumn, both point at `{`.
+        // ブロック本体矢印 (`=> { ... }`)。header 終端と body 開始は同じ `{` を指す。
+        if (sanitizedHeader[index] == '{')
+        {
+            arrowInfo = new JavaScriptTypeScriptMethodHeaderInfo(
+                candidateName,
+                index,
+                visibility,
+                genericStartColumn,
+                genericEndColumn,
+                returnTypeStartColumn,
+                returnTypeEndColumn,
+                index);
+            return true;
+        }
+
+        // Expression-body arrow (`=> expr;`). Walk until a class-field terminator at depth 0.
+        // Explicit `;` always terminates; implicit ASI also terminates when we hit the enclosing
+        // class body `}` or a newline followed by a new class-member start (identifier+`=`/`(`,
+        // `#private`, `*name`, decorator, or modifier keyword). `[` is treated as continuation
+        // here because a bare `[` is ambiguous between computed-member access and a computed
+        // method name; see StartsJavaScriptTypeScriptClassMemberAt for the full rationale.
+        // `{}` / `()` / `[]` stay balanced; strings / comments are already masked by the upstream
+        // lexer. If the accumulated header ends at depth 0 with expression tokens but no visible
+        // terminator, return false so TryCapture pulls another line and retries.
+        // 式本体矢印 (`=> expr;`)。深さ 0 でのクラスフィールド終端まで歩く。明示的な `;` は常に終端し、
+        // 暗黙の ASI は囲みクラス body の `}` か、改行直後に新しいクラスメンバの開始 (identifier+`=`/`(`、
+        // `#private`、`*name`、decorator、修飾子キーワード) が来た場合にも終端する。`[` は computed
+        // member access の継続と computed method 名の両方になり得るためここでは継続扱いとする
+        // (詳細は StartsJavaScriptTypeScriptClassMemberAt のコメント参照)。
+        // 括弧類はバランスを取り、文字列・コメントは上流の lexer でマスク済み。終端が見えないまま
+        // 蓄積ヘッダの末尾に達したら false を返し、TryCapture に次の行を積ませる。
+        var expressionStart = index;
+        var parenDepth2 = 0;
+        var bracketDepth2 = 0;
+        var braceDepth2 = 0;
+        int? lastNonWhitespace = null;
+        while (index < sanitizedHeader.Length)
+        {
+            var ch = sanitizedHeader[index];
+
+            if (ch == ';' && parenDepth2 == 0 && bracketDepth2 == 0 && braceDepth2 == 0)
+            {
+                if (lastNonWhitespace == null)
+                    return false;
+                arrowInfo = new JavaScriptTypeScriptMethodHeaderInfo(
+                    candidateName,
+                    expressionStart,
+                    visibility,
+                    genericStartColumn,
+                    genericEndColumn,
+                    returnTypeStartColumn,
+                    returnTypeEndColumn,
+                    expressionStart,
+                    HasBody: true,
+                    ExpressionBodyEndColumn: lastNonWhitespace);
+                return true;
+            }
+
+            if (ch == '}' && parenDepth2 == 0 && bracketDepth2 == 0 && braceDepth2 == 0)
+            {
+                // Enclosing class body `}` at depth 0. If we already have expression tokens that
+                // can validly end a statement (identifier/number/`)`/`]`/`}`), treat it as ASI and
+                // emit. Otherwise bail so the class scanner handles the closer.
+                // 囲みクラス body の `}` (深さ 0)。識別子/数値/`)`/`]`/`}` のように文末になり得るトークンが
+                // 既に見えていれば ASI として終端扱いで emit する。無ければクラススキャナに委ねるため false。
+                if (lastNonWhitespace != null
+                    && CanJavaScriptTypeScriptExpressionEndAt(sanitizedHeader[lastNonWhitespace.Value]))
+                {
+                    arrowInfo = new JavaScriptTypeScriptMethodHeaderInfo(
+                        candidateName,
+                        expressionStart,
+                        visibility,
+                        genericStartColumn,
+                        genericEndColumn,
+                        returnTypeStartColumn,
+                        returnTypeEndColumn,
+                        expressionStart,
+                        HasBody: true,
+                        ExpressionBodyEndColumn: lastNonWhitespace);
+                    return true;
+                }
+                return false;
+            }
+
+            if (ch == '\n' && parenDepth2 == 0 && bracketDepth2 == 0 && braceDepth2 == 0
+                && lastNonWhitespace != null
+                && CanJavaScriptTypeScriptExpressionEndAt(sanitizedHeader[lastNonWhitespace.Value]))
+            {
+                var peek = index + 1;
+                while (peek < sanitizedHeader.Length && char.IsWhiteSpace(sanitizedHeader[peek]))
+                    peek++;
+                // peek == sanitizedHeader.Length means we exhausted the accumulated header after
+                // this newline — need more input from TryCapture. Break out of the heuristic and
+                // fall through to the normal end-of-input `return false` path.
+                // peek が末尾に達した場合は、この改行以降に蓄積ヘッダ上の文字が尽きたということなので
+                // TryCapture に次の行を積ませる必要がある。ヒューリスティックは停止し、ループ末尾の
+                // end-of-input `return false` に任せる。
+                if (peek < sanitizedHeader.Length
+                    && StartsJavaScriptTypeScriptClassMemberAt(sanitizedHeader, peek))
+                {
+                    arrowInfo = new JavaScriptTypeScriptMethodHeaderInfo(
+                        candidateName,
+                        expressionStart,
+                        visibility,
+                        genericStartColumn,
+                        genericEndColumn,
+                        returnTypeStartColumn,
+                        returnTypeEndColumn,
+                        expressionStart,
+                        HasBody: true,
+                        ExpressionBodyEndColumn: lastNonWhitespace);
+                    return true;
+                }
+            }
+
+            if (ch == '(') parenDepth2++;
+            else if (ch == ')' && parenDepth2 > 0) parenDepth2--;
+            else if (ch == '[') bracketDepth2++;
+            else if (ch == ']' && bracketDepth2 > 0) bracketDepth2--;
+            else if (ch == '{') braceDepth2++;
+            else if (ch == '}' && braceDepth2 > 0) braceDepth2--;
+
+            if (!char.IsWhiteSpace(ch))
+                lastNonWhitespace = index;
+            index++;
+        }
+
+        return false;
+    }
+
+    // Returns true when `ch` is a token that can validly end a JavaScript / TypeScript expression
+    // (identifier/digit tail, closing bracket, `$`/`_`, or the closing delimiter of a string /
+    // template literal). The upstream lexer preserves the opening and closing `"`/`'`/`` ` `` in
+    // the sanitized header (only the body content is blanked to spaces), so a string-returning
+    // arrow such as `only = () => "x"` ends with a visible quote character here.
+    // Operator-like characters (`+`, `.`, `,`, etc.) return false so multi-line expression
+    // continuations are not accidentally cut off by the ASI heuristic.
+    // `ch` が JavaScript / TypeScript の式を終端できるトークン (識別子/数字末尾、閉じ括弧、`$`/`_`、
+    // 文字列・テンプレートリテラルの閉じデリミタ) なら true。上流の lexer は sanitized header 上で
+    // `"` / `'` / `` ` `` の開き/閉じ文字は残し、リテラル本体だけをスペースに blank する。
+    // そのため `only = () => "x"` のような文字列を返す式は、ここでは閉じクォートが lastNonWhitespace と
+    // して可視のまま残る。演算子類 (`+`、`.`、`,` 等) は false を返すことで、複数行の式継続が ASI
+    // ヒューリスティックで誤って途中終端されないようにする。
+    private static bool CanJavaScriptTypeScriptExpressionEndAt(char ch)
+    {
+        if (char.IsLetterOrDigit(ch))
+            return true;
+        return ch is '_' or '$' or ')' or ']' or '}' or '"' or '\'' or '`';
+    }
+
+    // Returns true when the position starts a new class-body member declaration: `}` (class body
+    // close), `;` (stray empty statement), `#` / `@` / `*<name>` lead tokens, or an identifier that
+    // is either a well-known class-member modifier keyword or is followed by a class-field /
+    // method-shorthand syntactic marker (`=`, `(`, `<`, `?`, `!`, `:`, `;`).
+    // Note: `[` is intentionally NOT a member-start signal here. A bare `[` after a newline is
+    // ambiguous between a computed method name (`[Symbol.iterator]()`) and a computed member
+    // access continuation (`foo\n  [bar]`). JavaScript's ASI rule explicitly forbids inserting a
+    // `;` before a line that starts with `[`, so any source file that wants the computed-method
+    // reading must write an explicit `;` — which the outer loop's `;` branch already handles. That
+    // makes "treat `[` as continuation" the safe default for this heuristic.
+    // Feed a sanitized (lex-masked) header string; strings/comments must already be blanked.
+    // 指定位置がクラスボディの新しいメンバ宣言を始めるかを判定する: `}` (クラス body 閉じ)、
+    // `;` (空文)、`#` / `@` / `*<name>` の先頭トークン、あるいは識別子で「クラスメンバ修飾キーワード」
+    // または直後が `=` / `(` / `<` / `?` / `!` / `:` / `;` の場合。
+    // 注意: `[` はあえて member-start として扱わない。改行直後の素の `[` は computed method name
+    // (`[Symbol.iterator]()`) と computed member access の継続 (`foo\n  [bar]`) の両方に見えてしまう。
+    // JavaScript の ASI 規則は `[` で始まる行の前に自動で `;` を挿入しないため、計算メンバ名を意図する
+    // ソースは明示的に `;` を書く必要があり、そのケースは外側ループの `;` 分岐で既に拾える。よって
+    // この ASI ヒューリスティックでは `[` を継続として扱うのが安全な既定。
+    // 呼び出し側は lexer でマスク済み (文字列/コメントが blanked) の sanitizedHeader を渡すこと。
+    private static bool StartsJavaScriptTypeScriptClassMemberAt(string sanitizedHeader, int index)
+    {
+        if (index < 0 || index >= sanitizedHeader.Length)
+            return false;
+        var ch = sanitizedHeader[index];
+        if (ch is '}' or ';' or '#' or '@')
+            return true;
+        if (ch == '*')
+        {
+            var j = index + 1;
+            while (j < sanitizedHeader.Length && char.IsWhiteSpace(sanitizedHeader[j]))
+                j++;
+            if (j >= sanitizedHeader.Length)
+                return false;
+            var next = sanitizedHeader[j];
+            return IsJavaScriptTypeScriptIdentifierStart(next) || next is '#' or '[';
+        }
+        if (!IsJavaScriptTypeScriptIdentifierStart(ch))
+            return false;
+
+        var end = index + 1;
+        while (end < sanitizedHeader.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedHeader[end]))
+            end++;
+        var word = sanitizedHeader[index..end];
+        if (word is "async" or "static" or "get" or "set" or "public" or "private" or "protected"
+            or "readonly" or "override" or "abstract" or "declare" or "accessor" or "constructor")
+        {
+            return true;
+        }
+
+        var after = end;
+        while (after < sanitizedHeader.Length && sanitizedHeader[after] != '\n' && char.IsWhiteSpace(sanitizedHeader[after]))
+            after++;
+        if (after >= sanitizedHeader.Length)
+            return false;
+        var follow = sanitizedHeader[after];
+        return follow is '=' or '(' or '<' or '?' or '!' or ':' or ';';
+    }
+
+    // Walks a TypeScript type annotation starting at ':' through to the outer '=' that terminates
+    // it (i.e., the class-field assignment operator). `=>` inside the type (arrow types) is
+    // treated as a two-char token and skipped; `==` is likewise skipped so we do not terminate on
+    // a stray comparison.
+    // 型注釈 `:` から、フィールド代入の外側 `=` までを歩く。型内部の `=>` (arrow type) は 2 文字ひと組で
+    // 読み飛ばし、`==` も比較演算子として読み飛ばして誤終端しないようにする。
+    private static bool TrySkipJavaScriptTypeScriptTypeAnnotationUntilFieldEquals(string sanitizedHeader, ref int index)
+    {
+        if (index >= sanitizedHeader.Length || sanitizedHeader[index] != ':')
+            return false;
+        index++;
+
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var angleDepth = 0;
+
+        while (index < sanitizedHeader.Length)
+        {
+            var ch = sanitizedHeader[index];
+
+            if (ch == '=' && index + 1 < sanitizedHeader.Length && sanitizedHeader[index + 1] == '>')
+            {
+                index += 2;
+                continue;
+            }
+
+            if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0)
+            {
+                if (ch == '=')
+                {
+                    if (index + 1 < sanitizedHeader.Length && sanitizedHeader[index + 1] == '=')
+                    {
+                        index += 2;
+                        continue;
+                    }
+                    return true;
+                }
+                if (ch == ';' || ch == ',')
+                    return false;
+            }
+
+            if (ch == '(') parenDepth++;
+            else if (ch == ')' && parenDepth > 0) parenDepth--;
+            else if (ch == '[') bracketDepth++;
+            else if (ch == ']' && bracketDepth > 0) bracketDepth--;
+            else if (ch == '{') braceDepth++;
+            else if (ch == '}' && braceDepth > 0) braceDepth--;
+            else if (ch == '<') angleDepth++;
+            else if (ch == '>' && angleDepth > 0) angleDepth--;
+
+            index++;
+        }
+
+        return false;
+    }
+
+    // Walks a TypeScript return-type annotation from ':' to the terminating '=>'. Inner arrow
+    // types inside parens/angles/brackets are skipped as two-char tokens without decrementing
+    // depth. Returns the inclusive column of the last non-whitespace character of the type.
+    // 戻り値型 `:` から最外殻の `=>` までを歩く。括弧/角括弧/山括弧内の arrow type は 2 文字単位で
+    // 読み飛ばし深さを下げない。型末尾の非空白位置 (inclusive) を返す。
+    private static bool TrySkipJavaScriptTypeScriptTypeAnnotationUntilArrow(
+        string sanitizedHeader,
+        ref int index,
+        out int typeEndColumn)
+    {
+        typeEndColumn = -1;
+        if (index >= sanitizedHeader.Length || sanitizedHeader[index] != ':')
+            return false;
+        var lastNonWs = index;
+        index++;
+
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var angleDepth = 0;
+
+        while (index < sanitizedHeader.Length)
+        {
+            var ch = sanitizedHeader[index];
+
+            if (ch == '=' && index + 1 < sanitizedHeader.Length && sanitizedHeader[index + 1] == '>')
+            {
+                if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0)
+                {
+                    typeEndColumn = lastNonWs;
+                    return true;
+                }
+                lastNonWs = index + 1;
+                index += 2;
+                continue;
+            }
+
+            if (ch == '(') parenDepth++;
+            else if (ch == ')' && parenDepth > 0) parenDepth--;
+            else if (ch == '[') bracketDepth++;
+            else if (ch == ']' && bracketDepth > 0) bracketDepth--;
+            else if (ch == '{') braceDepth++;
+            else if (ch == '}' && braceDepth > 0) braceDepth--;
+            else if (ch == '<') angleDepth++;
+            else if (ch == '>' && angleDepth > 0) angleDepth--;
+
+            if (!char.IsWhiteSpace(ch))
+                lastNonWs = index;
+            index++;
+        }
+
+        return false;
     }
 
     private static bool TryParseJavaScriptTypeScriptMethodHeader(string sanitizedLine, int startColumn, string? lang, out JavaScriptTypeScriptMethodHeaderInfo methodHeader)
@@ -8638,6 +9621,134 @@ public static class SymbolExtractor
         return false;
     }
 
+    // Multi-line accumulating wrapper for class-field arrow functions. Mirrors
+    // TryCaptureJavaScriptTypeScriptMethodHeader: accumulates sanitized/source lines, calls the
+    // arrow-header parser on each accumulation step, and maps the sanitized body-open column back
+    // to a source (lineIndex, column) pair. Returns a JavaScriptTypeScriptMethodHeaderCapture so
+    // the scanner can emit an arrow field symbol with the same machinery as method headers.
+    // クラスフィールドのアロー関数に対する複数行蓄積ラッパー。
+    // TryCaptureJavaScriptTypeScriptMethodHeader と同じく sanitized/source を行単位で蓄積し、
+    // 蓄積ごとにアローヘッダーパーサを呼び、sanitized 上の body 開始列を source の
+    // (行, 列) に逆写像する。戻り値は JavaScriptTypeScriptMethodHeaderCapture を使い回すため、
+    // 呼び出し元の emit 処理はメソッドヘッダーと同じフローで扱える。
+    private static bool TryCaptureJavaScriptTypeScriptClassFieldArrow(
+        string[] lines,
+        int startIndex,
+        int startColumn,
+        int scanEndExclusive,
+        string firstSanitizedLine,
+        JavaScriptLexState nextLineLexState,
+        string? lang,
+        out JavaScriptTypeScriptMethodHeaderCapture arrowCapture)
+    {
+        arrowCapture = default;
+        var sourceBuilder = new System.Text.StringBuilder();
+        var sanitizedBuilder = new System.Text.StringBuilder();
+
+        var firstSourceSegmentRaw = startColumn < lines[startIndex].Length
+            ? lines[startIndex][startColumn..]
+            : string.Empty;
+        var firstSanitizedSegmentRaw = startColumn < firstSanitizedLine.Length
+            ? firstSanitizedLine[startColumn..]
+            : string.Empty;
+        sourceBuilder.Append(StripTrailingCr(firstSourceSegmentRaw));
+        sanitizedBuilder.Append(StripTrailingCr(firstSanitizedSegmentRaw));
+
+        if (TryFinalizeJavaScriptTypeScriptClassFieldArrowCapture(
+            sourceBuilder.ToString(),
+            sanitizedBuilder.ToString(),
+            startIndex,
+            startColumn,
+            lang,
+            out arrowCapture))
+        {
+            return true;
+        }
+
+        var lexState = nextLineLexState;
+        for (int lineIndex = startIndex + 1; lineIndex < scanEndExclusive; lineIndex++)
+        {
+            var lexedLine = LexJavaScriptLine(lines[lineIndex], lexState);
+            lexState = lexedLine.EndState;
+
+            sourceBuilder.Append('\n');
+            sourceBuilder.Append(StripTrailingCr(lines[lineIndex]));
+            sanitizedBuilder.Append('\n');
+            sanitizedBuilder.Append(StripTrailingCr(lexedLine.SanitizedLine));
+
+            if (TryFinalizeJavaScriptTypeScriptClassFieldArrowCapture(
+                sourceBuilder.ToString(),
+                sanitizedBuilder.ToString(),
+                startIndex,
+                startColumn,
+                lang,
+                out arrowCapture))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryFinalizeJavaScriptTypeScriptClassFieldArrowCapture(
+        string sourceHeader,
+        string sanitizedHeader,
+        int startIndex,
+        int startColumn,
+        string? lang,
+        out JavaScriptTypeScriptMethodHeaderCapture arrowCapture)
+    {
+        arrowCapture = default;
+        if (!TryParseJavaScriptTypeScriptClassFieldArrowHeader(sanitizedHeader, 0, lang, out var arrowInfo))
+            return false;
+
+        if (!TryMapJavaScriptTypeScriptHeaderColumnToSourceLocation(
+            sourceHeader,
+            startIndex,
+            startColumn,
+            arrowInfo.BodyStartColumn,
+            out var bodyStartLineIndex,
+            out var bodyStartColumn))
+        {
+            return false;
+        }
+
+        int? bodyEndLineIndex = null;
+        int? bodyEndColumn = null;
+        if (arrowInfo.ExpressionBodyEndColumn is int expressionEnd)
+        {
+            if (!TryMapJavaScriptTypeScriptHeaderColumnToSourceLocation(
+                sourceHeader,
+                startIndex,
+                startColumn,
+                expressionEnd,
+                out var expressionEndLineIndex,
+                out var expressionEndColumn))
+            {
+                return false;
+            }
+            bodyEndLineIndex = expressionEndLineIndex;
+            bodyEndColumn = expressionEndColumn;
+        }
+
+        // For brace-body arrow fields, header end == body start (both point at `{`). For
+        // expression-body arrow fields, BodyStartColumn points at the first expression char
+        // and BodyEndLineIndex/Column describe the last expression char before `;`.
+        // block body 矢印 field は header end と body start が同じ `{` を指す。式本体矢印 field は
+        // BodyStartColumn が式の先頭、BodyEndLineIndex/Column が `;` 直前の式末尾を指す。
+        arrowCapture = new JavaScriptTypeScriptMethodHeaderCapture(
+            sourceHeader,
+            arrowInfo,
+            bodyStartLineIndex,
+            bodyStartColumn,
+            bodyStartLineIndex,
+            bodyStartColumn,
+            bodyEndLineIndex,
+            bodyEndColumn);
+        return true;
+    }
+
     private static bool TryFinalizeJavaScriptTypeScriptMethodHeaderCapture(
         string sourceHeader,
         string sanitizedHeader,
@@ -8751,6 +9862,43 @@ public static class SymbolExtractor
         }
 
         return methodCapture.SourceHeader[..(methodCapture.HeaderInfo.BodyStartColumn + 1)].Trim();
+    }
+
+    // Build a signature string for a class-field arrow function. Same shape as the method-header
+    // signature builder (same-line bodies quote the source slice verbatim, multi-line bodies stop
+    // at the '{' that opens the block body).
+    // クラスフィールドのアロー関数向けのシグネチャ文字列を組み立てる。メソッドヘッダー版と同じ方針で、
+    // 同一行 body は source をそのまま切り出し、複数行 body はブロック本体を開く '{' まで切り出す。
+    private static string BuildJavaScriptTypeScriptClassFieldArrowSignature(
+        string[] lines,
+        int startIndex,
+        int startColumn,
+        int? bodyEndLine,
+        int sameLineArrowEndColumn,
+        JavaScriptTypeScriptMethodHeaderCapture arrowCapture)
+    {
+        if (bodyEndLine == startIndex + 1 && sameLineArrowEndColumn >= startColumn)
+            return lines[startIndex][startColumn..(sameLineArrowEndColumn + 1)].Trim();
+
+        // For expression-body arrow fields that span multiple lines, include the full source up
+        // to and including the last expression char (before `;`) so the signature reflects the
+        // whole `name = (args) => expr` shape.
+        // 複数行にわたる式本体矢印 field では、`;` 直前の式末尾までをシグネチャに含めて
+        // `name = (args) => expr` 全体が見えるようにする。
+        if (arrowCapture.HeaderInfo.ExpressionBodyEndColumn is int expressionEnd
+            && expressionEnd >= 0
+            && expressionEnd + 1 <= arrowCapture.SourceHeader.Length)
+        {
+            return arrowCapture.SourceHeader[..(expressionEnd + 1)].Trim();
+        }
+
+        if (arrowCapture.HeaderInfo.BodyStartColumn < 0
+            || arrowCapture.HeaderInfo.BodyStartColumn >= arrowCapture.SourceHeader.Length)
+        {
+            return arrowCapture.SourceHeader.Trim();
+        }
+
+        return arrowCapture.SourceHeader[..(arrowCapture.HeaderInfo.BodyStartColumn + 1)].Trim();
     }
 
     private static string? GetJavaScriptTypeScriptBareMethodReturnType(string sourceHeader, JavaScriptTypeScriptMethodHeaderInfo methodHeader, string? lang)
@@ -12090,6 +13238,18 @@ public static class SymbolExtractor
         }
 
         return result;
+    }
+
+    private static bool IsCSharpRootCodePosition(string line, CSharpLexState lineStartState, int rawColumn)
+    {
+        var clampedColumn = Math.Clamp(rawColumn, 0, line.Length);
+        var stateAtColumn = clampedColumn == 0
+            ? lineStartState
+            : LexCSharpLine(line[..clampedColumn], lineStartState).EndState;
+
+        return stateAtColumn.Mode == CSharpLexMode.Code
+            && stateAtColumn.InterpolationReturnMode == CSharpLexMode.Code
+            && stateAtColumn.InterpolationBraceDepth == 0;
     }
 
     // Translate a column in a CollapseCSharpGenericTypeWhitespace-collapsed match line back

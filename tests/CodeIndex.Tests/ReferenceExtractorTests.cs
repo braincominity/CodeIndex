@@ -2767,6 +2767,45 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithNullableTupleTypeSuffixBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<object> items, object value)
+                {
+                    return Sink.Pick(from Status in items
+                                     let cast = value as (int Left, int Right)?
+                                     select(Status.Ready),
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpQualifiedEnumMemberAccess_WithPostfixIncrementBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
     {
         const string content = """
@@ -6865,6 +6904,42 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
     }
 
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JsTemplateHoleLineContinuationString_DoesNotCloseHoleEarlyOrLeakPhantoms(string language)
+    {
+        // Regression for issue #433: a JS/TS single/double-quoted string inside a
+        // template-literal hole may legally continue onto the next physical line via
+        // trailing `\`. The hole scanner must stay inside that string on the next line;
+        // otherwise a leading `}` closes the hole early, string text leaks as phantom
+        // references, and the real call after the string is dropped.
+        // issue #433 回帰: テンプレートホール内の JS/TS 単/二重引用符文字列は、行末の `\`
+        // により次行へ継続できる。継続行でも hole scanner は文字列内のままである必要が
+        // あり、そうでないと先頭の `}` で hole を早閉じし、文字列内テキストが phantom
+        // 参照として漏れ、本物の `runTask()` が落ちる。
+        const string content = """
+            function caller() {
+                const branch = `before ${"line1\
+            } fake_in_string() line2" + runTask()} after`;
+                realCall();
+                return branch;
+            }
+
+            function runTask() {}
+            function realCall() {}
+            function fake_in_string() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, language, content);
+        var references = ReferenceExtractor.Extract(1, language, content, symbols);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "caller");
+        Assert.Contains(references, r => r.SymbolName == "runTask" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fake_in_string");
+    }
+
     [Fact]
     public void Extract_PythonNestedFStringInnerHoleStringLiteralWithBrace_PreservesInnerCall()
     {
@@ -7374,6 +7449,154 @@ public class ReferenceExtractorTests
 
         Assert.Contains(references, r =>
             r.SymbolName == "callback" && r.ReferenceKind == "call" && r.ContainerName == "caller");
+    }
+
+    [Fact]
+    public void Extract_JsNoParenConstructor_CapturesInstantiateReference()
+    {
+        // issue #295: JavaScript allows zero-arg constructor calls without `()`
+        // (`new Foo;`, `new Date;`, `new Demo.Provider;`, `cond ? new Demo.Helper : other`). The generic CallRegex only
+        // sees names that reach `(`, so these forms previously vanished from the
+        // reference table and downstream graph queries under-counted instantiations.
+        // issue #295: JavaScript では引数なしコンストラクタ呼び出しで `()` を省略できる
+        // (`new Foo;`, `new Date;`, `new Demo.Provider;`, `cond ? new Demo.Helper : other`)。従来の汎用 CallRegex は
+        // `(` まで届く名前しか拾えないため、これらの instantiate が参照テーブルから欠落していた。
+        const string content = """
+            class Foo {}
+
+            function run(Demo) {
+                const a = new Foo;
+                const b = new Date;
+                const c = new Demo.Provider;
+                const d = ready ? new Demo.Helper : c;
+                return [a, b, c, d];
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Foo" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "Date" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "Provider" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "Helper" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+    }
+
+    [Fact]
+    public void Extract_TsNoParenConstructorWithTypeArgs_CapturesInstantiateReference()
+    {
+        // issue #295 follow-up: TypeScript keeps the same no-paren `new` form even when
+        // a single generic argument list is present (`new Box<number>;`). The dedicated
+        // JS/TS path must keep accepting the one-level `<...>` segment already supported
+        // by the shared `CallRegex` / initializer regex family.
+        // issue #295 補足: TypeScript では generic 引数付きでも no-paren `new`
+        // (`new Box<number>;`) が現れる。専用 JS/TS 経路でも既存 regex 群と同じ
+        // 1 段の `<...>` を受け入れて instantiate を落とさないことを確認する。
+        const string content = """
+            class Box<T> {}
+
+            function run() {
+                const value = new Box<number>;
+                return value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Box" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+    }
+
+    [Fact]
+    public void Extract_JsNoParenConstructor_NextLineMemberContinuation_DoesNotEmitPhantomInstantiate()
+    {
+        // issue #859: the no-paren `new` fix for #295 must stay suppressed when the next
+        // physical line continues the expression (`new Foo\n.bar()`), otherwise the graph
+        // regresses by inventing a standalone `instantiate Foo` edge.
+        // issue #859: #295 の no-paren `new` 修正は、次の物理行で式が継続する
+        // (`new Foo\n.bar()`) 場合に suppress を維持しないと phantom `instantiate Foo`
+        // を発生させてグラフを壊してしまう。
+        const string content = """
+            class Foo {
+                bar() {
+                    return 1;
+                }
+            }
+
+            function run() {
+                const value = new Foo
+                    .bar();
+                return value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "Foo" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "bar" && r.ReferenceKind == "call" && r.ContainerName == "run");
+    }
+
+    [Fact]
+    public void Extract_JsNoParenConstructor_NextLineIndexContinuation_DoesNotEmitPhantomInstantiate()
+    {
+        // issue #859: bracket continuations such as `new Foo\n[0]` are still the same
+        // expression and must not be promoted into a terminated no-paren constructor site.
+        // issue #859: `new Foo\n[0]` のような添字継続も同じ式の続きなので、
+        // 終端済み no-paren constructor として昇格させてはいけない。
+        const string content = """
+            class Foo {
+                constructor() {
+                    this[0] = 1;
+                }
+            }
+
+            function run() {
+                const value = new Foo
+                    [0];
+                return value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "Foo" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+    }
+
+    [Fact]
+    public void Extract_JsNoParenConstructor_NextLineCallContinuation_DoesNotEmitPhantomInstantiate()
+    {
+        // issue #859: the dedicated no-paren path must also stay off when the next line
+        // begins with `(`, because `new Foo\n(arg)` is a continued call expression rather
+        // than the statement-like zero-argument form fixed in #295.
+        // issue #859: 次行が `(` で始まる場合も専用 no-paren 経路は抑止されるべきで、
+        // `new Foo\n(arg)` は #295 が対象にした statement-like な zero-arg 形式ではない。
+        const string content = """
+            function Foo(value) {
+                return value;
+            }
+
+            function run(arg) {
+                const value = new Foo
+                    (arg);
+                return value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "Foo" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
     }
 
     [Fact]
@@ -8078,6 +8301,186 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run");
         Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
         Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Run");
+    }
+
+    [Fact]
+    public void Extract_CsharpSwitchExpressionTypePatterns_EmitEveryGenuineTypeHead()
+    {
+        // issue #732: switch-expression arm heads should follow the same type-vs-constant
+        // discrimination as `case` labels so modern C# pattern arms remain visible to
+        // references/inspect without reclassifying constant-member arms as types.
+        // issue #732: switch 式 arm head も `case` ラベルと同じ type-vs-constant 判定を通し、
+        // modern C# pattern arm を references/inspect から見えるようにしつつ定数 member arm を
+        // 型依存へ誤分類しない。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+            class Shape {}
+            enum Color { Red }
+
+            class Demo
+            {
+                int Match(object value) => value switch
+                {
+                    Point => 1,
+                    Point or Shape => 2,
+                    Color.Red => 3,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+        var shapeRefs = references.Where(r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference").ToList();
+
+        Assert.Equal(2, pointRefs.Count);
+        Assert.Single(shapeRefs);
+        Assert.All(pointRefs, r => Assert.Equal("Match", r.ContainerName));
+        Assert.All(shapeRefs, r => Assert.Equal("Match", r.ContainerName));
+        Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Color" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+    }
+
+    [Fact]
+    public void Extract_CsharpSwitchExpressionGenericTypePatterns_DoNotSplitAtTypeArgumentCommas()
+    {
+        // issue #732 follow-up: generic type-argument commas inside a switch-expression arm
+        // are part of the type head, not arm separators.
+        // issue #732 の追補: switch 式 arm 内の generic 型引数カンマは arm 区切りではなく
+        // 型 head の一部として扱う必要がある。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+            class Shape {}
+            class Wrapper<TLeft, TRight> {}
+
+            class Demo
+            {
+                int Match(object value) => value switch
+                {
+                    Wrapper<Point, Shape> => 1,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Wrapper" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+    }
+
+    [Fact]
+    public void Extract_CsharpSwitchExpressionGenericDeclarationPatternWithRelationalWhenGuard_KeepsArmHead()
+    {
+        // issue #732 follow-up: relational `>` inside a `when` guard must not steal the
+        // arm-head generic close and make the declaration-pattern type disappear.
+        // issue #732 の追補: `when` guard 内の relational `>` が arm head 側の generic close を
+        // 奪って、宣言パターンの型依存を消してはいけない。
+        const string content = """
+            namespace Probe;
+
+            class Wrapper<TLeft, TRight> {}
+            class Point { public int X { get; init; } }
+            class Shape {}
+
+            class Demo
+            {
+                int Match(object value, int limit) => value switch
+                {
+                    Wrapper<Point, Shape> p when p is Wrapper<Point, Shape> && limit > p.GetHashCode() => 1,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var wrapperRefs = references
+            .Where(r => r.SymbolName == "Wrapper" && r.ReferenceKind == "type_reference")
+            .OrderBy(r => r.Column)
+            .ToList();
+
+        Assert.Equal(2, wrapperRefs.Count);
+        Assert.Equal([9, 43], wrapperRefs.Select(r => r.Column).ToArray());
+        Assert.All(wrapperRefs, r => Assert.Equal("Match", r.ContainerName));
+    }
+
+    [Fact]
+    public void Extract_CsharpSwitchExpressionGenericDeclarationPatternWithFunctionWhenGuard_KeepsArmHead()
+    {
+        // issue #732 follow-up: a bare helper call at the end of a `when` guard still leaves the
+        // switch arm arrow as a pattern arm, not a lambda. The arm-head type must survive.
+        // issue #732 の追補: `when` guard 末尾の bare helper call があっても、その `=>` は lambda
+        // ではなく switch arm の矢印であり、arm head の型依存を落としてはいけない。
+        const string content = """
+            namespace Probe;
+
+            class Wrapper<TLeft, TRight> {}
+            class Point {}
+            class Shape {}
+
+            class Demo
+            {
+                static bool Check(object value) => true;
+
+                int Match(object value) => value switch
+                {
+                    Wrapper<Point, Shape> p when Check(p) => 1,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var wrapperRefs = references
+            .Where(r => r.SymbolName == "Wrapper" && r.ReferenceKind == "type_reference")
+            .OrderBy(r => r.Column)
+            .ToList();
+
+        Assert.Single(wrapperRefs);
+        Assert.Equal(9, wrapperRefs[0].Column);
+        Assert.Equal("Match", wrapperRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpSwitchExpressionLaterArmAfterWhenGuard_StillEmitsTypeHead()
+    {
+        // issue #732 follow-up: a `when` clause on an earlier arm must not truncate the rest of
+        // the switch-expression body and hide later arm heads.
+        // issue #732 の追補: 先行 arm の `when` 句で後続 arm まで切り落としてはならない。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+            class Shape {}
+
+            class Demo
+            {
+                int Match(object value) => value switch
+                {
+                    Point p when p.GetHashCode() > 0 => 1,
+                    Shape => 2,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
     }
 
     [Fact]
@@ -12384,5 +12787,120 @@ public class ReferenceExtractorTests
 
         var test = Assert.Single(references.Where(r => r.SymbolName == "Test"));
         Assert.Equal("annotation", test.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_Csharp_LeadingBom_ExtractsReferencesOnFirstLine()
+    {
+        // BOM-prefixed C# source: reference extraction on line 1 must still work.
+        // Closes #183.
+        // BOM 付き C# ソース: 1 行目の参照抽出も機能する。Closes #183.
+        const string content = "\uFEFFusing System;\n\nnamespace BomRef;\n\npublic class C\n{\n    public void Run() { Helper(); }\n    public void Helper() { }\n}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System" && s.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Helper");
+    }
+
+    [Fact]
+    public void Extract_Csharp_MidFileBom_ExtractsReferencesOnAffectedLine()
+    {
+        // Mid-file BOM right before a call site: the reference must still be captured
+        // on its real line number. Closes #183.
+        // mid-file BOM が呼び出し行直前に挟まっても、実際の行番号で参照を拾う。Closes #183.
+        const string content = "namespace BomRef;\npublic class C\n{\n    public void Run()\n    {\n\uFEFF        Helper();\n    }\n    public void Helper() { }\n}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var helperRef = Assert.Single(references.Where(r => r.SymbolName == "Helper"));
+        Assert.Equal(6, helperRef.Line);
+    }
+
+    [Fact]
+    public void Extract_NullContent_ReturnsEmpty()
+    {
+        // Direct callers that pass `null` must not throw. The #183 CRLF-normalization
+        // step added ahead of StripLineLeadingBom would otherwise dereference `null`
+        // before the helper's IsNullOrEmpty guard could run. Closes #183.
+        // direct call で `null` を渡してもスローしない。#183 で StripLineLeadingBom
+        // の前段に CRLF 正規化を入れたため、helper 側 IsNullOrEmpty まで届かず
+        // `null` を逆参照してしまう回帰を防ぐ。Closes #183.
+        Assert.Empty(ReferenceExtractor.Extract(1, "csharp", null!, Array.Empty<CodeIndex.Models.SymbolRecord>()));
+    }
+
+    [Fact]
+    public void Extract_EmptyContent_ReturnsEmpty()
+    {
+        // Empty content returns no references and does not throw. Closes #183.
+        // 空入力は参照 0 個で、例外にならない。Closes #183.
+        Assert.Empty(ReferenceExtractor.Extract(1, "csharp", string.Empty, Array.Empty<CodeIndex.Models.SymbolRecord>()));
+    }
+
+    [Fact]
+    public void Extract_Csharp_CrlfLeadingBom_ExtractsReferencesOnFirstLine()
+    {
+        // Direct-call input with CRLF line endings AND a leading BOM: the CRLF → LF
+        // normalization must run before StripLineLeadingBom so call sites on mid-file
+        // BOM lines are still captured. Closes #183.
+        // CRLF 改行 + 先頭 BOM の direct call: CRLF → LF 正規化を helper より先に通す
+        // ことで、mid-file 行頭 BOM 直後の呼び出しも参照として拾える。Closes #183.
+        const string content = "\uFEFFnamespace BomRefCrlf;\r\npublic class C\r\n{\r\n    public void Run()\r\n    {\r\n\uFEFF        Helper();\r\n    }\r\n    public void Helper() { }\r\n}\r\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var helperRef = Assert.Single(references.Where(r => r.SymbolName == "Helper"));
+        Assert.Equal(6, helperRef.Line);
+    }
+
+    [Fact]
+    public void Extract_Csharp_BareCrLeadingBom_ExtractsReferenceOnBomLine()
+    {
+        // Bare-`\r` direct-call input with a leading BOM + mid-file line-leading
+        // BOM in front of the call site: the in-extractor `\r` → `\n`
+        // normalization must run so `StripLineLeadingBom` (which treats `\n` as
+        // the sole line separator) still sees the mid-file BOM as line-leading
+        // and strips it, letting the regex capture the call site on the
+        // BOM-prefixed line. Closes #183.
+        // bare `\r` 改行 + 先頭 BOM + 呼び出し行頭 BOM の direct call: `\r` → `\n`
+        // 正規化を helper より先に通し、classic-Mac 改行でも BOM 行の呼び出し
+        // 参照が拾えることを固定。Closes #183.
+        const string content = "\uFEFFnamespace BomRefBareCr;\rpublic class C\r{\r    public void Run()\r    {\r\uFEFF        Helper();\r    }\r    public void Helper() { }\r}\r";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var helperRef = Assert.Single(references.Where(r => r.SymbolName == "Helper"));
+        Assert.Equal(6, helperRef.Line);
+    }
+
+    [Fact]
+    public void Extract_Csharp_MixedLineEndingsLeadingBom_ExtractsReferenceOnBomLine()
+    {
+        // Mixed line endings (`\r\n`, bare `\r`, bare `\n`) interleaved with a
+        // leading BOM and a mid-file line-leading BOM positioned immediately
+        // after a real `\r\n\r` boundary (the blank line uses bare `\r`, so the
+        // BOM follows `\r\n` + `\r`). The call site on the BOM-prefixed line is
+        // only captured when the normalization collapses `\r\n` AND bare `\r`
+        // to `\n` before `StripLineLeadingBom` runs — otherwise the `\r`
+        // immediately preceding the mid-file BOM would keep the BOM
+        // non-line-leading (helper treats `\n` as the sole line separator).
+        // Line 7 assertion accounts for the blank line inserted by that extra
+        // `\r`. Closes #183.
+        // 混在改行（`\r\n` / bare `\r` / bare `\n`）+ 先頭 BOM + `\r\n\r` 境界直後の
+        // mid-file 行頭 BOM の direct call: `\r\n` と bare `\r` の双方を `\n` に
+        // 正規化してからでないと、BOM 直前の `\r` のせいで helper からは BOM が
+        // 行頭扱いされず呼び出し参照が拾えない。bare `\r` による空行が挟まる分、
+        // Helper は行 7。Closes #183.
+        const string content = "\uFEFFnamespace BomRefMixed;\r\npublic class C\r{\n    public void Run()\r\n    {\r\n\r\uFEFF        Helper();\n    }\r    public void Helper() { }\r\n}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var helperRef = Assert.Single(references.Where(r => r.SymbolName == "Helper"));
+        Assert.Equal(7, helperRef.Line);
     }
 }
