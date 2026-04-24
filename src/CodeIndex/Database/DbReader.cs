@@ -304,6 +304,22 @@ public partial class DbReader
         return TryGetMetaString(conn, "fold_key_fingerprint");
     }
 
+    private string? ResolveFoldReadyReason()
+    {
+        if (_foldReady)
+            return null;
+
+        var storedVersion = ParseFoldVersion(_conn);
+        var storedFingerprint = ParseFoldFingerprint(_conn);
+        if (storedVersion < 0 || string.IsNullOrWhiteSpace(storedFingerprint))
+            return "missing_fold_backfill";
+        if (storedVersion != NameFold.Version)
+            return "stale_fold_key_version";
+        if (!string.Equals(storedFingerprint, NameFold.Fingerprint(), StringComparison.Ordinal))
+            return "stale_fold_key_fingerprint";
+        return "fold_rows_not_restamped";
+    }
+
     private HashSet<string> LoadIndexedHotspotFamilyLanguages()
     {
         var langs = new HashSet<string>(StringComparer.Ordinal);
@@ -4669,6 +4685,7 @@ public partial class DbReader
         var csharpMetadataTargetReady = !hasCSharpFiles || _csharpMetadataTargetReady;
         var sqlGraphContractSignal = GetSqlGraphContractSignal(lang: null);
         var hotspotFamilySignal = GetHotspotFamilySignal(lang: null);
+        var foldReadyReason = ResolveFoldReadyReason();
 
         // Language breakdown / 言語別内訳
         var langs = new Dictionary<string, long>();
@@ -4696,6 +4713,7 @@ public partial class DbReader
             SqlGraphContractReady = sqlGraphContractSignal.Ready,
             SqlGraphContractDegradedReason = sqlGraphContractSignal.DegradedReason,
             FoldReady = _foldReady,
+            FoldReadyReason = foldReadyReason,
         };
     }
 

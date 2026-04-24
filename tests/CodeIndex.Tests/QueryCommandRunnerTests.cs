@@ -6742,6 +6742,225 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunStatus_Json_ReportsFoldOnlyRemediationHint()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_fold_only_json");
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version'";
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal("stale_fold_key_version", json.GetProperty("fold_ready_reason").GetString());
+            Assert.Contains("older fold-key version", json.GetProperty("degraded_reason").GetString());
+            Assert.Contains("cdidx backfill-fold --db", json.GetProperty("recommended_action").GetString());
+            Assert.Contains("--rebuild", json.GetProperty("alternative_action").GetString());
+            Assert.Contains("DEGRADED", json.GetProperty("summary").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_HumanOutput_WarnsWhenOnlyFoldReadinessIsDegraded()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_fold_only_human");
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version'";
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("older fold-key version", stdout);
+            Assert.Contains("Hint    : run `cdidx backfill-fold --db", stdout);
+            Assert.Contains("Hint    : or run `cdidx index", stdout);
+            Assert.Contains("--rebuild", stdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_Json_ReadOnlyUriFoldRemediationUsesWritableDbPath()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_fold_only_uri");
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version'";
+                cmd.ExecuteNonQuery();
+
+                using var checkpoint = db.Connection.CreateCommand();
+                checkpoint.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+                checkpoint.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", readOnlyUri, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("stale_fold_key_version", json.GetProperty("fold_ready_reason").GetString());
+            Assert.Contains(dbPath, json.GetProperty("recommended_action").GetString());
+            Assert.Contains(dbPath, json.GetProperty("alternative_action").GetString());
+            Assert.DoesNotContain("immutable=1", json.GetProperty("recommended_action").GetString());
+            Assert.DoesNotContain("immutable=1", json.GetProperty("alternative_action").GetString());
+            Assert.DoesNotContain("file:", json.GetProperty("recommended_action").GetString());
+            Assert.DoesNotContain("file:", json.GetProperty("alternative_action").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void RunStatus_Json_RelativeReadOnlyUriFoldRemediationUsesWorkingDirectoryDbPath()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_fold_only_relative_uri_json");
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var dbDirectory = Path.GetDirectoryName(dbPath)!;
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version'";
+                cmd.ExecuteNonQuery();
+
+                using var checkpoint = db.Connection.CreateCommand();
+                checkpoint.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+                checkpoint.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var (exitCode, stdout, stderr) = RunBuiltCli(
+                ["status", "--db", "file:codeindex.db?immutable=1", "--json"],
+                dbDirectory);
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("stale_fold_key_version", json.GetProperty("fold_ready_reason").GetString());
+            Assert.Contains(dbPath, json.GetProperty("recommended_action").GetString());
+            Assert.Contains(dbPath, json.GetProperty("alternative_action").GetString());
+            Assert.DoesNotContain("<writable-db-path>", json.GetProperty("recommended_action").GetString());
+            Assert.DoesNotContain("<writable-db-path>", json.GetProperty("alternative_action").GetString());
+            Assert.DoesNotContain("file:", json.GetProperty("recommended_action").GetString());
+            Assert.DoesNotContain("file:", json.GetProperty("alternative_action").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void RunStatus_HumanOutput_RelativeReadOnlyUriUsesWorkingDirectoryDbPath()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_fold_only_relative_uri_human");
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var dbDirectory = Path.GetDirectoryName(dbPath)!;
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version'";
+                cmd.ExecuteNonQuery();
+
+                using var checkpoint = db.Connection.CreateCommand();
+                checkpoint.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+                checkpoint.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var (exitCode, stdout, stderr) = RunBuiltCli(
+                ["status", "--db", "file:codeindex.db?mode=ro"],
+                dbDirectory);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains(dbPath, stdout);
+            Assert.Contains("cdidx backfill-fold --db", stdout);
+            Assert.Contains("cdidx index", stdout);
+            Assert.DoesNotContain("<writable-db-path>", stdout);
+            Assert.DoesNotContain("file:codeindex.db", stdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
     public void RunStatus_HumanOutput_WarnsWhenHotspotFamilyTrustIsDegraded()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_hotspots_family_human");
@@ -23541,11 +23760,11 @@ public class QueryCommandRunnerTests
         return JsonDocument.Parse(jsonLine);
     }
 
-    private static (int ExitCode, string StdOut, string StdErr) RunBuiltCli(string[] args)
+    private static (int ExitCode, string StdOut, string StdErr) RunBuiltCli(string[] args, string? workingDirectory = null)
     {
         var psi = new System.Diagnostics.ProcessStartInfo("dotnet")
         {
-            WorkingDirectory = GetRepositoryRoot(),
+            WorkingDirectory = workingDirectory ?? GetRepositoryRoot(),
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
