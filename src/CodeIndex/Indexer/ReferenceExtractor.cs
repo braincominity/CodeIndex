@@ -4495,6 +4495,9 @@ public static class ReferenceExtractor
                     allowSingleSegmentQualifiedMatch: parsed.HasLeadingGlobalQualifier))
                 continue;
 
+            if (IsCSharpQualifiedConstantPatternReferenceSite(preparedLine, parsed))
+                continue;
+
             var nextTokenIndex = SkipWhitespace(preparedLine, member.End);
             if (nextTokenIndex < preparedLine.Length && preparedLine[nextTokenIndex] == '(')
                 continue;
@@ -4514,6 +4517,150 @@ public static class ReferenceExtractor
                 lineNumber,
                 callContainer);
         }
+    }
+
+    private static bool IsCSharpQualifiedConstantPatternReferenceSite(
+        string preparedLine,
+        (List<(int Start, int End)> Segments, int NextIndex, bool LastSeparatorWasDot, bool HasLeadingGlobalQualifier) parsed)
+    {
+        if (!parsed.LastSeparatorWasDot || parsed.Segments.Count < 2)
+            return false;
+
+        var headCursor = parsed.Segments[0].Start;
+        if (parsed.HasLeadingGlobalQualifier
+            && headCursor >= "global::".Length
+            && preparedLine.AsSpan(headCursor - "global::".Length, "global::".Length).Equals("global::", StringComparison.Ordinal))
+        {
+            headCursor -= "global::".Length;
+        }
+
+        return IsCSharpConstantPatternAnchor(preparedLine, ref headCursor);
+    }
+
+    private static bool IsCSharpConstantPatternAnchor(string text, ref int cursor)
+    {
+        cursor = SkipCSharpTriviaBackward(text, cursor);
+        if (TryConsumeTrailingCSharpToken(text, ref cursor, "not"))
+            cursor = SkipCSharpTriviaBackward(text, cursor);
+
+        while (true)
+        {
+            if (TryConsumeTrailingCSharpToken(text, ref cursor, "case"))
+                return true;
+
+            if (TryConsumeTrailingCSharpToken(text, ref cursor, "is"))
+                return false;
+
+            if (!TryConsumeTrailingCSharpToken(text, ref cursor, "or")
+                && !TryConsumeTrailingCSharpToken(text, ref cursor, "and"))
+            {
+                return false;
+            }
+
+            cursor = SkipCSharpTriviaBackward(text, cursor);
+            if (!SkipCSharpPatternHeadBackward(text, ref cursor))
+                return false;
+            cursor = SkipCSharpTriviaBackward(text, cursor);
+            if (TryConsumeTrailingCSharpToken(text, ref cursor, "not"))
+                cursor = SkipCSharpTriviaBackward(text, cursor);
+        }
+    }
+
+    private static int SkipCSharpTriviaBackward(string text, int cursor)
+    {
+        while (cursor > 0)
+        {
+            if (char.IsWhiteSpace(text[cursor - 1]))
+            {
+                cursor--;
+                continue;
+            }
+
+            if (cursor >= 2
+                && text[cursor - 1] == '/'
+                && text[cursor - 2] == '*')
+            {
+                var commentStart = text.LastIndexOf("/*", cursor - 2, StringComparison.Ordinal);
+                if (commentStart >= 0)
+                {
+                    cursor = commentStart;
+                    continue;
+                }
+            }
+
+            break;
+        }
+
+        return cursor;
+    }
+
+    private static bool TryConsumeTrailingCSharpToken(string text, ref int cursor, string token)
+    {
+        if (string.IsNullOrEmpty(token))
+            return false;
+
+        cursor = SkipCSharpTriviaBackward(text, cursor);
+        if (cursor < token.Length)
+            return false;
+
+        var tokenStart = cursor - token.Length;
+        if (!text.AsSpan(tokenStart, token.Length).Equals(token, StringComparison.Ordinal))
+            return false;
+
+        if ((tokenStart > 0 && IsCSharpIdentifierPart(text[tokenStart - 1]))
+            || (cursor < text.Length && IsCSharpIdentifierPart(text[cursor])))
+        {
+            return false;
+        }
+
+        cursor = tokenStart;
+        return true;
+    }
+
+    private static bool SkipCSharpPatternHeadBackward(string text, ref int cursor)
+    {
+        if (!TryConsumeTrailingCSharpIdentifier(text, ref cursor))
+            return false;
+
+        while (true)
+        {
+            cursor = SkipCSharpTriviaBackward(text, cursor);
+            if (cursor >= 2
+                && text[cursor - 2] == ':'
+                && text[cursor - 1] == ':')
+            {
+                cursor -= 2;
+            }
+            else if (cursor > 0 && text[cursor - 1] == '.')
+            {
+                cursor--;
+            }
+            else
+            {
+                break;
+            }
+
+            cursor = SkipCSharpTriviaBackward(text, cursor);
+            if (!TryConsumeTrailingCSharpIdentifier(text, ref cursor))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryConsumeTrailingCSharpIdentifier(string text, ref int cursor)
+    {
+        var end = cursor;
+        while (cursor > 0 && IsCSharpIdentifierPart(text[cursor - 1]))
+            cursor--;
+
+        if (cursor == end)
+            return false;
+
+        if (cursor > 0 && text[cursor - 1] == '@')
+            cursor--;
+
+        return true;
     }
 
     private static bool TryReadCSharpQualifiedAccess(

@@ -16438,13 +16438,14 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunReferences_ExactJson_CSharpMultiLineCaseUsingStaticConstantPattern_StaysSuppressed()
+    public void RunReferences_ExactJson_CSharpCommentSeparatedMultiLineCaseUsingStaticConstantPattern_StaysSuppressed()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_multiline_case_constant_pattern_exact_suppressed");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_comment_separated_multiline_case_constant_pattern_exact_suppressed");
         try
         {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/Defs.cs", "csharp",
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "Defs.cs"),
                 """
                 namespace Probe;
 
@@ -16453,7 +16454,8 @@ public class QueryCommandRunnerTests
                     Red
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/Use.cs", "csharp",
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "Use.cs"),
                 """
                 using static Probe.Color;
 
@@ -16466,6 +16468,7 @@ public class QueryCommandRunnerTests
                         switch (value)
                         {
                             case
+                                // formatting-only comment
                                 Red
                                 or
                                 Red:
@@ -16474,21 +16477,113 @@ public class QueryCommandRunnerTests
                     }
                 }
                 """);
-            MarkGraphAndFoldReady(dbPath);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
-                _jsonOptions));
-            using var document = ParseJsonOutput(stdout);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (nonExactExitCode, nonExactStdout, nonExactStderr) = RunBuiltCli(
+                ["references", "Red", "--db", dbPath, "--json", "--lang", "csharp", "--path", "src/Use.cs", "--limit", "100"]);
+            var nonExactRows = ParseJsonLines(nonExactStdout)
+                .Select(document => document.RootElement)
+                .ToList();
 
-            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--count"],
-                _jsonOptions));
+            var (exactExitCode, exactStdout, exactStderr) = RunBuiltCli(
+                ["references", "Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
+            using var exactDocument = ParseJsonOutput(exactStdout);
+
+            var (countExitCode, countStdout, countStderr) = RunBuiltCli(
+                ["references", "Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--count"]);
             using var countDocument = ParseJsonOutput(countStdout);
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            Assert.Equal(CommandExitCodes.Success, nonExactExitCode);
+            Assert.Equal(string.Empty, nonExactStderr);
+            Assert.Equal(2, nonExactRows.Count);
+            Assert.Equal([13, 15], nonExactRows.Select(row => row.GetProperty("line").GetInt32()).OrderBy(line => line).ToArray());
+
+            Assert.Equal(CommandExitCodes.NotFound, exactExitCode);
+            Assert.Equal(string.Empty, exactStderr);
+            Assert.Equal(0, exactDocument.RootElement.GetProperty("count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal(string.Empty, countStderr);
+            Assert.Equal(0, countDocument.RootElement.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_CSharpBlankLineSeparatedMultiLineCaseUsingStaticConstantPattern_StaysSuppressed()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_blank_line_multiline_case_constant_pattern_exact_suppressed");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "Defs.cs"),
+                """
+                namespace Probe;
+
+                public enum Color
+                {
+                    Red
+                }
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "Use.cs"),
+                """
+                using static Probe.Color;
+
+                namespace Probe;
+
+                class Demo
+                {
+                    void Run(object value)
+                    {
+                        switch (value)
+                        {
+                            case
+
+                                Red
+                                or
+                                Red:
+                                break;
+                        }
+                    }
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (nonExactExitCode, nonExactStdout, nonExactStderr) = RunBuiltCli(
+                ["references", "Red", "--db", dbPath, "--json", "--lang", "csharp", "--path", "src/Use.cs", "--limit", "100"]);
+            var nonExactRows = ParseJsonLines(nonExactStdout)
+                .Select(document => document.RootElement)
+                .ToList();
+
+            var (exactExitCode, exactStdout, exactStderr) = RunBuiltCli(
+                ["references", "Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
+            using var exactDocument = ParseJsonOutput(exactStdout);
+
+            var (countExitCode, countStdout, countStderr) = RunBuiltCli(
+                ["references", "Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--count"]);
+            using var countDocument = ParseJsonOutput(countStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            Assert.Equal(CommandExitCodes.Success, nonExactExitCode);
+            Assert.Equal(string.Empty, nonExactStderr);
+            Assert.Equal(2, nonExactRows.Count);
+            Assert.Equal([13, 15], nonExactRows.Select(row => row.GetProperty("line").GetInt32()).OrderBy(line => line).ToArray());
+
+            Assert.Equal(CommandExitCodes.NotFound, exactExitCode);
+            Assert.Equal(string.Empty, exactStderr);
+            Assert.Equal(0, exactDocument.RootElement.GetProperty("count").GetInt32());
 
             Assert.Equal(CommandExitCodes.Success, countExitCode);
             Assert.Equal(string.Empty, countStderr);
@@ -16506,8 +16601,9 @@ public class QueryCommandRunnerTests
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_long_multiline_case_constant_pattern_suppressed");
         try
         {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/Defs.cs", "csharp",
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "Defs.cs"),
                 """
                 namespace Probe;
 
@@ -16516,54 +16612,54 @@ public class QueryCommandRunnerTests
                     Red
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/Use.cs", "csharp",
-                """
-                using static Probe.Color;
+            var sourceBuilder = new System.Text.StringBuilder();
+            sourceBuilder.AppendLine("using static Probe.Color;");
+            sourceBuilder.AppendLine();
+            sourceBuilder.AppendLine("namespace Probe;");
+            sourceBuilder.AppendLine();
+            sourceBuilder.AppendLine("class Demo");
+            sourceBuilder.AppendLine("{");
+            sourceBuilder.AppendLine("    void Run(object value)");
+            sourceBuilder.AppendLine("    {");
+            sourceBuilder.AppendLine("        switch (value)");
+            sourceBuilder.AppendLine("        {");
+            sourceBuilder.AppendLine("            case");
+            for (var index = 0; index < 70; index++)
+            {
+                sourceBuilder.Append("                Red");
+                sourceBuilder.AppendLine(index == 69 ? ":" : string.Empty);
+                if (index < 69)
+                    sourceBuilder.AppendLine("                or");
+            }
+            sourceBuilder.AppendLine("                break;");
+            sourceBuilder.AppendLine("        }");
+            sourceBuilder.AppendLine("    }");
+            sourceBuilder.AppendLine("}");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Use.cs"), sourceBuilder.ToString());
 
-                namespace Probe;
-
-                class Demo
-                {
-                    void Run(object value)
-                    {
-                        switch (value)
-                        {
-                            case
-                                Red
-                                or
-                                Red
-                                or
-                                Red
-                                or
-                                Red:
-                                break;
-                        }
-                    }
-                }
-                """);
-            MarkGraphAndFoldReady(dbPath);
-
-            var (nonExactExitCode, nonExactStdout, nonExactStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--path", "src/Use.cs"],
-                _jsonOptions));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (nonExactExitCode, nonExactStdout, nonExactStderr) = RunBuiltCli(
+                ["references", "Red", "--db", dbPath, "--json", "--lang", "csharp", "--path", "src/Use.cs", "--limit", "100"]);
             var nonExactRows = ParseJsonLines(nonExactStdout)
                 .Select(document => document.RootElement)
                 .ToList();
 
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
             Assert.Equal(CommandExitCodes.Success, nonExactExitCode);
             Assert.Equal(string.Empty, nonExactStderr);
-            Assert.Equal(4, nonExactRows.Count);
-            Assert.Equal([12, 14, 16, 18], nonExactRows.Select(row => row.GetProperty("line").GetInt32()).OrderBy(line => line).ToArray());
+            Assert.Equal(70, nonExactRows.Count);
+            Assert.Equal(Enumerable.Range(0, 70).Select(index => 12 + (index * 2)).ToArray(), nonExactRows.Select(row => row.GetProperty("line").GetInt32()).OrderBy(line => line).ToArray());
             Assert.All(nonExactRows, row => Assert.Equal("Run", row.GetProperty("container_name").GetString()));
 
-            var (exactExitCode, exactStdout, exactStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
-                _jsonOptions));
+            var (exactExitCode, exactStdout, exactStderr) = RunBuiltCli(
+                ["references", "Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
             using var exactDocument = ParseJsonOutput(exactStdout);
 
-            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--count"],
-                _jsonOptions));
+            var (countExitCode, countStdout, countStderr) = RunBuiltCli(
+                ["references", "Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--count"]);
             using var countDocument = ParseJsonOutput(countStdout);
 
             Assert.Equal(CommandExitCodes.NotFound, exactExitCode);
@@ -16636,13 +16732,14 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunReferences_ExactJson_CSharpQualifiedConstantPatternsDoNotUseUnrelatedSameNameTypeRescue()
+    public void RunReferences_ExactJson_CSharpQualifiedConstantPatternSameFileEnumMemberSitesStaySuppressed()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_qualified_constant_pattern_same_name_type_rescue");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_qualified_constant_pattern_same_file_enum_member_sites_suppressed");
         try
         {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/Defs.cs", "csharp",
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "Use.cs"),
                 """
                 namespace Probe;
 
@@ -16653,10 +16750,6 @@ public class QueryCommandRunnerTests
                 }
 
                 public class Red {}
-                """);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/Use.cs", "csharp",
-                """
-                namespace Probe;
 
                 class Demo
                 {
@@ -16670,25 +16763,35 @@ public class QueryCommandRunnerTests
                     }
                 }
                 """);
-            MarkGraphAndFoldReady(dbPath);
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
-                _jsonOptions));
-            using var document = ParseJsonOutput(stdout);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (referencesExitCode, referencesStdout, referencesStderr) = RunBuiltCli(
+                ["references", "Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
+            using var referencesDocument = ParseJsonOutput(referencesStdout);
 
-            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--count"],
-                _jsonOptions));
+            var (countExitCode, countStdout, countStderr) = RunBuiltCli(
+                ["references", "Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--count"]);
             using var countDocument = ParseJsonOutput(countStdout);
 
-            Assert.Equal(CommandExitCodes.NotFound, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, document.RootElement.GetProperty("count").GetInt32());
+            var (callersExitCode, callersStdout, callersStderr) = RunBuiltCli(
+                ["callers", "Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"]);
+            using var callersDocument = ParseJsonOutput(callersStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            Assert.Equal(CommandExitCodes.NotFound, referencesExitCode);
+            Assert.Equal(string.Empty, referencesStderr);
+            Assert.Equal(0, referencesDocument.RootElement.GetProperty("count").GetInt32());
 
             Assert.Equal(CommandExitCodes.Success, countExitCode);
             Assert.Equal(string.Empty, countStderr);
             Assert.Equal(0, countDocument.RootElement.GetProperty("count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.NotFound, callersExitCode);
+            Assert.Equal(string.Empty, callersStderr);
+            Assert.Equal(0, callersDocument.RootElement.GetProperty("count").GetInt32());
         }
         finally
         {

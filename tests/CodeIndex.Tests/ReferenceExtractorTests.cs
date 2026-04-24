@@ -7818,9 +7818,9 @@ public class ReferenceExtractorTests
         var colorRefs = references.Where(r => r.SymbolName == "Color" && r.ReferenceKind == "type_reference").ToList();
         Assert.Single(colorRefs);
 
-        Assert.Contains(references, r => r.SymbolName == "Red" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference");
 
         Assert.Equal(

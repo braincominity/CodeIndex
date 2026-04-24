@@ -998,7 +998,9 @@ public partial class DbReader
         exact
         &&
         (lang == null || string.Equals(lang, "csharp", StringComparison.Ordinal))
-        && (referenceKind == null || string.Equals(referenceKind, "type_reference", StringComparison.Ordinal));
+        && (referenceKind == null
+            || string.Equals(referenceKind, "type_reference", StringComparison.Ordinal)
+            || string.Equals(referenceKind, "call", StringComparison.Ordinal));
 
     private bool ShouldSuppressCSharpUsingStaticConstantPatternReference(ReferenceResult result)
     {
@@ -1030,7 +1032,6 @@ public partial class DbReader
     private bool ShouldSuppressCSharpUsingStaticConstantPatternReference(string path, string? lang, string symbolName, string referenceKind, int lineNumber, int columnNumber, string contextForFilter)
     {
         if (!string.Equals(lang, "csharp", StringComparison.Ordinal)
-            || !string.Equals(referenceKind, "type_reference", StringComparison.Ordinal)
             || string.IsNullOrWhiteSpace(symbolName)
             || string.IsNullOrWhiteSpace(contextForFilter)
             || symbolName.IndexOf('.') >= 0
@@ -1047,6 +1048,9 @@ public partial class DbReader
         TryBuildCSharpUsingStaticPatternContextWindow(path, lineNumber, symbolName, contextForFilter, columnNumber, out patternContext, out patternColumn);
         if (ShouldSuppressCSharpQualifiedConstantPatternReference(path, lineNumber, symbolName, patternContext, patternColumn))
             return true;
+
+        if (!string.Equals(referenceKind, "type_reference", StringComparison.Ordinal))
+            return false;
 
         if (!IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn))
             return false;
@@ -2295,12 +2299,11 @@ public partial class DbReader
             return;
         }
 
-        // Multiline logical patterns can be longer than a tiny fixed window. Walk backward
-        // until we either rediscover the real `case` / `is` anchor or hit an obvious boundary.
-        // 長い複数行 logical pattern では小さな固定窓だと anchor を見失うため、実際の
-        // `case` / `is` anchor を再発見するか、明確な境界に当たるまで後方へ戻る。
-        const int maxContextLines = 64;
-        var startLine = Math.Max(1, lineNumber - (maxContextLines - 1));
+        // Multiline logical patterns can span long `or` chains with blank/comment-only lines.
+        // Walk backward from the current reference until we rediscover the real anchor.
+        // 複数行 logical pattern は長い `or` 連鎖や空行・コメント専用行をまたげるため、
+        // 現在位置から実際の anchor を再発見するまで後方へ戻る。
+        var startLine = 1;
         if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap, startLine, lineNumber)
             || !lineMap.TryGetValue(lineNumber, out var currentLine))
         {
@@ -2313,9 +2316,6 @@ public partial class DbReader
         for (var absoluteLine = lineNumber - 1; absoluteLine >= startLine; absoluteLine--)
         {
             if (!lineMap.TryGetValue(absoluteLine, out var lineText))
-                break;
-
-            if (string.IsNullOrWhiteSpace(lineText))
                 break;
 
             prefixLength += lineText.Length + 1;
@@ -2391,10 +2391,40 @@ public partial class DbReader
                 }
             }
 
+            if (TryGetCSharpSingleLineCommentLineStart(text, cursor, out var commentLineStart))
+            {
+                cursor = commentLineStart;
+                continue;
+            }
+
             break;
         }
 
         return cursor;
+    }
+
+    private static bool TryGetCSharpSingleLineCommentLineStart(string text, int cursor, out int commentLineStart)
+    {
+        commentLineStart = -1;
+        if (cursor <= 0)
+            return false;
+
+        var lineStart = text.LastIndexOf('\n', Math.Min(cursor - 1, text.Length - 1));
+        lineStart = lineStart < 0 ? 0 : lineStart + 1;
+
+        var firstNonWhitespace = lineStart;
+        while (firstNonWhitespace < cursor && char.IsWhiteSpace(text[firstNonWhitespace]))
+            firstNonWhitespace++;
+
+        if (firstNonWhitespace + 1 >= cursor
+            || text[firstNonWhitespace] != '/'
+            || text[firstNonWhitespace + 1] != '/')
+        {
+            return false;
+        }
+
+        commentLineStart = lineStart;
+        return true;
     }
 
     private static bool SkipCSharpPatternHeadBackward(string text, ref int cursor)
