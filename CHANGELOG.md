@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Fixed
+- **Release artifacts now ship license notices and the installer preserves them** — `create-release` now copies `LICENSE`, `COMMERCIAL_LICENSE.md`, and `TRADEMARKS.md` into the published payload, and `install.sh` installs those notices when they are present alongside the binary.
+
 ### [1.15.0] - 2026-04-24
 
 #### Changed
@@ -895,6 +898,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 修正
+- **release 配布物にライセンス文書を同梱し、installer でも保持するように修正** — `create-release` が `LICENSE` / `COMMERCIAL_LICENSE.md` / `TRADEMARKS.md` を publish payload にコピーするようになり、`install.sh` もそれらが同梱されている場合はバイナリと一緒に配置するようになりました。
 
 ### [1.15.0] - 2026-04-24
 
