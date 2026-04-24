@@ -52,7 +52,7 @@ The test project mirrors the production areas closely.
 - `GitHubIssueReporterTests.cs`
   GitHub token resolution logic (CDIDX_GITHUB_TOKEN only; generic GITHUB_TOKEN is ignored).
 - `ConcurrencyTests.cs`
-  Concurrent read and read-during-write scenarios (WAL mode validation).
+  Concurrent read and read-during-write scenarios (WAL mode validation), including the `GetStatus` snapshot-isolation regression for issue #180 that seeds a `refs == files * refsPerFile` invariant and asserts every concurrent reader observation preserves it while a background writer commits.
 - `PerformanceTests.cs`
   Large-scale data benchmarks (10K+ files). Skip-by-default; run manually with `--filter`.
 - `DbRecoveryTests.cs`
@@ -202,7 +202,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `GitHubIssueReporterTests.cs`
   GitHubトークン解決ロジック（CDIDX_GITHUB_TOKENのみ。汎用GITHUB_TOKENは無視）。
 - `ConcurrencyTests.cs`
-  並行読み取りと書き込み中読み取りシナリオ（WALモード検証）。
+  並行読み取りと書き込み中読み取りシナリオ（WALモード検証）。issue #180 の `GetStatus` snapshot 隔離回帰テストを含み、`refs == files * refsPerFile` という seed 不変条件を立てて並行 writer が commit し続ける間、各 reader 観測が必ず不変条件を維持することを要求する。
 - `PerformanceTests.cs`
   大規模データベンチマーク（10K+ファイル）。デフォルトSkip。`--filter` で手動実行。
 - `DbRecoveryTests.cs`

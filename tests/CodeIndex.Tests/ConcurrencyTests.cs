@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using CodeIndex.Database;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
@@ -96,6 +97,115 @@ public class ConcurrencyTests : IDisposable
         });
 
         await Task.WhenAll(writeTask, readTask);
+    }
+
+    [Fact]
+    public async Task GetStatus_ReferencesAndFilesStaySnapshotConsistent_UnderConcurrentWriter()
+    {
+        // Issue #180 regression: GetStatus must expose a single consistent WAL snapshot
+        // across its many COUNT(*) / freshness / readiness queries. The test seeds a known
+        // ratio (refs == files * refsPerFile) that every committed writer step preserves,
+        // spawns a background writer that keeps committing new files with exactly that
+        // many refs, and spins a reader that repeatedly calls GetStatus. Without the
+        // snapshot-isolation wrap in DbReader.GetStatus, a commit landing between the
+        // `files` COUNT(*) and the `references` COUNT(*) breaks the invariant; with the
+        // wrap, every observation must match.
+        // Issue #180 の回帰テスト: GetStatus の複数 SELECT が 1 つの WAL snapshot に揃うこと
+        // を検証する。seed で `refs == files * refsPerFile` という不変条件を作り、writer が
+        // 同じ比率で file+refs を commit し続ける間に reader が GetStatus を回す。snapshot
+        // 隔離が無いと files と refs の COUNT(*) の間に writer が commit した結果として
+        // 比率が破れる。
+        const int seedFileCount = 5;
+        const int refsPerFile = 20;
+
+        var writer = new DbWriter(_db.Connection);
+        for (var seedIndex = 0; seedIndex < seedFileCount; seedIndex++)
+        {
+            var fileId = writer.UpsertFile(new FileRecord
+            {
+                Path = $"src/seed{seedIndex}.cs", Lang = "csharp", Size = 100, Lines = 10,
+                Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                Checksum = $"seed{seedIndex}",
+            });
+            writer.InsertReferences(BuildReferenceBatch(fileId, $"seed{seedIndex}", refsPerFile));
+        }
+        // DbReader gates `_hasReferencesTable` on the GraphReadyFlag bit in user_version, so
+        // without this stamp every call to GetStatus returns `references: 0` regardless of
+        // table contents and the snapshot-isolation assertion becomes vacuous.
+        // DbReader は `_hasReferencesTable` を user_version の GraphReadyFlag で決めるため、
+        // MarkGraphReady() を呼ばないと GetStatus は常に refs=0 を返し、検証が成立しない。
+        writer.MarkGraphReady();
+
+        using var cts = new CancellationTokenSource();
+        var violations = new ConcurrentBag<(long files, long references)>();
+        long readerIterations = 0;
+        long writerIterations = 0;
+
+        var writeTask = Task.Run(() =>
+        {
+            using var writeDb = new DbContext(_dbPath);
+            writeDb.TryMigrateForRead();
+            var w = new DbWriter(writeDb.Connection);
+            var extra = 0;
+            while (!cts.IsCancellationRequested)
+            {
+                using var txn = w.BeginTransaction();
+                var fileId = w.UpsertFile(new FileRecord
+                {
+                    Path = $"src/added{extra}.cs", Lang = "csharp", Size = 100, Lines = 10,
+                    Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = $"added{extra}",
+                });
+                w.InsertReferences(BuildReferenceBatch(fileId, $"added{extra}", refsPerFile));
+                txn.Commit();
+                Interlocked.Increment(ref writerIterations);
+                extra++;
+            }
+        });
+
+        var readTask = Task.Run(() =>
+        {
+            using var readDb = new DbContext(_dbPath);
+            readDb.TryMigrateForRead();
+            var reader = new DbReader(readDb.Connection);
+            while (!cts.IsCancellationRequested)
+            {
+                var status = reader.GetStatus();
+                if (status.References != status.Files * refsPerFile)
+                    violations.Add((status.Files, status.References));
+                Interlocked.Increment(ref readerIterations);
+            }
+        });
+
+        // Run long enough for the two threads to interleave commits and reads many times.
+        // 十分な時間動かし、コミットと読み出しの交錯機会を多数確保する。
+        await Task.Delay(TimeSpan.FromSeconds(2));
+        cts.Cancel();
+        await Task.WhenAll(writeTask, readTask);
+
+        Assert.True(
+            violations.IsEmpty,
+            $"GetStatus returned inconsistent files/refs snapshots {violations.Count} times out of " +
+            $"{readerIterations} reads while the writer committed {writerIterations} times. " +
+            $"Sample: {string.Join(", ", violations.Take(3).Select(v => $"files={v.files} refs={v.references}"))}");
+    }
+
+    private static List<ReferenceRecord> BuildReferenceBatch(long fileId, string label, int count)
+    {
+        var refs = new List<ReferenceRecord>(count);
+        for (var refIndex = 0; refIndex < count; refIndex++)
+        {
+            refs.Add(new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = $"{label}_sym{refIndex}",
+                ReferenceKind = "call",
+                Line = refIndex + 1,
+                Column = 1,
+                Context = $"// ref {refIndex} in {label}",
+            });
+        }
+        return refs;
     }
 
     public void Dispose()

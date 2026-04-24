@@ -4740,6 +4740,19 @@ public partial class DbReader
     /// </summary>
     public StatusResult GetStatus()
     {
+        // Issue #180: wrap the multi-statement status read in one DEFERRED transaction so
+        // every COUNT(*) / freshness / readiness query resolves against the same WAL
+        // snapshot. Without this, a concurrent writer that commits between the first and
+        // last statement can expose wildly inconsistent counts (e.g. `refs: 0` against a
+        // steady-state 44k while an incremental update is mid-flight). DEFERRED avoids
+        // acquiring a write lock — the transaction grabs a SHARED lock on the first SELECT
+        // and holds one consistent snapshot until Commit releases it.
+        // Issue #180: 複数 SELECT を 1 つの DEFERRED transaction で囲み、全 COUNT(*) /
+        // freshness / readiness クエリを同じ WAL snapshot で解決する。これが無いと、
+        // 並行 writer が途中で commit した際に「refs: 0 なのに files=836」のような不整合
+        // が見える。DEFERRED は最初の SELECT で SHARED lock を取るのみで write lock を
+        // 握らないため、別 writer を阻害しない。
+        using var txn = _conn.BeginTransaction(deferred: true);
         var files = ExecuteScalar("SELECT COUNT(*) FROM files");
         var chunks = ExecuteScalar("SELECT COUNT(*) FROM chunks");
         var symbols = ExecuteScalar("SELECT COUNT(*) FROM symbols");
@@ -4761,14 +4774,22 @@ public partial class DbReader
         var foldReadyReason = ResolveFoldReadyReason();
 
         // Language breakdown / 言語別内訳
+        // Scope the reader in an inner block so it releases its statement handle before
+        // we Commit() the enclosing txn — `SqliteTransaction.Commit()` fails if any
+        // reader on the same connection is still open.
+        // reader を内側ブロックに閉じ込め、txn.Commit() の前に statement handle を
+        // 解放する。SqliteTransaction.Commit() は同じ connection 上で開いている reader
+        // があると失敗する。
         var langs = new Dictionary<string, long>();
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "SELECT lang, COUNT(*) FROM files WHERE lang IS NOT NULL GROUP BY lang ORDER BY COUNT(*) DESC";
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
-            langs[reader.GetString(0)] = reader.GetInt64(1);
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "SELECT lang, COUNT(*) FROM files WHERE lang IS NOT NULL GROUP BY lang ORDER BY COUNT(*) DESC";
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+                langs[reader.GetString(0)] = reader.GetInt64(1);
+        }
 
-        return new StatusResult
+        var result = new StatusResult
         {
             Files = files,
             Chunks = chunks,
@@ -4788,6 +4809,10 @@ public partial class DbReader
             FoldReady = _foldReady,
             FoldReadyReason = foldReadyReason,
         };
+        // Commit the read-only snapshot explicitly so the SHARED lock is released promptly.
+        // read-only なので rollback でも同じだが、明示 commit して SHARED lock を早期解放する。
+        txn.Commit();
+        return result;
     }
 
     /// <summary>

@@ -620,6 +620,16 @@ public partial class DbReader
         // commands. Without this, `inspect Run --exact` would still pull RunAsync/RunImpact
         // into references / callers / callees. See codex review of #83.
         // `exact` は bundle 内のすべての sub-query に伝播させ、leaf コマンドと precision を揃える。
+        //
+        // Issue #180: wrap the multi-statement bundle in one DEFERRED transaction so every
+        // sub-query (definitions / file metadata / freshness / references / callers /
+        // callees / nearby symbols) resolves against the same WAL snapshot. Without this,
+        // a concurrent writer mid-indexing can make the bundle report callers for an old
+        // symbol layout alongside a file row that already reflects the new one.
+        // Issue #180: bundle 内の全 sub-query を 1 つの DEFERRED transaction でまとめ、
+        // definitions / file / freshness / references / callers / callees / nearby symbols
+        // が同じ WAL snapshot を参照するようにする。
+        using var txn = _conn.BeginTransaction(deferred: true);
         var definitionLimit = Math.Min(limit, 5);
         var definitions = GetDefinitions(query, definitionLimit, kind: null, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since: null, exact);
         DefinitionResult? primaryDefinition = definitions
@@ -676,7 +686,7 @@ public partial class DbReader
             ? GetNearbySymbols(primaryDefinition.Path, primaryDefinition.StartLine, Math.Min(limit, 10), primaryDefinition.Name, primaryDefinition.StartLine)
             : [];
 
-        return new SymbolAnalysisResult
+        var result = new SymbolAnalysisResult
         {
             Query = query,
             File = file,
@@ -699,6 +709,8 @@ public partial class DbReader
             ExactHasMissingTable = exactSignal?.HasMissingTable,
             DegradedReason = exactSignal?.DegradedReason,
         };
+        txn.Commit();
+        return result;
     }
 
     public HashSet<string> GetUnsupportedExactGraphSymbolKinds(
