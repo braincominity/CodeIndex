@@ -770,7 +770,9 @@ public static class ReferenceExtractor
                     out var nextCsharpDelimitedDocComment))
             {
                 var csharpDocCommentText = originalLine[csharpDocCommentStartIndex..csharpDocCommentEndExclusive];
-                if (csharpDocCommentText.IndexOf("cref=\"", StringComparison.OrdinalIgnoreCase) >= 0)
+                if (csharpDocCommentText.IndexOf("cref=\"", StringComparison.OrdinalIgnoreCase) >= 0
+                    && CanAttachCSharpXmlDocCommentToNextDeclaration(
+                        FindInnermostContainer(containerCandidates, lineNumber)))
                 {
                     var docContainer = FindDocumentedContainer(containerCandidates, lineNumber);
                     if (docContainer != null)
@@ -7603,6 +7605,10 @@ public static class ReferenceExtractor
 
         return null;
     }
+
+    private static bool CanAttachCSharpXmlDocCommentToNextDeclaration(SymbolRecord? innermostContainer) =>
+        innermostContainer == null
+        || innermostContainer.Kind is "class" or "struct" or "interface" or "enum" or "namespace";
 
     private static SymbolRecord? FindDocumentedContainer(IReadOnlyList<SymbolRecord> candidates, int lineNumber)
     {

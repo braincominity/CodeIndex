@@ -8633,6 +8633,8 @@ public class ReferenceExtractorTests
                     /// <see cref="Foo"/>
                     var x = 1;
                 }
+
+                void Later() {}
             }
             """;
 
@@ -8683,6 +8685,8 @@ public class ReferenceExtractorTests
                     /** <see cref="Foo"/> */
                     var x = 1;
                 }
+
+                void Later() {}
             }
             """;
 
