@@ -5261,6 +5261,62 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_Interface_ModifierSlotMatrix_LocksInAllLegalShapes()
+    {
+        // Closes #302: the C# interface row's modifier slot must accept every legal
+        // declaration shape in a single fixture so a future modifier-slot refactor
+        // (mirror of the #238 `operator checked`, #244 `static abstract`, #355 `file`,
+        // and #376 `new` families) cannot silently drop one variant. Covers plain
+        // `interface`, `public interface`, `file interface` (C# 11 file-scoped), the
+        // two `partial interface` orderings (bare and visibility-first), `unsafe
+        // interface`, and the nested `public new interface` that hides a same-named
+        // base-type member.
+        // Closes #302: C# interface 行の修飾子スロットが、単一 fixture で合法な宣言形を
+        // すべて受理することを固定する。修飾子スロットの将来的な再編（#238 の
+        // `operator checked`、#244 の `static abstract`、#355 の `file`、#376 の `new` と
+        // 同じファミリの問題）で、いずれか1形を黙って落とす回帰を防ぐ。plain `interface`、
+        // `public interface`、`file interface`（C# 11 file-scoped）、`partial interface` の
+        // 2 並び（単独と visibility 先行）、`unsafe interface`、同名ベースメンバを隠蔽する
+        // ネストの `public new interface` を網羅する。
+        var content = """
+            namespace ModifierSlotMatrix;
+
+            interface IPlain { void Do(); }
+            public interface IPublic { void Do(); }
+            file interface IFile { void Do(); }
+            partial interface IPartial { void Do(); }
+            public partial interface IPublicPartial { void Do(); }
+            unsafe interface IUnsafe { void Do(); }
+
+            public class Base
+            {
+                public interface INested { void Do(); }
+            }
+            public class Derived : Base
+            {
+                public new interface INested { void Do(); }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "IPlain" && string.IsNullOrEmpty(s.Visibility));
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "IPublic" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "IFile" && string.IsNullOrEmpty(s.Visibility));
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "IPartial" && string.IsNullOrEmpty(s.Visibility));
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "IPublicPartial" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "IUnsafe" && string.IsNullOrEmpty(s.Visibility));
+
+        // Nested `public new interface INested` must produce a second symbol attributed
+        // to the `Derived` container alongside the base-side `INested` on `Base`.
+        // ネストの `public new interface INested` は、基底側の `Base.INested` に加えて
+        // `Derived` コンテナ下の独立シンボルとして抽出される必要がある。
+        var nested = symbols.Where(s => s.Kind == "interface" && s.Name == "INested").ToList();
+        Assert.Equal(2, nested.Count);
+        Assert.Contains(nested, s => s.ContainerName == "Base" && s.Visibility == "public");
+        Assert.Contains(nested, s => s.ContainerName == "Derived" && s.Visibility == "public");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsExpressionBodiedMembers()
     {
         var content = "public class Calc\n{\n    public int X => 42;\n    public string Name => \"calc\";\n    public static double Pi => 3.14;\n}";
