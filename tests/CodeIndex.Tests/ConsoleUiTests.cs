@@ -29,6 +29,7 @@ public class ConsoleUiTests
         Assert.Contains("cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--dry-run] [--json]", output);
         Assert.Contains("cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json]", output);
         Assert.Contains("cdidx backfill-fold [--db <path>] [--json]", output);
+        Assert.Contains("cdidx license", output);
         Assert.Contains("cdidx references <query>|--query <query>|-- <query>", output);
         Assert.Contains("cdidx callers <query>|--query <query>|-- <query>", output);
         Assert.Contains("cdidx callees <query>|--query <query>|-- <query>", output);
@@ -72,6 +73,9 @@ public class ConsoleUiTests
         Assert.Contains("cdidx references DbContext --kind instantiate Filter constructor sites by reference kind", output);
         Assert.Contains("cdidx hotspots --lang csharp --exclude-tests    Find high-impact symbols with conservative duplicate fallback", output);
         Assert.Contains("cdidx impact FolderDiffService --json           Type query may return heuristic file-level dependency hints", output);
+        Assert.Contains("license                    Show licensing, trademark, and commercial-use summary", output);
+        Assert.Contains("--license                  Show licensing, trademark, and commercial-use summary", output);
+        Assert.Contains("cdidx license                                  Show licensing and commercial-use terms", output);
         Assert.DoesNotContain("Easter eggs", output);
         Assert.DoesNotContain("--sushi", output);
         Assert.DoesNotContain("--random-spinner", output);
@@ -98,6 +102,7 @@ public class ConsoleUiTests
         Assert.Contains("cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--count] [--since <datetime>]", output);
         Assert.Contains("cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--count]", output);
         Assert.Contains("cdidx unused [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--count]", output);
+        Assert.Contains("cdidx license", output);
     }
 
     [Fact]
@@ -106,6 +111,32 @@ public class ConsoleUiTests
         var frames = ConsoleUi.GetSpinnerFrames(null);
 
         Assert.Equal(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"], frames);
+    }
+
+    [Fact]
+    public void PrintLicenseSummary_DescribesPerimeterAndCommercialRestriction()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            using var writer = new StringWriter();
+            try
+            {
+                Console.SetOut(writer);
+                ConsoleUi.PrintLicenseSummary();
+                var output = writer.ToString();
+
+                Assert.Contains("PolyForm Perimeter License 1.0.0", output);
+                Assert.Contains("competes with CodeIndex", output);
+                Assert.Contains("competing commercial product or service", output);
+                Assert.Contains("separate written agreement", output);
+                Assert.Contains("TRADEMARKS.md", output);
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+        }
     }
 
     [Fact]
@@ -139,9 +170,11 @@ public class ConsoleUiTests
                 var exactSubstringToken = shell == "fish" ? "exact-substring" : "--exact-substring";
                 var exactNameToken = shell == "fish" ? "exact-name" : "--exact-name";
                 var groupByNameToken = shell == "fish" ? "group-by-name" : "--group-by-name";
+                var licenseToken = shell == "fish" ? "-l license" : shell == "bash" ? "--license" : "license:license command";
                 Assert.Contains(exactSubstringToken, output);
                 Assert.Contains(exactNameToken, output);
                 Assert.Contains(groupByNameToken, output);
+                Assert.Contains(licenseToken, output);
                 if (shell is "bash" or "zsh")
                 {
                     // Should contain dynamically generated languages, including newly added ones
