@@ -292,6 +292,18 @@ public class StatusResult
     /// true のとき --exact は Unicode fold 経路、false のとき ASCII NOCASE fallback。
     /// </summary>
     public bool FoldReady { get; set; }
+    [JsonPropertyName("fold_ready_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? FoldReadyReason { get; set; }
+    [JsonPropertyName("degraded_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DegradedReason { get; set; }
+    [JsonPropertyName("recommended_action")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RecommendedAction { get; set; }
+    [JsonPropertyName("alternative_action")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? AlternativeAction { get; set; }
 }
 
 public class RepoMapResult
@@ -450,6 +462,7 @@ internal sealed class RepoFileStat
 {
     public string Path { get; set; } = string.Empty;
     public string? Lang { get; set; }
+    public string? ModuleName { get; set; }
     public long Size { get; set; }
     public int Lines { get; set; }
     public int SymbolCount { get; set; }

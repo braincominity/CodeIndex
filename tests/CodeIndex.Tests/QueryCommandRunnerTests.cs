@@ -2495,23 +2495,31 @@ public class QueryCommandRunnerTests
     [Theory]
     [InlineData("callers", "attribute")]
     [InlineData("callers", "annotation")]
+    [InlineData("callers", "type_reference")]
     [InlineData("callees", "attribute")]
     [InlineData("callees", "annotation")]
-    public void RunCallersCallees_RejectMetadataKind_WithUsageError(string command, string kind)
+    [InlineData("callees", "type_reference")]
+    public void RunCallersCallees_RejectNonCallGraphKind_WithUsageError(string command, string kind)
     {
-        // issue #293 follow-up: `callers` / `callees` must reject `--kind attribute` and
-        // `--kind annotation` at the CLI boundary. Metadata references are attributed to the
-        // enclosing body-range symbol rather than the annotated target, so `callers Obsolete
-        // --kind attribute` would return `[Obsolete] void M()` under the enclosing class
+        // issue #293 + issue #444: `callers` / `callees` must reject non-call-graph reference
+        // kinds at the CLI boundary. Metadata (`attribute` / `annotation`) rows are attributed
+        // to the enclosing body-range symbol rather than the annotated target, so `callers
+        // Obsolete --kind attribute` would return `[Obsolete] void M()` under the enclosing class
         // instead of `M`, and file-level targets like `[assembly: Foo]` drop entirely because
-        // `container_name` is NULL. The correct path for metadata enumeration is
-        // `references <name> --kind attribute|annotation`.
-        // issue #293 補足: `callers` / `callees` は CLI 境界で `--kind attribute` /
-        // `--kind annotation` を必ず弾かなければならない。metadata 参照は注釈対象ではなく
+        // `container_name` is NULL. `type_reference` rows are compile-time type-position edges
+        // (declaration types, generic constraints, `is`/`as`/`instanceof`, XML-doc `cref`) and
+        // are not runtime calls, so `callers Foo --kind type_reference` would misreport type
+        // mentions as caller edges. The correct path for these kinds is
+        // `references <name> --kind attribute|annotation|type_reference`.
+        // issue #293 + issue #444 補足: `callers` / `callees` は CLI 境界で非 call-graph な
+        // reference kind を必ず弾く。metadata (`attribute` / `annotation`) 行は注釈対象ではなく
         // body-range の外側シンボルに帰属するため、`callers Obsolete --kind attribute` では
         // `[Obsolete] void M()` が `M` ではなく外側クラスに寄り、`[assembly: Foo]` のような
-        // file-level target は `container_name = NULL` で完全に脱落する。metadata 列挙の
-        // 正しい経路は `references <name> --kind attribute|annotation`。
+        // file-level target は `container_name = NULL` で完全に脱落する。`type_reference` は
+        // 宣言型・generic 制約・`is`/`as`/`instanceof`・XML-doc `cref` といった compile-time な
+        // 型言及であり実行時呼び出しではないので、`callers Foo --kind type_reference` は型言及を
+        // caller edge として誤って返す。正しい経路は
+        // `references <name> --kind attribute|annotation|type_reference`。
         var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_{command}_reject_kind_{kind}");
         try
         {
@@ -2528,6 +2536,102 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Contains($"'--kind {kind}' is not supported on '{command}'", stderr);
             Assert.Contains($"references <name> --kind {kind}", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_AcceptsTypeReferenceKind_WithoutUnknownKindWarning()
+    {
+        // issue #444: `references --kind type_reference` is a legitimate query (compile-time
+        // type-position edges from C#/Java base lists, declaration types, generic constraints,
+        // `is`/`as`/`instanceof`, and XML-doc `cref`). It must succeed without the "unknown
+        // reference kind" hint that was previously printed by `WriteGraphReferenceKindHint`.
+        // issue #444: `references --kind type_reference` は compile-time な型位置エッジを
+        // 列挙する正当なクエリ（C#/Java の継承リスト・宣言型・generic 制約・`is`/`as`/`instanceof`・
+        // XML-doc `cref`）。以前は `WriteGraphReferenceKindHint` が "unknown reference kind" と
+        // 警告していたが、その偽警告を出さずに成功しなければならない。
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_type_reference_kind");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "Target.cs"),
+                """
+                public class TargetBase { }
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "Consumer.cs"),
+                """
+                public class Consumer : TargetBase
+                {
+                }
+                """);
+
+            var (indexExitCode, _, _) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["TargetBase", "--db", dbPath, "--kind", "type_reference", "--lang", "csharp", "--exact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.DoesNotContain("not a known reference kind", stderr);
+            Assert.DoesNotContain("WARN:", stderr);
+            Assert.Contains("type_reference", stdout);
+            Assert.Contains("TargetBase", stdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_JsonTypeReferenceKind_EmitsNoStderrWarning()
+    {
+        // issue #444 JSON path: the stderr "unknown reference kind" hint is suppressed for
+        // `--json`, but the fix also straightens the validation set so `type_reference` is
+        // accepted everywhere without relying on JSON suppression.
+        // issue #444 JSON 経路: `--json` のときは stderr のヒント自体が抑制されるが、
+        // 今回の修正で検証集合も整理されたため、JSON 抑制に頼らずとも `type_reference` が
+        // 受理されることを確認する。
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_type_reference_kind_json");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "User.cs"),
+                """
+                public class User { }
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "Consumer.cs"),
+                """
+                public class Consumer : User
+                {
+                }
+                """);
+
+            var (indexExitCode, _, _) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["User", "--db", dbPath, "--kind", "type_reference", "--json", "--lang", "csharp", "--exact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("\"reference_kind\":\"type_reference\"", stdout);
         }
         finally
         {
@@ -6738,6 +6842,225 @@ public class QueryCommandRunnerTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_Json_ReportsFoldOnlyRemediationHint()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_fold_only_json");
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version'";
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal("stale_fold_key_version", json.GetProperty("fold_ready_reason").GetString());
+            Assert.Contains("older fold-key version", json.GetProperty("degraded_reason").GetString());
+            Assert.Contains("cdidx backfill-fold --db", json.GetProperty("recommended_action").GetString());
+            Assert.Contains("--rebuild", json.GetProperty("alternative_action").GetString());
+            Assert.Contains("DEGRADED", json.GetProperty("summary").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_HumanOutput_WarnsWhenOnlyFoldReadinessIsDegraded()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_fold_only_human");
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version'";
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("older fold-key version", stdout);
+            Assert.Contains("Hint    : run `cdidx backfill-fold --db", stdout);
+            Assert.Contains("Hint    : or run `cdidx index", stdout);
+            Assert.Contains("--rebuild", stdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunStatus_Json_ReadOnlyUriFoldRemediationUsesWritableDbPath()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_fold_only_uri");
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version'";
+                cmd.ExecuteNonQuery();
+
+                using var checkpoint = db.Connection.CreateCommand();
+                checkpoint.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+                checkpoint.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", readOnlyUri, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("stale_fold_key_version", json.GetProperty("fold_ready_reason").GetString());
+            Assert.Contains(dbPath, json.GetProperty("recommended_action").GetString());
+            Assert.Contains(dbPath, json.GetProperty("alternative_action").GetString());
+            Assert.DoesNotContain("immutable=1", json.GetProperty("recommended_action").GetString());
+            Assert.DoesNotContain("immutable=1", json.GetProperty("alternative_action").GetString());
+            Assert.DoesNotContain("file:", json.GetProperty("recommended_action").GetString());
+            Assert.DoesNotContain("file:", json.GetProperty("alternative_action").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void RunStatus_Json_RelativeReadOnlyUriFoldRemediationUsesWorkingDirectoryDbPath()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_fold_only_relative_uri_json");
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var dbDirectory = Path.GetDirectoryName(dbPath)!;
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version'";
+                cmd.ExecuteNonQuery();
+
+                using var checkpoint = db.Connection.CreateCommand();
+                checkpoint.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+                checkpoint.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var (exitCode, stdout, stderr) = RunBuiltCli(
+                ["status", "--db", "file:codeindex.db?immutable=1", "--json"],
+                dbDirectory);
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("stale_fold_key_version", json.GetProperty("fold_ready_reason").GetString());
+            Assert.Contains(dbPath, json.GetProperty("recommended_action").GetString());
+            Assert.Contains(dbPath, json.GetProperty("alternative_action").GetString());
+            Assert.DoesNotContain("<writable-db-path>", json.GetProperty("recommended_action").GetString());
+            Assert.DoesNotContain("<writable-db-path>", json.GetProperty("alternative_action").GetString());
+            Assert.DoesNotContain("file:", json.GetProperty("recommended_action").GetString());
+            Assert.DoesNotContain("file:", json.GetProperty("alternative_action").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void RunStatus_HumanOutput_RelativeReadOnlyUriUsesWorkingDirectoryDbPath()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_fold_only_relative_uri_human");
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var dbDirectory = Path.GetDirectoryName(dbPath)!;
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version'";
+                cmd.ExecuteNonQuery();
+
+                using var checkpoint = db.Connection.CreateCommand();
+                checkpoint.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+                checkpoint.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var (exitCode, stdout, stderr) = RunBuiltCli(
+                ["status", "--db", "file:codeindex.db?mode=ro"],
+                dbDirectory);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains(dbPath, stdout);
+            Assert.Contains("cdidx backfill-fold --db", stdout);
+            Assert.Contains("cdidx index", stdout);
+            Assert.DoesNotContain("<writable-db-path>", stdout);
+            Assert.DoesNotContain("file:codeindex.db", stdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
         }
     }
 
@@ -22326,6 +22649,299 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunMap_WithJson_JavaModuleInfoUsesModuleDeclarationAsModuleKey()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_java_module");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "com", "example", "app"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "module-info.java"),
+                """
+                module com.example.app {
+                    requires java.base;
+                    exports com.example.api;
+                }
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "com", "example", "app", "App.java"),
+                """
+                package com.example.app;
+
+                public class App
+                {
+                    public static void main(String[] args) {}
+                }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var modules = document.RootElement.GetProperty("modules").EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var javaModule = Assert.Single(modules.Where(module => module.GetProperty("module").GetString() == "com.example.app"));
+            Assert.Equal(2, javaModule.GetProperty("files").GetInt32());
+            Assert.DoesNotContain(modules, module => module.GetProperty("module").GetString() == "com");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunMap_WithJson_JavaModuleInfoWithAllmanBraceUsesModuleDeclarationAsModuleKey()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_java_module_allman");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "com", "example", "app"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "module-info.java"),
+                """
+                module com.example.app
+                {
+                    requires java.base;
+                    exports com.example.api;
+                }
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "com", "example", "app", "App.java"),
+                """
+                package com.example.app;
+
+                public class App
+                {
+                    public static void main(String[] args) {}
+                }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var modules = document.RootElement.GetProperty("modules").EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var javaModule = Assert.Single(modules.Where(module => module.GetProperty("module").GetString() == "com.example.app"));
+            Assert.Equal(2, javaModule.GetProperty("files").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunMap_WithJson_NonJavaNamespaceDoesNotOverridePathBasedModuleKey()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_non_java_namespace");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "App"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "App", "App.cs"),
+                """
+                namespace My.Company.App;
+
+                public class App {}
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var modules = document.RootElement.GetProperty("modules").EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains(modules, module => module.GetProperty("module").GetString() == "src/App");
+            Assert.DoesNotContain(modules, module => module.GetProperty("module").GetString() == "My.Company.App");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunMap_WithJson_PathFilteredJavaModuleFileKeepsModuleDeclarationAsModuleKey()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_java_module_filtered");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "com", "example", "app"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "module-info.java"),
+                """
+                module com.example.app {
+                    requires java.base;
+                    exports com.example.api;
+                }
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "com", "example", "app", "App.java"),
+                """
+                package com.example.app;
+
+                public class App
+                {
+                    public static void main(String[] args) {}
+                }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--json", "--path", "com/example/app/App.java"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var modules = document.RootElement.GetProperty("modules").EnumerateArray().ToList();
+            var topFiles = document.RootElement.GetProperty("top_files").EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var javaModule = Assert.Single(modules);
+            Assert.Equal("com.example.app", javaModule.GetProperty("module").GetString());
+            Assert.Equal(1, javaModule.GetProperty("files").GetInt32());
+            var topFile = Assert.Single(topFiles);
+            Assert.Equal("com/example/app/App.java", topFile.GetProperty("path").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_WithJson_JavaModuleInfoWithMultilineDirectivesIncludesImports()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_outline_java_module_multiline");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src", "main", "java"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "main", "java", "module-info.java"),
+                """
+                module com.example.app {
+                    requires /*comment*/ java.base;
+                    exports com.example.internal
+                        to com.example.plugin,
+                           com.example.tools;
+                    opens com.example.model
+                        to com.example.viewer,
+                           com.example.editor;
+                    uses com.example.spi.MyService;
+                    provides com.example.spi.MyService
+                        with com.example.impl.DefaultService,
+                             com.example.impl.BackupService;
+                }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/main/java/module-info.java", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var symbols = document.RootElement.GetProperty("symbols").EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(6, symbols.Count);
+            Assert.Contains(symbols, symbol => symbol.GetProperty("kind").GetString() == "import"
+                && symbol.GetProperty("name").GetString() == "java.base");
+            Assert.Contains(symbols, symbol => symbol.GetProperty("kind").GetString() == "import"
+                && symbol.GetProperty("name").GetString() == "com.example.internal");
+            Assert.Contains(symbols, symbol => symbol.GetProperty("kind").GetString() == "import"
+                && symbol.GetProperty("name").GetString() == "com.example.model");
+            Assert.Equal(2, symbols.Count(symbol => symbol.GetProperty("kind").GetString() == "import"
+                && symbol.GetProperty("name").GetString() == "com.example.spi.MyService"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_WithJson_JavaModuleInfoWithAllmanBraceLineDirectiveIncludesImports()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_outline_java_module_allman_brace_line");
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "module-info.java"),
+                """
+                module com.example.app
+                { requires java.base;
+                  exports com.example.api;
+                }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["module-info.java", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var symbols = document.RootElement.GetProperty("symbols").EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(3, symbols.Count);
+            Assert.Contains(symbols, symbol => symbol.GetProperty("kind").GetString() == "import"
+                && symbol.GetProperty("name").GetString() == "java.base");
+            Assert.Contains(symbols, symbol => symbol.GetProperty("kind").GetString() == "import"
+                && symbol.GetProperty("name").GetString() == "com.example.api");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_Json_CSharpNestedRawStringInsideInterpolationDoesNotCreatePhantomSymbols()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_nested_raw_fixture");
@@ -23541,11 +24157,11 @@ public class QueryCommandRunnerTests
         return JsonDocument.Parse(jsonLine);
     }
 
-    private static (int ExitCode, string StdOut, string StdErr) RunBuiltCli(string[] args)
+    private static (int ExitCode, string StdOut, string StdErr) RunBuiltCli(string[] args, string? workingDirectory = null)
     {
         var psi = new System.Diagnostics.ProcessStartInfo("dotnet")
         {
-            WorkingDirectory = GetRepositoryRoot(),
+            WorkingDirectory = workingDirectory ?? GetRepositoryRoot(),
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
