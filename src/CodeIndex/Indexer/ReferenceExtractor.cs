@@ -797,8 +797,10 @@ public static class ReferenceExtractor
                             || CanAttachCSharpXmlDocCommentToNextDeclaration(
                                 innermostContainer,
                                 csharpXmlDocAttachmentScopeCandidates,
+                                csharpAttrRanges,
                                 preparedLines,
-                                lineNumber)))
+                                lineNumber,
+                                docContainer)))
                     {
                         EmitCSharpDocCrefReferences(
                             csharpDocCommentText,
@@ -7632,9 +7634,20 @@ public static class ReferenceExtractor
     private static bool CanAttachCSharpXmlDocCommentToNextDeclaration(
         SymbolRecord? innermostContainer,
         IReadOnlyList<SymbolRecord>? scopeCandidates,
+        List<List<(int start, int end)>>? csharpAttrRanges,
         string[] preparedLines,
-        int lineNumber)
+        int lineNumber,
+        SymbolRecord documentedContainer)
     {
+        if (!HasOnlyCSharpWhitespaceOrAttributesBetweenCommentAndDeclaration(
+                csharpAttrRanges,
+                preparedLines,
+                lineNumber,
+                documentedContainer.StartLine))
+        {
+            return false;
+        }
+
         if (innermostContainer != null
             && innermostContainer.Kind is not "class" or "struct" or "interface" or "enum" or "namespace")
         {
@@ -7648,6 +7661,56 @@ public static class ReferenceExtractor
             return true;
 
         return IsAtCSharpXmlDocAttachmentDepth(enclosingScope, preparedLines, lineNumber);
+    }
+
+    private static bool HasOnlyCSharpWhitespaceOrAttributesBetweenCommentAndDeclaration(
+        List<List<(int start, int end)>>? csharpAttrRanges,
+        string[] preparedLines,
+        int commentLineNumber,
+        int declarationLineNumber)
+    {
+        var startLineIndex = Math.Max(commentLineNumber, 0);
+        var endLineIndex = Math.Min(declarationLineNumber - 1, preparedLines.Length);
+        for (var lineIndex = startLineIndex; lineIndex < endLineIndex; lineIndex++)
+        {
+            var line = preparedLines[lineIndex];
+            if (string.IsNullOrWhiteSpace(line))
+                continue;
+
+            if (IsCSharpAttributeOnlyLine(line, csharpAttrRanges?[lineIndex]))
+                continue;
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsCSharpAttributeOnlyLine(string preparedLine, List<(int start, int end)>? ranges)
+    {
+        if (ranges == null || ranges.Count == 0)
+            return false;
+
+        for (var i = 0; i < preparedLine.Length; i++)
+        {
+            if (char.IsWhiteSpace(preparedLine[i]))
+                continue;
+
+            var covered = false;
+            foreach (var (start, end) in ranges)
+            {
+                if (i >= start && i < end)
+                {
+                    covered = true;
+                    break;
+                }
+            }
+
+            if (!covered)
+                return false;
+        }
+
+        return true;
     }
 
     private static bool IsAtCSharpXmlDocAttachmentDepth(

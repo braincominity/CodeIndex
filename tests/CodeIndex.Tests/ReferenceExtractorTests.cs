@@ -8884,6 +8884,66 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatTripleSlashBeforeTopLevelStatementAsLaterLocalFunctionDocComment()
+    {
+        const string content = """
+            class Foo {}
+            /// <summary><see cref="Foo"/></summary>
+            System.Console.WriteLine(1);
+            void Later() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatDelimitedBlockCommentBeforeTopLevelStatementAsLaterLocalFunctionDocComment()
+    {
+        const string content = """
+            class Foo {}
+            /** <summary><see cref="Foo"/></summary> */
+            System.Console.WriteLine(1);
+            void Later() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 2);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatTripleSlashBeforeTopLevelStatementAsLaterTypeDocComment()
+    {
+        const string content = """
+            class Foo {}
+            /// <summary><see cref="Foo"/></summary>
+            System.Console.WriteLine(1);
+            class Later {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 2);
+    }
+
+    [Fact]
     public void Extract_CsharpDocCref_DoesNotTreatCodeAfterDelimitedDocCloseAsDocComment()
     {
         const string content = """
