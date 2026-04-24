@@ -10,6 +10,10 @@ namespace CodeIndex.Indexer;
 /// </summary>
 public static class ReferenceExtractor
 {
+    private readonly record struct SqlDefinitionLeafSpan(string LeafName, int StartIndex, int EndIndexExclusive);
+    private const string SqlProcCallIdentifierPattern = @"(?:\[[^\[\]\r\n]+\]|`[^`\r\n]+`|""(?:""""|[^""\r\n])+""|##?\w+|[_\p{L}][\p{L}\p{Mn}\p{Mc}\p{Nd}\p{Pc}$]*)";
+    private const string SqlProcCallQualifierPattern = @"(?:(?:" + SqlProcCallIdentifierPattern + @")?\s*\.\s*)*";
+
     private static readonly HashSet<string> SupportedLanguages =
     [
         "python", "javascript", "typescript", "csharp", "go", "rust",
@@ -218,7 +222,7 @@ public static class ReferenceExtractor
     private const string SqlMergeTargetHintPattern =
         @"WITH\s*\((?:[^()]|\([^()]*\))*\)";
     private static readonly Regex SqlProcCallRegex = new(
-        $@"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?(?:(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern})?\.)*(?<name>{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern})",
+        @"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?" + SqlProcCallQualifierPattern + @"(?<name>" + SqlProcCallIdentifierPattern + @")",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // SQL named source references that should become `reference` edges rather than `call` edges.
     // Bare `USING` is intentionally excluded because SQL dialects also reuse it for non-source
@@ -636,9 +640,32 @@ public static class ReferenceExtractor
         // `[...]` の引数中に現れる enum / 修飾定数（`ConverterStrategy.AllowNumbers` など）が
         // no-arg attribute として誤分類されないよう、no-arg 属性用ゲートに使う。
         var csharpAttrTopLevelRanges = csharpAttrTables.Item2;
+        var definitionNamesComparer = language == "sql"
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
         var definitionNamesByLine = symbols
             .GroupBy(symbol => symbol.Line)
-            .ToDictionary(group => group.Key, group => group.Select(symbol => symbol.Name).ToHashSet(StringComparer.Ordinal));
+            .ToDictionary(
+                group => group.Key,
+                group =>
+                {
+                    var names = new HashSet<string>(definitionNamesComparer);
+                    foreach (var symbol in group)
+                    {
+                        names.Add(symbol.Name);
+                        if (language == "sql")
+                        {
+                            var leafName = SqlNameResolver.GetLeafName(symbol.Name);
+                            if (!string.IsNullOrWhiteSpace(leafName))
+                                names.Add(leafName);
+                        }
+                    }
+
+                    return names;
+                });
+        var sqlDefinitionLeafSpansByLine = language == "sql"
+            ? BuildSqlDefinitionLeafSpansByLine(lines, symbols)
+            : null;
         // Include 'property' so expression-bodied and block-bodied property accessors
         // attribute their calls to the property rather than falling through to the
         // enclosing class (see issue #233).
@@ -733,6 +760,9 @@ public static class ReferenceExtractor
             var definitionNames = definitionNamesByLine.TryGetValue(lineNumber, out var namesOnLine)
                 ? namesOnLine
                 : null;
+            List<SqlDefinitionLeafSpan>? sqlDefinitionLeafSpans = null;
+            if (language == "sql")
+                sqlDefinitionLeafSpansByLine?.TryGetValue(lineNumber, out sqlDefinitionLeafSpans);
             var container = FindInnermostContainer(containerCandidates, lineNumber);
 
             // Per-line Java same-line ctor synthesis. When `public Leaf(){super(0); doWork();}`
@@ -801,6 +831,30 @@ public static class ReferenceExtractor
                 }
 
                 return container;
+            }
+
+            bool ShouldSuppressDefinitionCall(string resolvedName, int callIndex)
+            {
+                if (definitionNames == null)
+                    return false;
+
+                if (language != "sql")
+                    return definitionNames.Contains(resolvedName);
+
+                if (sqlDefinitionLeafSpans == null)
+                    return false;
+
+                foreach (var span in sqlDefinitionLeafSpans)
+                {
+                    if (callIndex >= span.StartIndex
+                        && callIndex < span.EndIndexExclusive
+                        && string.Equals(span.LeafName, resolvedName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
             }
 
             // Event subscription/unsubscription (C#) / イベント購読・解除 (C#)
@@ -999,7 +1053,7 @@ public static class ReferenceExtractor
                                 // `[ORDER]` / `` `order` `` のような正当な名前を落とさないため keyword ignore list をスキップする。
                                 if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
                                     continue;
-                                if (definitionNames != null && definitionNames.Contains(resolvedName))
+                                if (ShouldSuppressDefinitionCall(resolvedName, nameIndex))
                                     continue;
 
                                 var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
@@ -1325,7 +1379,7 @@ public static class ReferenceExtractor
                 }
                 if (IsIgnoredCallName(language, name))
                     return;
-                if (definitionNames != null && definitionNames.Contains(normalizedName))
+                if (ShouldSuppressDefinitionCall(normalizedName, callIndex))
                     return;
 
                 // issue #293: reclassify C# attribute / Java/Kotlin/Scala/TypeScript annotation
@@ -9084,6 +9138,142 @@ public static class ReferenceExtractor
         return segment.Length > 0 ? segment : null;
     }
 
+    private static Dictionary<int, List<SqlDefinitionLeafSpan>> BuildSqlDefinitionLeafSpansByLine(string[] lines, IReadOnlyList<SymbolRecord> symbols)
+    {
+        var spansByLine = new Dictionary<int, List<SqlDefinitionLeafSpan>>();
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Line < 1 || symbol.Line > lines.Length)
+                continue;
+            if (!TryFindSqlDefinitionLeafSpan(lines[symbol.Line - 1], symbol.Name, out var span))
+                continue;
+
+            if (!spansByLine.TryGetValue(symbol.Line, out var spans))
+            {
+                spans = [];
+                spansByLine[symbol.Line] = spans;
+            }
+
+            spans.Add(span);
+        }
+
+        return spansByLine;
+    }
+
+    private static bool TryFindSqlDefinitionLeafSpan(string line, string qualifiedName, out SqlDefinitionLeafSpan span)
+    {
+        span = default;
+        if (string.IsNullOrWhiteSpace(line) || string.IsNullOrWhiteSpace(qualifiedName))
+            return false;
+
+        var leafName = SqlNameResolver.GetLeafName(qualifiedName);
+        if (string.IsNullOrWhiteSpace(leafName))
+            return false;
+
+        var rawSegments = SplitSqlQualifiedNameSourceSegments(qualifiedName);
+        if (rawSegments.Count == 0)
+            return false;
+
+        var pattern = new StringBuilder();
+        for (var i = 0; i < rawSegments.Count; i++)
+        {
+            if (i > 0)
+                pattern.Append(@"\s*\.\s*");
+
+            var escaped = Regex.Escape(rawSegments[i]);
+            if (i == rawSegments.Count - 1)
+                pattern.Append("(?<leaf>").Append(escaped).Append(')');
+            else
+                pattern.Append(escaped);
+        }
+
+        var match = Regex.Match(line, pattern.ToString(), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success)
+            return false;
+
+        var leafGroup = match.Groups["leaf"];
+        if (!leafGroup.Success)
+            return false;
+
+        span = new SqlDefinitionLeafSpan(leafName, leafGroup.Index, leafGroup.Index + leafGroup.Length);
+        return true;
+    }
+
+    private static List<string> SplitSqlQualifiedNameSourceSegments(string qualifiedName)
+    {
+        var trimmed = qualifiedName.Trim();
+        var segments = new List<string>();
+        var current = new StringBuilder();
+        char quote = '\0';
+
+        for (var i = 0; i < trimmed.Length; i++)
+        {
+            var ch = trimmed[i];
+            if (quote != '\0')
+            {
+                current.Append(ch);
+                if (quote == '[')
+                {
+                    if (ch == ']')
+                    {
+                        if (i + 1 < trimmed.Length && trimmed[i + 1] == ']')
+                        {
+                            current.Append(trimmed[i + 1]);
+                            i++;
+                        }
+                        else
+                        {
+                            quote = '\0';
+                        }
+                    }
+
+                    continue;
+                }
+
+                if (ch == quote)
+                {
+                    if (i + 1 < trimmed.Length && trimmed[i + 1] == quote)
+                    {
+                        current.Append(trimmed[i + 1]);
+                        i++;
+                    }
+                    else
+                    {
+                        quote = '\0';
+                    }
+                }
+
+                continue;
+            }
+
+            if (ch is '[' or '"' or '`')
+            {
+                quote = ch;
+                current.Append(ch);
+                continue;
+            }
+
+            if (ch == '.')
+            {
+                AppendSqlQualifiedNameSourceSegment(segments, current);
+                continue;
+            }
+
+            current.Append(ch);
+        }
+
+        AppendSqlQualifiedNameSourceSegment(segments, current);
+        return segments;
+    }
+
+    private static void AppendSqlQualifiedNameSourceSegment(List<string> segments, StringBuilder current)
+    {
+        var value = current.ToString().Trim();
+        if (value.Length > 0)
+            segments.Add(value);
+        current.Clear();
+    }
+
     // SQL-aware line sanitizer used only for the SQL source/target and `EXEC` / `EXECUTE` / `CALL`
     // scans. Preserves backtick/bracket/double-quoted identifiers, blanks single-quoted strings
     // (including multiline bodies), multiline `/* ... */` comments, PostgreSQL `$$...$$` /
@@ -9357,6 +9547,11 @@ public static class ReferenceExtractor
             && !string.Equals(token, "TABLE", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(token, "EXEC", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(token, "EXECUTE", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ReplaceRegexMatchesWithSpaces(Regex regex, string input)
+    {
+        return regex.Replace(input, static match => match.Length == 0 ? string.Empty : new string(' ', match.Length));
     }
 
     private static string PrepareLine(string lang, string line)
