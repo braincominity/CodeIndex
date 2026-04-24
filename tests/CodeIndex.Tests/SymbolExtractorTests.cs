@@ -3813,6 +3813,60 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_NewEnumModifier_ExtractsEnumSymbol()
+    {
+        // Closes #353: nested `new enum` (member hiding in derived type) must be captured.
+        // Modifier order is free, so both `public new enum` and `new public enum` work, and
+        // an explicit underlying-type colon must still classify as kind `enum`.
+        // Closes #353: 派生型で親のネスト enum を隠蔽する `new enum` は enum としてキャプチャする。
+        // 修飾子の順序は自由で、`public new enum` と `new public enum` の両方、
+        // 明示的な基底型指定 `: byte` が付いた場合でも kind `enum` として分類する。
+        var content = """
+            namespace Demo;
+
+            public class Derived : Base
+            {
+                public new enum Kind { A }
+                public new enum KindByte : byte { A }
+                new public enum KindReversed { A }
+                new enum KindPrivate { A }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Kind" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "KindByte" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "KindReversed" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "KindPrivate");
+    }
+
+    [Fact]
+    public void Extract_CSharp_NewDelegateModifier_ExtractsDelegateSymbol()
+    {
+        // Regression for #353 companion: nested `new delegate` (member hiding in derived type)
+        // must stay captured. Modifier order is free, so both `public new delegate` and
+        // `new public delegate` work.
+        // #353 関連の回帰テスト: 派生型で親のネスト delegate を隠蔽する `new delegate` は
+        // delegate としてキャプチャし続ける。修飾子の順序は自由で、`public new delegate` と
+        // `new public delegate` の両方を受け付ける。
+        var content = """
+            namespace Demo;
+
+            public class Derived : Base
+            {
+                public new delegate int Handler(int x);
+                new public delegate int Reversed();
+                new delegate int PrivateD();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "Handler" && s.Visibility == "public" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "Reversed" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "PrivateD");
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineClassHeader_SignatureUnchanged()
     {
         var content = """
@@ -5434,6 +5488,57 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_ConstField_TupleReturnTypes()
+    {
+        // Closes #346: const fields with tuple / named-tuple / nullable-tuple /
+        // generic-over-tuple / global::-qualified / tuple-array return types were silently
+        // dropped because the const row's returnType char class had no `(`, `)`, `\s`, and no
+        // tuple alternative. The method row at the next priority was already immunized by
+        // the post-#349 CSharpNonTypeKeywordPattern / CSharpTypePattern consolidation, so no
+        // phantom `function const` row was emitted — the symbols simply vanished. Switching
+        // the const returnType to the shared CSharpTypePattern token restores capture for all
+        // of these shapes and preserves baselines (`public const int Plain = 42;`,
+        // `new public const int HiddenConst = 2;`).
+        // Closes #346: tuple / 名前付き tuple / nullable tuple / generic-over-tuple /
+        // `global::` 修飾 / tuple-array を戻り値型とする const フィールドは、const 行の
+        // returnType 文字クラスに `(` / `)` / `\s` も tuple 代替もなかったため、サイレントに
+        // drop されていた。method 行は #349 以後の CSharpNonTypeKeywordPattern /
+        // CSharpTypePattern 統合で既にこの後方参照経路を塞いでいるため、phantom `function const`
+        // 行は出ずに単に消えていた。const の returnType を共有トークン CSharpTypePattern に
+        // 差し替えることで、以下のすべての形を捕捉し、既存の baseline（`public const int Plain = 42;`
+        // / `new public const int HiddenConst = 2;`）も維持する。
+        var content = """
+            namespace ConstTuple;
+
+            public class Cfg
+            {
+                public const (int, int) Pair = (1, 2);
+                public const (int a, int b) NamedPair = (1, 2);
+                public const (int, int)? MaybePair = null;
+                public const (int, int)[] PairArray = null;
+                public const global::System.Int32 Qualified = 7;
+                public const int Plain = 42;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Pair" && s.Visibility == "public" && s.ReturnType == "(int, int)");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "NamedPair" && s.Visibility == "public" && s.ReturnType == "(int a, int b)");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MaybePair" && s.Visibility == "public" && s.ReturnType == "(int, int)?");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "PairArray" && s.Visibility == "public" && s.ReturnType == "(int, int)[]");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Qualified" && s.Visibility == "public" && s.ReturnType == "global::System.Int32");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Plain" && s.Visibility == "public" && s.ReturnType == "int");
+
+        // The method row must not emit a phantom `function const` row for any of the tuple
+        // shapes above. `const` itself as a name would only appear via the post-#349 backtrack
+        // the issue describes. Assert the negative so any regression of that phantom is caught.
+        // tuple 形に対して method 行が phantom `function const` 行を発行していないことを
+        // 明示的に確認する。`const` 自体が name として現れるのは #349 以後は起きないはずの
+        // 後方参照経路のみなので、将来その regression が起きたらここで検出できる。
+        Assert.DoesNotContain(symbols, s => s.Name == "const");
+    }
+
+    [Fact]
     public void Extract_CSharp_PlainField_FreeModifierOrder()
     {
         // Closes #355: plain fields (kind `property`) and multi-line field headers must also
@@ -5551,6 +5656,37 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "B" && s.Visibility == "public");
         Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "C" && s.Visibility == "public");
         Assert.Contains(symbols, s => s.Kind == "event" && s.Name == "D" && s.Visibility == "public");
+    }
+
+    [Fact]
+    public void Extract_CSharp_FileDelegate_Issue303Repro()
+    {
+        // Closes #303: the `file` modifier on a top-level delegate must not be dropped by
+        // the modifier slot, regardless of whether other variants share the same file.
+        // v1.10.0 captured plain / public / unsafe delegates but silently missed
+        // `file delegate`. The #355 fix (free modifier order; accept `file` / `new`) covers
+        // this, so this test locks in the behavior against the exact reproducer from #303.
+        // Closes #303: トップレベル delegate の `file` 修飾子が modifier スロットで落ちないこと。
+        // v1.10.0 では plain / public / unsafe delegate は拾えていたが `file delegate` だけが
+        // 黙って欠落していた。#355 の修正 (修飾子順序を自由化し `file` / `new` を受理) が
+        // 本件も解消するため、#303 の再現 fixture で挙動を固定する。
+        var content = """
+            namespace Demo;
+
+            public delegate void PublicHandler(object sender);
+
+            file delegate void FileOnlyHandler(object sender);
+
+            delegate void PlainHandler(object sender);
+
+            unsafe delegate void UnsafeHandler(object sender);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "PublicHandler" && s.Visibility == "public" && s.ReturnType == "void");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "FileOnlyHandler" && s.ReturnType == "void");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "PlainHandler" && s.ReturnType == "void");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "UnsafeHandler" && s.ReturnType == "void");
     }
 
     [Fact]
@@ -7545,6 +7681,21 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_QualifiedNamesAllowWhitespaceAroundDots()
+    {
+        var content =
+            "CREATE PROCEDURE [sales] . [sp_Report] AS SELECT 1;\n" +
+            "CREATE VIEW dbo . v_Orders AS SELECT 1;\n" +
+            "CREATE TYPE sales . Money AS ENUM ('usd');\n";
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name.Contains("sp_Report", StringComparison.Ordinal));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name.Contains("v_Orders", StringComparison.Ordinal));
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name.Contains("Money", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Extract_SQL_ProcedureBodyRange_TSqlBeginEnd()
     {
         // Multi-line T-SQL CREATE PROCEDURE with explicit BEGIN/END body terminated by GO.
@@ -8012,6 +8163,46 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "remote_db" && s.Signature != null && s.Signature.StartsWith("ALTER DATABASE LINK", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "data_dir" && s.Signature != null && s.Signature.StartsWith("ALTER DIRECTORY", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "app_profile" && s.Signature != null && s.Signature.StartsWith("ALTER PROFILE", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Extract_SQL_KeepsQualifiedNamesWhenDotsHaveSurroundingWhitespace()
+    {
+        var content =
+            "CREATE SCHEMA sales . reporting;\n" +
+            "CREATE SCHEMA AUTHORIZATION sales . auth_owner;\n" +
+            "CREATE SEQUENCE sales . seq_orders START WITH 1;\n" +
+            "CREATE EXTENSION \"sales\" . \"ext_demo\";\n" +
+            "CREATE SYNONYM [sales] . [syn_demo] FOR dbo.target;\n" +
+            "CREATE DATABASE LINK sales . remote_db CONNECT TO app IDENTIFIED BY 'x' USING 'REMOTE';\n" +
+            "CREATE LOGIN sales . app_login WITH PASSWORD = 'x';\n" +
+            "CREATE PARTITION FUNCTION sales . pf_orders (int) AS RANGE LEFT FOR VALUES (1);\n" +
+            "CREATE PARTITION SCHEME sales . ps_orders AS PARTITION sales . pf_orders ALL TO ([PRIMARY]);\n" +
+            "CREATE FULLTEXT CATALOG sales . ft_catalog;\n" +
+            "CREATE INDEX sales . idx_users_email ON dbo.Users (Email);\n" +
+            "ALTER PARTITION FUNCTION sales . pf_orders() SPLIT RANGE (2);\n" +
+            "ALTER SCHEMA sales . reporting TRANSFER dbo.Users;\n" +
+            "ALTER EXTENSION \"sales\" . \"ext_demo\" UPDATE TO '2.0';\n" +
+            "ALTER DATABASE LINK sales . remote_db;\n" +
+            "ALTER SEQUENCE sales . seq_orders RESTART WITH 10;\n" +
+            "ALTER SYNONYM [sales] . [syn_demo] FOR dbo.target;\n" +
+            "ALTER LOGIN sales . app_login WITH DEFAULT_DATABASE = master;\n" +
+            "ALTER INDEX sales . idx_users_email REBUILD;\n" +
+            "ALTER PARTITION SCHEME sales . ps_orders NEXT USED [PRIMARY];\n" +
+            "ALTER FULLTEXT CATALOG sales . ft_catalog REORGANIZE;\n";
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "sales.reporting");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "sales.auth_owner");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.seq_orders");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "\"sales\".\"ext_demo\"");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "[sales].[syn_demo]");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.remote_db");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.app_login");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "sales.pf_orders");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.ps_orders");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.ft_catalog");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.idx_users_email");
     }
 
     [Fact]

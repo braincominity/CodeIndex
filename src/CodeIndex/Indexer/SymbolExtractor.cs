@@ -69,6 +69,9 @@ public static class SymbolExtractor
     private const string CSharpIdentifierPattern = @"@?[_\p{L}]\w*";
     private const string CSharpNamespacePattern = CSharpIdentifierPattern + @"(?:\." + CSharpIdentifierPattern + @")*";
     private const string CSharpTypeTokenCharsPattern = @"[\w@?.<>\[\],:*]";
+    private const string SqlQualifiedIdentifierSegmentPattern = @"(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)";
+    private const string SqlQualifiedIdentifierPattern =
+        @"(?:" + SqlQualifiedIdentifierSegmentPattern + @")(?:\s*\.\s*(?:" + SqlQualifiedIdentifierSegmentPattern + @"))*";
     private const string CSharpTypeSegmentPattern =
         @"(?:" + CSharpTypeTokenCharsPattern + @"+(?:" + CSharpTupleGroupPattern + CSharpTypeTokenCharsPattern + @"*)*|" + CSharpTupleGroupPattern + CSharpTypeTokenCharsPattern + @"*)";
     private const string CSharpTypePattern =
@@ -242,7 +245,12 @@ public static class SymbolExtractor
         "public", "private", "protected", "static", "readonly", "abstract", "override", "async", "get", "set"
     ];
 
-    private static readonly Regex CSharpEnumDeclarationRegex = new($@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+|(?:file)\s+)*enum\s+(?<name>{CSharpIdentifierPattern})", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    // Enum declaration — visibility optional; modifier order is free. Accepts `file` (file-scoped
+    // enum) and `new` (member-hiding nested enum in a derived type) as non-visibility modifiers.
+    // Closes #353.
+    // enum 宣言 — visibility は任意で、修飾子の順序は自由。非 visibility 修飾子として `file`
+    // （ファイルスコープ enum）と `new`（派生型でのネスト enum 隠蔽）を受け付ける。Closes #353.
+    private static readonly Regex CSharpEnumDeclarationRegex = new($@"^\s*(?:(?<visibility>public|private|protected\s+internal|private\s+protected|protected|internal)\s+|(?:file|new)\s+)*enum\s+(?<name>{CSharpIdentifierPattern})", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpEnumMemberRegex = new(@"^\s*(?<name>@?[_\p{L}]\w*)\s*(?:=\s*(?:-?\d|0x|@?[_\p{L}]\w*(?:\s*\|\s*@?[_\p{L}]\w*)*)[^""']*)?,?\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CSharpEnumMemberNameRegex = new(@"^\s*(?<name>@?[_\p{L}]\w*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex JavaCompactConstructorRegex = new(
@@ -379,10 +387,22 @@ public static class SymbolExtractor
             // Const field — must come before class/method patterns to avoid misclassification.
             // Modifier order is free: visibility may appear anywhere in the modifier sequence,
             // so `new public const` and `public new const` are both captured. Closes #355.
+            // returnType uses the shared CSharpTypePattern (same token the method / property /
+            // indexer / delegate / event rows already use) so tuple / named-tuple /
+            // nullable-tuple / generic-over-tuple / global::-qualified / tuple-array const field
+            // types are captured instead of silently dropped. The legacy hand-rolled char class
+            // had no `(`, `)`, or `\s`, so `public const (int, int) Pair = (1, 2);` failed the
+            // returnType group and fell through every subsequent row. Closes #346.
             // const フィールド — クラス/メソッドパターンより前に配置し誤分類を防ぐ。
             // 修飾子順序は自由で、visibility は修飾子列の任意位置に現れてよい（例: `new public const` /
             // `public new const`）。Closes #355.
-            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:new|static)\s+)*const\s+(?<returnType>[\w@?.<>\[\],:]+)\s+(?<name>{CSharpIdentifierPattern})\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            // returnType は method / property / indexer / delegate / event 行で既に使っている共有
+            // トークン CSharpTypePattern を使う。これにより tuple / 名前付き tuple / nullable tuple /
+            // generic-over-tuple / `global::` 修飾 / tuple-array を戻り値型とする const フィールドを
+            // 取りこぼさない。従来の手書き文字クラスには `(` / `)` / `\s` が無く、
+            // `public const (int, int) Pair = (1, 2);` は returnType 群で失敗し、以降のどの行にも
+            // マッチしなかった。Closes #346.
+            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:new|static)\s+)*const\s+(?<returnType>{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
             // Static readonly field / static readonly フィールド
             // Modifier order is free: `static` and `readonly` may appear in any order, and `new`
             // (member hiding) may appear anywhere in the modifier sequence. Visibility is also
@@ -920,7 +940,7 @@ public static class SymbolExtractor
             //（schema.name、[dbo].[sp_X]、"s"."n"）。
             // CREATE TABLE / VIEW — Postgres TEMP/UNLOGGED + MATERIALIZED VIEW, T-SQL `CREATE OR ALTER` (2016+)
             // CREATE TABLE / VIEW — Postgres の TEMP/UNLOGGED や MATERIALIZED VIEW、T-SQL の `CREATE OR ALTER`（2016+）に対応
-            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:(?:(?:GLOBAL|LOCAL)\s+)?(?:TEMP|TEMPORARY)\s+|UNLOGGED\s+)?(?:TABLE|(?:MATERIALIZED\s+)?VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex($@"^\s*CREATE\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:(?:(?:GLOBAL|LOCAL)\s+)?(?:TEMP|TEMPORARY)\s+|UNLOGGED\s+)?(?:TABLE|(?:MATERIALIZED\s+)?VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // CREATE PROCEDURE / PROC / FUNCTION / TRIGGER — Postgres `OR REPLACE` and T-SQL `OR ALTER` / `PROC` short form
             // Uses BodyStyle.SqlProcBody so the body range covers the BEGIN...END / dollar-quoted body,
             // letting ReferenceExtractor.ResolveContainerForCall attribute calls inside the body to the
@@ -928,37 +948,37 @@ public static class SymbolExtractor
             // CREATE PROCEDURE / PROC / FUNCTION / TRIGGER — Postgres の `OR REPLACE` と T-SQL の `OR ALTER` / 短縮形 `PROC` に対応
             // BodyStyle.SqlProcBody により BEGIN...END / dollar-quoted の本体範囲を求め、ReferenceExtractor の
             // ResolveContainerForCall が本体内の呼び出しを外側のプロシージャに帰属させられるようにする（issue #429）。
-            new("function", new Regex(@"^\s*CREATE\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:PROCEDURE|PROC|FUNCTION|TRIGGER)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.SqlProcBody),
-            new("enum",     new Regex(@"^\s*CREATE\s+TYPE\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)\s+AS\s+ENUM\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("function", new Regex($@"^\s*CREATE\s+(?:OR\s+(?:REPLACE|ALTER)\s+)?(?:PROCEDURE|PROC|FUNCTION|TRIGGER)\b\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.SqlProcBody),
+            new("enum",     new Regex($@"^\s*CREATE\s+TYPE\s+(?<name>{SqlQualifiedIdentifierPattern})\s+AS\s+ENUM\b", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // Oracle: CREATE [OR REPLACE] TYPE BODY <name> and CREATE [OR REPLACE] PACKAGE [BODY] <name>.
             // These must precede the bare CREATE TYPE / CREATE PACKAGE rows so the `BODY` keyword is
             // not absorbed as the object name.
             // Oracle: CREATE [OR REPLACE] TYPE BODY <name> と CREATE [OR REPLACE] PACKAGE [BODY] <name>。
             // 裸の CREATE TYPE / CREATE PACKAGE 行より前に置き、`BODY` キーワードを name として
             // 飲み込まないようにする。
-            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?TYPE\s+BODY\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:EDITIONABLE\s+|NONEDITIONABLE\s+)?PACKAGE\s+BODY\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:EDITIONABLE\s+|NONEDITIONABLE\s+)?PACKAGE\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?TYPE\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("namespace", new Regex(@"^\s*CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:(?<name>(?!AUTHORIZATION\b)(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)|AUTHORIZATION\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*))", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*CREATE\s+(?:SEQUENCE|DOMAIN)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("import",   new Regex(@"^\s*CREATE\s+EXTENSION\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex($@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?TYPE\s+BODY\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex($@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:EDITIONABLE\s+|NONEDITIONABLE\s+)?PACKAGE\s+BODY\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex($@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:EDITIONABLE\s+|NONEDITIONABLE\s+)?PACKAGE\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex($@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?TYPE\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("namespace", new Regex($@"^\s*CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:(?<name>(?!AUTHORIZATION\b){SqlQualifiedIdentifierPattern})|AUTHORIZATION\s+(?<name>{SqlQualifiedIdentifierPattern}))", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex($@"^\s*CREATE\s+(?:SEQUENCE|DOMAIN)\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("import",   new Regex($@"^\s*CREATE\s+EXTENSION\s+(?:IF\s+NOT\s+EXISTS\s+)?(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // T-SQL SYNONYM (also Oracle / DB2)
-            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:PUBLIC\s+)?SYNONYM\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex($@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:PUBLIC\s+)?SYNONYM\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // Oracle: CREATE [SHARED] [PUBLIC] DATABASE LINK <name> — must precede the bare CREATE DATABASE row
             // so the `LINK` token is not taken as a name. SHARED and PUBLIC may appear together in that order.
             // Oracle: CREATE [SHARED] [PUBLIC] DATABASE LINK <name> — 裸の CREATE DATABASE 行より前に置き、
             // `LINK` を name として飲み込まないようにする。SHARED と PUBLIC はこの順で 2 語並ぶことがある。
-            new("class",    new Regex(@"^\s*CREATE\s+(?:SHARED\s+)?(?:PUBLIC\s+)?DATABASE\s+LINK\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex($@"^\s*CREATE\s+(?:SHARED\s+)?(?:PUBLIC\s+)?DATABASE\s+LINK\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // T-SQL server-level / database-level principals and objects, plus Oracle-only DIRECTORY / CONTEXT / PROFILE.
             // T-SQL のサーバ/データベースレベルのプリンシパル・オブジェクトと、Oracle 固有の DIRECTORY / CONTEXT / PROFILE。
-            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:DATABASE|LOGIN|USER|ROLE|CERTIFICATE|DIRECTORY|CONTEXT|PROFILE)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex($@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:DATABASE|LOGIN|USER|ROLE|CERTIFICATE|DIRECTORY|CONTEXT|PROFILE)\b\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // T-SQL partitioning and full-text catalogs
             // T-SQL のパーティション関連と全文検索カタログ
-            new("function", new Regex(@"^\s*CREATE\s+PARTITION\s+FUNCTION\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*CREATE\s+PARTITION\s+SCHEME\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*CREATE\s+FULLTEXT\s+CATALOG\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(?!ON\b)(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("function", new Regex($@"^\s*CREATE\s+PARTITION\s+FUNCTION\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex($@"^\s*CREATE\s+PARTITION\s+SCHEME\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex($@"^\s*CREATE\s+FULLTEXT\s+CATALOG\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex($@"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?(?!ON\b)(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // ALTER covers the same object kinds we create above, so migration scripts remain visible.
             // Kinds are split to match the CREATE side (procedure-like → function, schema → namespace,
             // extension → import, everything else → class) so `symbols --kind` / `definition` / `inspect`
@@ -973,10 +993,10 @@ public static class SymbolExtractor
             // ALTER PROCEDURE / PROC / FUNCTION / TRIGGER は CREATE と同じ本体形状を持つため
             // BodyStyle.SqlProcBody を使う。ALTER PARTITION FUNCTION は本体を持たない
             // （パーティション境界の変更のみ）ため、下の別パターンで BodyStyle.None のままにする。
-            new("function", new Regex(@"^\s*ALTER\s+(?:PROCEDURE|PROC|FUNCTION|TRIGGER)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.SqlProcBody),
-            new("function", new Regex(@"^\s*ALTER\s+PARTITION\s+FUNCTION\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("namespace", new Regex(@"^\s*ALTER\s+SCHEMA\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("import",   new Regex(@"^\s*ALTER\s+EXTENSION\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("function", new Regex($@"^\s*ALTER\s+(?:PROCEDURE|PROC|FUNCTION|TRIGGER)\b\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.SqlProcBody),
+            new("function", new Regex($@"^\s*ALTER\s+PARTITION\s+FUNCTION\b\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("namespace", new Regex($@"^\s*ALTER\s+SCHEMA\b\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("import",   new Regex($@"^\s*ALTER\s+EXTENSION\b\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
             // Oracle: ALTER DATABASE LINK <name> — must precede the bare ALTER DATABASE row so `LINK`
             // is not absorbed as the object name. Real Oracle body compilation is expressed as
             // `ALTER PACKAGE <name> COMPILE BODY` / `ALTER TYPE <name> COMPILE BODY` and falls through
@@ -985,8 +1005,8 @@ public static class SymbolExtractor
             // として飲み込まないようにする。Oracle の body コンパイルは実際には
             // `ALTER PACKAGE <name> COMPILE BODY` / `ALTER TYPE <name> COMPILE BODY` の形で、下の
             // generic ALTER 行で拾う。`ALTER PACKAGE BODY <name>` のような構文は Oracle に存在しない。
-            new("class",    new Regex(@"^\s*ALTER\s+DATABASE\s+LINK\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
-            new("class",    new Regex(@"^\s*ALTER\s+(?:TABLE|(?:MATERIALIZED\s+)?VIEW|SEQUENCE|SYNONYM|LOGIN|USER|ROLE|DATABASE|CERTIFICATE|INDEX|PACKAGE|TYPE|DOMAIN|DIRECTORY|PROFILE|PARTITION\s+SCHEME|FULLTEXT\s+CATALOG)\b\s+(?<name>(?:\[[^\]]+\]|""[^""]+""|[\w$#]+)(?:\.(?:\[[^\]]+\]|""[^""]+""|[\w$#]+))*)", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex($@"^\s*ALTER\s+DATABASE\s+LINK\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
+            new("class",    new Regex($@"^\s*ALTER\s+(?:TABLE|(?:MATERIALIZED\s+)?VIEW|SEQUENCE|SYNONYM|LOGIN|USER|ROLE|DATABASE|CERTIFICATE|INDEX|PACKAGE|TYPE|DOMAIN|DIRECTORY|PROFILE|PARTITION\s+SCHEME|FULLTEXT\s+CATALOG)\b\s+(?<name>{SqlQualifiedIdentifierPattern})", RegexOptions.Compiled | RegexOptions.IgnoreCase), BodyStyle.None),
         ],
         ["terraform"] =
         [
@@ -14951,6 +14971,7 @@ public static class SymbolExtractor
         {
             "csharp" => NormalizeCSharpSymbolName(name, match, matchLine),
             "kotlin" => NormalizeKotlinSymbolName(name, matchLine),
+            "sql" => NormalizeSqlSymbolName(name),
             _ => name,
         };
     }
@@ -14983,6 +15004,85 @@ public static class SymbolExtractor
             || string.Equals(trimmedName, "companion object", StringComparison.Ordinal)
             ? "Companion"
             : name;
+    }
+
+    private static string NormalizeSqlSymbolName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return name;
+
+        var trimmed = name.Trim();
+        var normalized = new StringBuilder(trimmed.Length);
+        char quote = '\0';
+        var pendingWhitespace = false;
+
+        for (var i = 0; i < trimmed.Length; i++)
+        {
+            var ch = trimmed[i];
+            if (quote != '\0')
+            {
+                normalized.Append(ch);
+                if (quote == '[')
+                {
+                    if (ch == ']')
+                    {
+                        if (i + 1 < trimmed.Length && trimmed[i + 1] == ']')
+                        {
+                            normalized.Append(']');
+                            i++;
+                        }
+                        else
+                        {
+                            quote = '\0';
+                        }
+                    }
+                }
+                else if (ch == quote)
+                {
+                    if (i + 1 < trimmed.Length && trimmed[i + 1] == quote)
+                    {
+                        normalized.Append(quote);
+                        i++;
+                    }
+                    else
+                    {
+                        quote = '\0';
+                    }
+                }
+
+                continue;
+            }
+
+            if (char.IsWhiteSpace(ch))
+            {
+                pendingWhitespace = normalized.Length > 0;
+                continue;
+            }
+
+            if (ch == '.')
+            {
+                if (normalized.Length == 0 || normalized[^1] == '.')
+                    continue;
+
+                normalized.Append('.');
+                pendingWhitespace = false;
+                while (i + 1 < trimmed.Length && char.IsWhiteSpace(trimmed[i + 1]))
+                    i++;
+                continue;
+            }
+
+            if (pendingWhitespace)
+            {
+                normalized.Append(' ');
+                pendingWhitespace = false;
+            }
+
+            normalized.Append(ch);
+            if (ch is '[' or '"' or '`')
+                quote = ch;
+        }
+
+        return normalized.ToString();
     }
 
     private static bool TryReadCSharpConversionOperatorName(Match match, string matchLine, out string name)
