@@ -6819,6 +6819,55 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunStatus_Json_ReadOnlyUriFoldRemediationUsesWritableDbPath()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_fold_only_uri");
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var db = new DbContext(dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version'";
+                cmd.ExecuteNonQuery();
+
+                using var checkpoint = db.Connection.CreateCommand();
+                checkpoint.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+                checkpoint.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", readOnlyUri, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("stale_fold_key_version", json.GetProperty("fold_ready_reason").GetString());
+            Assert.Contains(dbPath, json.GetProperty("recommended_action").GetString());
+            Assert.Contains(dbPath, json.GetProperty("alternative_action").GetString());
+            Assert.DoesNotContain("immutable=1", json.GetProperty("recommended_action").GetString());
+            Assert.DoesNotContain("immutable=1", json.GetProperty("alternative_action").GetString());
+            Assert.DoesNotContain("file:", json.GetProperty("recommended_action").GetString());
+            Assert.DoesNotContain("file:", json.GetProperty("alternative_action").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
     public void RunStatus_HumanOutput_WarnsWhenHotspotFamilyTrustIsDegraded()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_status_hotspots_family_human");

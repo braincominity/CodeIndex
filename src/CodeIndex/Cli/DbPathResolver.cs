@@ -74,6 +74,25 @@ public static class DbPathResolver
         }
     }
 
+    /// <summary>
+    /// Best-effort: resolve a DB reference used for write commands to a writable filesystem path.
+    /// Plain paths pass through; `file:///...?...` URIs are normalized to their local path when possible.
+    /// Returns false when a writable local path cannot be derived safely.
+    /// 書き込み系コマンド向けに DB 参照をローカルの writable path へ解決する。安全に解決できない場合は false。
+    /// </summary>
+    public static bool TryResolveWritableMutationDbPath(string dbPath, out string writableDbPath)
+    {
+        var normalized = NormalizeDbPath(dbPath);
+        if (normalized.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+        {
+            writableDbPath = string.Empty;
+            return false;
+        }
+
+        writableDbPath = Path.GetFullPath(normalized);
+        return true;
+    }
+
     private static string? TryReadIndexedProjectRoot(string dbPath)
     {
         try
@@ -165,7 +184,7 @@ public static class DbPathResolver
         return new SqliteConnection(builder.ConnectionString);
     }
 
-    private static bool UriRequestsReadOnly(string uriText)
+    public static bool UriRequestsReadOnly(string uriText)
     {
         var qIdx = uriText.IndexOf('?');
         if (qIdx < 0) return false;

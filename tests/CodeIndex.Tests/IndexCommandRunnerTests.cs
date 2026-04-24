@@ -792,6 +792,33 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_ReadOnlyUriDbPath_PrintsActionableErrorInsteadOfCrashing()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "class App {}\n");
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+
+            var (exitCode, stdout, stderr) = RunCliInSubprocess([projectRoot, "--db", readOnlyUri, "--json"], projectRoot);
+
+            using var document = JsonDocument.Parse(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("database must be writable for index", json.GetProperty("message").GetString());
+            Assert.Contains("Point `--db` at a writable filesystem path", json.GetProperty("hint").GetString());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunBackfillFold_BackfillsLegacyRowsAndStampsFoldReady()
     {
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_backfill_fold_{Guid.NewGuid():N}.db");

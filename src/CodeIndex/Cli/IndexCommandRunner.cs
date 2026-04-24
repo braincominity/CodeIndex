@@ -31,20 +31,9 @@ public static class IndexCommandRunner
         }
 
         var dbPath = DbPathResolver.ResolveForIndex(options.ProjectPath, options.DbPath);
-        var resolvedDbPath = Path.GetFullPath(DbPathResolver.NormalizeDbPath(dbPath));
         var stopwatch = Stopwatch.StartNew();
         var isUpdateMode = options.Commits.Count > 0 || options.UpdateFiles.Count > 0;
         var mode = options.Rebuild ? "rebuild" : isUpdateMode ? "update" : "incremental";
-
-        if (!options.Json)
-        {
-            ConsoleUi.PrintBanner();
-            Console.WriteLine();
-            Console.WriteLine($"  Project : {Path.GetFullPath(options.ProjectPath)}");
-            Console.WriteLine($"  Output  : {resolvedDbPath}");
-            Console.WriteLine($"  Mode    : {mode}");
-            Console.WriteLine();
-        }
 
         if (!Directory.Exists(options.ProjectPath))
         {
@@ -78,6 +67,29 @@ public static class IndexCommandRunner
                 Console.Error.WriteLine("Hint: drop `--rebuild` for `--commits`/`--files`, or rerun `cdidx index <projectPath> --rebuild` for a full rescan.");
             }
             return CommandExitCodes.UsageError;
+        }
+
+        if (DbPathResolver.UriRequestsReadOnly(dbPath))
+        {
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                $"database must be writable for index: {dbPath}",
+                CommandExitCodes.DatabaseError,
+                "Point `--db` at a writable filesystem path, or omit `--db` to use `<projectPath>/.cdidx/codeindex.db`.");
+        }
+
+        dbPath = DbPathResolver.NormalizeDbPath(dbPath);
+        var resolvedDbPath = Path.GetFullPath(dbPath);
+
+        if (!options.Json)
+        {
+            ConsoleUi.PrintBanner();
+            Console.WriteLine();
+            Console.WriteLine($"  Project : {Path.GetFullPath(options.ProjectPath)}");
+            Console.WriteLine($"  Output  : {resolvedDbPath}");
+            Console.WriteLine($"  Mode    : {mode}");
+            Console.WriteLine();
         }
 
         var ignoreCase = GitHelper.ResolveIgnoreCase(options.ProjectPath);
@@ -1828,9 +1840,10 @@ public static class IndexCommandRunner
 
     private static string QuoteCommandArgument(string value)
     {
-        var fullPath = value.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
-            ? value
-            : Path.GetFullPath(value);
+        var fullPath = DbPathResolver.NormalizeDbPath(value);
+        if (!fullPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            fullPath = Path.GetFullPath(fullPath);
+
         return fullPath.IndexOfAny([' ', '\t', '"']) >= 0
             ? $"\"{fullPath.Replace("\"", "\\\"", StringComparison.Ordinal)}\""
             : fullPath;

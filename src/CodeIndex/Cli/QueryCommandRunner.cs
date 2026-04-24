@@ -3221,10 +3221,7 @@ public static class QueryCommandRunner
         if (!dbPathExplicit)
             return "cdidx backfill-fold";
 
-        var resolvedDbPath = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
-            ? dbPath
-            : Path.GetFullPath(dbPath);
-        return $"cdidx backfill-fold --db {QuoteCommandArgument(resolvedDbPath)}";
+        return $"cdidx backfill-fold --db {QuoteCommandArgument(ResolveWritableDbPathOrPlaceholder(dbPath))}";
     }
 
     private static string BuildCSharpCanonicalNameRepairCommand(DbReader reader, QueryCommandOptions options)
@@ -3256,20 +3253,27 @@ public static class QueryCommandRunner
         if (!dbPathExplicit)
             return $"cdidx index .{rebuildSuffix}";
 
-        var resolvedDbPath = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
-            ? dbPath
-            : Path.GetFullPath(dbPath);
+        var resolvedDbPath = ResolveWritableDbPathOrPlaceholder(dbPath);
         var targetProject = string.IsNullOrWhiteSpace(projectRoot)
             ? "<projectPath>"
             : QuoteCommandArgument(projectRoot);
         return $"cdidx index {targetProject} --db {QuoteCommandArgument(resolvedDbPath)}{rebuildSuffix}";
     }
 
+    private static string ResolveWritableDbPathOrPlaceholder(string dbPath)
+        => DbPathResolver.TryResolveWritableMutationDbPath(dbPath, out var writableDbPath)
+            ? writableDbPath
+            : "<writable-db-path>";
+
     private static string QuoteCommandArgument(string value)
     {
-        var fullPath = value.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
-            ? value
-            : Path.GetFullPath(value);
+        if (value.Length >= 2 && value[0] == '<' && value[^1] == '>')
+            return value;
+
+        var fullPath = DbPathResolver.NormalizeDbPath(value);
+        if (!fullPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            fullPath = Path.GetFullPath(fullPath);
+
         return fullPath.IndexOfAny([' ', '\t', '"']) >= 0
             ? $"\"{fullPath.Replace("\"", "\\\"", StringComparison.Ordinal)}\""
             : fullPath;
