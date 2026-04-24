@@ -1646,6 +1646,199 @@ internal static class StructuralLineMasker
 
             lines[i] = new string(masked);
         }
+
+        // Post-pass: drop `of` hits whose enclosing `for (...)` header is a for-of or
+        // for-await-of loop. `of` is not a reserved word in ECMAScript, so `const of =
+        // ...; of\`x\`` must stay visible — only the loop-header form should be silenced.
+        // The check is done against the fully masked buffer so the template body cannot
+        // inject false tokens, and it walks across line boundaries to cover multi-line
+        // headers like `for (\n  const ch of \`abc\`\n)`.
+        // 後段パス: 囲む `for (...)` ヘッダが for-of / for-await-of の場合のみ `of` ヒット
+        // を除外する。`of` は ECMAScript の予約語ではなく `const of = ...; of\`x\`` は正当
+        // なので、ループヘッダ形だけを静かにする必要がある。マスク後バッファに対して
+        // 検査するため template 本体が誤トークンを混入させることがなく、
+        // `for (\n  const ch of \`abc\`\n)` のような複数行ヘッダも行境界を越えて処理する。
+        if (taggedTemplateHits != null && taggedTemplateHits.Count > 0)
+            FilterJsForOfHeaderHits(lines, taggedTemplateHits);
+    }
+
+    private static void FilterJsForOfHeaderHits(string[] lines, List<JsTaggedTemplateHit> hits)
+    {
+        for (int h = hits.Count - 1; h >= 0; h--)
+        {
+            var hit = hits[h];
+            if (hit.Name != "of")
+                continue;
+            if (IsJsForOfHeaderContext(lines, hit.Line - 1, hit.Column - 1))
+                hits.RemoveAt(h);
+        }
+    }
+
+    // From (lineIdx, colIdx) pointing at the start of the `of` token, decide whether `of`
+    // is the iterator keyword of a for-of / for-await-of header. Classic `for (init; cond;
+    // step)` keeps `of` visible as a real tagged-template call.
+    // `of` トークン先頭 (lineIdx, colIdx) を起点に、その `of` が for-of / for-await-of の
+    // 反復子キーワードかを判定する。古典形 `for (init; cond; step)` 内の `of` はタグとして
+    // 残す。
+    private static bool IsJsForOfHeaderContext(string[] lines, int lineIdx, int colIdx)
+    {
+        if (lineIdx < 0 || lineIdx >= lines.Length)
+            return false;
+
+        if (!TryFindEnclosingOpenParen(lines, lineIdx, colIdx, out var openLine, out var openCol))
+            return false;
+
+        if (!PrecedingTokenIsForKeyword(lines, openLine, openCol))
+            return false;
+
+        return HasNoTopLevelSemicolonInParenGroup(lines, openLine, openCol);
+    }
+
+    // Walk backward from just before (startLine, startCol) through masked lines to find the
+    // nearest unmatched `(`. Balanced `()` / `[]` / `{}` groups are skipped. Escaping an
+    // unmatched `[` or `{` means `of` is not inside a paren-group at all; return false.
+    // (startLine, startCol) の直前から masked lines を後方に走査し、釣り合っていない最
+    // 近傍の `(` を探す。釣り合いのとれた `()` / `[]` / `{}` は飛ばす。未対応の `[` / `{`
+    // を抜ける場合は paren-group 内にないため false を返す。
+    private static bool TryFindEnclosingOpenParen(string[] lines, int startLine, int startCol, out int openLine, out int openCol)
+    {
+        openLine = -1;
+        openCol = -1;
+        int parenDepth = 0;
+        int bracketDepth = 0;
+        int braceDepth = 0;
+        int curCol = startCol - 1;
+        for (int li = startLine; li >= 0; li--)
+        {
+            var line = lines[li];
+            if (li != startLine)
+                curCol = line.Length - 1;
+            for (int c = curCol; c >= 0; c--)
+            {
+                char ch = line[c];
+                if (ch == ')') { parenDepth++; continue; }
+                if (ch == ']') { bracketDepth++; continue; }
+                if (ch == '}') { braceDepth++; continue; }
+                if (ch == '[')
+                {
+                    if (bracketDepth > 0) { bracketDepth--; continue; }
+                    return false;
+                }
+                if (ch == '{')
+                {
+                    if (braceDepth > 0) { braceDepth--; continue; }
+                    return false;
+                }
+                if (ch == '(')
+                {
+                    if (parenDepth > 0) { parenDepth--; continue; }
+                    openLine = li;
+                    openCol = c;
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // Check whether the token immediately before the `(` at (openLine, openCol) is `for`
+    // (optionally followed by an `await` token between `for` and `(`). Whitespace and
+    // line breaks between the keyword and `(` are tolerated.
+    // (openLine, openCol) の `(` 直前トークンが `for`（`for` と `(` の間に `await` が入る
+    // 形も許容）であるかを判定する。キーワードと `(` の間の空白・改行は許容する。
+    private static bool PrecedingTokenIsForKeyword(string[] lines, int openLine, int openCol)
+    {
+        int li = openLine;
+        int c = openCol - 1;
+        if (!SkipWhitespaceBackward(lines, ref li, ref c))
+            return false;
+        if (!TryReadIdentifierBackward(lines, ref li, ref c, out var token1))
+            return false;
+        if (token1 == "for")
+            return true;
+        if (token1 != "await")
+            return false;
+        if (!SkipWhitespaceBackward(lines, ref li, ref c))
+            return false;
+        if (!TryReadIdentifierBackward(lines, ref li, ref c, out var token2))
+            return false;
+        return token2 == "for";
+    }
+
+    // Starting from `(` at (openLine, openCol), walk forward to the matching `)` and
+    // report whether the paren group contains zero top-level `;`. Zero means for-of /
+    // for-await-of shape; any top-level `;` means classic `for (init; cond; step)`.
+    // (openLine, openCol) の `(` から対応する `)` までを前方走査し、トップレベルの `;` が
+    // 1 つも無ければ for-of / for-await-of 形、1 つ以上あれば古典形 `for (init; cond;
+    // step)` と判断する。
+    private static bool HasNoTopLevelSemicolonInParenGroup(string[] lines, int openLine, int openCol)
+    {
+        int parenDepth = 1;
+        int bracketDepth = 0;
+        int braceDepth = 0;
+        for (int li = openLine; li < lines.Length; li++)
+        {
+            var line = lines[li];
+            int startCol = (li == openLine) ? openCol + 1 : 0;
+            for (int c = startCol; c < line.Length; c++)
+            {
+                char ch = line[c];
+                if (ch == '(') { parenDepth++; continue; }
+                if (ch == ')')
+                {
+                    parenDepth--;
+                    if (parenDepth == 0)
+                        return true;
+                    continue;
+                }
+                if (ch == '[') { bracketDepth++; continue; }
+                if (ch == ']') { if (bracketDepth > 0) bracketDepth--; continue; }
+                if (ch == '{') { braceDepth++; continue; }
+                if (ch == '}') { if (braceDepth > 0) braceDepth--; continue; }
+                if (ch == ';' && parenDepth == 1 && bracketDepth == 0 && braceDepth == 0)
+                    return false;
+            }
+        }
+        return false;
+    }
+
+    private static bool SkipWhitespaceBackward(string[] lines, ref int li, ref int c)
+    {
+        while (true)
+        {
+            while (c < 0)
+            {
+                li--;
+                if (li < 0)
+                    return false;
+                c = lines[li].Length - 1;
+            }
+            char ch = lines[li][c];
+            if (ch == ' ' || ch == '\t')
+            {
+                c--;
+                continue;
+            }
+            return true;
+        }
+    }
+
+    private static bool TryReadIdentifierBackward(string[] lines, ref int li, ref int c, out string token)
+    {
+        token = string.Empty;
+        if (li < 0 || li >= lines.Length || c < 0)
+            return false;
+        var line = lines[li];
+        if (c >= line.Length || !IsJsIdentifierPart(line[c]))
+            return false;
+        int end = c + 1;
+        while (c >= 0 && IsJsIdentifierPart(line[c]))
+            c--;
+        int start = c + 1;
+        if (!IsJsIdentifierStart(line[start]))
+            return false;
+        token = line.Substring(start, end - start);
+        return true;
     }
 
     // Advance past one JS/TS token (identifier run, numeric run, single non-string/regex char)
@@ -1845,66 +2038,7 @@ internal static class StructuralLineMasker
             return;
 
         var name = new string(masked, start, end - start);
-        if (name == "of" && IsInsideJsForHeader(masked, start))
-            return;
         hits.Add(new JsTaggedTemplateHit(lineIndex + 1, start + 1, name));
-    }
-
-    // `of` is an unreserved identifier in ECMAScript and may legitimately be used as a tag
-    // (`const of = ...; of\`x\``). We only want to suppress the `for (<decl> of \`...\`)` loop-
-    // header form. Walk backward from `fromIndex` to the nearest unmatched `(` and verify the
-    // token immediately before that `(` is the `for` keyword (optionally followed by `await`).
-    // This limits the suppression to the loop-header context and keeps real `of` tags visible
-    // in references / callers / callees / impact. Only the current line is inspected — the
-    // far rarer multi-line `for (\n  const x of \`...\`\n)` form is out of scope.
-    // `of` は ECMAScript の予約語ではなく `const of = ...; of\`x\`` のようにタグとして正当に
-    // 使えるため、`for (<decl> of \`...\`)` のループヘッダ形だけを局所的に落とす。`fromIndex`
-    // から釣り合いの取れていない `(` を後方に探し、その直前トークンが `for`（必要なら後段の
-    // `await` も許容）の場合だけ抑制する。現行実装は同一行内のみを走査するため、極めて稀な
-    // 複数行に跨る `for (\n  const x of \`...\`\n)` 形は対象外。
-    private static bool IsInsideJsForHeader(char[] masked, int fromIndex)
-    {
-        int depth = 0;
-        for (int i = fromIndex - 1; i >= 0; i--)
-        {
-            char c = masked[i];
-            if (c == ')')
-            {
-                depth++;
-                continue;
-            }
-            if (c == '(')
-            {
-                if (depth > 0)
-                {
-                    depth--;
-                    continue;
-                }
-                int j = i - 1;
-                while (j >= 0 && (masked[j] == ' ' || masked[j] == '\t'))
-                    j--;
-                // `for await (<decl> of ...)` — skip an optional `await` token that sits
-                // between `for` and `(`.
-                // `for await (<decl> of ...)` — `for` と `(` の間の `await` を読み飛ばす。
-                if (j >= 4
-                    && masked[j] == 't' && masked[j - 1] == 'i'
-                    && masked[j - 2] == 'a' && masked[j - 3] == 'w' && masked[j - 4] == 'a'
-                    && (j - 5 < 0 || !IsJsIdentifierPart(masked[j - 5])))
-                {
-                    j -= 5;
-                    while (j >= 0 && (masked[j] == ' ' || masked[j] == '\t'))
-                        j--;
-                }
-                if (j >= 2
-                    && masked[j] == 'r' && masked[j - 1] == 'o' && masked[j - 2] == 'f'
-                    && (j - 3 < 0 || !IsJsIdentifierPart(masked[j - 3])))
-                {
-                    return true;
-                }
-                return false;
-            }
-        }
-        return false;
     }
 
     // Decide whether `/` at the current scan position starts a regex literal rather

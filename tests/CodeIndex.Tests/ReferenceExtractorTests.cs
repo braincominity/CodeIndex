@@ -6344,6 +6344,77 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScriptClassicForWithOfAsTaggedTemplate_IsCapturedAsCall()
+    {
+        // issue #268 regression: classic `for (init; cond; step)` must not silence a
+        // legitimate `of` tag used inside its init clause. The for-header probe classifies
+        // the loop shape by counting top-level `;` inside the `(...)` group — classic form
+        // has `;` and keeps `of` visible.
+        // issue #268 退行防止: 古典形 `for (init; cond; step)` 内の `of` タグは消さない。
+        // 囲む `(...)` 内のトップレベル `;` を数え、`;` 入りの classic `for` では `of` を
+        // タグとして残す。
+        const string content = """
+            const of = (strings) => strings.raw[0];
+            function run() {
+                for (of`x`; keepGoing(); step()) {
+                    break;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        var hit = Assert.Single(references.Where(r => r.SymbolName == "of" && r.ReferenceKind == "call"));
+        Assert.Equal("run", hit.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_JavaScriptMultiLineForOfLoopOverPlainTemplate_IsNotCaptured()
+    {
+        // issue #268 regression: the `for (...)` header may span multiple lines. The
+        // backward-scan from `of` must cross line boundaries to find the enclosing `(` and
+        // then confirm zero top-level `;` to classify this as the for-of form.
+        // issue #268 退行防止: `for (...)` ヘッダは複数行に跨ることがある。`of` からの
+        // 後方走査は行境界を越えて `(` を見つけ、トップレベル `;` が 0 のとき for-of 形と
+        // 判定する必要がある。
+        const string content = "function f() {\n" +
+            "    for (\n" +
+            "        const ch of `abc`\n" +
+            "    ) {\n" +
+            "        use(ch);\n" +
+            "    }\n" +
+            "}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptMultiLineForAwaitOfLoopOverPlainTemplate_IsNotCaptured()
+    {
+        // issue #268 regression: multi-line `for await (...)` with the iterator on a later
+        // line must still be suppressed. The cross-line scan has to handle the optional
+        // `await` contextual keyword between `for` and `(` too.
+        // issue #268 退行防止: 複数行 `for await (...)` で iterator 行が離れていても抑制する。
+        // `for` と `(` の間の `await` も跨いで判定する。
+        const string content = "async function f(iter) {\n" +
+            "    for await (\n" +
+            "        const x of `abc`\n" +
+            "    ) {\n" +
+            "        use(x);\n" +
+            "    }\n" +
+            "}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
+    }
+
+    [Fact]
     public void Extract_JavaScriptInstanceofBeforePlainTemplate_IsNotCaptured()
     {
         // Regression guard: `foo instanceof \`plain\`` uses `instanceof` as the type-check
