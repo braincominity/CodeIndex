@@ -365,6 +365,79 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_RawFtsSyntaxErrorsAreReportedAsUsageErrors()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_syntax_error");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/demo.cs", "csharp", "class Demo {}\n");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["title:foo", "--db", dbPath, "--fts", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("Error: FTS5 query syntax:", stderr);
+            Assert.Contains("raw FTS5 syntax", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_UsesNestedSymbolDepthInHumanOutput()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_depth");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/deep.cs",
+                "csharp",
+                """
+                namespace OuterNs
+                {
+                    namespace InnerNs
+                    {
+                        public class OuterClass
+                        {
+                            public class NestedClass
+                            {
+                                public class DeeplyNested
+                                {
+                                    public void Method() { }
+                                }
+                            }
+                        }
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/deep.cs", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var outerIndex = stdout.IndexOf("public class OuterClass", StringComparison.Ordinal);
+            var nestedIndex = stdout.IndexOf("public class NestedClass", StringComparison.Ordinal);
+            var deepIndex = stdout.IndexOf("public class DeeplyNested", StringComparison.Ordinal);
+
+            Assert.True(outerIndex >= 0);
+            Assert.True(nestedIndex > outerIndex);
+            Assert.True(deepIndex > nestedIndex);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_RejectsMissingMaxLineWidthValue()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_missing_max_line_width");

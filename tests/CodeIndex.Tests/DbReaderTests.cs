@@ -137,6 +137,44 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetOutline_PreservesNestedSymbolDepths()
+    {
+        InsertIndexedFile(
+            "src/deep.cs",
+            "csharp",
+            """
+            namespace OuterNs
+            {
+                namespace InnerNs
+                {
+                    public class OuterClass
+                    {
+                        public class NestedClass
+                        {
+                            public class DeeplyNested
+                            {
+                                public void Method() { }
+                            }
+                        }
+                    }
+                }
+            }
+            """);
+
+        var outline = _reader.GetOutline("src/deep.cs");
+
+        Assert.NotNull(outline);
+        var outer = Assert.Single(outline!.Symbols.Where(symbol => symbol.Name == "OuterClass"));
+        var nested = Assert.Single(outline.Symbols.Where(symbol => symbol.Name == "NestedClass"));
+        var deep = Assert.Single(outline.Symbols.Where(symbol => symbol.Name == "DeeplyNested"));
+        var method = Assert.Single(outline.Symbols.Where(symbol => symbol.Name == "Method"));
+
+        Assert.True(nested.Depth > outer.Depth);
+        Assert.True(deep.Depth > nested.Depth);
+        Assert.True(method.Depth > deep.Depth);
+    }
+
+    [Fact]
     public void Search_PrefersSourceFilesOverTests()
     {
         var testFileId = _writer.UpsertFile(new FileRecord

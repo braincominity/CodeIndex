@@ -26,6 +26,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonFString_PreservesInterpolationCalls()
+    {
+        const string content = """
+            def run():
+                return 42
+
+            def use():
+                return f"value = {run()}"
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "run"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "use");
+    }
+
+    [Fact]
     public void Extract_CsharpExpressionBodiedMembers_AttributeToIndividualMember()
     {
         // issue #233: expression-bodied methods and properties must attribute their
