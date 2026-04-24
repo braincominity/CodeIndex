@@ -171,6 +171,14 @@ public static class QueryCommandRunner
                 "Add the symbol name after the command, for example: `cdidx definition QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
+        if (IsBareVerbatimQueryToken(options.Query))
+        {
+            WriteUsageError(
+                "definition requires a symbol query argument",
+                GetUsageLineOrThrow("definition"),
+                "Add a real symbol name after the command; bare verbatim prefixes like `@` and lone `|` separators are not valid queries.");
+            return CommandExitCodes.UsageError;
+        }
         if (TryWriteUnexpectedExtraPositionals("definition", options))
             return CommandExitCodes.UsageError;
 
@@ -300,6 +308,14 @@ public static class QueryCommandRunner
                 "Add the symbol name you want to trace, for example: `cdidx references QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
+        if (IsBareVerbatimQueryToken(options.Query))
+        {
+            WriteUsageError(
+                "references requires a symbol query argument",
+                GetUsageLineOrThrow("references"),
+                "Add a real symbol name after the command; bare verbatim prefixes like `@` and lone `|` separators are not valid queries.");
+            return CommandExitCodes.UsageError;
+        }
         if (TryWriteUnexpectedExtraPositionals("references", options))
             return CommandExitCodes.UsageError;
 
@@ -414,6 +430,14 @@ public static class QueryCommandRunner
                 "Add the callee symbol name after the command, for example: `cdidx callers QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
+        if (IsBareVerbatimQueryToken(options.Query))
+        {
+            WriteUsageError(
+                "callers requires a symbol query argument",
+                GetUsageLineOrThrow("callers"),
+                "Add a real symbol name after the command; bare verbatim prefixes like `@` and lone `|` separators are not valid queries.");
+            return CommandExitCodes.UsageError;
+        }
         if (TryWriteUnexpectedExtraPositionals("callers", options))
             return CommandExitCodes.UsageError;
 
@@ -522,6 +546,14 @@ public static class QueryCommandRunner
                 "callees requires a caller query argument",
                 GetUsageLineOrThrow("callees"),
                 "Add the caller symbol name after the command, for example: `cdidx callees RunIndex`.");
+            return CommandExitCodes.UsageError;
+        }
+        if (IsBareVerbatimQueryToken(options.Query))
+        {
+            WriteUsageError(
+                "callees requires a caller query argument",
+                GetUsageLineOrThrow("callees"),
+                "Add a real symbol name after the command; bare verbatim prefixes like `@` and lone `|` separators are not valid queries.");
             return CommandExitCodes.UsageError;
         }
         if (TryWriteUnexpectedExtraPositionals("callees", options))
@@ -1261,6 +1293,14 @@ public static class QueryCommandRunner
                 "Add the symbol you want to inspect, for example: `cdidx inspect QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
+        if (IsBareVerbatimQueryToken(options.Query))
+        {
+            WriteUsageError(
+                "inspect requires a symbol query argument",
+                GetUsageLineOrThrow("inspect"),
+                "Add a real symbol name after the command; bare verbatim prefixes like `@` and lone `|` separators are not valid queries.");
+            return CommandExitCodes.UsageError;
+        }
         if (TryWriteUnexpectedExtraPositionals("inspect", options))
             return CommandExitCodes.UsageError;
 
@@ -1658,6 +1698,14 @@ public static class QueryCommandRunner
                 "impact requires a symbol query argument",
                 GetUsageLineOrThrow("impact"),
                 "Add the symbol whose callers you want to inspect, for example: `cdidx impact QueryCommandRunner`.");
+            return CommandExitCodes.UsageError;
+        }
+        if (IsBareVerbatimQueryToken(options.Query))
+        {
+            WriteUsageError(
+                "impact requires a symbol query argument",
+                GetUsageLineOrThrow("impact"),
+                "Add a real symbol name after the command; bare verbatim prefixes like `@` and lone `|` separators are not valid queries.");
             return CommandExitCodes.UsageError;
         }
         if (TryWriteUnexpectedExtraPositionals("impact", options))

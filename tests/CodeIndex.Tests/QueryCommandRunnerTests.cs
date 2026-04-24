@@ -1318,6 +1318,54 @@ public class QueryCommandRunnerTests
             var (exit, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(["--name", "", "--db", dbPath], _jsonOptions));
             Assert.Equal(1, exit);
             Assert.Contains("--name requires a value", stderr);
+
+            var (definitionExit, definitionStdout, definitionStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["@", "--db", dbPath, "--count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, definitionExit);
+            Assert.Contains("bare verbatim prefixes", definitionStderr);
+            Assert.Equal(string.Empty, definitionStdout);
+
+            var (referencesExit, referencesStdout, referencesStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["@", "--db", dbPath, "--count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, referencesExit);
+            Assert.Contains("bare verbatim prefixes", referencesStderr);
+            Assert.Equal(string.Empty, referencesStdout);
+
+            var (callersExit, callersStdout, callersStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["@", "--db", dbPath, "--count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, callersExit);
+            Assert.Contains("bare verbatim prefixes", callersStderr);
+            Assert.Equal(string.Empty, callersStdout);
+
+            var (calleesExit, calleesStdout, calleesStderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                ["@", "--db", dbPath, "--count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, calleesExit);
+            Assert.Contains("bare verbatim prefixes", calleesStderr);
+            Assert.Equal(string.Empty, calleesStdout);
+
+            var (impactExit, impactStdout, impactStderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["@", "--db", dbPath, "--count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, impactExit);
+            Assert.Contains("bare verbatim prefixes", impactStderr);
+            Assert.Equal(string.Empty, impactStdout);
+
+            var (inspectExit, inspectStdout, inspectStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["@", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, inspectExit);
+            Assert.Contains("bare verbatim prefixes", inspectStderr);
+            Assert.Equal(string.Empty, inspectStdout);
         }
         finally
         {

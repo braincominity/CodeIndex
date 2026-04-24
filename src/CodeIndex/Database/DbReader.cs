@@ -853,7 +853,7 @@ public partial class DbReader
     public List<ReferenceResult> SearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth)
     {
         maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidth);
-        query = NormalizeCSharpVerbatimQuery(query);
+        query = NormalizeCSharpVerbatimQuery(query) ?? query ?? string.Empty;
         if (!_hasReferencesTable)
             return new List<ReferenceResult>();
 
@@ -2770,7 +2770,10 @@ public partial class DbReader
     // C# 宣言側 canonicalizer の query 側ミラー。`@class` / `Outer.@class` のような source
     // spelling を受けても、DB 側の `@` なし canonical 名に合わせてから検索する。
     private static string? NormalizeCSharpVerbatimQuery(string? query)
-        => query == null ? null : NormalizeDbCSharpQualifiedName(query);
+    {
+        var normalized = query == null ? null : NormalizeDbCSharpQualifiedName(query);
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
 
     private static string? CombineDbQualifiedName(string? parentQualifiedName, string? name)
     {
@@ -2816,7 +2819,7 @@ public partial class DbReader
 
     public int CountSearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
-        query = NormalizeCSharpVerbatimQuery(query);
+        query = NormalizeCSharpVerbatimQuery(query) ?? query ?? string.Empty;
         if (ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind, exact))
             return SearchReferences(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact).Count;
 
@@ -2913,7 +2916,7 @@ public partial class DbReader
 
     public QueryCountResult CountSearchReferencesTotal(string? query = null, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
-        query = NormalizeCSharpVerbatimQuery(query);
+        query = NormalizeCSharpVerbatimQuery(query) ?? query ?? string.Empty;
         if (ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind, exact))
             return CountSearchReferencesTotalWithUsingStaticFilter(query, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact);
 
@@ -3016,7 +3019,7 @@ public partial class DbReader
     /// </summary>
     public List<CallerResult> GetCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
-        query = NormalizeCSharpVerbatimQuery(query);
+        query = NormalizeCSharpVerbatimQuery(query) ?? query ?? string.Empty;
         if (!_hasReferencesTable) return new List<CallerResult>();
         using var cmd = _conn.CreateCommand();
 
@@ -3126,7 +3129,7 @@ public partial class DbReader
 
     public int CountCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
-        query = NormalizeCSharpVerbatimQuery(query);
+        query = NormalizeCSharpVerbatimQuery(query) ?? query ?? string.Empty;
         if (!_hasReferencesTable) return 0;
         using var cmd = _conn.CreateCommand();
         var groupedSql = @"
@@ -3261,7 +3264,7 @@ public partial class DbReader
     /// </summary>
     public List<CalleeResult> GetCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
-        query = NormalizeCSharpVerbatimQuery(query);
+        query = NormalizeCSharpVerbatimQuery(query) ?? query ?? string.Empty;
         if (!_hasReferencesTable) return new List<CalleeResult>();
         using var cmd = _conn.CreateCommand();
 
@@ -3369,7 +3372,7 @@ public partial class DbReader
 
     public int CountCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
-        query = NormalizeCSharpVerbatimQuery(query);
+        query = NormalizeCSharpVerbatimQuery(query) ?? query ?? string.Empty;
         if (!_hasReferencesTable) return 0;
         using var cmd = _conn.CreateCommand();
         var groupedSql = @"
