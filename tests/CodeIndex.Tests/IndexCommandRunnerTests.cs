@@ -3223,10 +3223,13 @@ public class IndexCommandRunnerTests
             var (exitCode, _, errorOutput) = RunCliInSubprocess([projectRoot], projectRoot);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Contains("Index completed with degraded readiness", errorOutput);
+            Assert.Contains("Index completed with fold-only degraded readiness (fold_ready=false).", errorOutput);
+            Assert.Contains("older fold-key version", errorOutput);
+            Assert.Contains("cdidx backfill-fold --db", errorOutput);
+            Assert.Contains("cdidx index", errorOutput);
+            Assert.Contains("--rebuild", errorOutput);
             Assert.Contains("fold_ready=false", errorOutput);
-            Assert.DoesNotContain("graph_table_available=false", errorOutput);
-            Assert.DoesNotContain("issues_table_available=false", errorOutput);
+            Assert.DoesNotContain("Run `cdidx status --db", errorOutput);
         }
         finally
         {
