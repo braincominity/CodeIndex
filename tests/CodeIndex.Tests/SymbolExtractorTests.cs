@@ -9483,6 +9483,26 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_HandlesAnnotationMemberDefaultArrayValueAsBodyLess()
+    {
+        // `default { ... }` on an annotation member is part of the default value, not a real
+        // member body. The scanner must keep the declaration body-less so later same-line
+        // siblings still survive.
+        // annotation member の `default { ... }` は本体ではなく default 値の一部。
+        // body-less のまま保持し、同一行の後続 sibling を落とさないこと。
+        var content = "@interface Tags { String[] value() default {\"a\", \"b\"}; int age(); } class C {}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var value = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "value" && s.ContainerName == "Tags"));
+        Assert.Equal("String[] value() default {\"a\", \"b\"};", value.Signature);
+        Assert.Null(value.BodyStartLine);
+        Assert.Null(value.BodyEndLine);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "age" && s.ContainerName == "Tags" && s.BodyStartLine == null);
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "C");
+    }
+
+    [Fact]
     public void Extract_Java_HandlesBlockCommentBetweenAnnotationAndMember()
     {
         // Block comments between `@Annotation` and the member name must be skipped.
