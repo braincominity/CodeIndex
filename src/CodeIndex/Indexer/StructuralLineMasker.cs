@@ -82,6 +82,15 @@ internal static class StructuralLineMasker
             case "typescript":
                 MaskJsTsTemplateLiteralContents(maskedLines);
                 break;
+            case "kotlin":
+                MaskKotlinTripleStringContents(maskedLines);
+                break;
+            case "swift":
+                MaskSwiftMultilineStringContents(maskedLines);
+                break;
+            case "scala":
+                MaskScalaTripleStringContents(maskedLines);
+                break;
         }
 
         return maskedLines;
@@ -1966,6 +1975,523 @@ internal static class StructuralLineMasker
         if (p < line.Length)
             p++;
         return p;
+    }
+
+    // Kotlin multi-line raw string literals: """...""".
+    // Body is raw (no backslash escape processing). Interpolation: $identifier and
+    // ${expression}. Only ${expr} hole contents are preserved so downstream reference
+    // extraction still sees real call edges; $ident is a bare identifier that cannot
+    // be a call by itself, so masking the surrounding body is safe.
+    // Regression target: issue #385.
+    // Kotlin の複数行 raw 文字列 """...""" を扱う。本文は raw（\ エスケープなし）。
+    // 補間は $identifier と ${expression}。${expr} ホール内の本物の呼び出しを
+    // 参照抽出に残すため、ホール内は保存する。$ident は単独識別子で call にならないため
+    // 周囲本体と一緒にマスクしてよい。回帰対象: issue #385。
+    private static void MaskKotlinTripleStringContents(string[] lines)
+    {
+        var insideTriple = false;
+        var blockCommentDepth = 0;
+        // Hole state persists across lines so multi-line ${ ... } bodies keep real
+        // call edges and do not accidentally close at the wrong `}`.
+        // -1 when outside a hole, >=0 = nested `{` depth inside the hole (0 = top).
+        // ホール状態は行をまたいで保持する。ホール外は -1、ホール内は `{` 深さ（0 が最上位）。
+        var holeBraceDepth = -1;
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (line.Length == 0)
+                continue;
+
+            var masked = line.ToCharArray();
+            var pos = 0;
+
+            while (pos < line.Length)
+            {
+                if (blockCommentDepth > 0)
+                {
+                    if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '*')
+                    {
+                        ReplaceWithSpaces(masked, pos, 2);
+                        blockCommentDepth++;
+                        pos += 2;
+                        continue;
+                    }
+                    if (pos + 1 < line.Length && line[pos] == '*' && line[pos + 1] == '/')
+                    {
+                        ReplaceWithSpaces(masked, pos, 2);
+                        blockCommentDepth--;
+                        pos += 2;
+                        continue;
+                    }
+                    masked[pos] = ' ';
+                    pos++;
+                    continue;
+                }
+
+                if (insideTriple)
+                {
+                    if (holeBraceDepth >= 0)
+                    {
+                        // Inside ${expr} hole: preserve body. Skip nested single-line
+                        // strings and char literals so their `}` does not close the
+                        // hole, and track nested braces for lambdas / object literals.
+                        // ${expr} ホール内: 本文を保存。内部の単行文字列・char
+                        // リテラルはスキップし、lambda / object literal のネスト brace を
+                        // 追跡して、誤って早く閉じないようにする。
+                        if (line[pos] == '"' || line[pos] == '\'')
+                        {
+                            pos = SkipJsSingleLineString(line, pos);
+                            continue;
+                        }
+
+                        if (line[pos] == '{')
+                        {
+                            holeBraceDepth++;
+                            pos++;
+                            continue;
+                        }
+
+                        if (line[pos] == '}')
+                        {
+                            if (holeBraceDepth == 0)
+                            {
+                                masked[pos] = ' ';
+                                holeBraceDepth = -1;
+                                pos++;
+                                continue;
+                            }
+
+                            holeBraceDepth--;
+                            pos++;
+                            continue;
+                        }
+
+                        pos++;
+                        continue;
+                    }
+
+                    if (pos + 2 < line.Length
+                        && line[pos] == '"' && line[pos + 1] == '"' && line[pos + 2] == '"')
+                    {
+                        ReplaceWithSpaces(masked, pos, 3);
+                        pos += 3;
+                        insideTriple = false;
+                        continue;
+                    }
+
+                    if (pos + 1 < line.Length && line[pos] == '$' && line[pos + 1] == '{')
+                    {
+                        ReplaceWithSpaces(masked, pos, 2);
+                        holeBraceDepth = 0;
+                        pos += 2;
+                        continue;
+                    }
+
+                    masked[pos] = ' ';
+                    pos++;
+                    continue;
+                }
+
+                if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '/')
+                    break;
+
+                if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '*')
+                {
+                    ReplaceWithSpaces(masked, pos, 2);
+                    blockCommentDepth = 1;
+                    pos += 2;
+                    continue;
+                }
+
+                if (pos + 2 < line.Length
+                    && line[pos] == '"' && line[pos + 1] == '"' && line[pos + 2] == '"')
+                {
+                    ReplaceWithSpaces(masked, pos, 3);
+                    pos += 3;
+                    insideTriple = true;
+                    continue;
+                }
+
+                if (line[pos] == '"' || line[pos] == '\'')
+                {
+                    pos = SkipJsSingleLineString(line, pos);
+                    continue;
+                }
+
+                pos++;
+            }
+
+            lines[i] = new string(masked);
+        }
+    }
+
+    // Swift multi-line string literals: """...""" and extended """#"""..."""# forms.
+    // Plain form supports \(expr) interpolation; N-hash extended form needs \#(expr)
+    // (matching hash count). Interpolation hole contents are preserved so downstream
+    // reference extraction keeps real call edges inside \(...).
+    // Regression target: issue #385.
+    // Swift の複数行文字列 """...""" と拡張 #"""..."""# 系を扱う。通常形の補間は
+    // \(expr)、N 個の # 付き拡張形は \#(expr)（個数一致）。\(...) ホール内は保存し、
+    // 本物の call を参照抽出に見せる。回帰対象: issue #385。
+    private static void MaskSwiftMultilineStringContents(string[] lines)
+    {
+        var insideTriple = false;
+        // 0 for plain """...""", N for the extended """<N>#"""..."""<N># variant.
+        // 通常 """...""" は 0、拡張形は一致させる # 個数 N。
+        var tripleHashCount = 0;
+        var blockCommentDepth = 0;
+        // -1 when outside a \(...) interpolation hole, >=0 = nested `(` depth.
+        // \(...) ホール外は -1、ホール内は `(` 深さ。
+        var holeParenDepth = -1;
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (line.Length == 0)
+                continue;
+
+            var masked = line.ToCharArray();
+            var pos = 0;
+
+            while (pos < line.Length)
+            {
+                if (blockCommentDepth > 0)
+                {
+                    if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '*')
+                    {
+                        ReplaceWithSpaces(masked, pos, 2);
+                        blockCommentDepth++;
+                        pos += 2;
+                        continue;
+                    }
+                    if (pos + 1 < line.Length && line[pos] == '*' && line[pos + 1] == '/')
+                    {
+                        ReplaceWithSpaces(masked, pos, 2);
+                        blockCommentDepth--;
+                        pos += 2;
+                        continue;
+                    }
+                    masked[pos] = ' ';
+                    pos++;
+                    continue;
+                }
+
+                if (insideTriple)
+                {
+                    if (holeParenDepth >= 0)
+                    {
+                        // Inside \(expr) hole: preserve body. Skip nested single-line
+                        // strings and char-like literals so `)` inside them does not
+                        // close the hole, and track nested `(` depth.
+                        // \(expr) ホール内: 本文を保存。内部の単行文字列の `)` が
+                        // 誤ってホールを閉じないようスキップ、ネスト `(` も追跡。
+                        if (line[pos] == '"' || line[pos] == '\'')
+                        {
+                            pos = SkipJsSingleLineString(line, pos);
+                            continue;
+                        }
+
+                        if (line[pos] == '(')
+                        {
+                            holeParenDepth++;
+                            pos++;
+                            continue;
+                        }
+
+                        if (line[pos] == ')')
+                        {
+                            if (holeParenDepth == 0)
+                            {
+                                masked[pos] = ' ';
+                                holeParenDepth = -1;
+                                pos++;
+                                continue;
+                            }
+
+                            holeParenDepth--;
+                            pos++;
+                            continue;
+                        }
+
+                        pos++;
+                        continue;
+                    }
+
+                    // Closing """[#...] with matching hash count.
+                    // 閉じ """[#...]（hash 数一致）。
+                    if (pos + 2 < line.Length
+                        && line[pos] == '"' && line[pos + 1] == '"' && line[pos + 2] == '"'
+                        && HasHashRun(line, pos + 3, tripleHashCount))
+                    {
+                        ReplaceWithSpaces(masked, pos, 3 + tripleHashCount);
+                        pos += 3 + tripleHashCount;
+                        insideTriple = false;
+                        tripleHashCount = 0;
+                        continue;
+                    }
+
+                    if (line[pos] == '\\')
+                    {
+                        // \(expr) interpolation opener (for raw forms, needs matching
+                        // `#` run: \#(, \##(, ...).
+                        // \(expr) 補間の開始。拡張形では hash 数一致が必要: \#(、\##( など。
+                        if (HasHashRun(line, pos + 1, tripleHashCount)
+                            && pos + 1 + tripleHashCount < line.Length
+                            && line[pos + 1 + tripleHashCount] == '(')
+                        {
+                            ReplaceWithSpaces(masked, pos, 2 + tripleHashCount);
+                            pos += 2 + tripleHashCount;
+                            holeParenDepth = 0;
+                            continue;
+                        }
+
+                        // Plain `"""..."""`: `\\` is a literal backslash — consume both
+                        // so the second char cannot accidentally start a triple close or
+                        // escape parser.
+                        // 通常 `"""..."""`: `\\` は literal backslash。2 文字まとめて
+                        // 消費し、2 文字目が triple close の一部と誤検出されないようにする。
+                        if (tripleHashCount == 0 && pos + 1 < line.Length)
+                        {
+                            ReplaceWithSpaces(masked, pos, 2);
+                            pos += 2;
+                            continue;
+                        }
+
+                        // Extended form `#"""..."""#` (or more hashes): without a
+                        // matching `\#` run the backslash is literal; advance one char.
+                        // 拡張形 `#"""..."""#` など: hash 数が一致しない `\` は literal。
+                        masked[pos] = ' ';
+                        pos++;
+                        continue;
+                    }
+
+                    masked[pos] = ' ';
+                    pos++;
+                    continue;
+                }
+
+                if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '/')
+                    break;
+
+                if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '*')
+                {
+                    ReplaceWithSpaces(masked, pos, 2);
+                    blockCommentDepth = 1;
+                    pos += 2;
+                    continue;
+                }
+
+                // Extended / plain triple-quoted opener: optional leading `#` run then `"""`.
+                // 拡張または通常の triple 開始: 任意の `#` 列 + `"""`。
+                var leadingHashes = CountRun(line, pos, '#');
+                if (pos + leadingHashes + 2 < line.Length
+                    && line[pos + leadingHashes] == '"'
+                    && line[pos + leadingHashes + 1] == '"'
+                    && line[pos + leadingHashes + 2] == '"')
+                {
+                    ReplaceWithSpaces(masked, pos, leadingHashes + 3);
+                    pos += leadingHashes + 3;
+                    insideTriple = true;
+                    tripleHashCount = leadingHashes;
+                    continue;
+                }
+
+                // Single-line extended raw string `#"..."#` with matching `#` run. The
+                // body may contain unescaped `"`, so the generic single-quote skipper
+                // would stop too early. Swift single-line strings cannot cross a physical
+                // newline, so we just scan to the matching `"<hashes>` on this line and
+                // fall back to end-of-line if the source is malformed.
+                // 単行の `#"..."#` 拡張 raw 文字列。body に `"` を含めるため通常の単行
+                // スキッパーでは早すぎて止まる。Swift の単行文字列は物理改行を越えないため、
+                // この行内で `"<hashes>` を探す。構文誤りなら行末まで詰める。
+                if (leadingHashes > 0
+                    && pos + leadingHashes < line.Length
+                    && line[pos + leadingHashes] == '"')
+                {
+                    var q = pos + leadingHashes + 1;
+                    while (q < line.Length)
+                    {
+                        if (line[q] == '"' && HasHashRun(line, q + 1, leadingHashes))
+                        {
+                            q += 1 + leadingHashes;
+                            break;
+                        }
+                        q++;
+                    }
+                    var span = Math.Min(q, line.Length) - pos;
+                    ReplaceWithSpaces(masked, pos, span);
+                    pos += span;
+                    continue;
+                }
+
+                if (line[pos] == '"')
+                {
+                    pos = SkipJsSingleLineString(line, pos);
+                    continue;
+                }
+
+                pos++;
+            }
+
+            lines[i] = new string(masked);
+        }
+    }
+
+    // Scala multi-line string literals: """...""". Only interpolator-prefixed forms
+    // (s""", f""", raw""", or any identifier-prefixed form) interpret $ident / ${expr}
+    // holes; plain """...""" is a raw literal with no interpolation. ${expr} hole
+    // contents are preserved so downstream reference extraction keeps real call
+    // edges inside ${...}; bare $ident is not a call and is masked with the body.
+    // Regression target: issue #385.
+    // Scala の複数行文字列 """..."""。補間は interpolator prefix（`s"""` / `f"""` /
+    // `raw"""`、または任意の識別子 prefix）のときだけ有効。プレーン """...""" は
+    // 補間なしの raw。${expr} ホール内は本物の call を参照抽出に残すため保存、
+    // `$ident` は単独識別子で call にならないため本体とともにマスクする。
+    // 回帰対象: issue #385。
+    private static void MaskScalaTripleStringContents(string[] lines)
+    {
+        var insideTriple = false;
+        // Whether the currently-open triple is an interpolator form (prefixed by an
+        // identifier): only interpolators recognize ${expr} holes. Plain `"""..."""`
+        // has no interpolation.
+        // 現在開いている triple が interpolator 形式か。interpolator のみ ${expr}
+        // を補間として扱う。プレーン `"""..."""` は補間なし。
+        var isInterpolator = false;
+        var blockCommentDepth = 0;
+        var holeBraceDepth = -1;
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (line.Length == 0)
+                continue;
+
+            var masked = line.ToCharArray();
+            var pos = 0;
+
+            while (pos < line.Length)
+            {
+                if (blockCommentDepth > 0)
+                {
+                    if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '*')
+                    {
+                        ReplaceWithSpaces(masked, pos, 2);
+                        blockCommentDepth++;
+                        pos += 2;
+                        continue;
+                    }
+                    if (pos + 1 < line.Length && line[pos] == '*' && line[pos + 1] == '/')
+                    {
+                        ReplaceWithSpaces(masked, pos, 2);
+                        blockCommentDepth--;
+                        pos += 2;
+                        continue;
+                    }
+                    masked[pos] = ' ';
+                    pos++;
+                    continue;
+                }
+
+                if (insideTriple)
+                {
+                    if (holeBraceDepth >= 0)
+                    {
+                        if (line[pos] == '"' || line[pos] == '\'')
+                        {
+                            pos = SkipJsSingleLineString(line, pos);
+                            continue;
+                        }
+
+                        if (line[pos] == '{')
+                        {
+                            holeBraceDepth++;
+                            pos++;
+                            continue;
+                        }
+
+                        if (line[pos] == '}')
+                        {
+                            if (holeBraceDepth == 0)
+                            {
+                                masked[pos] = ' ';
+                                holeBraceDepth = -1;
+                                pos++;
+                                continue;
+                            }
+
+                            holeBraceDepth--;
+                            pos++;
+                            continue;
+                        }
+
+                        pos++;
+                        continue;
+                    }
+
+                    if (pos + 2 < line.Length
+                        && line[pos] == '"' && line[pos + 1] == '"' && line[pos + 2] == '"')
+                    {
+                        ReplaceWithSpaces(masked, pos, 3);
+                        pos += 3;
+                        insideTriple = false;
+                        isInterpolator = false;
+                        continue;
+                    }
+
+                    if (isInterpolator
+                        && pos + 1 < line.Length
+                        && line[pos] == '$' && line[pos + 1] == '{')
+                    {
+                        ReplaceWithSpaces(masked, pos, 2);
+                        holeBraceDepth = 0;
+                        pos += 2;
+                        continue;
+                    }
+
+                    masked[pos] = ' ';
+                    pos++;
+                    continue;
+                }
+
+                if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '/')
+                    break;
+
+                if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '*')
+                {
+                    ReplaceWithSpaces(masked, pos, 2);
+                    blockCommentDepth = 1;
+                    pos += 2;
+                    continue;
+                }
+
+                if (pos + 2 < line.Length
+                    && line[pos] == '"' && line[pos + 1] == '"' && line[pos + 2] == '"')
+                {
+                    // Interpolator detection: an identifier character immediately before
+                    // `"""` marks this as a prefixed form (s""", f""", raw""", or a
+                    // user-defined interpolator). Only those forms honor ${expr} holes.
+                    // interpolator 判定: `"""` の直前が識別子文字なら prefix 付き
+                    // （`s"""` / `f"""` / `raw"""` / ユーザー定義）で、${expr} ホールを有効化する。
+                    var prefixIsInterpolator = pos > 0 && IsIdentifierPart(line[pos - 1]);
+                    ReplaceWithSpaces(masked, pos, 3);
+                    pos += 3;
+                    insideTriple = true;
+                    isInterpolator = prefixIsInterpolator;
+                    continue;
+                }
+
+                if (line[pos] == '"' || line[pos] == '\'')
+                {
+                    pos = SkipJsSingleLineString(line, pos);
+                    continue;
+                }
+
+                pos++;
+            }
+
+            lines[i] = new string(masked);
+        }
     }
 
     private static bool IsIdentifierPart(char c) =>
