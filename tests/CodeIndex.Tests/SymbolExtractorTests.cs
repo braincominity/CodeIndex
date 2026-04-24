@@ -5267,17 +5267,25 @@ public class SymbolExtractorTests
         // declaration shape in a single fixture so a future modifier-slot refactor
         // (mirror of the #238 `operator checked`, #244 `static abstract`, #355 `file`,
         // and #376 `new` families) cannot silently drop one variant. Covers plain
-        // `interface`, `public interface`, `file interface` (C# 11 file-scoped), the
-        // two `partial interface` orderings (bare and visibility-first), `unsafe
-        // interface`, and the nested `public new interface` that hides a same-named
-        // base-type member.
+        // `interface`, `public interface`, `file interface` (C# 11 file-scoped), bare
+        // `partial interface`, canonical `public partial interface`, non-canonical
+        // `partial public interface` (modifiers before visibility — exercises that the
+        // regex truly accepts free modifier order, not just the canonical one),
+        // `unsafe interface`, and the nested `public new interface` that hides a
+        // same-named base-type member. Each unique name is pinned with `Assert.Single`
+        // so a silent duplicate row or a kind/visibility relabel on a sibling variant
+        // cannot make this test pass via a second matching row.
         // Closes #302: C# interface 行の修飾子スロットが、単一 fixture で合法な宣言形を
         // すべて受理することを固定する。修飾子スロットの将来的な再編（#238 の
         // `operator checked`、#244 の `static abstract`、#355 の `file`、#376 の `new` と
         // 同じファミリの問題）で、いずれか1形を黙って落とす回帰を防ぐ。plain `interface`、
-        // `public interface`、`file interface`（C# 11 file-scoped）、`partial interface` の
-        // 2 並び（単独と visibility 先行）、`unsafe interface`、同名ベースメンバを隠蔽する
-        // ネストの `public new interface` を網羅する。
+        // `public interface`、`file interface`（C# 11 file-scoped）、素の `partial interface`、
+        // 正準順の `public partial interface`、非正準順の `partial public interface`
+        // （修飾子が可視性より前 — regex が正準順だけでなく自由順を本当に受理することを
+        // 検証する）、`unsafe interface`、同名ベースメンバを隠蔽するネストの
+        // `public new interface` を網羅する。各ユニーク名は `Assert.Single` で固定し、
+        // 兄弟変種に silent duplicate や kind / visibility relabel が入っても
+        // 別行のヒットで silent pass しないようにする。
         var content = """
             namespace ModifierSlotMatrix;
 
@@ -5286,6 +5294,7 @@ public class SymbolExtractorTests
             file interface IFile { void Do(); }
             partial interface IPartial { void Do(); }
             public partial interface IPublicPartial { void Do(); }
+            partial public interface IPartialPublic { void Do(); }
             unsafe interface IUnsafe { void Do(); }
 
             public class Base
@@ -5299,12 +5308,13 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "IPlain" && string.IsNullOrEmpty(s.Visibility));
-        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "IPublic" && s.Visibility == "public");
-        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "IFile" && string.IsNullOrEmpty(s.Visibility));
-        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "IPartial" && string.IsNullOrEmpty(s.Visibility));
-        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "IPublicPartial" && s.Visibility == "public");
-        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "IUnsafe" && string.IsNullOrEmpty(s.Visibility));
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IPlain" && string.IsNullOrEmpty(s.Visibility));
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IPublic" && s.Visibility == "public");
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IFile" && string.IsNullOrEmpty(s.Visibility));
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IPartial" && string.IsNullOrEmpty(s.Visibility));
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IPublicPartial" && s.Visibility == "public");
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IPartialPublic" && s.Visibility == "public");
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IUnsafe" && string.IsNullOrEmpty(s.Visibility));
 
         // Nested `public new interface INested` must produce a second symbol attributed
         // to the `Derived` container alongside the base-side `INested` on `Base`.
@@ -5312,8 +5322,8 @@ public class SymbolExtractorTests
         // `Derived` コンテナ下の独立シンボルとして抽出される必要がある。
         var nested = symbols.Where(s => s.Kind == "interface" && s.Name == "INested").ToList();
         Assert.Equal(2, nested.Count);
-        Assert.Contains(nested, s => s.ContainerName == "Base" && s.Visibility == "public");
-        Assert.Contains(nested, s => s.ContainerName == "Derived" && s.Visibility == "public");
+        Assert.Single(nested, s => s.ContainerName == "Base" && s.Visibility == "public");
+        Assert.Single(nested, s => s.ContainerName == "Derived" && s.Visibility == "public");
     }
 
     [Fact]
