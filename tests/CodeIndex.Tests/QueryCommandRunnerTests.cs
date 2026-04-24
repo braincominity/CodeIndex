@@ -438,6 +438,35 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunFind_JsonTreatsZeroMaxLineWidthAsUnclamped()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_long_line_zero_width");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var longLine = new string('a', 320) + "target" + new string('b', 320);
+            TestProjectHelper.InsertIndexedFile(dbPath, "dist/search.txt", "text", longLine);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["target", "--db", dbPath, "--path", "dist/search.txt", "--json", "--max-line-width", "0"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.GetProperty("snippet_truncated").GetBoolean());
+            Assert.Contains("target", json.GetProperty("snippet").GetString());
+            Assert.True(json.GetProperty("snippet").GetString()!.Length > 512);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_RejectsMissingMaxLineWidthValue()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_missing_max_line_width");
@@ -1284,15 +1313,17 @@ public class QueryCommandRunnerTests
         }
     }
 
-    // Regression lock for #184 follow-up: `--focus-column` and `--max-line-width` are
-    // positive-integer options. Zero, negative, and non-numeric values must fail closed with
-    // UsageError and the "requires a positive integer" error message. Earlier tests only
-    // covered the missing-value case (which now short-circuits before TryParsePositiveInt),
-    // leaving the positive-integer contract uncovered for these two options specifically.
-    // #184 のフォローアップ回帰ロック: `--focus-column` と `--max-line-width` は正の整数オプション。
-    // 0・負数・非数値は UsageError と "requires a positive integer" メッセージで fail-close する。
-    // 以前のテストは値欠如（今は TryParsePositiveInt 前に短絡する）しかカバーしていなかったため、
-    // この 2 つのオプション固有の正の整数契約を明示的にロックする。
+    // Regression lock for #184 follow-up: `--focus-column` requires a positive integer,
+    // while `--max-line-width` accepts non-negative integers so `0` can disable truncation.
+    // Zero, negative, and non-numeric values must fail closed with UsageError and the
+    // corresponding validation message. Earlier tests only covered the missing-value case
+    // (which now short-circuits before TryParsePositiveInt), leaving these option-specific
+    // numeric contracts uncovered.
+    // #184 のフォローアップ回帰ロック: `--focus-column` は正の整数を要求し、
+    // `--max-line-width` は切り詰め解除のため 0 を許容する非負整数。0・負数・非数値は
+    // UsageError と対応する validation message で fail-close する。以前のテストは値欠如
+    // （今は TryParsePositiveInt 前に短絡する）しかカバーしていなかったため、
+    // これらのオプション固有の数値契約を明示的にロックする。
     [Theory]
     [InlineData("0")]
     [InlineData("abc")]
