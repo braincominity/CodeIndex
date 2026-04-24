@@ -68,6 +68,15 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_AllowsZeroMaxLineWidth()
+    {
+        var options = QueryCommandRunner.ParseArgs(["RunSearch", "--max-line-width", "0"], jsonDefault: false, allowNamedQuery: true);
+
+        Assert.Equal("RunSearch", options.Query);
+        Assert.Equal(0, options.MaxLineWidth);
+    }
+
+    [Fact]
     public void ParseArgs_CountFlagParsed()
     {
         var options = QueryCommandRunner.ParseArgs(["myquery", "--count"], jsonDefault: false);
@@ -1238,7 +1247,7 @@ public class QueryCommandRunnerTests
     [Theory]
     [InlineData("-1")]
     [InlineData("abc")]
-    public void RunReferences_RejectsInvalidMaxLineWidthValue(string invalidValue)
+    public void RunReferences_RejectsNegativeOrNonNumericMaxLineWidthValue(string invalidValue)
     {
         var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_references_invalid_max_line_width_{invalidValue}");
         try
@@ -1918,6 +1927,35 @@ public class QueryCommandRunnerTests
             Assert.True(json.GetProperty("snippet_truncated").GetBoolean());
             Assert.Contains("target", json.GetProperty("snippet").GetString());
             Assert.True(json.GetProperty("snippet").GetString()!.Length <= 96);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunFind_JsonTreatsZeroMaxLineWidthAsUnclamped()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_find_long_line_zero_width");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var longLine = new string('a', 320) + "target" + new string('b', 320);
+            TestProjectHelper.InsertIndexedFile(dbPath, "dist/search.txt", "text", longLine);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
+                ["target", "--db", dbPath, "--path", "dist/search.txt", "--json", "--max-line-width", "0"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.GetProperty("snippet_truncated").GetBoolean());
+            Assert.Contains("target", json.GetProperty("snippet").GetString());
+            Assert.True(json.GetProperty("snippet").GetString()!.Length > 512);
         }
         finally
         {

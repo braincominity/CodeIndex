@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Runtime.CompilerServices;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
@@ -9342,6 +9343,89 @@ public static class SymbolExtractor
         }
     }
 
+    private static readonly ConditionalWeakTable<List<SymbolRecord>, SymbolAddState> SymbolAddStates = new();
+
+    private sealed class SymbolAddState
+    {
+        private readonly Dictionary<SymbolRecordIdentity, int> _exactCounts = new();
+        private readonly Dictionary<SameLineSignatureKey, int> _sameLineSignatureCounts = new();
+
+        public int GetExactDuplicateCount(SymbolRecord symbol)
+        {
+            var key = new SymbolRecordIdentity(symbol);
+            return _exactCounts.TryGetValue(key, out var count) ? count : 0;
+        }
+
+        public int? GetSameLineSignatureOccurrenceIndex(SymbolRecord symbol)
+        {
+            if (!TryGetSameLineSignatureKey(symbol, out var key))
+                return null;
+
+            return _sameLineSignatureCounts.TryGetValue(key, out var count) ? count : 0;
+        }
+
+        public void Record(SymbolRecord symbol)
+        {
+            var exactKey = new SymbolRecordIdentity(symbol);
+            _exactCounts[exactKey] = _exactCounts.TryGetValue(exactKey, out var exactCount)
+                ? exactCount + 1
+                : 1;
+
+            if (TryGetSameLineSignatureKey(symbol, out var sameLineKey))
+            {
+                _sameLineSignatureCounts[sameLineKey] = _sameLineSignatureCounts.TryGetValue(sameLineKey, out var sameLineCount)
+                    ? sameLineCount + 1
+                    : 1;
+            }
+        }
+    }
+
+    private readonly record struct SymbolRecordIdentity(
+        string Kind,
+        string Name,
+        int Line,
+        int StartLine,
+        int? StartColumn,
+        int EndLine,
+        int? BodyStartLine,
+        int? BodyEndLine,
+        string? Signature,
+        string? Visibility,
+        string? ReturnType)
+    {
+        public SymbolRecordIdentity(SymbolRecord symbol)
+            : this(
+                symbol.Kind,
+                symbol.Name,
+                symbol.Line,
+                symbol.StartLine,
+                symbol.StartColumn,
+                symbol.EndLine,
+                symbol.BodyStartLine,
+                symbol.BodyEndLine,
+                symbol.Signature,
+                symbol.Visibility,
+                symbol.ReturnType)
+        {
+        }
+    }
+
+    private readonly record struct SameLineSignatureKey(int Line, int StartLine, string Signature);
+
+    private static bool TryGetSameLineSignatureKey(SymbolRecord symbol, out SameLineSignatureKey key)
+    {
+        if (symbol.Signature != null
+            && symbol.StartLine == symbol.EndLine
+            && symbol.Line == symbol.StartLine)
+        {
+            key = new SameLineSignatureKey(symbol.Line, symbol.StartLine, symbol.Signature);
+            return true;
+        }
+
+        key = default;
+        return false;
+    }
+
     private static void AddSymbolRecord(
         List<SymbolRecord> symbols,
         HashSet<string>? cssSeenSymbols,
@@ -9352,6 +9436,8 @@ public static class SymbolExtractor
         if (string.IsNullOrWhiteSpace(symbol.Name))
             return;
 
+        var state = SymbolAddStates.GetValue(symbols, _ => new SymbolAddState());
+
         if (cssSeenSymbols != null)
         {
             var key = $"{lineNumber}:{symbol.Kind}:{symbol.Name}";
@@ -9359,7 +9445,7 @@ public static class SymbolExtractor
                 return;
         }
 
-        symbol.SameLineSignatureOccurrenceIndex = GetSameLineSignatureOccurrenceIndex(symbols, symbol);
+        symbol.SameLineSignatureOccurrenceIndex = state.GetSameLineSignatureOccurrenceIndex(symbol);
 
         // Same-line restart paths can legitimately revisit the same declaration from a
         // different regex row or restart offset. Suppress only exact duplicate symbol
@@ -9370,40 +9456,15 @@ public static class SymbolExtractor
         // 再訪しうる。ここでは exact duplicate の `SymbolRecord` だけを抑止し、
         // mixed-kind 回復で同じ宣言が二重出力されるのを防ぎつつ、範囲や signature が
         // 異なる正当な overload / sibling はそのまま残す。Closes #472 / #473 follow-up.
-        var duplicateCount = symbols.Count(existing =>
-                existing.Kind == symbol.Kind
-                && existing.Name == symbol.Name
-                && existing.Line == symbol.Line
-                && existing.StartLine == symbol.StartLine
-                && existing.StartColumn == symbol.StartColumn
-                && existing.EndLine == symbol.EndLine
-                && existing.BodyStartLine == symbol.BodyStartLine
-                && existing.BodyEndLine == symbol.BodyEndLine
-                && existing.Signature == symbol.Signature
-                && existing.Visibility == symbol.Visibility
-                && existing.ReturnType == symbol.ReturnType);
+        var duplicateCount = state.GetExactDuplicateCount(symbol);
         if (duplicateCount > 0
             && !HasRemainingSameLineSignatureOccurrence(symbol, rawLine, duplicateCount))
         {
             return;
         }
 
+        state.Record(symbol);
         symbols.Add(symbol);
-    }
-
-    private static int? GetSameLineSignatureOccurrenceIndex(List<SymbolRecord> symbols, SymbolRecord symbol)
-    {
-        if (symbol.Signature == null
-            || symbol.StartLine != symbol.EndLine
-            || symbol.Line != symbol.StartLine)
-        {
-            return null;
-        }
-
-        return symbols.Count(existing =>
-            existing.Line == symbol.Line
-            && existing.StartLine == symbol.StartLine
-            && existing.Signature == symbol.Signature);
     }
 
     // Some compact same-line C# fixtures can legitimately contain two distinct siblings with

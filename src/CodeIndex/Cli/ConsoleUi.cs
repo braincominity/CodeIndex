@@ -384,7 +384,7 @@ public static class ConsoleUi
         Console.WriteLine("  --exclude-path <pattern>   Exclude paths containing this text (repeatable)");
         Console.WriteLine("  --exclude-tests            Exclude likely test files");
         Console.WriteLine("  --snippet-lines <n>        Search snippet length (1-20, default: 8)");
-        Console.WriteLine($"  --max-line-width <n>       search/references/find/excerpt/inspect only: clamp very long single-line snippet/context/excerpt payloads (default: {LineWidthFormatter.DefaultMaxLineWidth}, 0 disables truncation)");
+        Console.WriteLine($"  --max-line-width <n>       search/references/find/excerpt/inspect only: clamp very long single-line snippet/context/excerpt payloads (`0` disables clamping; default: {LineWidthFormatter.DefaultMaxLineWidth})");
         Console.WriteLine("  --focus-line <line>        excerpt: line whose focused column should stay visible (requires --focus-column)");
         Console.WriteLine("  --focus-column <n>         excerpt: column to keep centered when clamping (must be within the focused line)");
         Console.WriteLine("  --focus-length <n>         excerpt: width of the focused span (default: 1, requires --focus-column)");
@@ -644,7 +644,7 @@ _cdidx() {{
                     '--exclude-tests[Exclude tests]' \
                     '--before[Context lines before]:number' \
                     '--after[Context lines after]:number' \
-                    '--max-line-width[Clamp long single-line snippets]:number' \
+                    '--max-line-width[Clamp long single-line snippets (0 disables clamping)]:number' \
                     '--exact[Exact match]' \
                     '--count[Count only]' \
                     '--query[Literal query]' \
@@ -673,7 +673,7 @@ _cdidx() {{
                     '--exclude-path[Exclude path]:pattern' \
                     '--exclude-tests[Exclude tests]' \
                     '--count[Count only]' \
-                    '--max-line-width[Clamp long single-line contexts]:number' \
+                    '--max-line-width[Clamp long single-line contexts (0 disables clamping)]:number' \
                     '--exact[Backward-compatible exact shorthand]' \
                     '--exact-name[Exact symbol-name equality]' \
                     '*:query'
@@ -687,7 +687,7 @@ _cdidx() {{
                     '--exclude-path[Exclude path]:pattern' \
                     '--exclude-tests[Exclude tests]' \
                     '--body[Include body]' \
-                    '--max-line-width[Clamp long single-line contexts]:number' \
+                    '--max-line-width[Clamp long single-line contexts (0 disables clamping)]:number' \
                     '--exact[Backward-compatible exact shorthand]' \
                     '--exact-name[Exact symbol-name equality]' \
                     '*:query'
@@ -765,7 +765,7 @@ _cdidx");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from find' -l query -r -d 'Literal query'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from find excerpt' -l before -r -d 'Context lines before'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from find excerpt' -l after -r -d 'Context lines after'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search references excerpt find inspect' -l max-line-width -r -d 'Clamp long single-line payloads'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search references excerpt find inspect' -l max-line-width -r -d 'Clamp long single-line payloads (0 disables clamping)'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l focus-line -r -d 'Focused line to keep visible when clamping'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l focus-column -r -d 'Focused column to keep visible when clamping'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l focus-length -r -d 'Focused span width when clamping'");
