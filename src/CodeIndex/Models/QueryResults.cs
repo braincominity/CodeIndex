@@ -260,6 +260,17 @@ public class StatusResult
     [JsonPropertyName("csharp_symbol_name_ready")]
     public bool CSharpSymbolNameReady { get; set; } = true;
     /// <summary>
+    /// True when every indexed SQL graph row was written under the current stored call-column /
+    /// qualified-name contract. False means SQL graph/dependency readers may still return false
+    /// negatives until `cdidx index .` rewrites unchanged SQL rows.
+    /// SQL graph 行が current の call-column / qualified-name 契約で書かれていれば true。
+    /// </summary>
+    [JsonPropertyName("sql_graph_contract_ready")]
+    public bool SqlGraphContractReady { get; set; } = true;
+    [JsonPropertyName("sql_graph_contract_degraded_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SqlGraphContractDegradedReason { get; set; }
+    /// <summary>
     /// True when every row in symbols / symbol_references has its name_folded column
     /// populated AND the FoldReadyFlag bit is set on the DB. False means `--exact` still
     /// falls back to ASCII `COLLATE NOCASE` (non-ASCII casing pairs like Ä/ä won't match).

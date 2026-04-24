@@ -15,6 +15,11 @@ public readonly record struct HotspotFamilySignal(
     bool Relevant,
     string? DegradedReason);
 
+public readonly record struct SqlGraphContractSignal(
+    bool Ready,
+    bool Relevant,
+    string? DegradedReason);
+
 /// <summary>
 /// Handles read/query operations against the database for search, symbols, and files.
 /// 検索・シンボル・ファイル一覧などのDB読み取り操作を担当する。
@@ -54,6 +59,7 @@ public partial class DbReader
     // #86: name_folded 列が全行埋まっているか（fold 経路を使えるか）。
     internal readonly bool _foldReady;
     internal readonly bool _csharpSymbolNameContractCurrent;
+    internal readonly bool _sqlGraphContractCurrent;
     // Tracks which languages have authoritative cross-file hotspot family semantics.
     // Mixed legacy/update states can therefore degrade only the affected language instead of
     // globally disabling families for unrelated marker types.
@@ -173,6 +179,7 @@ public partial class DbReader
     public DbReader(SqliteConnection connection, bool isReadOnly = false)
     {
         _conn = connection;
+        DbContext.RegisterConnectionFunctions(_conn);
         _isReadOnly = isReadOnly;
         _fileColumns = LoadColumns("files");
         _symbolColumns = LoadColumns("symbols");
@@ -205,6 +212,10 @@ public partial class DbReader
         _csharpSymbolNameContractCurrent = string.Equals(
             TryGetMetaString(_conn, DbContext.CSharpSymbolNameContractVersionMetaKey),
             DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            StringComparison.Ordinal);
+        _sqlGraphContractCurrent = string.Equals(
+            TryGetMetaString(_conn, DbContext.SqlGraphContractVersionMetaKey),
+            DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
             StringComparison.Ordinal);
         _hotspotFamilyReadyLanguages = LoadHotspotFamilyReadyLanguages(connection);
         // NOTE: row presence is intentionally NOT used as a fallback. A legacy DB or an
@@ -435,6 +446,23 @@ public partial class DbReader
             DegradedReason: "csharp_symbol_name_ready=false (canonical C# operator / conversion operator / indexer / verbatim identifier names are stale in this DB)");
     }
 
+    private ExactQuerySignal? GetSqlGraphContractExactQuerySignal(
+        string? lang = null,
+        IReadOnlyList<string>? pathPatterns = null,
+        IReadOnlyList<string>? excludePathPatterns = null,
+        bool excludeTests = false)
+    {
+        var signal = GetSqlGraphContractSignal(lang, pathPatterns, excludePathPatterns, excludeTests);
+        if (!signal.Relevant || signal.Ready)
+            return null;
+
+        return new(
+            ExactIndexAvailable: false,
+            HasMissingIndex: false,
+            HasMissingTable: false,
+            DegradedReason: signal.DegradedReason);
+    }
+
     private bool ScopeMayIncludeCSharpFiles(
         string? lang,
         IReadOnlyList<string>? pathPatterns,
@@ -457,6 +485,43 @@ public partial class DbReader
             cmd.Parameters.AddWithValue("@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         return cmd.ExecuteScalar() != null;
+    }
+
+    private bool ScopeMayIncludeSqlFiles(
+        string? lang,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests)
+    {
+        if (lang != null && !string.Equals(lang, "sql", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        using var cmd = _conn.CreateCommand();
+        var sql = "SELECT 1 FROM files f WHERE f.lang = 'sql'";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += " LIMIT 1";
+
+        cmd.CommandText = sql;
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        return cmd.ExecuteScalar() != null;
+    }
+
+    internal SqlGraphContractSignal GetSqlGraphContractSignal(
+        string? lang = null,
+        IReadOnlyList<string>? pathPatterns = null,
+        IReadOnlyList<string>? excludePathPatterns = null,
+        bool excludeTests = false)
+    {
+        if (!ScopeMayIncludeSqlFiles(lang, pathPatterns, excludePathPatterns, excludeTests))
+            return new SqlGraphContractSignal(Ready: true, Relevant: false, DegradedReason: null);
+
+        if (_sqlGraphContractCurrent)
+            return new SqlGraphContractSignal(Ready: true, Relevant: true, DegradedReason: null);
+
+        return new SqlGraphContractSignal(
+            Ready: false,
+            Relevant: true,
+            DegradedReason: "sql_graph_contract_ready=false (SQL graph rows may still use a stale call-column / qualified-name contract; rerun `cdidx index <projectPath>` before trusting SQL graph/dependency results)");
     }
 
     private static ExactQuerySignal CombineExactSignals(params ExactQuerySignal?[] signals)
@@ -508,7 +573,8 @@ public partial class DbReader
         => CombineExactSignals(
             BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
                 _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase"),
-            GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
+            GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
+            GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
 
     public ExactQuerySignal GetCallersExactQuerySignal(
         string? lang = null,
@@ -518,7 +584,8 @@ public partial class DbReader
         => CombineExactSignals(
             BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
                 _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase"),
-            GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
+            GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
+            GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
 
     public ExactQuerySignal GetCalleesExactQuerySignal(
         string? lang = null,
@@ -528,7 +595,8 @@ public partial class DbReader
         => CombineExactSignals(
             BuildExactGraphSignal(ContainerNameExactGraphIndexAvailable,
                 _foldReady ? "idx_symbol_refs_container_name_folded" : "idx_symbol_refs_container_nocase"),
-            GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
+            GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
+            GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
 
     public ExactQuerySignal GetAnalyzeSymbolExactQuerySignal(
         bool includeGraphSignal = true,
@@ -539,7 +607,8 @@ public partial class DbReader
     {
         return CombineExactSignals(
             GetDefinitionExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
-            includeGraphSignal ? BuildAnalyzeGraphExactQuerySignal() : null);
+            includeGraphSignal ? BuildAnalyzeGraphExactQuerySignal() : null,
+            includeGraphSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null);
     }
 
     internal bool HasGraphApplicableFiles(string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
@@ -584,6 +653,9 @@ public partial class DbReader
     {
         return input.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
     }
+
+    private static bool AllowSqlLeafFallbackForQuery(string query)
+        => !SqlNameResolver.HasQualifier(query);
 
     private static string BuildGraphSupportedLanguagePredicate(SqliteCommand cmd, string fileAlias, string parameterPrefix)
     {
@@ -800,20 +872,57 @@ public partial class DbReader
         var referencesAliasScope = referencesSuffixAlias != null
             ? " AND f.lang = 'csharp' AND r.reference_kind = 'attribute'"
             : string.Empty;
+        const string sqlLeafReferenceScope = " AND f.lang = 'sql'";
         if (query != null)
         {
-            if (exact && _foldReady)
+            var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
+            var useSqlQualifiedContextMatch = SqlNameResolver.HasQualifier(query);
+            // --exact: Unicode-aware equality when FoldReady (#86), else ASCII COLLATE NOCASE.
+            // Fold path: r.symbol_name_folded = @qFolded (indexed), query pre-folded in .NET.
+            // Fallback: r.symbol_name = @q COLLATE NOCASE (indexed by idx_symbol_refs_name_nocase).
+            // When the query ends with C# attribute suffix `Attribute`, also OR against the
+            // suffix-stripped alias so `references FooAttribute --exact` reaches the idiomatic
+            // `[Foo]` reference site stored with `symbol_name = "Foo"`. In substring mode we
+            // still LIKE-match `%FooAttribute%` and add only the exact stripped alias to avoid
+            // overmatching unrelated names (e.g. `FooAuditLog`) that share the stripped prefix.
+            // The alias disjunct is scoped to C# attribute rows to avoid false positives.
+            // --exact: FoldReady なら Unicode 折り畳み経路、未 ready なら ASCII NOCASE へ fallback。
+            // C# の `Attribute` suffix が付いたクエリは、suffix を外した別名とも照合する。
+            // 部分一致モードでは `%FooAttribute%` をそのまま使い、別名側は exact 照合だけを OR
+            // することで `FooAuditLog` など無関係な名前を巻き込まないようにする。
+            // 別名節は C# の attribute 行に限定し、誤一致を避ける。
+            if (useSqlQualifiedContextMatch && exact && _foldReady)
                 sql += referencesSuffixAlias != null
-                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{referencesAliasScope}))"
-                    : " AND r.symbol_name_folded = @query";
+                    ? $" AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{referencesAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query))";
+            else if (useSqlQualifiedContextMatch && exact)
+                sql += referencesSuffixAlias != null
+                    ? $" AND (((f.lang = 'sql') AND sql_context_has_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_has_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE))";
+            else if (useSqlQualifiedContextMatch && _foldReady)
+                sql += referencesSuffixAlias != null
+                    ? $" AND (((f.lang = 'sql') AND sql_context_like_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_like_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+            else if (useSqlQualifiedContextMatch)
+                sql += referencesSuffixAlias != null
+                    ? $" AND (((f.lang = 'sql') AND sql_context_like_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_like_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+            else if (exact && _foldReady)
+                sql += referencesSuffixAlias != null
+                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{referencesAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafReferenceScope})" : string.Empty)})"
+                    : allowSqlLeafFallback
+                        ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafReferenceScope}))"
+                        : " AND r.symbol_name_folded = @query";
             else if (exact)
                 sql += referencesSuffixAlias != null
-                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}))"
-                    : " AND r.symbol_name = @query COLLATE NOCASE";
+                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafReferenceScope})" : string.Empty)})"
+                    : allowSqlLeafFallback
+                        ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafReferenceScope}))"
+                        : " AND r.symbol_name = @query COLLATE NOCASE";
             else
                 sql += referencesSuffixAlias != null
-                    ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}))"
-                    : " AND r.symbol_name LIKE @query ESCAPE '\\'";
+                    ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}) OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafReferenceScope}))"
+                    : $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafReferenceScope}))";
         }
         if (referenceKind != null)
             sql += " AND r.reference_kind = @referenceKind";
@@ -842,6 +951,8 @@ public partial class DbReader
             else
                 queryParam = query;
             cmd.Parameters.AddWithValue("@query", queryParam);
+            cmd.Parameters.AddWithValue("@aliasQuery", query);
+            cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
             if (referencesSuffixAlias != null)
             {
                 var aliasParam = exact && _foldReady
@@ -2490,20 +2601,43 @@ public partial class DbReader
         var countAliasScope = countSuffixAlias != null
             ? " AND f.lang = 'csharp' AND r.reference_kind = 'attribute'"
             : string.Empty;
+        const string sqlLeafCountScope = " AND f.lang = 'sql'";
         if (query != null)
         {
-            if (exact && _foldReady)
+            var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
+            var useSqlQualifiedContextMatch = SqlNameResolver.HasQualifier(query);
+            if (useSqlQualifiedContextMatch && exact && _foldReady)
                 innerSql += countSuffixAlias != null
-                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{countAliasScope}))"
-                    : " AND r.symbol_name_folded = @query";
+                    ? $" AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{countAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query))";
+            else if (useSqlQualifiedContextMatch && exact)
+                innerSql += countSuffixAlias != null
+                    ? $" AND (((f.lang = 'sql') AND sql_context_has_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_has_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE))";
+            else if (useSqlQualifiedContextMatch && _foldReady)
+                innerSql += countSuffixAlias != null
+                    ? $" AND (((f.lang = 'sql') AND sql_context_like_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_like_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+            else if (useSqlQualifiedContextMatch)
+                innerSql += countSuffixAlias != null
+                    ? $" AND (((f.lang = 'sql') AND sql_context_like_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_like_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+            else if (exact && _foldReady)
+                innerSql += countSuffixAlias != null
+                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{countAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafCountScope})" : string.Empty)})"
+                    : allowSqlLeafFallback
+                        ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafCountScope}))"
+                        : " AND r.symbol_name_folded = @query";
             else if (exact)
                 innerSql += countSuffixAlias != null
-                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}))"
-                    : " AND r.symbol_name = @query COLLATE NOCASE";
+                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafCountScope})" : string.Empty)})"
+                    : allowSqlLeafFallback
+                        ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafCountScope}))"
+                        : " AND r.symbol_name = @query COLLATE NOCASE";
             else
                 innerSql += countSuffixAlias != null
-                    ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}))"
-                    : " AND r.symbol_name LIKE @query ESCAPE '\\'";
+                    ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}) OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafCountScope}))"
+                    : $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafCountScope}))";
         }
         if (referenceKind != null)
             innerSql += " AND r.reference_kind = @referenceKind";
@@ -2523,6 +2657,8 @@ public partial class DbReader
                     ? NameFold.Fold(query) ?? query
                     : query;
             cmd.Parameters.AddWithValue("@query", value);
+            cmd.Parameters.AddWithValue("@aliasQuery", query);
+            cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
             if (countSuffixAlias != null)
             {
                 var aliasParam = exact && _foldReady
@@ -2565,20 +2701,43 @@ public partial class DbReader
         var totalAliasScope = totalSuffixAlias != null
             ? " AND f.lang = 'csharp' AND r.reference_kind = 'attribute'"
             : string.Empty;
+        const string sqlLeafTotalScope = " AND f.lang = 'sql'";
         if (query != null)
         {
-            if (exact && _foldReady)
+            var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
+            var useSqlQualifiedContextMatch = SqlNameResolver.HasQualifier(query);
+            if (useSqlQualifiedContextMatch && exact && _foldReady)
                 innerSql += totalSuffixAlias != null
-                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{totalAliasScope}))"
-                    : " AND r.symbol_name_folded = @query";
+                    ? $" AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{totalAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query))";
+            else if (useSqlQualifiedContextMatch && exact)
+                innerSql += totalSuffixAlias != null
+                    ? $" AND (((f.lang = 'sql') AND sql_context_has_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_has_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE))";
+            else if (useSqlQualifiedContextMatch && _foldReady)
+                innerSql += totalSuffixAlias != null
+                    ? $" AND (((f.lang = 'sql') AND sql_context_like_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_like_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+            else if (useSqlQualifiedContextMatch)
+                innerSql += totalSuffixAlias != null
+                    ? $" AND (((f.lang = 'sql') AND sql_context_like_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_like_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+            else if (exact && _foldReady)
+                innerSql += totalSuffixAlias != null
+                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{totalAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafTotalScope})" : string.Empty)})"
+                    : allowSqlLeafFallback
+                        ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafTotalScope}))"
+                        : " AND r.symbol_name_folded = @query";
             else if (exact)
                 innerSql += totalSuffixAlias != null
-                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}))"
-                    : " AND r.symbol_name = @query COLLATE NOCASE";
+                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafTotalScope})" : string.Empty)})"
+                    : allowSqlLeafFallback
+                        ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafTotalScope}))"
+                        : " AND r.symbol_name = @query COLLATE NOCASE";
             else
                 innerSql += totalSuffixAlias != null
-                    ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}))"
-                    : " AND r.symbol_name LIKE @query ESCAPE '\\'";
+                    ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}) OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafTotalScope}))"
+                    : $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafTotalScope}))";
         }
         if (referenceKind != null)
             innerSql += " AND r.reference_kind = @referenceKind";
@@ -2598,6 +2757,8 @@ public partial class DbReader
                     ? NameFold.Fold(query) ?? query
                     : query;
             cmd.Parameters.AddWithValue("@query", value);
+            cmd.Parameters.AddWithValue("@aliasQuery", query);
+            cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
             if (totalSuffixAlias != null)
             {
                 var aliasParam = exact && _foldReady
@@ -2648,12 +2809,26 @@ public partial class DbReader
             sql += " AND r.reference_kind = @referenceKind";
         else
             sql += NonInvocationReferenceKindsExclusion;
-        if (exact && _foldReady)
-            sql += " AND r.symbol_name_folded = @query";
+        var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
+        var useSqlQualifiedContextMatch = SqlNameResolver.HasQualifier(query);
+        if (useSqlQualifiedContextMatch && exact && _foldReady)
+            sql += " AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query))";
+        else if (useSqlQualifiedContextMatch && exact)
+            sql += " AND (((f.lang = 'sql') AND sql_context_has_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE))";
+        else if (useSqlQualifiedContextMatch && _foldReady)
+            sql += " AND (((f.lang = 'sql') AND sql_context_like_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+        else if (useSqlQualifiedContextMatch)
+            sql += " AND (((f.lang = 'sql') AND sql_context_like_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+        else if (exact && _foldReady)
+            sql += allowSqlLeafFallback
+                ? " AND (r.symbol_name_folded = @query OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))"
+                : " AND r.symbol_name_folded = @query";
         else if (exact)
-            sql += " AND r.symbol_name = @query COLLATE NOCASE";
+            sql += allowSqlLeafFallback
+                ? " AND (r.symbol_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
+                : " AND r.symbol_name = @query COLLATE NOCASE";
         else
-            sql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+            sql += " AND (r.symbol_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
@@ -2683,6 +2858,8 @@ public partial class DbReader
         else
             callersQueryParam = query;
         cmd.Parameters.AddWithValue("@query", callersQueryParam);
+        cmd.Parameters.AddWithValue("@aliasQuery", query);
+        cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
         cmd.Parameters.AddWithValue("@preferExactCase", exact ? 1 : 0);
         cmd.Parameters.AddWithValue("@rawQuery", exact ? query : string.Empty);
         cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
@@ -2730,12 +2907,26 @@ public partial class DbReader
             groupedSql += " AND r.reference_kind = @referenceKind";
         else
             groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
-        if (exact && _foldReady)
-            groupedSql += " AND r.symbol_name_folded = @query";
+        var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
+        var useSqlQualifiedContextMatch = SqlNameResolver.HasQualifier(query);
+        if (useSqlQualifiedContextMatch && exact && _foldReady)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query))";
+        else if (useSqlQualifiedContextMatch && exact)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_context_has_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE))";
+        else if (useSqlQualifiedContextMatch && _foldReady)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_context_like_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+        else if (useSqlQualifiedContextMatch)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_context_like_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+        else if (exact && _foldReady)
+            groupedSql += allowSqlLeafFallback
+                ? " AND (r.symbol_name_folded = @query OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))"
+                : " AND r.symbol_name_folded = @query";
         else if (exact)
-            groupedSql += " AND r.symbol_name = @query COLLATE NOCASE";
+            groupedSql += allowSqlLeafFallback
+                ? " AND (r.symbol_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
+                : " AND r.symbol_name = @query COLLATE NOCASE";
         else
-            groupedSql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+            groupedSql += " AND (r.symbol_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
         if (lang != null)
             groupedSql += " AND f.lang = @lang";
         AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
@@ -2750,6 +2941,8 @@ public partial class DbReader
                 ? NameFold.Fold(query) ?? query
                 : query;
         cmd.Parameters.AddWithValue("@query", value);
+        cmd.Parameters.AddWithValue("@aliasQuery", query);
+        cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
@@ -2781,12 +2974,26 @@ public partial class DbReader
             groupedSql += " AND r.reference_kind = @referenceKind";
         else
             groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
-        if (exact && _foldReady)
-            groupedSql += " AND r.symbol_name_folded = @query";
+        var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
+        var useSqlQualifiedContextMatch = SqlNameResolver.HasQualifier(query);
+        if (useSqlQualifiedContextMatch && exact && _foldReady)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query))";
+        else if (useSqlQualifiedContextMatch && exact)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_context_has_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE))";
+        else if (useSqlQualifiedContextMatch && _foldReady)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_context_like_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+        else if (useSqlQualifiedContextMatch)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_context_like_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+        else if (exact && _foldReady)
+            groupedSql += allowSqlLeafFallback
+                ? " AND (r.symbol_name_folded = @query OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))"
+                : " AND r.symbol_name_folded = @query";
         else if (exact)
-            groupedSql += " AND r.symbol_name = @query COLLATE NOCASE";
+            groupedSql += allowSqlLeafFallback
+                ? " AND (r.symbol_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
+                : " AND r.symbol_name = @query COLLATE NOCASE";
         else
-            groupedSql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+            groupedSql += " AND (r.symbol_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
         if (lang != null)
             groupedSql += " AND f.lang = @lang";
         AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
@@ -2801,6 +3008,8 @@ public partial class DbReader
                 ? NameFold.Fold(query) ?? query
                 : query;
         cmd.Parameters.AddWithValue("@query", value);
+        cmd.Parameters.AddWithValue("@aliasQuery", query);
+        cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
@@ -2843,12 +3052,22 @@ public partial class DbReader
             sql += " AND r.reference_kind = @referenceKind";
         else
             sql += NonInvocationReferenceKindsExclusion;
-        if (exact && _foldReady)
-            sql += " AND r.container_name_folded = @query";
+        var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
+        var useSqlQualifiedContainerMatch = SqlNameResolver.HasQualifier(query);
+        if (exact && useSqlQualifiedContainerMatch && _foldReady)
+            sql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name_folded(r.container_name) = @aliasQueryNormalizedFolded) OR ((f.lang != 'sql') AND r.container_name_folded = @query))";
+        else if (exact && useSqlQualifiedContainerMatch)
+            sql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name(r.container_name) = @aliasQueryNormalized COLLATE NOCASE) OR ((f.lang != 'sql') AND r.container_name = @query COLLATE NOCASE))";
+        else if (exact && _foldReady)
+            sql += allowSqlLeafFallback
+                ? " AND (r.container_name_folded = @query OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))"
+                : " AND r.container_name_folded = @query";
         else if (exact)
-            sql += " AND r.container_name = @query COLLATE NOCASE";
+            sql += allowSqlLeafFallback
+                ? " AND (r.container_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
+                : " AND r.container_name = @query COLLATE NOCASE";
         else
-            sql += " AND r.container_name LIKE @query ESCAPE '\\'";
+            sql += " AND (r.container_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))";
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
@@ -2877,6 +3096,11 @@ public partial class DbReader
         else
             calleesQueryParam = query;
         cmd.Parameters.AddWithValue("@query", calleesQueryParam);
+        cmd.Parameters.AddWithValue("@aliasQuery", query);
+        cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
+        cmd.Parameters.AddWithValue("@aliasQueryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
+        cmd.Parameters.AddWithValue("@aliasQueryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
+        cmd.Parameters.AddWithValue("@aliasQuerySegmentCount", SqlNameResolver.GetSegmentCount(query));
         cmd.Parameters.AddWithValue("@preferExactCase", exact ? 1 : 0);
         cmd.Parameters.AddWithValue("@rawQuery", exact ? query : string.Empty);
         cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
@@ -2927,12 +3151,22 @@ public partial class DbReader
             groupedSql += " AND r.reference_kind = @referenceKind";
         else
             groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
-        if (exact && _foldReady)
-            groupedSql += " AND r.container_name_folded = @query";
+        var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
+        var useSqlQualifiedContainerMatch = SqlNameResolver.HasQualifier(query);
+        if (exact && useSqlQualifiedContainerMatch && _foldReady)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name_folded(r.container_name) = @aliasQueryNormalizedFolded) OR ((f.lang != 'sql') AND r.container_name_folded = @query))";
+        else if (exact && useSqlQualifiedContainerMatch)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name(r.container_name) = @aliasQueryNormalized COLLATE NOCASE) OR ((f.lang != 'sql') AND r.container_name = @query COLLATE NOCASE))";
+        else if (exact && _foldReady)
+            groupedSql += allowSqlLeafFallback
+                ? " AND (r.container_name_folded = @query OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))"
+                : " AND r.container_name_folded = @query";
         else if (exact)
-            groupedSql += " AND r.container_name = @query COLLATE NOCASE";
+            groupedSql += allowSqlLeafFallback
+                ? " AND (r.container_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
+                : " AND r.container_name = @query COLLATE NOCASE";
         else
-            groupedSql += " AND r.container_name LIKE @query ESCAPE '\\'";
+            groupedSql += " AND (r.container_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))";
         if (lang != null)
             groupedSql += " AND f.lang = @lang";
         AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
@@ -2947,6 +3181,11 @@ public partial class DbReader
                 ? NameFold.Fold(query) ?? query
                 : query;
         cmd.Parameters.AddWithValue("@query", value);
+        cmd.Parameters.AddWithValue("@aliasQuery", query);
+        cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
+        cmd.Parameters.AddWithValue("@aliasQueryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
+        cmd.Parameters.AddWithValue("@aliasQueryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
+        cmd.Parameters.AddWithValue("@aliasQuerySegmentCount", SqlNameResolver.GetSegmentCount(query));
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
@@ -2981,12 +3220,22 @@ public partial class DbReader
             groupedSql += " AND r.reference_kind = @referenceKind";
         else
             groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
-        if (exact && _foldReady)
-            groupedSql += " AND r.container_name_folded = @query";
+        var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
+        var useSqlQualifiedContainerMatch = SqlNameResolver.HasQualifier(query);
+        if (exact && useSqlQualifiedContainerMatch && _foldReady)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name_folded(r.container_name) = @aliasQueryNormalizedFolded) OR ((f.lang != 'sql') AND r.container_name_folded = @query))";
+        else if (exact && useSqlQualifiedContainerMatch)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name(r.container_name) = @aliasQueryNormalized COLLATE NOCASE) OR ((f.lang != 'sql') AND r.container_name = @query COLLATE NOCASE))";
+        else if (exact && _foldReady)
+            groupedSql += allowSqlLeafFallback
+                ? " AND (r.container_name_folded = @query OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))"
+                : " AND r.container_name_folded = @query";
         else if (exact)
-            groupedSql += " AND r.container_name = @query COLLATE NOCASE";
+            groupedSql += allowSqlLeafFallback
+                ? " AND (r.container_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
+                : " AND r.container_name = @query COLLATE NOCASE";
         else
-            groupedSql += " AND r.container_name LIKE @query ESCAPE '\\'";
+            groupedSql += " AND (r.container_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))";
         if (lang != null)
             groupedSql += " AND f.lang = @lang";
         AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
@@ -3001,6 +3250,11 @@ public partial class DbReader
                 ? NameFold.Fold(query) ?? query
                 : query;
         cmd.Parameters.AddWithValue("@query", value);
+        cmd.Parameters.AddWithValue("@aliasQuery", query);
+        cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
+        cmd.Parameters.AddWithValue("@aliasQueryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
+        cmd.Parameters.AddWithValue("@aliasQueryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
+        cmd.Parameters.AddWithValue("@aliasQuerySegmentCount", SqlNameResolver.GetSegmentCount(query));
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
@@ -3025,16 +3279,37 @@ public partial class DbReader
         // No path/test filters — definitions outside caller scope must still be found.
         // Only considers graph-supported languages to avoid resolving to unsupported ones.
         // FoldReady なら folded equality、legacy DB では ASCII `COLLATE NOCASE` にフォールバック。
+        var normalizedName = SqlNameResolver.NormalizeQualifiedName(symbolName);
+        var leafName = SqlNameResolver.GetLeafName(symbolName);
+        var segmentCount = SqlNameResolver.GetSegmentCount(symbolName);
+        var allowLeafFallback = !SqlNameResolver.HasQualifier(symbolName);
         using var cmd = _conn.CreateCommand();
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "resolveLang");
         var nameCondition = _foldReady
-            ? "s.name_folded = @nameFolded"
-            : "s.name = @name COLLATE NOCASE";
+            ? allowLeafFallback
+                ? "(s.name_folded = @nameFolded OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @segmentCount AND sql_normalize_name_folded(s.name) = @normalizedNameFolded) OR sql_leaf_name_folded(s.name) = @leafNameFolded)))"
+                : "(s.name_folded = @nameFolded OR (f.lang = 'sql' AND sql_segment_count(s.name) = @segmentCount AND sql_normalize_name_folded(s.name) = @normalizedNameFolded))"
+            : allowLeafFallback
+                ? "(s.name = @name COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @segmentCount AND sql_normalize_name(s.name) = @normalizedName COLLATE NOCASE) OR sql_leaf_name(s.name) = @leafName COLLATE NOCASE)))"
+                : "(s.name = @name COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @segmentCount AND sql_normalize_name(s.name) = @normalizedName COLLATE NOCASE))";
         cmd.CommandText = @"SELECT s.name FROM symbols s JOIN files f ON s.file_id = f.id
                             WHERE " + nameCondition + @"
                               AND " + supportedLangFilter + @"
-                            ORDER BY CASE WHEN s.name = @name THEN 0 ELSE 1 END LIMIT 1";
+                            ORDER BY CASE
+                                         WHEN s.name = @name THEN 0
+                                         WHEN f.lang = 'sql' AND sql_segment_count(s.name) = @segmentCount AND sql_normalize_name(s.name) = @normalizedName THEN 1
+                                         WHEN f.lang = 'sql' AND sql_segment_count(s.name) = @segmentCount AND sql_normalize_name_folded(s.name) = @normalizedNameFolded THEN 2
+                                         WHEN @allowLeafFallback = 1 AND f.lang = 'sql' AND sql_leaf_name(s.name) = @leafName THEN 3
+                                         WHEN @allowLeafFallback = 1 AND f.lang = 'sql' AND sql_leaf_name_folded(s.name) = @leafNameFolded THEN 4
+                                         ELSE 5
+                                     END LIMIT 1";
         cmd.Parameters.AddWithValue("@name", symbolName);
+        cmd.Parameters.AddWithValue("@normalizedName", normalizedName);
+        cmd.Parameters.AddWithValue("@normalizedNameFolded", NameFold.Fold(normalizedName) ?? normalizedName);
+        cmd.Parameters.AddWithValue("@leafName", leafName);
+        cmd.Parameters.AddWithValue("@leafNameFolded", NameFold.Fold(leafName) ?? leafName);
+        cmd.Parameters.AddWithValue("@segmentCount", segmentCount);
+        cmd.Parameters.AddWithValue("@allowLeafFallback", allowLeafFallback ? 1 : 0);
         if (_foldReady)
             cmd.Parameters.AddWithValue("@nameFolded", NameFold.Fold(symbolName) ?? symbolName);
         using var reader = cmd.ExecuteTrackedReader();
@@ -3061,11 +3336,18 @@ public partial class DbReader
         // caller rows whose stored callee casing differs from the resolved definition.
         // caller 側も leaf `--exact` と同じく FoldReady なら folded equality、legacy DB では
         // `COLLATE NOCASE` fallback。definition と caller 行の casing 差もここで吸収する。
+        var allowSqlLeafFallback = !SqlNameResolver.HasQualifier(symbolName);
         var nameCondition = _foldReady
-            ? @"
-              AND r.symbol_name_folded = @symbolNameFolded"
-            : @"
-              AND r.symbol_name = @symbolName COLLATE NOCASE";
+            ? allowSqlLeafFallback
+                ? @"
+              AND (r.symbol_name_folded = @symbolNameFolded OR (f.lang = 'sql' AND r.symbol_name_folded = @symbolNameLeafFolded))"
+                : @"
+              AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(r.context, @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @symbolNameFolded))"
+            : allowSqlLeafFallback
+                ? @"
+              AND (r.symbol_name = @symbolName COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@symbolName) COLLATE NOCASE))"
+                : @"
+              AND (((f.lang = 'sql') AND sql_context_has_name_at(r.context, @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @symbolName COLLATE NOCASE))";
 
         // impact BFS must share the call-graph contract with `callers`/`callees`/`hotspots`,
         // so event subscriptions (`Click += OnClick`) also participate in the transitive
@@ -3097,6 +3379,7 @@ public partial class DbReader
 
         cmd.CommandText = sql;
         cmd.Parameters.AddWithValue("@symbolName", symbolName);
+        cmd.Parameters.AddWithValue("@symbolNameLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(symbolName)) ?? SqlNameResolver.GetLeafName(symbolName));
         if (_foldReady)
             cmd.Parameters.AddWithValue("@symbolNameFolded", NameFold.Fold(symbolName) ?? symbolName);
         if (lang != null)
@@ -3326,11 +3609,19 @@ public partial class DbReader
 
     private List<SymbolResult> ResolveImpactDefinitions(string resolvedName, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
+        var normalizedName = SqlNameResolver.NormalizeQualifiedName(resolvedName);
+        var leafName = SqlNameResolver.GetLeafName(resolvedName);
+        var segmentCount = SqlNameResolver.GetSegmentCount(resolvedName);
+        var allowLeafFallback = !SqlNameResolver.HasQualifier(resolvedName);
         using var cmd = _conn.CreateCommand();
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "impactDefLang");
         var nameCondition = _foldReady
-            ? "s.name_folded = @resolvedNameFolded"
-            : "s.name = @resolvedName COLLATE NOCASE";
+            ? allowLeafFallback
+                ? "(s.name_folded = @resolvedNameFolded OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name_folded(s.name) = @resolvedNameNormalizedFolded) OR sql_leaf_name_folded(s.name) = @resolvedNameLeafFolded)))"
+                : "(s.name_folded = @resolvedNameFolded OR (f.lang = 'sql' AND sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name_folded(s.name) = @resolvedNameNormalizedFolded))"
+            : allowLeafFallback
+                ? "(s.name = @resolvedName COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name(s.name) = @resolvedNameNormalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @resolvedNameLeaf COLLATE NOCASE)))"
+                : "(s.name = @resolvedName COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name(s.name) = @resolvedNameNormalized COLLATE NOCASE))";
         var sql = $@"
             SELECT f.path, f.lang, s.kind, s.name, s.line,
                    {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
@@ -3350,10 +3641,23 @@ public partial class DbReader
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY CASE WHEN s.name = @resolvedName THEN 0 ELSE 1 END, {PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line LIMIT @limit";
+        sql += @" ORDER BY CASE
+                     WHEN s.name = @resolvedName THEN 0
+                     WHEN f.lang = 'sql' AND sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name(s.name) = @resolvedNameNormalized THEN 1
+                     WHEN f.lang = 'sql' AND sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name_folded(s.name) = @resolvedNameNormalizedFolded THEN 2
+                     WHEN @allowLeafFallback = 1 AND f.lang = 'sql' AND sql_leaf_name(s.name) = @resolvedNameLeaf THEN 3
+                     WHEN @allowLeafFallback = 1 AND f.lang = 'sql' AND sql_leaf_name_folded(s.name) = @resolvedNameLeafFolded THEN 4
+                     ELSE 5
+                   END, " + $"{PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line LIMIT @limit";
 
         cmd.CommandText = sql;
         cmd.Parameters.AddWithValue("@resolvedName", resolvedName);
+        cmd.Parameters.AddWithValue("@resolvedNameNormalized", normalizedName);
+        cmd.Parameters.AddWithValue("@resolvedNameNormalizedFolded", NameFold.Fold(normalizedName) ?? normalizedName);
+        cmd.Parameters.AddWithValue("@resolvedNameLeaf", leafName);
+        cmd.Parameters.AddWithValue("@resolvedNameLeafFolded", NameFold.Fold(leafName) ?? leafName);
+        cmd.Parameters.AddWithValue("@resolvedNameSegmentCount", segmentCount);
+        cmd.Parameters.AddWithValue("@allowLeafFallback", allowLeafFallback ? 1 : 0);
         if (_foldReady)
             cmd.Parameters.AddWithValue("@resolvedNameFolded", NameFold.Fold(resolvedName) ?? resolvedName);
         if (lang != null)
@@ -4136,6 +4440,7 @@ public partial class DbReader
         var freshness = GetWorkspaceFreshness();
         var hasCSharpFiles = ScopeMayIncludeCSharpFiles("csharp", pathPatterns: null, excludePathPatterns: null, excludeTests: false, since: null);
         var csharpSymbolNameReady = !hasCSharpFiles || _csharpSymbolNameContractCurrent;
+        var sqlGraphContractSignal = GetSqlGraphContractSignal(lang: null);
         var hotspotFamilySignal = GetHotspotFamilySignal(lang: null);
 
         // Language breakdown / 言語別内訳
@@ -4160,6 +4465,8 @@ public partial class DbReader
             HotspotFamilyReady = hotspotFamilySignal.Ready,
             HotspotFamilyDegradedReason = hotspotFamilySignal.DegradedReason,
             CSharpSymbolNameReady = csharpSymbolNameReady,
+            SqlGraphContractReady = sqlGraphContractSignal.Ready,
+            SqlGraphContractDegradedReason = sqlGraphContractSignal.DegradedReason,
             FoldReady = _foldReady,
         };
     }
@@ -4344,6 +4651,37 @@ public partial class DbReader
         return $"({csharpClause} OR {jsClause} OR {otherClause})";
     }
 
+    // `deps` keeps persisted SQL symbol names qualified (`dbo.fn_X`) but must
+    // still join bare SQL reference rows (`fn_X`) back to that definition.
+    // Normalize dependency target keys to logical qualified names for SQL while leaving
+    // other languages on the stored symbol name. SQL reference rows can still fall back to
+    // leaf-only matching at join time when the source site itself is unqualified.
+    // SQL の依存 target key は qualified 名 (`dbo.fn_X`) に正規化し、他言語は保存名のまま。
+    // SQL の source 側が unqualified (`fn_X`) の場合だけ join 時に leaf fallback を許可する。
+    private static string BuildLogicalDependencySymbolNameExpr(string fileAlias, string symbolNameExpr)
+        => $"CASE WHEN {fileAlias}.lang = 'sql' THEN sql_normalize_name({symbolNameExpr}) ELSE {symbolNameExpr} END";
+
+    private static string BuildLogicalDependencySymbolSegmentCountExpr(string fileAlias, string symbolNameExpr)
+        => $"CASE WHEN {fileAlias}.lang = 'sql' THEN sql_segment_count({symbolNameExpr}) ELSE 1 END";
+
+    private static string BuildLogicalReferenceNameExpr(string langExpr, string symbolNameExpr, string contextExpr, string containerNameExpr, string columnNumberExpr)
+        => $@"CASE
+                WHEN {langExpr} = 'sql' THEN sql_resolve_reference_name_at({symbolNameExpr}, {contextExpr}, {containerNameExpr}, {columnNumberExpr})
+                ELSE {symbolNameExpr}
+            END";
+
+    private static string BuildLogicalReferenceSegmentCountExpr(string langExpr, string symbolNameExpr, string contextExpr, string containerNameExpr, string columnNumberExpr)
+        => $@"CASE
+                WHEN {langExpr} = 'sql' THEN sql_resolve_reference_segment_count_at({symbolNameExpr}, {contextExpr}, {containerNameExpr}, {columnNumberExpr})
+                ELSE 1
+            END";
+
+    private static string BuildLogicalReferenceLeafFallbackAllowedExpr(string langExpr, string symbolNameExpr, string contextExpr, string containerNameExpr, string columnNumberExpr)
+        => $@"CASE
+                WHEN {langExpr} = 'sql' THEN sql_allow_leaf_fallback_at({symbolNameExpr}, {contextExpr}, {containerNameExpr}, {columnNumberExpr})
+                ELSE 0
+            END";
+
     /// <summary>
     /// Compute file-level dependency edges: which files reference symbols defined in which other files.
     /// ファイル間の依存関係エッジを算出: どのファイルがどのファイルで定義されたシンボルを参照しているか。
@@ -4360,12 +4698,40 @@ public partial class DbReader
         // per-reference × per-symbol の膨張を防ぐ。
         var sourceFilterAlias = "src";
         var targetFilterAlias = "dst";
+        var targetLogicalSymbolNameExpr = BuildLogicalDependencySymbolNameExpr("dst", "s.name");
+        var targetLogicalSymbolSegmentCountExpr = BuildLogicalDependencySymbolSegmentCountExpr("dst", "s.name");
+        var sqlDependencyTargetMatchExpr = @"(
+                    (tf.target_lang != 'sql' AND tf.symbol_name = snc.symbol_name)
+                 OR (tf.target_lang = 'sql' AND (
+                        (tf.symbol_segment_count = snc.symbol_segment_count AND tf.symbol_name = snc.symbol_name COLLATE NOCASE)
+                     OR (sql_segment_count(snc.raw_symbol_name) = 1
+                         AND snc.allow_leaf_fallback = 1
+                         AND tf.symbol_segment_count > 1
+                         AND sql_leaf_name(tf.symbol_name) = snc.raw_symbol_name COLLATE NOCASE
+                         AND NOT EXISTS (
+                                SELECT 1
+                                FROM target_files tf_exact
+                                WHERE tf_exact.target_lang = tf.target_lang
+                                  AND tf_exact.symbol_segment_count = 1
+                                  AND tf_exact.symbol_name = snc.symbol_name COLLATE NOCASE
+                            )
+                         AND NOT EXISTS (
+                                SELECT 1
+                                FROM target_files tf_resolved
+                                WHERE tf_resolved.target_lang = tf.target_lang
+                                  AND tf_resolved.symbol_segment_count = snc.symbol_segment_count
+                                  AND tf_resolved.symbol_name = snc.symbol_name COLLATE NOCASE
+                            ))
+                 ))
+                )";
         var sql = @"
             WITH logical_references_primary AS (
                 SELECT src.id AS source_file_id,
                        src.path AS source_path,
                        src.lang AS source_lang,
                        r.symbol_name,
+                       r.context,
+                       r.container_name,
                        r.line,
                        r.column_number,
                        " + GetLogicalReferenceKindSql("r.reference_kind") + @" AS logical_reference_kind
@@ -4405,10 +4771,15 @@ public partial class DbReader
         if (!reverse && excludeTests)
             sql += $" AND NOT {TestPathCondition.Replace("f.path", $"{sourceFilterAlias}.path")}";
         sql += @"
-                GROUP BY src.id, src.path, src.lang, r.symbol_name, r.line, r.column_number, logical_reference_kind
+                GROUP BY src.id, src.path, src.lang, r.symbol_name, r.context, r.container_name, r.line, r.column_number, logical_reference_kind
             ),
             logical_references AS (
-                SELECT source_file_id, source_path, source_lang, symbol_name, line, column_number, logical_reference_kind,
+                SELECT source_file_id, source_path, source_lang,
+                       " + BuildLogicalReferenceNameExpr("source_lang", "symbol_name", "context", "container_name", "column_number") + @" AS symbol_name,
+                       " + BuildLogicalReferenceSegmentCountExpr("source_lang", "symbol_name", "context", "container_name", "column_number") + @" AS symbol_segment_count,
+                       " + BuildLogicalReferenceLeafFallbackAllowedExpr("source_lang", "symbol_name", "context", "container_name", "column_number") + @" AS allow_leaf_fallback,
+                       symbol_name AS raw_symbol_name,
+                       line, column_number, logical_reference_kind,
                        0 AS is_attribute_alias,
                        CASE WHEN logical_reference_kind IN ('attribute', 'annotation') THEN 1 ELSE 0 END AS is_metadata
                 FROM logical_references_primary
@@ -4425,6 +4796,9 @@ public partial class DbReader
                 -- 偶然 'FooAttribute' という名前を持つ関数やプロパティへの誤ったエッジを防ぐ。
                 SELECT source_file_id, source_path, source_lang,
                        symbol_name || 'Attribute' AS symbol_name,
+                       1 AS symbol_segment_count,
+                       0 AS allow_leaf_fallback,
+                       symbol_name || 'Attribute' AS raw_symbol_name,
                        line, column_number, logical_reference_kind,
                        1 AS is_attribute_alias,
                        1 AS is_metadata
@@ -4446,11 +4820,14 @@ public partial class DbReader
                        source_path,
                        source_lang,
                        symbol_name,
+                       symbol_segment_count,
+                       allow_leaf_fallback,
+                       raw_symbol_name,
                        is_attribute_alias,
                        is_metadata,
                        COUNT(*) AS ref_count
                 FROM logical_references
-                GROUP BY source_file_id, source_path, source_lang, symbol_name, is_attribute_alias, is_metadata
+                GROUP BY source_file_id, source_path, source_lang, symbol_name, symbol_segment_count, allow_leaf_fallback, raw_symbol_name, is_attribute_alias, is_metadata
             ),
             target_files AS (
                 -- Collapse per-symbol rows to one per (target_path, target_lang, symbol_name)
@@ -4478,7 +4855,8 @@ public partial class DbReader
                 -- legacy DB では filter を無効化し class-like 全体に戻る。
                 SELECT dst.path AS target_path,
                        dst.lang AS target_lang,
-                       s.name AS symbol_name,
+                       " + targetLogicalSymbolNameExpr + @" AS symbol_name,
+                       " + targetLogicalSymbolSegmentCountExpr + @" AS symbol_segment_count,
                        MAX(CASE WHEN s.kind IN ('class','struct','interface') THEN 1 ELSE 0 END) AS has_class_like_kind,
                        MAX(CASE WHEN " + BuildMetadataTargetKindExpr("dst") + @"
                                 THEN 1 ELSE 0 END) AS has_metadata_target_kind
@@ -4503,7 +4881,7 @@ public partial class DbReader
         if (reverse && excludeTests)
             sql += $" AND NOT {TestPathCondition.Replace("f.path", $"{targetFilterAlias}.path")}";
         sql += @"
-                GROUP BY dst.path, dst.lang, s.name
+                GROUP BY dst.path, dst.lang, " + targetLogicalSymbolNameExpr + @", " + targetLogicalSymbolSegmentCountExpr + @"
             ),
             metadata_raw_suppression AS (
                 -- When a raw C# attribute reference '[Foo]' (stored as symbol_name='Foo',
@@ -4520,6 +4898,7 @@ public partial class DbReader
                 JOIN target_files tf_alias
                   ON tf_alias.target_lang = lrp.source_lang
                  AND tf_alias.symbol_name = lrp.symbol_name || 'Attribute'
+                 AND tf_alias.symbol_segment_count = 1
                  AND tf_alias.has_metadata_target_kind = 1
                 WHERE lrp.source_lang = 'csharp'
                   AND lrp.logical_reference_kind = 'attribute'
@@ -4546,6 +4925,7 @@ public partial class DbReader
                 -- 当たらないため、lang / path / graph-supported スコープはそのまま継承。
                 SELECT tf.target_lang,
                        tf.symbol_name,
+                       tf.symbol_segment_count,
                        COUNT(*) AS class_like_target_count
                 FROM target_files tf
                 JOIN files dst
@@ -4553,7 +4933,8 @@ public partial class DbReader
                  AND dst.lang = tf.target_lang
                 JOIN symbols s
                   ON s.file_id = dst.id
-                 AND s.name = tf.symbol_name
+                 AND " + targetLogicalSymbolNameExpr + @" = tf.symbol_name
+                 AND " + targetLogicalSymbolSegmentCountExpr + @" = tf.symbol_segment_count
                  -- Same language-aware metadata-eligibility filter as
                  -- target_files: C# restricts to `class` with inheritance
                  -- clause (interface/struct cannot be attribute targets);
@@ -4565,16 +4946,16 @@ public partial class DbReader
                  -- それ以外は class-like 全体を候補にする。
                  AND " + BuildMetadataTargetKindExpr("dst") + @"
                 WHERE tf.has_metadata_target_kind = 1
-                GROUP BY tf.target_lang, tf.symbol_name
+                GROUP BY tf.target_lang, tf.symbol_name, tf.symbol_segment_count
             ),
             edges AS (
                 SELECT snc.source_path,
                        tf.target_path,
-                       snc.symbol_name,
+                       tf.symbol_name,
                        snc.ref_count
                 FROM source_name_counts snc
                 JOIN target_files tf
-                  ON tf.symbol_name = snc.symbol_name
+                  ON " + sqlDependencyTargetMatchExpr + @"
                  AND tf.target_lang = snc.source_lang
                 LEFT JOIN metadata_raw_suppression mrs
                   ON mrs.source_file_id = snc.source_file_id
@@ -4582,6 +4963,7 @@ public partial class DbReader
                 LEFT JOIN target_ambiguity ta
                   ON ta.target_lang = snc.source_lang
                  AND ta.symbol_name = snc.symbol_name
+                 AND ta.symbol_segment_count = snc.symbol_segment_count
                 WHERE snc.source_path != tf.target_path
                   -- All metadata references ([Foo] / @Foo) and their synthetic C#
                   -- suffix aliases must only match class-like target kinds; otherwise

@@ -5605,6 +5605,37 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_FileDelegate_Issue303Repro()
+    {
+        // Closes #303: the `file` modifier on a top-level delegate must not be dropped by
+        // the modifier slot, regardless of whether other variants share the same file.
+        // v1.10.0 captured plain / public / unsafe delegates but silently missed
+        // `file delegate`. The #355 fix (free modifier order; accept `file` / `new`) covers
+        // this, so this test locks in the behavior against the exact reproducer from #303.
+        // Closes #303: トップレベル delegate の `file` 修飾子が modifier スロットで落ちないこと。
+        // v1.10.0 では plain / public / unsafe delegate は拾えていたが `file delegate` だけが
+        // 黙って欠落していた。#355 の修正 (修飾子順序を自由化し `file` / `new` を受理) が
+        // 本件も解消するため、#303 の再現 fixture で挙動を固定する。
+        var content = """
+            namespace Demo;
+
+            public delegate void PublicHandler(object sender);
+
+            file delegate void FileOnlyHandler(object sender);
+
+            delegate void PlainHandler(object sender);
+
+            unsafe delegate void UnsafeHandler(object sender);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "PublicHandler" && s.Visibility == "public" && s.ReturnType == "void");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "FileOnlyHandler" && s.ReturnType == "void");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "PlainHandler" && s.ReturnType == "void");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "UnsafeHandler" && s.ReturnType == "void");
+    }
+
+    [Fact]
     public void Extract_CSharp_EventModifierCombinations_Issue334Repro()
     {
         // Closes #334: the full issue repro must survive extraction, including class events
@@ -7596,6 +7627,21 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_QualifiedNamesAllowWhitespaceAroundDots()
+    {
+        var content =
+            "CREATE PROCEDURE [sales] . [sp_Report] AS SELECT 1;\n" +
+            "CREATE VIEW dbo . v_Orders AS SELECT 1;\n" +
+            "CREATE TYPE sales . Money AS ENUM ('usd');\n";
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name.Contains("sp_Report", StringComparison.Ordinal));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name.Contains("v_Orders", StringComparison.Ordinal));
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name.Contains("Money", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Extract_SQL_ProcedureBodyRange_TSqlBeginEnd()
     {
         // Multi-line T-SQL CREATE PROCEDURE with explicit BEGIN/END body terminated by GO.
@@ -8063,6 +8109,46 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "remote_db" && s.Signature != null && s.Signature.StartsWith("ALTER DATABASE LINK", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "data_dir" && s.Signature != null && s.Signature.StartsWith("ALTER DIRECTORY", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "app_profile" && s.Signature != null && s.Signature.StartsWith("ALTER PROFILE", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Extract_SQL_KeepsQualifiedNamesWhenDotsHaveSurroundingWhitespace()
+    {
+        var content =
+            "CREATE SCHEMA sales . reporting;\n" +
+            "CREATE SCHEMA AUTHORIZATION sales . auth_owner;\n" +
+            "CREATE SEQUENCE sales . seq_orders START WITH 1;\n" +
+            "CREATE EXTENSION \"sales\" . \"ext_demo\";\n" +
+            "CREATE SYNONYM [sales] . [syn_demo] FOR dbo.target;\n" +
+            "CREATE DATABASE LINK sales . remote_db CONNECT TO app IDENTIFIED BY 'x' USING 'REMOTE';\n" +
+            "CREATE LOGIN sales . app_login WITH PASSWORD = 'x';\n" +
+            "CREATE PARTITION FUNCTION sales . pf_orders (int) AS RANGE LEFT FOR VALUES (1);\n" +
+            "CREATE PARTITION SCHEME sales . ps_orders AS PARTITION sales . pf_orders ALL TO ([PRIMARY]);\n" +
+            "CREATE FULLTEXT CATALOG sales . ft_catalog;\n" +
+            "CREATE INDEX sales . idx_users_email ON dbo.Users (Email);\n" +
+            "ALTER PARTITION FUNCTION sales . pf_orders() SPLIT RANGE (2);\n" +
+            "ALTER SCHEMA sales . reporting TRANSFER dbo.Users;\n" +
+            "ALTER EXTENSION \"sales\" . \"ext_demo\" UPDATE TO '2.0';\n" +
+            "ALTER DATABASE LINK sales . remote_db;\n" +
+            "ALTER SEQUENCE sales . seq_orders RESTART WITH 10;\n" +
+            "ALTER SYNONYM [sales] . [syn_demo] FOR dbo.target;\n" +
+            "ALTER LOGIN sales . app_login WITH DEFAULT_DATABASE = master;\n" +
+            "ALTER INDEX sales . idx_users_email REBUILD;\n" +
+            "ALTER PARTITION SCHEME sales . ps_orders NEXT USED [PRIMARY];\n" +
+            "ALTER FULLTEXT CATALOG sales . ft_catalog REORGANIZE;\n";
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "sales.reporting");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "sales.auth_owner");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.seq_orders");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "\"sales\".\"ext_demo\"");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "[sales].[syn_demo]");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.remote_db");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.app_login");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "sales.pf_orders");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.ps_orders");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.ft_catalog");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.idx_users_email");
     }
 
     [Fact]
