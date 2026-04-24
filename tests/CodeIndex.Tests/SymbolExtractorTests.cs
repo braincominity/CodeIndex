@@ -8803,6 +8803,37 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_DetectsModuleInfoDeclarationAndDirectives()
+    {
+        const string content = """
+            open module com.example.app {
+                requires static transitive java.logging;
+                requires java.base;
+                exports com.example.api;
+                exports com.example.internal to com.example.plugin, com.example.tools;
+                opens com.example.model;
+                uses com.example.spi.MyService;
+                provides com.example.spi.MyService with com.example.impl.DefaultService, com.example.impl.BackupService;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var module = Assert.Single(symbols.Where(s => s.Kind == "namespace" && s.Name == "com.example.app"));
+        Assert.Equal(1, module.Line);
+        Assert.Equal(1, module.StartLine);
+        Assert.Equal(9, module.EndLine);
+
+        var imports = symbols.Where(s => s.Kind == "import").ToList();
+        Assert.Equal(7, imports.Count);
+        Assert.Contains(imports, s => s.Name == "java.logging" && s.ContainerName == "com.example.app");
+        Assert.Contains(imports, s => s.Name == "java.base" && s.ContainerName == "com.example.app");
+        Assert.Contains(imports, s => s.Name == "com.example.api" && s.ContainerName == "com.example.app");
+        Assert.Contains(imports, s => s.Name == "com.example.internal" && s.ContainerName == "com.example.app");
+        Assert.Contains(imports, s => s.Name == "com.example.model" && s.ContainerName == "com.example.app");
+        Assert.Equal(2, imports.Count(s => s.Name == "com.example.spi.MyService" && s.ContainerName == "com.example.app"));
+    }
+
+    [Fact]
     public void Extract_Java_DetectsFlexibleConstantOrder()
     {
         // final static order (reversed) and generic types with spaces

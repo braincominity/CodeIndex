@@ -450,6 +450,7 @@ internal sealed class RepoFileStat
 {
     public string Path { get; set; } = string.Empty;
     public string? Lang { get; set; }
+    public string? ModuleName { get; set; }
     public long Size { get; set; }
     public int Lines { get; set; }
     public int SymbolCount { get; set; }

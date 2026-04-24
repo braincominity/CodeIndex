@@ -112,7 +112,7 @@ internal sealed class RepoMapBuilder
                 .Take(limit)
                 .ToList(),
             Modules = fileStats
-                .GroupBy(file => GetModuleKey(file.Path))
+                .GroupBy(GetModuleKey)
                 .Select(group => new RepoModuleResult
                 {
                     Module = group.Key,
@@ -173,6 +173,12 @@ internal sealed class RepoMapBuilder
             : "0";
         var sql = $@"
             SELECT f.path, f.lang, f.size, f.lines,
+                   (SELECT s.name
+                    FROM symbols s
+                    WHERE s.file_id = f.id
+                      AND s.kind = 'namespace'
+                    ORDER BY s.line
+                    LIMIT 1) AS module_name,
                    (SELECT COUNT(*) FROM symbols s WHERE s.file_id = f.id) AS symbol_count,
                    {refCountExpr} AS reference_count,
                    {GetFileColumnSql("checksum")} AS checksum,
@@ -201,11 +207,12 @@ internal sealed class RepoMapBuilder
                 Lang = DbReader.GetNullableString(reader, 1),
                 Size = reader.GetInt64(2),
                 Lines = reader.GetInt32(3),
-                SymbolCount = reader.GetInt32(4),
-                ReferenceCount = reader.GetInt32(5),
-                Checksum = DbReader.GetNullableString(reader, 6),
-                Modified = DbReader.GetNullableDateTime(reader, 7),
-                IndexedAt = DbReader.GetNullableDateTime(reader, 8),
+                ModuleName = DbReader.GetNullableString(reader, 4),
+                SymbolCount = reader.GetInt32(5),
+                ReferenceCount = reader.GetInt32(6),
+                Checksum = DbReader.GetNullableString(reader, 7),
+                Modified = DbReader.GetNullableDateTime(reader, 8),
+                IndexedAt = DbReader.GetNullableDateTime(reader, 9),
             });
         }
 
@@ -315,9 +322,15 @@ internal sealed class RepoMapBuilder
         };
     }
 
-    private static string GetModuleKey(string path)
+    private static string GetModuleKey(RepoFileStat file)
     {
-        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (string.Equals(Path.GetFileName(file.Path), "module-info.java", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(file.ModuleName))
+        {
+            return file.ModuleName;
+        }
+
+        var segments = file.Path.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (segments.Length == 0)
             return ".";
         if (segments.Length == 1)

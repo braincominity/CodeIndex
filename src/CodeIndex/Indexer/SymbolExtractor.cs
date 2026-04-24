@@ -789,6 +789,8 @@ public static class SymbolExtractor
         ],
         ["java"] =
         [
+            // Module declaration (Java 9+ module-info.java) / モジュール宣言（Java 9+ の module-info.java）
+            new("namespace", new Regex(@"^\s*(?:open\s+)?module\s+(?<name>[\w.]+)\s*\{", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
             // Annotation type (@interface) / アノテーション型
             new("class",    new Regex(@"^\s*(?<visibility>public|private|protected)?\s*@interface\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
             // record (Java 16+) — must come before general class pattern / record は一般クラスパターンの前に配置
@@ -800,6 +802,10 @@ public static class SymbolExtractor
             // Class — with extended modifiers (final, sealed, static, abstract, strictfp)
             // クラス — 拡張修飾子対応（final, sealed, static, abstract, strictfp）
             new("class",    new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*class\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
+            // JPMS directives / JPMS ディレクティブ
+            new("import",   new Regex(@"^\s*requires\s+(?:transitive\s+|static\s+)*(?<name>[\w.]+)\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import",   new Regex(@"^\s*(?:exports|opens)\s+(?<name>[\w.]+)(?:\s+to\s+[\w.,\s]+)?\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import",   new Regex(@"^\s*(?:uses|provides)\s+(?<name>[\w.]+)(?:\s+with\s+[\w.,\s]+)?\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             // Static final field (Java equivalent of C# const) — order-flexible (static final or final static), generic types with spaces
             // static final フィールド — 語順柔軟（static final / final static）、スペース含むジェネリック型対応
             new("function", new Regex(@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final)\s+){2}(?<returnType>[\w?.<>\[\],\s]+?)\s+(?<name>[A-Z_]\w*)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, "visibility", "returnType"),
