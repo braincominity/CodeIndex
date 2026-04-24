@@ -5252,7 +5252,15 @@ public static class ReferenceExtractor
     private static bool IsCSharpPatternHeadCallSite(string preparedLine, int nameIndex)
     {
         var cursor = nameIndex;
-        return IsCSharpConstantPatternAnchor(preparedLine, ref cursor);
+        if (IsCSharpConstantPatternAnchor(preparedLine, ref cursor))
+            return true;
+
+        cursor = nameIndex;
+        cursor = SkipCSharpTriviaBackward(preparedLine, cursor);
+        if (TryConsumeTrailingCSharpToken(preparedLine, ref cursor, "not"))
+            cursor = SkipCSharpTriviaBackward(preparedLine, cursor);
+
+        return TryConsumeTrailingCSharpToken(preparedLine, ref cursor, "is");
     }
 
     private static bool TryConsumeTrailingCSharpToken(string text, ref int cursor, string token)

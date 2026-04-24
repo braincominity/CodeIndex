@@ -9555,6 +9555,10 @@ public class ReferenceExtractorTests
             {
                 void Run(object value)
                 {
+                    if (value is Point(var x, var y))
+                    {
+                    }
+
                     switch (value)
                     {
                         case Point { X: 0, Y: 0 }:
@@ -9570,7 +9574,7 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
-        Assert.Equal(2, pointRefs.Count);
+        Assert.Equal(3, pointRefs.Count);
         Assert.All(pointRefs, r => Assert.Equal("Run", r.ContainerName));
         Assert.DoesNotContain(references, r => r.SymbolName == "Point" && r.ReferenceKind == "call");
     }
