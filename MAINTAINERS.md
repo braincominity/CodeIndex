@@ -1,9 +1,9 @@
-# Maintainers & Forkers
+# Maintainers & Authorized Operators
 
-> **[日本語版はこちら / Japanese version](#maintainer-と-forker-向け)**
+> **[日本語版はこちら / Japanese version](#maintainer-と認可オペレーター向け)**
 
 This index lists the documents and sections that are **only relevant to the
-repository owner, maintainers, or forkers** — not to end users who simply
+repository owner, maintainers, or authorized release operators** — not to end users who simply
 `cdidx index` their codebase. They cover releasing, CI/install plumbing, and
 the AI-driven self-improvement workflow on this specific repo.
 
@@ -13,16 +13,18 @@ this page — `README.md` is enough.
 ## What's on this page for
 
 - **Releasing a new version of cdidx.** Only the owner has release push
-  permissions, but a forker bumping their own fork needs the same steps.
+  permissions; do not reuse the official release workflow, package identity,
+  or cdidx/CodeIndex branding for derivative distributions without written
+  permission.
   → [DEVELOPER_GUIDE.md → "Release Workflow"](DEVELOPER_GUIDE.md#release-workflow)
 - **Bootstrapping a Claude Code cloud session with no local .NET SDK.** Only
   useful to someone who wants to run Claude Code *against this repo* from a
-  SDK-less container (owner workflow; forkers can reuse the same prompt).
+  SDK-less container as an authorized maintainer.
   → [CLOUD_BOOTSTRAP_PROMPT.md](CLOUD_BOOTSTRAP_PROMPT.md) — drop-in first-turn prompt.
   → [DEVELOPER_GUIDE.md → "Cloud Claude Code bootstrap (no .NET SDK)"](DEVELOPER_GUIDE.md#cloud-claude-code-bootstrap-no-net-sdk) — deep dive on the install/runtime mechanics behind the prompt.
 - **AI-driven self-improvement loop.** The operating contract used by
   maintainer-run Claude Code sessions to iterate on cdidx itself. End users
-  shouldn't need this; forkers may adapt it.
+  shouldn't need this.
   → [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md)
 
 ## Why these are separated
@@ -32,14 +34,14 @@ search paths keep working. This page just flags them as *not part of the
 end-user documentation surface* so that:
 
 - End users don't waste time reading release / CI internals.
-- Maintainers and forkers have one entry point to everything operational.
+- Maintainers and authorized operators have one entry point to everything operational.
 - New maintainer-facing docs have an obvious home to get linked from.
 
 ---
 
-# Maintainer と forker 向け
+# Maintainer と認可オペレーター向け
 
-このページは、**このリポジトリの Maintainer または forker にのみ
+このページは、**このリポジトリの Maintainer または認可されたリリース担当者にのみ
 関係する**ドキュメントとセクションの索引です。単に自分のコードベースを
 `cdidx index` したいエンドユーザーには不要な情報です。リリース、CI と
 インストールの裏側、およびこのリポジトリ固有の AI 駆動自己改善フローを扱います。
@@ -49,12 +51,12 @@ end-user documentation surface* so that:
 
 ## このページが扱う範囲
 
-- **cdidx の新バージョンリリース。** リリースの push 権限を持つのは Maintainer だけですが、fork して自分のリリースを切る人にも同じ手順が必要です。
+- **cdidx の新バージョンリリース。** 公式リリースの push 権限を持つのは Maintainer だけです。派生配布で公式 release workflow、package identity、cdidx / CodeIndex branding を再利用するには書面による許可が必要です。
   → [DEVELOPER_GUIDE.md → 「リリース手順」](DEVELOPER_GUIDE.md#リリース手順)
-- **.NET SDK のないコンテナから Claude Code Cloud セッションを bootstrap する。** SDK の無いコンテナから *このリポジトリ* に対して Claude Code を走らせたい人（Maintainer のワークフロー。forker も同じプロンプトを流用可）に限って有用。
+- **.NET SDK のないコンテナから Claude Code Cloud セッションを bootstrap する。** SDK の無いコンテナから *このリポジトリ* に対して Claude Code を走らせたい認可 Maintainer 向けのワークフローです。
   → [CLOUD_BOOTSTRAP_PROMPT.md](CLOUD_BOOTSTRAP_PROMPT.md) — 初回投入用のプロンプト。
   → [DEVELOPER_GUIDE.md → 「Cloud Claude Code bootstrap（.NET SDK なし）」](DEVELOPER_GUIDE.md#cloud-claude-code-bootstrapnet-sdk-なし) — そのプロンプトの裏で走るインストール・ランタイムの詳細解説。
-- **AI 駆動の自己改善ループ。** Maintainer が走らせる Claude Code セッションが cdidx 自身を改善するときの運用契約。エンドユーザーには不要。forker は改変して使える。
+- **AI 駆動の自己改善ループ。** Maintainer が走らせる Claude Code セッションが cdidx 自身を改善するときの運用契約。エンドユーザーには不要です。
   → [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md)
 
 ## なぜ分離するのか
@@ -64,5 +66,5 @@ end-user documentation surface* so that:
 立てる役割を担います:
 
 - エンドユーザーがリリース内部や CI 内部の情報を読んで時間を無駄にしない。
-- Maintainer と forker に、運用系ドキュメントの単一の入口を提供する。
+- Maintainer と認可オペレーターに、運用系ドキュメントの単一の入口を提供する。
 - 今後 maintainer 向けドキュメントを足すときの、明示的なリンク元になる。

@@ -5614,6 +5614,72 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_DeleteUsingTempSourcesWithAliasesAfterComma_AreNotTreatedAsComments()
+    {
+        // issue #792: `DELETE ... USING #a AS alias, #b AS alias` must keep later temp sources on the
+        // temp-table path instead of treating the comma tail as a MySQL `# comment`.
+        // issue #792: `DELETE ... USING #a AS alias, #b AS alias` は、comma 後続を MySQL `# comment`
+        // と誤認せず、後続の temp source を temp-table 経路に残す必要がある。
+        const string content = """
+            CREATE TABLE #staging_a (id int);
+            CREATE TABLE #staging_b (id int);
+            DELETE FROM audit_log USING #staging_a AS a, #staging_b AS b
+            WHERE audit_log.id = a.id;
+            DELETE FROM audit_log USING #staging_a a, #staging_b b
+            WHERE audit_log.id = a.id;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#staging_a" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#staging_b" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_DeleteUsingQuotedIdentifierWithCommaAfterComma_AreNotTreatedAsComments()
+    {
+        // issue #792: `DELETE ... USING [schema,table], #b` must keep later temp sources on the
+        // temp-table path even when the previous list item contains a comma inside a quoted identifier.
+        // issue #792: `DELETE ... USING [schema,table], #b` は、直前の list item の quoted identifier 内に
+        // comma があっても、後続の temp source を temp-table 経路に残す必要がある。
+        const string content = """
+            CREATE TABLE #staging_b (id int);
+            DELETE FROM audit_log USING [schema,table], #staging_b AS b
+            WHERE audit_log.id = b.id;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "#staging_b" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_DeleteUsingMixedTableAndTempSourcesAfterComma_AreNotTreatedAsComments()
+    {
+        // issue #792: `DELETE ... USING reusing_data, #temp` must keep the temp source after the
+        // comma even when the previous list item is a regular table source that contains `using`
+        // as a substring.
+        // issue #792: `DELETE ... USING reusing_data, #temp` は、直前の list item が通常テーブルでも
+        // `using` を部分文字列に含む場合があっても、
+        // comma 後続の temp source を保持する必要がある。
+        const string content = """
+            CREATE TABLE #staging_b (id int);
+            DELETE FROM audit_log USING reusing_data, #staging_b AS b
+            WHERE audit_log.id = b.id;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "reusing_data" && r.ReferenceKind == "reference");
+        Assert.Equal(1, references.Count(r => r.SymbolName == "#staging_b" && r.ReferenceKind == "reference"));
+    }
+
+    [Fact]
     public void Extract_SQL_MergeUsingDoesNotTreatOtherUsingClausesAsSources()
     {
         // issue #695: `USING` should stay on the SQL source path only for `MERGE ... USING <source>`,
