@@ -596,6 +596,8 @@ The database reflects the working tree at the time of the last index. After swit
 | Svelte | `.svelte` | -- |
 | Terraform | `.tf` | -- |
 
+JavaScript/TypeScript symbol extraction also surfaces barrel re-exports such as `export * from` / `export { foo as bar } from`, TypeScript `export type { User } from`, direct CommonJS named exports like `module.exports.foo = function () {}` / `exports.baz = value`, and exported object-literal alias properties such as `module.exports = { foo: inner }`.
+
 Modern Node module layouts are indexed without renaming files: `.cjs` / `.mjs` are treated as JavaScript, and `.cts` / `.mts` (including declaration variants such as `.d.cts` / `.d.mts`) are treated as TypeScript.
 
 All languages are fully searchable via FTS5. Languages with **Symbols = yes** also support structured queries by function/class/import name.
@@ -1526,6 +1528,8 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 | Vue | `.vue` | -- |
 | Svelte | `.svelte` | -- |
 | Terraform | `.tf` | -- |
+
+JavaScript/TypeScript のシンボル抽出は、`export * from` / `export { foo as bar } from` のような barrel re-export、TypeScript の `export type { User } from`、`module.exports.foo = function () {}` / `exports.baz = value` のような直接的な CommonJS named export、`module.exports = { foo: inner }` のような exported object-literal alias property も表面化します。
 
 モダンな Node モジュール構成でも、拡張子を変更せずにそのままインデックスできます。`.cjs` / `.mjs` は JavaScript、`.cts` / `.mts`（`.d.cts` / `.d.mts` の宣言ファイルを含む）は TypeScript として扱います。
 

@@ -238,7 +238,8 @@ public static class SymbolExtractor
         int ScanEndExclusive,
         int FirstLineScanOffset,
         string ContainerKind,
-        string ContainerName);
+        string ContainerName,
+        bool IsExported = false);
 
     private static readonly HashSet<string> TypeScriptBareMethodModifiers =
     [
@@ -371,6 +372,26 @@ public static class SymbolExtractor
     // 後続の `{` の位置は binding 用と同じ lex-aware 走査で特定する。
     private static readonly Regex JavaScriptTypeScriptExportDefaultObjectLiteralRegex = new(
         @"^\s*export\s+default\s*",
+        RegexOptions.Compiled);
+
+    private static readonly Regex JavaScriptTypeScriptStarReExportRegex = new(
+        @"^\s*export\s+\*\s+from\s+(?<module>['""][^'""]+['""])\s*;?\s*$",
+        RegexOptions.Compiled);
+
+    private static readonly Regex JavaScriptTypeScriptNamedReExportRegex = new(
+        @"^\s*export\s+(?:type\s+)?\{\s*(?<specifiers>[^}]+)\s*\}\s+from\s+(?<module>['""][^'""]+['""])\s*;?\s*$",
+        RegexOptions.Compiled);
+
+    private static readonly Regex JavaScriptTypeScriptCommonJsNamedExportAssignmentRegex = new(
+        $@"^\s*(?:module\.exports|exports)\.(?<name>{JavaScriptTypeScriptIdentifierPattern})(?:\s*:\s*[^=]+?)?\s*=\s*(?<rhs>.+)$",
+        RegexOptions.Compiled);
+
+    private static readonly Regex JavaScriptTypeScriptArrowAssignmentValueRegex = new(
+        $@"^(?:async\s+)?(?:\([^)]*\)|{JavaScriptTypeScriptIdentifierPattern})\s*=>",
+        RegexOptions.Compiled);
+
+    private static readonly Regex JavaScriptTypeScriptExportedObjectLiteralPropertyRegex = new(
+        $@"^\s*(?<name>{JavaScriptTypeScriptIdentifierPattern})\s*:",
         RegexOptions.Compiled);
 
     private const string VbVisibilityPattern = @"(?:Public|Private|Protected|Friend)(?:\s+(?:Protected|Friend))?";
@@ -4689,6 +4710,7 @@ public static class SymbolExtractor
 
         var objectLiteralTargets = CollectJavaScriptTypeScriptObjectLiteralScanTargets(lang, lines, privateScopeColumns);
         ExtractJavaScriptTypeScriptBareMethodsInTargets(fileId, lang, lines, symbols, objectLiteralTargets);
+        ExtractJavaScriptTypeScriptExportSurfaceSymbols(fileId, lang, lines, symbols, privateScopeColumns, objectLiteralTargets);
     }
 
     // Scans for object literal declarations (`const obj = { ... }`, `module.exports = { ... }`
@@ -4787,7 +4809,8 @@ public static class SymbolExtractor
                 bodyStartLine,
                 bodyEndLine,
                 containerKind: "object",
-                containerName: containerName);
+                containerName: containerName,
+                isExported: isExported);
 
             if (!targets.Any(t => t.StartIndex == candidate.StartIndex
                 && t.ScanStartIndex == candidate.ScanStartIndex
@@ -4802,6 +4825,323 @@ public static class SymbolExtractor
             .OrderBy(t => t.StartIndex)
             .ThenByDescending(t => t.ScanEndExclusive)
             .ToList();
+    }
+
+    private static void ExtractJavaScriptTypeScriptExportSurfaceSymbols(
+        long fileId,
+        string lang,
+        string[] lines,
+        List<SymbolRecord> symbols,
+        JavaScriptScopePrivacyFlags[][] privateScopeColumns,
+        List<JavaScriptClassScanTarget> objectLiteralTargets)
+    {
+        var sanitizedLines = BuildJavaScriptTypeScriptSanitizedLines(lines);
+        ExtractJavaScriptTypeScriptReExportSymbols(fileId, lines, symbols);
+        ExtractJavaScriptTypeScriptCommonJsNamedExportAssignments(fileId, lang, lines, sanitizedLines, symbols, privateScopeColumns);
+        ExtractJavaScriptTypeScriptExportedObjectLiteralProperties(fileId, lines, sanitizedLines, symbols, objectLiteralTargets);
+    }
+
+    private static string[] BuildJavaScriptTypeScriptSanitizedLines(string[] lines)
+    {
+        var sanitizedLines = new string[lines.Length];
+        var lexState = new JavaScriptLexState();
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var lexedLine = LexJavaScriptLine(lines[i], lexState);
+            sanitizedLines[i] = lexedLine.SanitizedLine;
+            lexState = lexedLine.EndState;
+        }
+
+        return sanitizedLines;
+    }
+
+    private static void ExtractJavaScriptTypeScriptReExportSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    {
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var rawLine = lines[i];
+            var trimmedLine = rawLine.Trim();
+            if (trimmedLine.Length == 0)
+                continue;
+
+            var starMatch = JavaScriptTypeScriptStarReExportRegex.Match(rawLine);
+            if (starMatch.Success)
+            {
+                AddSymbolRecord(
+                    symbols,
+                    cssSeenSymbols: null,
+                    i + 1,
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "import",
+                        Name = TrimJavaScriptTypeScriptQuotedModuleName(starMatch.Groups["module"].Value),
+                        Line = i + 1,
+                        StartLine = i + 1,
+                        StartColumn = starMatch.Index,
+                        EndLine = i + 1,
+                        Signature = trimmedLine,
+                        Visibility = "export",
+                    },
+                    rawLine);
+                continue;
+            }
+
+            var namedMatch = JavaScriptTypeScriptNamedReExportRegex.Match(rawLine);
+            if (!namedMatch.Success)
+                continue;
+
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols: null,
+                i + 1,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "import",
+                    Name = TrimJavaScriptTypeScriptQuotedModuleName(namedMatch.Groups["module"].Value),
+                    Line = i + 1,
+                    StartLine = i + 1,
+                    StartColumn = namedMatch.Index,
+                    EndLine = i + 1,
+                    Signature = trimmedLine,
+                    Visibility = "export",
+                },
+                rawLine);
+
+            foreach (var exportedName in ParseJavaScriptTypeScriptReExportedNames(namedMatch.Groups["specifiers"].Value))
+            {
+                AddSymbolRecord(
+                    symbols,
+                    cssSeenSymbols: null,
+                    i + 1,
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "property",
+                        Name = exportedName,
+                        Line = i + 1,
+                        StartLine = i + 1,
+                        StartColumn = namedMatch.Index,
+                        EndLine = i + 1,
+                        Signature = trimmedLine,
+                        Visibility = "export",
+                    },
+                    rawLine);
+            }
+        }
+    }
+
+    private static void ExtractJavaScriptTypeScriptCommonJsNamedExportAssignments(
+        long fileId,
+        string lang,
+        string[] rawLines,
+        string[] sanitizedLines,
+        List<SymbolRecord> symbols,
+        JavaScriptScopePrivacyFlags[][] privateScopeColumns)
+    {
+        for (int i = 0; i < sanitizedLines.Length; i++)
+        {
+            var sanitizedLine = sanitizedLines[i];
+            var match = JavaScriptTypeScriptCommonJsNamedExportAssignmentRegex.Match(sanitizedLine);
+            if (!match.Success)
+                continue;
+
+            if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, i, match.Index, sanitizedLine, includeBlockScope: true)
+                || IsJavaScriptTypeScriptMatchInNamespaceScope(privateScopeColumns, i, match.Index, sanitizedLine))
+            {
+                continue;
+            }
+
+            var name = match.Groups["name"].Value;
+            var rhs = match.Groups["rhs"].Value.TrimStart();
+            if (rhs.Length == 0
+                || rhs.StartsWith("class", StringComparison.Ordinal)
+                || rhs.StartsWith("(class", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var kind = StartsJavaScriptTypeScriptFunctionAssignmentValue(rhs)
+                ? "function"
+                : "property";
+
+            int? bodyStartLine = null;
+            int? bodyEndLine = null;
+            if (kind == "function")
+            {
+                var openBraceOffset = rhs.IndexOf('{');
+                if (openBraceOffset >= 0)
+                {
+                    var openBraceColumn = match.Groups["rhs"].Index + openBraceOffset;
+                    var (_, resolvedBodyStartLine, resolvedBodyEndLine) = ResolveRange(rawLines, i, BodyStyle.Brace, lang, openBraceColumn);
+                    bodyStartLine = resolvedBodyStartLine;
+                    bodyEndLine = resolvedBodyEndLine;
+                }
+            }
+
+            AddSymbolRecord(
+                symbols,
+                cssSeenSymbols: null,
+                i + 1,
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = kind,
+                    Name = name,
+                    Line = i + 1,
+                    StartLine = i + 1,
+                    StartColumn = match.Index,
+                    EndLine = Math.Max(i + 1, bodyEndLine ?? (i + 1)),
+                    BodyStartLine = bodyStartLine,
+                    BodyEndLine = bodyEndLine,
+                    Signature = rawLines[i].Trim(),
+                    Visibility = "export",
+                },
+                rawLines[i]);
+        }
+    }
+
+    private static void ExtractJavaScriptTypeScriptExportedObjectLiteralProperties(
+        long fileId,
+        string[] rawLines,
+        string[] sanitizedLines,
+        List<SymbolRecord> symbols,
+        List<JavaScriptClassScanTarget> objectLiteralTargets)
+    {
+        foreach (var target in objectLiteralTargets.Where(t => t.IsExported))
+        {
+            var braceDepth = 0;
+            var parenDepth = 0;
+            var bracketDepth = 0;
+
+            for (int lineIndex = target.ScanStartIndex; lineIndex < target.ScanEndExclusive; lineIndex++)
+            {
+                var sanitizedLine = sanitizedLines[lineIndex];
+                var scanColumn = lineIndex == target.ScanStartIndex
+                    ? target.FirstLineScanOffset
+                    : 0;
+
+                while (scanColumn < sanitizedLine.Length)
+                {
+                    var ch = sanitizedLine[scanColumn];
+                    if (braceDepth == 0 && parenDepth == 0 && bracketDepth == 0)
+                    {
+                        while (scanColumn < sanitizedLine.Length
+                            && (char.IsWhiteSpace(sanitizedLine[scanColumn]) || sanitizedLine[scanColumn] is ',' or ';'))
+                        {
+                            scanColumn++;
+                        }
+
+                        if (scanColumn >= sanitizedLine.Length)
+                            break;
+
+                        var propertyMatch = JavaScriptTypeScriptExportedObjectLiteralPropertyRegex.Match(sanitizedLine[scanColumn..]);
+                        if (propertyMatch.Success)
+                        {
+                            var propertyName = propertyMatch.Groups["name"].Value;
+                            var hasExistingContainerSymbol = symbols.Any(s =>
+                                s.Name == propertyName
+                                && s.ContainerKind == "object"
+                                && s.ContainerName == target.ContainerName);
+                            if (!hasExistingContainerSymbol)
+                            {
+                                AddSymbolRecord(
+                                    symbols,
+                                    cssSeenSymbols: null,
+                                    lineIndex + 1,
+                                    new SymbolRecord
+                                    {
+                                        FileId = fileId,
+                                        Kind = "property",
+                                        Name = propertyName,
+                                        Line = lineIndex + 1,
+                                        StartLine = lineIndex + 1,
+                                        StartColumn = scanColumn + propertyMatch.Index,
+                                        EndLine = lineIndex + 1,
+                                        Signature = rawLines[lineIndex].Trim(),
+                                        ContainerKind = "object",
+                                        ContainerName = target.ContainerName,
+                                        Visibility = "export",
+                                    },
+                                    rawLines[lineIndex]);
+                            }
+
+                            scanColumn += propertyMatch.Length;
+                            continue;
+                        }
+                    }
+
+                    switch (ch)
+                    {
+                        case '{':
+                            braceDepth++;
+                            break;
+                        case '}':
+                            if (braceDepth > 0)
+                                braceDepth--;
+                            break;
+                        case '(':
+                            parenDepth++;
+                            break;
+                        case ')':
+                            if (parenDepth > 0)
+                                parenDepth--;
+                            break;
+                        case '[':
+                            bracketDepth++;
+                            break;
+                        case ']':
+                            if (bracketDepth > 0)
+                                bracketDepth--;
+                            break;
+                    }
+
+                    scanColumn++;
+                }
+            }
+        }
+    }
+
+    private static bool StartsJavaScriptTypeScriptFunctionAssignmentValue(string rhs)
+    {
+        return rhs.StartsWith("function", StringComparison.Ordinal)
+            || rhs.StartsWith("async function", StringComparison.Ordinal)
+            || JavaScriptTypeScriptArrowAssignmentValueRegex.IsMatch(rhs);
+    }
+
+    private static string TrimJavaScriptTypeScriptQuotedModuleName(string moduleName)
+    {
+        if (moduleName.Length >= 2
+            && moduleName[0] == moduleName[^1]
+            && (moduleName[0] == '\'' || moduleName[0] == '"'))
+        {
+            return moduleName[1..^1];
+        }
+
+        return moduleName;
+    }
+
+    private static IEnumerable<string> ParseJavaScriptTypeScriptReExportedNames(string specifierList)
+    {
+        foreach (var rawSpecifier in specifierList.Split(','))
+        {
+            var specifier = rawSpecifier.Trim();
+            if (specifier.Length == 0)
+                continue;
+
+            if (specifier.StartsWith("type ", StringComparison.Ordinal))
+                specifier = specifier["type ".Length..].TrimStart();
+
+            var asIndex = specifier.LastIndexOf(" as ", StringComparison.Ordinal);
+            var exportedName = asIndex >= 0
+                ? specifier[(asIndex + " as ".Length)..].Trim()
+                : specifier;
+            if (exportedName.Length == 0)
+                continue;
+
+            yield return exportedName;
+        }
     }
 
     // Scans forward from (`startLineIndex`, `startColumn`) through the lex-sanitized source for
@@ -6287,7 +6627,7 @@ public static class SymbolExtractor
             : line[declarationStartColumn..].Trim();
     }
 
-    private static JavaScriptClassScanTarget CreateJavaScriptClassScanTarget(string[] lines, string lang, int startIndex, int startColumn, int? bodyStartLine, int? bodyEndLine, string containerKind, string containerName)
+    private static JavaScriptClassScanTarget CreateJavaScriptClassScanTarget(string[] lines, string lang, int startIndex, int startColumn, int? bodyStartLine, int? bodyEndLine, string containerKind, string containerName, bool isExported = false)
     {
         var scanStartIndex = bodyStartLine!.Value - 1;
         var scanEndExclusive = bodyEndLine!.Value;
@@ -6304,7 +6644,8 @@ public static class SymbolExtractor
             scanEndExclusive,
             firstLineScanOffset,
             containerKind,
-            containerName);
+            containerName,
+            isExported);
     }
 
     private static void ExtractJavaScriptTypeScriptBareMethodsInClass(
