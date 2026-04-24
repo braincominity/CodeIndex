@@ -8602,6 +8602,51 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpDocCref_TripleSlashKeepsPhysicalLineColumn()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                /// <see cref="Foo"/>
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var fooReference = Assert.Single(references.Where(r => r.SymbolName == "Foo" && r.ReferenceKind == "type_reference"));
+        var expectedColumn = content.Split('\n')[3].IndexOf("Foo", StringComparison.Ordinal) + 1;
+        Assert.Equal(expectedColumn, fooReference.Column);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DelimitedDocCommentsKeepPhysicalLineColumn()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                /**
+                 * <summary><see cref="Foo"/></summary>
+                 */
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var fooReference = Assert.Single(references.Where(r =>
+            r.SymbolName == "Foo"
+            && r.ReferenceKind == "type_reference"
+            && r.Line == 5));
+        var expectedColumn = content.Split('\n')[4].IndexOf("Foo", StringComparison.Ordinal) + 1;
+        Assert.Equal(expectedColumn, fooReference.Column);
+    }
+
+    [Fact]
     public void Extract_CsharpDocCref_DoesNotTreatCodeAfterDelimitedDocCloseAsDocComment()
     {
         const string content = """

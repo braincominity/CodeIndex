@@ -778,6 +778,7 @@ public static class ReferenceExtractor
                         references,
                         seen,
                         fileId,
+                        csharpDocCommentStartIndex,
                         csharpDocCommentText.Trim(),
                         lineNumber,
                         docContainer);
@@ -2297,6 +2298,7 @@ public static class ReferenceExtractor
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
+        int columnOffset,
         string context,
         int lineNumber,
         SymbolRecord? container)
@@ -2312,7 +2314,7 @@ public static class ReferenceExtractor
                 seen,
                 fileId,
                 normalized,
-                crefGroup.Index,
+                columnOffset + crefGroup.Index,
                 context,
                 lineNumber,
                 container,
