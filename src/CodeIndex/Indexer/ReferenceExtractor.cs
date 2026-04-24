@@ -11,6 +11,13 @@ namespace CodeIndex.Indexer;
 public static class ReferenceExtractor
 {
     private readonly record struct SqlDefinitionLeafSpan(string LeafName, int StartIndex, int EndIndexExclusive);
+    private readonly record struct CSharpMultiLineTypePatternState(
+        bool WaitingForHead,
+        string? PendingTypeExpression,
+        int PendingTypeIndex,
+        int PendingTypeLineNumber,
+        string? PendingContext,
+        SymbolRecord? PendingContainer);
     private const string SqlProcCallIdentifierPattern = @"(?:\[[^\[\]\r\n]+\]|`[^`\r\n]+`|""(?:""""|[^""\r\n])+""|##?\w+|[_\p{L}][\p{L}\p{Mn}\p{Mc}\p{Nd}\p{Pc}$]*)";
     private const string SqlProcCallQualifierPattern = @"(?:(?:" + SqlProcCallIdentifierPattern + @")?\s*\.\s*)*";
 
@@ -457,6 +464,18 @@ public static class ReferenceExtractor
     private static readonly Regex CSharpIsAsTypeTestRegex = new(
         $@"(?<![\w$])(?:is\s+(?:not\s+)?|as\s+)(?<type>{CSharpTypeExpressionPattern})",
         RegexOptions.Compiled);
+    private static readonly Regex CSharpTrailingIsAsTypePatternIntroRegex = new(
+        @"(?<![\w$])(?:is(?:\s+not)?|as)\s*$",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpTrailingCaseTypePatternIntroRegex = new(
+        @"(?<![\w$])case(?:\s+not)?\s*$",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpIsAsTypePatternIntroContextRegex = new(
+        @"(?<![\w$])(?:is(?:\s+not)?|as)",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpCaseTypePatternIntroContextRegex = new(
+        @"(?<![\w$])case(?:\s+not)?",
+        RegexOptions.Compiled);
     // C# `case` labels use a small structural follow-token check so declaration / recursive /
     // positional/logical patterns stay visible while constant member labels like
     // `case Color.Red:` and `case Color.Red or Color.Blue:` do not leak
@@ -782,6 +801,7 @@ public static class ReferenceExtractor
 
         var references = new List<ReferenceRecord>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        var pendingCSharpMultiLineTypePattern = default(CSharpMultiLineTypePatternState);
         HashSet<string>? sqlEstablishedTempObjectNames = null;
         string? sqlStatementPrefix = null;
         var sqlIdentifierScanState = default(SqlIdentifierScanState);
@@ -847,7 +867,26 @@ public static class ReferenceExtractor
                 csharpInDelimitedDocComment = nextCsharpDelimitedDocComment;
             }
             if (string.IsNullOrWhiteSpace(preparedLine))
+            {
+                if (language == "csharp"
+                    && (pendingCSharpMultiLineTypePattern.WaitingForHead
+                        || pendingCSharpMultiLineTypePattern.PendingTypeExpression != null))
+                {
+                    continue;
+                }
+
+                if (language == "csharp")
+                    FlushPendingCSharpMultiLineTypePatternReference(
+                        ref pendingCSharpMultiLineTypePattern,
+                        csharpQualifiedConstantPatternMemberLookup,
+                        csharpUsingAliases,
+                        csharpUsingStatics,
+                        HasActiveSameFileCSharpTypeCandidate,
+                        references,
+                        seen,
+                        fileId);
                 continue;
+            }
 
             var context = originalLine.Trim();
             if (context.Length == 0)
@@ -927,6 +966,23 @@ public static class ReferenceExtractor
                 }
 
                 return container;
+            }
+
+            if (language == "csharp")
+            {
+                AdvanceCSharpMultiLineTypePatternState(
+                    preparedLine,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpUsingAliases,
+                    csharpUsingStatics,
+                    HasActiveSameFileCSharpTypeCandidate,
+                    references,
+                    seen,
+                    fileId,
+                    ref pendingCSharpMultiLineTypePattern);
             }
 
             bool ShouldSuppressDefinitionCall(string resolvedName, int callIndex)
@@ -1023,7 +1079,20 @@ public static class ReferenceExtractor
                     context,
                     lineNumber,
                     ResolveContainerForCall,
-                    container);
+                    container,
+                    ref pendingCSharpMultiLineTypePattern);
+
+                if (CSharpTrailingIsAsTypePatternIntroRegex.IsMatch(preparedLine)
+                    && HasTrailingCSharpTypePatternIntro(originalLine, CSharpIsAsTypePatternIntroContextRegex))
+                {
+                    StartWaitingForCSharpMultiLineTypePatternHead(ref pendingCSharpMultiLineTypePattern);
+                }
+
+                if (CSharpTrailingCaseTypePatternIntroRegex.IsMatch(preparedLine)
+                    && HasTrailingCSharpTypePatternIntro(originalLine, CSharpCaseTypePatternIntroContextRegex))
+                {
+                    StartWaitingForCSharpMultiLineTypePatternHead(ref pendingCSharpMultiLineTypePattern);
+                }
             }
             else if (language == "java")
             {
@@ -1628,6 +1697,16 @@ public static class ReferenceExtractor
                 references,
                 seen,
                 fileId);
+
+            FlushPendingCSharpMultiLineTypePatternReference(
+                ref pendingCSharpMultiLineTypePattern,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpUsingAliases,
+                csharpUsingStatics,
+                HasActiveSameFileCSharpTypeCandidate,
+                references,
+                seen,
+                fileId);
         }
 
         return references;
@@ -2213,7 +2292,8 @@ public static class ReferenceExtractor
         string context,
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn,
-        SymbolRecord? container)
+        SymbolRecord? container,
+        ref CSharpMultiLineTypePatternState pendingCSharpMultiLineTypePattern)
     {
         TryEmitCSharpBaseListReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitCSharpWhereConstraintReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
@@ -2284,6 +2364,7 @@ public static class ReferenceExtractor
 
         EmitCSharpCaseTypePatternReferences(
             preparedLine,
+            originalLine,
             csharpQualifiedConstantPatternMemberLookup,
             csharpQualifiedTypePatternLookup,
             csharpUsingAliases,
@@ -2294,11 +2375,201 @@ public static class ReferenceExtractor
             fileId,
             context,
             lineNumber,
-            resolveContainerForColumn);
+            resolveContainerForColumn,
+            ref pendingCSharpMultiLineTypePattern);
+    }
+
+    private static void AdvanceCSharpMultiLineTypePatternState(
+        string preparedLine,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        ref CSharpMultiLineTypePatternState state)
+    {
+        if (!state.WaitingForHead && state.PendingTypeExpression == null)
+            return;
+
+        var cursor = SkipWhitespace(preparedLine, 0);
+        if (state.WaitingForHead)
+        {
+            if (!TryConsumeCSharpMultiLineTypePatternHead(
+                    preparedLine,
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn,
+                    ref cursor,
+                    ref state))
+            {
+                if (IsStandaloneCSharpMultiLinePatternNegation(preparedLine))
+                    return;
+
+                state = default;
+                return;
+            }
+        }
+        else if (!TryConsumeCSharpLogicalPatternKeyword(preparedLine, cursor, out cursor))
+        {
+            FlushPendingCSharpMultiLineTypePatternReference(
+                ref state,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpUsingAliases,
+                csharpUsingStatics,
+                hasActiveSameFileCSharpTypeCandidate,
+                references,
+                seen,
+                fileId);
+            return;
+        }
+        else
+        {
+            FlushPendingCSharpMultiLineTypePatternReference(
+                ref state,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpUsingAliases,
+                csharpUsingStatics,
+                hasActiveSameFileCSharpTypeCandidate,
+                references,
+                seen,
+                fileId);
+            if (!TryConsumeCSharpMultiLineTypePatternHead(
+                    preparedLine,
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn,
+                    ref cursor,
+                    ref state))
+            {
+                state = state with { WaitingForHead = true };
+                return;
+            }
+        }
+
+        while (TryConsumeCSharpLogicalPatternKeyword(
+            preparedLine,
+            SkipWhitespace(preparedLine, state.PendingTypeIndex + state.PendingTypeExpression!.Length),
+            out cursor))
+        {
+            FlushPendingCSharpMultiLineTypePatternReference(
+                ref state,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpUsingAliases,
+                csharpUsingStatics,
+                hasActiveSameFileCSharpTypeCandidate,
+                references,
+                seen,
+                fileId);
+            if (!TryConsumeCSharpMultiLineTypePatternHead(
+                    preparedLine,
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn,
+                    ref cursor,
+                    ref state))
+            {
+                state = state with { WaitingForHead = true };
+                return;
+            }
+        }
+    }
+
+    private static bool TryConsumeCSharpMultiLineTypePatternHead(
+        string preparedLine,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        ref int cursor,
+        ref CSharpMultiLineTypePatternState state)
+    {
+        cursor = SkipWhitespace(preparedLine, cursor);
+        if (TryConsumeCSharpPatternKeyword(preparedLine, ref cursor, "not"))
+            cursor = SkipWhitespace(preparedLine, cursor);
+
+        var match = CSharpTypeExpressionAtCursorRegex.Match(preparedLine, cursor);
+        if (!match.Success)
+            return false;
+
+        var typeGroup = match.Groups["type"];
+        state = new CSharpMultiLineTypePatternState(
+            WaitingForHead: false,
+            PendingTypeExpression: typeGroup.Value,
+            PendingTypeIndex: typeGroup.Index,
+            PendingTypeLineNumber: lineNumber,
+            PendingContext: context,
+            PendingContainer: resolveContainerForColumn(typeGroup.Index));
+        cursor = SkipWhitespace(preparedLine, typeGroup.Index + typeGroup.Length);
+        return true;
+    }
+
+    private static void FlushPendingCSharpMultiLineTypePatternReference(
+        ref CSharpMultiLineTypePatternState state,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId)
+    {
+        if (state.PendingTypeExpression == null || state.PendingContext == null)
+        {
+            state = default;
+            return;
+        }
+
+        if (!IsCSharpNonTypePatternExpression(state.PendingTypeExpression)
+            && !IsCSharpConstantPatternMemberHead(
+                state.PendingTypeExpression,
+                state.PendingTypeLineNumber,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpUsingAliases,
+                csharpUsingStatics,
+                hasActiveSameFileCSharpTypeCandidate))
+        {
+            AddTypeExpressionSegments(
+                references,
+                seen,
+                fileId,
+                state.PendingTypeExpression,
+                state.PendingTypeIndex,
+                state.PendingContext,
+                state.PendingTypeLineNumber,
+                state.PendingContainer,
+                "csharp");
+        }
+
+        state = default;
+    }
+
+    private static bool IsStandaloneCSharpMultiLinePatternNegation(string preparedLine)
+    {
+        var cursor = SkipWhitespace(preparedLine, 0);
+        if (!TryConsumeCSharpPatternKeyword(preparedLine, ref cursor, "not"))
+            return false;
+
+        return SkipWhitespace(preparedLine, cursor) >= preparedLine.Length;
+    }
+
+    private static void StartWaitingForCSharpMultiLineTypePatternHead(ref CSharpMultiLineTypePatternState state)
+    {
+        state = new CSharpMultiLineTypePatternState(
+            WaitingForHead: true,
+            PendingTypeExpression: null,
+            PendingTypeIndex: 0,
+            PendingTypeLineNumber: 0,
+            PendingContext: null,
+            PendingContainer: null);
     }
 
     private static void EmitCSharpCaseTypePatternReferences(
         string preparedLine,
+        string originalLine,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
@@ -2309,7 +2580,8 @@ public static class ReferenceExtractor
         long fileId,
         string context,
         int lineNumber,
-        Func<int, SymbolRecord?> resolveContainerForColumn)
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        ref CSharpMultiLineTypePatternState pendingCSharpMultiLineTypePattern)
     {
         foreach (Match caseMatch in CSharpCaseLabelRegex.Matches(preparedLine))
         {
@@ -2320,58 +2592,232 @@ public static class ReferenceExtractor
 
             var typeMatch = CSharpTypeExpressionAtCursorRegex.Match(preparedLine, cursor);
             if (!typeMatch.Success)
+            {
+                var rawCaseCursor = SkipCSharpTriviaForward(originalLine, caseMatch.Index + caseMatch.Length);
+                if (TryConsumeLeadingCSharpPatternKeyword(originalLine, ref rawCaseCursor, "not"))
+                    rawCaseCursor = SkipCSharpTriviaForward(originalLine, rawCaseCursor);
+
+                if (HasOnlyTrailingCSharpTrivia(originalLine, rawCaseCursor))
+                    StartWaitingForCSharpMultiLineTypePatternHead(ref pendingCSharpMultiLineTypePattern);
                 continue;
+            }
 
             var typeGroup = typeMatch.Groups["type"];
-            int continuationIndex = SkipWhitespace(preparedLine, typeGroup.Index + typeGroup.Length);
-            if (TryEmitCSharpLogicalTypePatternHeads(
-                    preparedLine,
-                    typeGroup.Value,
-                    typeGroup.Index,
-                    continuationIndex,
-                    lineNumber,
-                    csharpQualifiedConstantPatternMemberLookup,
-                    csharpQualifiedTypePatternLookup,
-                    csharpUsingAliases,
-                    csharpUsingStatics,
-                    hasActiveSameFileCSharpTypeCandidate,
-                    (logicalTypeExpression, logicalTypeIndex) => AddTypeExpressionSegments(
+            var currentTypeExpression = typeGroup.Value;
+            var currentTypeIndex = typeGroup.Index;
+            var currentContinuationIndex = SkipWhitespace(preparedLine, typeGroup.Index + typeGroup.Length);
+            var sawLogicalKeyword = false;
+            var waitingForNextHead = false;
+
+            while (TryConsumeCSharpLogicalPatternKeyword(preparedLine, currentContinuationIndex, out var nextHeadCursor))
+            {
+                sawLogicalKeyword = true;
+                if (!IsCSharpLogicalConstantPatternHead(
+                        preparedLine,
+                        currentTypeExpression,
+                        nextHeadCursor,
+                        lineNumber,
+                        csharpQualifiedConstantPatternMemberLookup,
+                        csharpQualifiedTypePatternLookup,
+                        csharpUsingAliases,
+                        csharpUsingStatics,
+                        hasActiveSameFileCSharpTypeCandidate))
+                {
+                    AddTypeExpressionSegments(
                         references,
                         seen,
                         fileId,
-                        logicalTypeExpression,
-                        logicalTypeIndex,
+                        currentTypeExpression,
+                        currentTypeIndex,
                         context,
                         lineNumber,
-                        resolveContainerForColumn(logicalTypeIndex),
-                        "csharp")))
+                        resolveContainerForColumn(currentTypeIndex),
+                        "csharp");
+                }
+
+                int nextTypeCursor = nextHeadCursor;
+                if (TryConsumeCSharpPatternKeyword(preparedLine, ref nextTypeCursor, "not"))
+                    nextTypeCursor = SkipWhitespace(preparedLine, nextTypeCursor);
+
+                var nextMatch = CSharpTypeExpressionAtCursorRegex.Match(preparedLine, nextTypeCursor);
+                if (!nextMatch.Success)
+                {
+                    var rawNextTypeCursor = SkipCSharpTriviaForward(originalLine, nextHeadCursor);
+                    if (TryConsumeLeadingCSharpPatternKeyword(originalLine, ref rawNextTypeCursor, "not"))
+                        rawNextTypeCursor = SkipCSharpTriviaForward(originalLine, rawNextTypeCursor);
+
+                    if (HasOnlyTrailingCSharpTrivia(originalLine, rawNextTypeCursor))
+                    {
+                        StartWaitingForCSharpMultiLineTypePatternHead(ref pendingCSharpMultiLineTypePattern);
+                        waitingForNextHead = true;
+                    }
+                    break;
+                }
+
+                var nextTypeGroup = nextMatch.Groups["type"];
+                currentTypeExpression = nextTypeGroup.Value;
+                currentTypeIndex = nextTypeGroup.Index;
+                currentContinuationIndex = SkipWhitespace(preparedLine, currentTypeIndex + currentTypeExpression.Length);
+            }
+
+            if (waitingForNextHead)
+                continue;
+
+            if (sawLogicalKeyword)
             {
+                if (!IsCSharpNonTypePatternExpression(currentTypeExpression)
+                    && !IsCSharpConstantPatternMemberHead(
+                        currentTypeExpression,
+                        lineNumber,
+                        csharpQualifiedConstantPatternMemberLookup,
+                        csharpUsingAliases,
+                        csharpUsingStatics,
+                        hasActiveSameFileCSharpTypeCandidate))
+                {
+                    AddTypeExpressionSegments(
+                        references,
+                        seen,
+                        fileId,
+                        currentTypeExpression,
+                        currentTypeIndex,
+                        context,
+                        lineNumber,
+                        resolveContainerForColumn(currentTypeIndex),
+                        "csharp");
+                }
+
                 continue;
             }
 
             if (!IsCSharpCaseTypePatternContinuation(
                     preparedLine,
-                    typeGroup.Value,
-                    continuationIndex,
+                    currentTypeExpression,
+                    currentContinuationIndex,
                     csharpQualifiedConstantPatternMemberLookup,
                     csharpQualifiedTypePatternLookup,
                     csharpUsingAliases,
                     csharpUsingStatics,
                     hasActiveSameFileCSharpTypeCandidate,
                     lineNumber))
+            {
                 continue;
+            }
 
             AddTypeExpressionSegments(
                 references,
                 seen,
                 fileId,
-                typeGroup.Value,
-                typeGroup.Index,
+                currentTypeExpression,
+                currentTypeIndex,
                 context,
                 lineNumber,
-                resolveContainerForColumn(typeGroup.Index),
+                resolveContainerForColumn(currentTypeIndex),
                 "csharp");
         }
+    }
+
+    private static bool HasOnlyTrailingCSharpTrivia(string text, int cursor)
+    {
+        while (cursor < text.Length)
+        {
+            if (char.IsWhiteSpace(text[cursor]))
+            {
+                cursor++;
+                continue;
+            }
+
+            if (cursor + 1 < text.Length
+                && text[cursor] == '/'
+                && text[cursor + 1] == '/')
+            {
+                return true;
+            }
+
+            if (cursor + 1 < text.Length
+                && text[cursor] == '/'
+                && text[cursor + 1] == '*')
+            {
+                var commentEnd = text.IndexOf("*/", cursor + 2, StringComparison.Ordinal);
+                if (commentEnd < 0)
+                    return true;
+
+                cursor = commentEnd + 2;
+                continue;
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private static int SkipCSharpTriviaForward(string text, int cursor)
+    {
+        while (cursor < text.Length)
+        {
+            if (char.IsWhiteSpace(text[cursor]))
+            {
+                cursor++;
+                continue;
+            }
+
+            if (cursor + 1 < text.Length
+                && text[cursor] == '/'
+                && text[cursor + 1] == '/')
+            {
+                return text.Length;
+            }
+
+            if (cursor + 1 < text.Length
+                && text[cursor] == '/'
+                && text[cursor + 1] == '*')
+            {
+                var commentEnd = text.IndexOf("*/", cursor + 2, StringComparison.Ordinal);
+                if (commentEnd < 0)
+                    return text.Length;
+
+                cursor = commentEnd + 2;
+                continue;
+            }
+
+            break;
+        }
+
+        return cursor;
+    }
+
+    private static bool TryConsumeLeadingCSharpPatternKeyword(string text, ref int cursor, string keyword)
+    {
+        if (string.IsNullOrEmpty(keyword))
+            return false;
+
+        cursor = SkipCSharpTriviaForward(text, cursor);
+        if (cursor + keyword.Length > text.Length
+            || !text.AsSpan(cursor, keyword.Length).Equals(keyword, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var nextIndex = cursor + keyword.Length;
+        if (nextIndex < text.Length
+            && (char.IsLetterOrDigit(text[nextIndex]) || text[nextIndex] == '_'))
+        {
+            return false;
+        }
+
+        cursor = nextIndex;
+        return true;
+    }
+
+    private static bool HasTrailingCSharpTypePatternIntro(string text, Regex introRegex)
+    {
+        foreach (Match match in introRegex.Matches(text))
+        {
+            if (HasOnlyTrailingCSharpTrivia(text, match.Index + match.Length))
+                return true;
+        }
+
+        return false;
     }
 
     private static void EmitCSharpSwitchExpressionTypePatternReferences(
@@ -4457,6 +4903,9 @@ public static class ReferenceExtractor
                     allowSingleSegmentQualifiedMatch: parsed.HasLeadingGlobalQualifier))
                 continue;
 
+            if (IsCSharpQualifiedConstantPatternReferenceSite(preparedLine, parsed))
+                continue;
+
             var nextTokenIndex = SkipWhitespace(preparedLine, member.End);
             if (nextTokenIndex < preparedLine.Length && preparedLine[nextTokenIndex] == '(')
                 continue;
@@ -4476,6 +4925,150 @@ public static class ReferenceExtractor
                 lineNumber,
                 callContainer);
         }
+    }
+
+    private static bool IsCSharpQualifiedConstantPatternReferenceSite(
+        string preparedLine,
+        (List<(int Start, int End)> Segments, int NextIndex, bool LastSeparatorWasDot, bool HasLeadingGlobalQualifier) parsed)
+    {
+        if (!parsed.LastSeparatorWasDot || parsed.Segments.Count < 2)
+            return false;
+
+        var headCursor = parsed.Segments[0].Start;
+        if (parsed.HasLeadingGlobalQualifier
+            && headCursor >= "global::".Length
+            && preparedLine.AsSpan(headCursor - "global::".Length, "global::".Length).Equals("global::", StringComparison.Ordinal))
+        {
+            headCursor -= "global::".Length;
+        }
+
+        return IsCSharpConstantPatternAnchor(preparedLine, ref headCursor);
+    }
+
+    private static bool IsCSharpConstantPatternAnchor(string text, ref int cursor)
+    {
+        cursor = SkipCSharpTriviaBackward(text, cursor);
+        if (TryConsumeTrailingCSharpToken(text, ref cursor, "not"))
+            cursor = SkipCSharpTriviaBackward(text, cursor);
+
+        while (true)
+        {
+            if (TryConsumeTrailingCSharpToken(text, ref cursor, "case"))
+                return true;
+
+            if (TryConsumeTrailingCSharpToken(text, ref cursor, "is"))
+                return false;
+
+            if (!TryConsumeTrailingCSharpToken(text, ref cursor, "or")
+                && !TryConsumeTrailingCSharpToken(text, ref cursor, "and"))
+            {
+                return false;
+            }
+
+            cursor = SkipCSharpTriviaBackward(text, cursor);
+            if (!SkipCSharpPatternHeadBackward(text, ref cursor))
+                return false;
+            cursor = SkipCSharpTriviaBackward(text, cursor);
+            if (TryConsumeTrailingCSharpToken(text, ref cursor, "not"))
+                cursor = SkipCSharpTriviaBackward(text, cursor);
+        }
+    }
+
+    private static int SkipCSharpTriviaBackward(string text, int cursor)
+    {
+        while (cursor > 0)
+        {
+            if (char.IsWhiteSpace(text[cursor - 1]))
+            {
+                cursor--;
+                continue;
+            }
+
+            if (cursor >= 2
+                && text[cursor - 1] == '/'
+                && text[cursor - 2] == '*')
+            {
+                var commentStart = text.LastIndexOf("/*", cursor - 2, StringComparison.Ordinal);
+                if (commentStart >= 0)
+                {
+                    cursor = commentStart;
+                    continue;
+                }
+            }
+
+            break;
+        }
+
+        return cursor;
+    }
+
+    private static bool TryConsumeTrailingCSharpToken(string text, ref int cursor, string token)
+    {
+        if (string.IsNullOrEmpty(token))
+            return false;
+
+        cursor = SkipCSharpTriviaBackward(text, cursor);
+        if (cursor < token.Length)
+            return false;
+
+        var tokenStart = cursor - token.Length;
+        if (!text.AsSpan(tokenStart, token.Length).Equals(token, StringComparison.Ordinal))
+            return false;
+
+        if ((tokenStart > 0 && IsCSharpIdentifierPart(text[tokenStart - 1]))
+            || (cursor < text.Length && IsCSharpIdentifierPart(text[cursor])))
+        {
+            return false;
+        }
+
+        cursor = tokenStart;
+        return true;
+    }
+
+    private static bool SkipCSharpPatternHeadBackward(string text, ref int cursor)
+    {
+        if (!TryConsumeTrailingCSharpIdentifier(text, ref cursor))
+            return false;
+
+        while (true)
+        {
+            cursor = SkipCSharpTriviaBackward(text, cursor);
+            if (cursor >= 2
+                && text[cursor - 2] == ':'
+                && text[cursor - 1] == ':')
+            {
+                cursor -= 2;
+            }
+            else if (cursor > 0 && text[cursor - 1] == '.')
+            {
+                cursor--;
+            }
+            else
+            {
+                break;
+            }
+
+            cursor = SkipCSharpTriviaBackward(text, cursor);
+            if (!TryConsumeTrailingCSharpIdentifier(text, ref cursor))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryConsumeTrailingCSharpIdentifier(string text, ref int cursor)
+    {
+        var end = cursor;
+        while (cursor > 0 && IsCSharpIdentifierPart(text[cursor - 1]))
+            cursor--;
+
+        if (cursor == end)
+            return false;
+
+        if (cursor > 0 && text[cursor - 1] == '@')
+            cursor--;
+
+        return true;
     }
 
     private static bool TryReadCSharpQualifiedAccess(

@@ -1647,6 +1647,29 @@ public static class SymbolExtractor
                         lineOffset = FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang);
                         continue;
                     }
+                    if (lang == "csharp"
+                        && pattern.BodyStyle == BodyStyle.None
+                        && (pattern.Kind == "property" || IsCSharpFieldLikeFunctionPattern(pattern))
+                        && IsInsidePreviouslyEmittedCSharpMemberBody(lines, symbols, i + 1, csharpGateRawStartColumn))
+                    {
+                        // Brace-based type-body scope tracking correctly rejects locals inside
+                        // block bodies, but multi-line expression-bodied members have no brace
+                        // transition for their continuation lines. Without an additional guard,
+                        // those later lines can still match the plain-field regex and emit
+                        // phantom `property` rows like `Red` from `value is\n Red\n or Red;`.
+                        // Only reject lines after the member's declaration line so same-line
+                        // siblings such as `int M() => 0; int X;` keep working through the
+                        // existing column-aware scope gate. Closes #779.
+                        // brace ベースの型本体スコープ追跡は block body 内の local を弾けるが、
+                        // 複数行の式本体メンバーには continuation 行用の brace 遷移が無い。
+                        // そのため追加ガードが無いと `value is\n Red\n or Red;` の後続行が
+                        // plain-field regex にマッチして `property Red` の phantom を出してしまう。
+                        // `int M() => 0; int X;` のような same-line sibling は既存の列単位
+                        // ゲートで扱えるよう、宣言行そのものではなく後続行だけを拒否する。
+                        // Closes #779.
+                        lineOffset = FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang);
+                        continue;
+                    }
                     var rawReturnType = TryGetGroup(match, pattern.ReturnTypeGroup);
                     if (lang == "csharp"
                         && pattern.ReturnTypeGroup != null
@@ -1873,7 +1896,7 @@ public static class SymbolExtractor
                     }
                     else if (lang == "csharp"
                         && pattern.BodyStyle == BodyStyle.None
-                        && TryFindCSharpFieldSignatureExtent(
+                        && TryFindCSharpSemicolonTerminatedSignatureExtent(
                             lines,
                             i,
                             csharpGateRawStartColumn,
@@ -1887,6 +1910,27 @@ public static class SymbolExtractor
                             csharpGateRawStartColumn,
                             csharpFieldSignatureLastLineIndex,
                             csharpFieldSignatureLastLineExclusiveEndColumn);
+                    }
+                    else if (lang == "csharp"
+                        && pattern.BodyStyle == BodyStyle.Brace
+                        && IsCSharpMultilineExpressionBodiedMember(
+                            lines,
+                            i,
+                            csharpSignatureRawStartColumn)
+                        && TryFindCSharpSemicolonTerminatedSignatureExtent(
+                            lines,
+                            i,
+                            csharpSignatureRawStartColumn,
+                            out var csharpSemicolonSignatureLastLineIndex,
+                            out var csharpSemicolonSignatureLastLineExclusiveEndColumn)
+                        && csharpSemicolonSignatureLastLineIndex > i)
+                    {
+                        signature = BuildCSharpMultilineSignature(
+                            lines,
+                            i,
+                            csharpSignatureRawStartColumn,
+                            csharpSemicolonSignatureLastLineIndex,
+                            csharpSemicolonSignatureLastLineExclusiveEndColumn);
                     }
                     else if (lang == "csharp" && csharpPropertyCandidate.LastConsumedLineIndex > i)
                     {
@@ -11116,6 +11160,42 @@ public static class SymbolExtractor
         return lastToken is "as" or "is" or "return" or "throw" or "new";
     }
 
+    private static bool IsInsidePreviouslyEmittedCSharpMemberBody(
+        string[] lines,
+        List<SymbolRecord> symbols,
+        int candidateLine,
+        int candidateColumn)
+    {
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is not "function" and not "property" and not "event")
+                continue;
+            if (!symbol.BodyStartLine.HasValue || !symbol.BodyEndLine.HasValue)
+                continue;
+            if (candidateLine <= symbol.StartLine)
+                continue;
+            if (candidateLine < symbol.BodyStartLine.Value || candidateLine > symbol.BodyEndLine.Value)
+                continue;
+            if (candidateLine == symbol.BodyEndLine.Value
+                && TryFindCSharpSemicolonTerminatedSignatureExtent(
+                    lines,
+                    Math.Max(0, symbol.StartLine - 1),
+                    symbol.StartColumn ?? 0,
+                    out var signatureLastLineIndex,
+                    out var signatureLastLineExclusiveEndColumn)
+                && signatureLastLineIndex + 1 == candidateLine
+                && signatureLastLineExclusiveEndColumn.HasValue
+                && candidateColumn >= signatureLastLineExclusiveEndColumn.Value)
+            {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
     private static int FindNextSameLineBraceStatementStart(string matchLine, int startIndex, string? lang)
     {
         return lang is "javascript" or "typescript"
@@ -12439,6 +12519,62 @@ public static class SymbolExtractor
         return false;
     }
 
+    private static bool IsCSharpMultilineExpressionBodiedMember(string[] lines, int startLineIndex, int startColumn)
+    {
+        var lexState = new CSharpLexState();
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+
+        for (int i = startLineIndex; i < lines.Length; i++)
+        {
+            var lexedLine = LexCSharpLine(lines[i], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+            var fromColumn = i == startLineIndex
+                ? Math.Min(Math.Max(0, startColumn), sanitizedLine.Length)
+                : 0;
+
+            for (int column = fromColumn; column < sanitizedLine.Length; column++)
+            {
+                var ch = sanitizedLine[column];
+                switch (ch)
+                {
+                    case '(':
+                        parenDepth++;
+                        break;
+                    case ')' when parenDepth > 0:
+                        parenDepth--;
+                        break;
+                    case '[':
+                        bracketDepth++;
+                        break;
+                    case ']' when bracketDepth > 0:
+                        bracketDepth--;
+                        break;
+                    case '{' when parenDepth == 0 && bracketDepth == 0 && braceDepth == 0:
+                        return false;
+                    case '{':
+                        braceDepth++;
+                        break;
+                    case '}' when braceDepth > 0:
+                        braceDepth--;
+                        break;
+                    case ';' when parenDepth == 0 && bracketDepth == 0 && braceDepth == 0:
+                        return false;
+                    case '=' when parenDepth == 0
+                        && bracketDepth == 0
+                        && braceDepth == 0
+                        && column + 1 < sanitizedLine.Length
+                        && sanitizedLine[column + 1] == '>':
+                        return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     private static int FindCSharpExpressionBodyEndLine(string[] lines, int arrowLineIndex, int arrowColumn)
     {
         var lexState = new CSharpLexState();
@@ -12514,7 +12650,7 @@ public static class SymbolExtractor
         return builder.ToString().Trim();
     }
 
-    private static bool TryFindCSharpFieldSignatureExtent(
+    private static bool TryFindCSharpSemicolonTerminatedSignatureExtent(
         string[] lines,
         int startLineIndex,
         int startColumn,
