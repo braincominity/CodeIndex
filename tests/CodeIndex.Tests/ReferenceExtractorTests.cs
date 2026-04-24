@@ -5691,6 +5691,24 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_FromDerivedTableSourcesCapturesLaterReferences()
+    {
+        // issue #942: a derived-table source must not stop the top-level comma walk before later items.
+        // issue #942: derived table の後続にある top-level comma-separated source を落とさない。
+        const string content = """
+            SELECT * FROM (SELECT 1) x, accounts;
+            SELECT * FROM (SELECT 1) AS y, accounts;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "accounts" && r.ReferenceKind == "reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "x" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "y" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_SQL_DeleteUsingTempSourcesAfterComma_AreNotTreatedAsComments()
     {
         // issue #789: `#temp` after a comma in `DELETE ... USING #a, #b` must stay on the temp-table
