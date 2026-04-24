@@ -918,4 +918,190 @@ public class LegacySchemaMigrationTests : IDisposable
             try { Directory.Delete(completedDir, recursive: true); } catch { }
         }
     }
+
+    [Fact]
+    public void ReadOnlyLegacyDb_MissingSignatureColumn_DepsAndImpactDoNotCrashOnCSharp()
+    {
+        // Issue #431 regression: `BuildMetadataTargetKindExpr` (the shared C#/JS-TS/other
+        // helper used by deps `target_files` / `target_ambiguity` and impact
+        // `IsMetadataTargetUnambiguous`) intentionally degrades to a name-heuristic
+        // fallback (`name LIKE '%Attribute'`) when `_symbolColumns` does not contain
+        // `signature`. That guard protects legacy / read-only DBs where `TryMigrateForRead`
+        // could not add the column in place — without it, the C# clause would reference
+        // `s.signature` and crash every `deps` / `impact` query with
+        // `SqliteException: no such column: s.signature`.
+        //
+        // The happy-path (column present) is pinned by
+        // `GetFileDependencies_CSharp_IndirectAttributeInheritance_ResolvesAsMetadataTarget`
+        // in DbReaderTests, and `TryMigrateForRead_LegacyDb_ReadPathsDoNotCrash` covers the
+        // writable-migration path where `TryMigrateForRead` adds `signature` back as NULL.
+        // This test closes the remaining gap: a DB where the column never becomes visible
+        // to `_symbolColumns` at all (mirrors the real-world read-only-filesystem shape from
+        // issue #431) must still return from `deps` / `impact` without crashing.
+        //
+        // Issue #431 回帰テスト: legacy / read-only DB で `TryMigrateForRead` が signature
+        // 列を追加できない場合、`BuildMetadataTargetKindExpr` が命名規約 fallback
+        // (`name LIKE '%Attribute'`) に縮退する分岐の回帰カバー。
+        // カラム復活できる通常経路は DbReaderTests の
+        // `GetFileDependencies_CSharp_IndirectAttributeInheritance_ResolvesAsMetadataTarget`
+        // と本ファイルの `TryMigrateForRead_LegacyDb_ReadPathsDoNotCrash` が押さえており、
+        // 本テストは `_symbolColumns` に signature が入らないまま deps / impact を呼んだ時に
+        // `no such column: s.signature` で落ちないことを確認する。
+        var dir = Path.Combine(Path.GetTempPath(), $"codeindex_issue431_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var dbPath = Path.Combine(dir, "codeindex.db");
+        try
+        {
+            // Seed a fully modern schema with a C# attribute class + a user that references it
+            // via `[Audit]`, then stamp GraphReady so `_hasReferencesTable` becomes true.
+            // 現行スキーマで index した後に GraphReady を立て、C# の attribute 依存を 1 本仕込む。
+            using (var seed = new DbContext(dbPath))
+            {
+                seed.InitializeSchema();
+                var writer = new DbWriter(seed.Connection);
+
+                var auditFileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/Audit.cs",
+                    Lang = "csharp",
+                    Size = 64,
+                    Lines = 3,
+                    Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = Guid.NewGuid().ToString("N"),
+                });
+                writer.InsertChunks([
+                    new ChunkRecord
+                    {
+                        FileId = auditFileId,
+                        ChunkIndex = 0,
+                        StartLine = 1,
+                        EndLine = 3,
+                        Content = "public class AuditAttribute : Attribute\n{\n}\n",
+                    }
+                ]);
+                writer.InsertSymbols([
+                    new SymbolRecord
+                    {
+                        FileId = auditFileId,
+                        Kind = "class",
+                        Name = "AuditAttribute",
+                        Line = 1,
+                        StartLine = 1,
+                        EndLine = 3,
+                        Signature = "public class AuditAttribute : Attribute",
+                        Visibility = "public",
+                    }
+                ]);
+
+                var userFileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/User.cs",
+                    Lang = "csharp",
+                    Size = 72,
+                    Lines = 4,
+                    Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = Guid.NewGuid().ToString("N"),
+                });
+                writer.InsertChunks([
+                    new ChunkRecord
+                    {
+                        FileId = userFileId,
+                        ChunkIndex = 0,
+                        StartLine = 1,
+                        EndLine = 4,
+                        Content = "[Audit]\npublic class User\n{\n}\n",
+                    }
+                ]);
+                writer.InsertSymbols([
+                    new SymbolRecord
+                    {
+                        FileId = userFileId,
+                        Kind = "class",
+                        Name = "User",
+                        Line = 2,
+                        StartLine = 2,
+                        EndLine = 4,
+                        Signature = "public class User",
+                        Visibility = "public",
+                    }
+                ]);
+                writer.InsertReferences([
+                    new ReferenceRecord
+                    {
+                        FileId = userFileId,
+                        SymbolName = "Audit",
+                        ReferenceKind = "attribute",
+                        Line = 1,
+                        Column = 2,
+                        Context = "[Audit]",
+                        ContainerKind = "class",
+                        ContainerName = "User",
+                    }
+                ]);
+                writer.MarkGraphReady();
+            }
+
+            SqliteConnection.ClearAllPools();
+
+            // Drop the signature column so `_symbolColumns` will not contain it. This is the
+            // faithful in-test equivalent of a legacy DB on read-only storage where
+            // `TryMigrateForRead` could not run `EnsureColumn("symbols", "signature", ...)`.
+            // signature 列を落として legacy / read-only 相当の状態に持っていく。
+            using (var drop = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                drop.Open();
+                Exec(drop, "ALTER TABLE symbols DROP COLUMN signature");
+            }
+
+            SqliteConnection.ClearAllPools();
+
+            // Reopen as read-only (immutable=1). DbContext sets `_isReadOnly=true`, so
+            // `TryMigrateForRead` returns early without re-adding `signature` — the reader
+            // genuinely sees `_symbolColumns` without the column.
+            // immutable=1 で read-only open。TryMigrateForRead は早期 return するため
+            // signature 列は復活せず、reader 側の `_symbolColumns` から抜けたままになる。
+            var fileUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            using var db = new DbContext(fileUri);
+            Assert.True(db.IsReadOnly);
+            db.TryMigrateForRead();
+
+            using (var check = db.Connection.CreateCommand())
+            {
+                check.CommandText = "PRAGMA table_info(symbols)";
+                using var r = check.ExecuteReader();
+                var cols = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                while (r.Read()) cols.Add(r.GetString(1));
+                Assert.DoesNotContain("signature", cols);
+            }
+
+            var reader = new DbReader(db.Connection, db.IsReadOnly);
+
+            // `deps`: exercises `BuildMetadataTargetKindExpr` twice (inside the `target_files`
+            // and `target_ambiguity` CTEs). The C# attribute-naming fallback still routes the
+            // `[Audit]` reference to `AuditAttribute` via the suffix alias, so the deps edge
+            // from `User.cs` → `Audit.cs` must survive even without `signature`.
+            // deps は target_files / target_ambiguity の両方で fallback 分岐を踏むが、
+            // `[Audit]` の suffix alias が `AuditAttribute` に解決するため edge は生き残る。
+            var deps = reader.GetFileDependencies(limit: 50);
+            var edge = Assert.Single(deps, d => d.SourcePath == "src/User.cs" && d.TargetPath == "src/Audit.cs");
+            Assert.Contains("AuditAttribute", edge.Symbols);
+
+            // `impact`: callers reject metadata kinds, so this flows through
+            // `GetFileDependencyHintsToResolvedType` which calls `IsMetadataTargetUnambiguous`
+            // (also backed by `BuildMetadataTargetKindExpr`). With a single class-like target
+            // the fallback mode surfaces `User.cs` as a heuristic file-level consumer.
+            // callers は metadata を弾くため、heuristic fallback 経路で
+            // `IsMetadataTargetUnambiguous` が fallback SQL を発行する。
+            var impact = reader.AnalyzeImpact("AuditAttribute");
+            Assert.NotNull(impact);
+            Assert.Equal("file_dependency_hints", impact.ImpactMode);
+            Assert.True(impact.Heuristic);
+            Assert.Contains(impact.FileImpacts, f => f.SourcePath == "src/User.cs");
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
 }
