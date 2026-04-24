@@ -354,6 +354,33 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsList_CallersCalleesAnalyzeSymbolDescriptions_PinCamelCaseMixedKindFields()
+    {
+        // #501 round 2: MCP tool descriptions must advertise the response fields in MCP camelCase
+        // (`referenceKind`, `referenceKinds`, `hasMixedReferenceKinds`) because MCP serializes with
+        // `JsonNamingPolicy.CamelCase`. This test pins those field names so a future edit that
+        // accidentally switches back to CLI snake_case is caught before it reaches MCP consumers.
+        // #501 round 2: MCP は `JsonNamingPolicy.CamelCase` でシリアライズするため、ツール説明も
+        // camelCase（`referenceKind` / `referenceKinds` / `hasMixedReferenceKinds`）で書く必要がある。
+        // 将来の編集で CLI snake_case に戻してしまう silent regression をこのテストで止める。
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        foreach (var name in new[] { "callers", "callees", "analyze_symbol" })
+        {
+            var tool = tools.First(t => t!["name"]!.GetValue<string>() == name)!;
+            var description = tool["description"]!.GetValue<string>();
+
+            Assert.Contains("referenceKind", description);
+            Assert.Contains("referenceKinds", description);
+            Assert.Contains("hasMixedReferenceKinds", description);
+            Assert.DoesNotContain("reference_kinds", description);
+            Assert.DoesNotContain("has_mixed_reference_kinds", description);
+        }
+    }
+
+    [Fact]
     public void ToolsList_ImpactAnalysisDescribesHeuristicFallback()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
