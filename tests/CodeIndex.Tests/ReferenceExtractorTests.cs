@@ -8304,6 +8304,186 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpSwitchExpressionTypePatterns_EmitEveryGenuineTypeHead()
+    {
+        // issue #732: switch-expression arm heads should follow the same type-vs-constant
+        // discrimination as `case` labels so modern C# pattern arms remain visible to
+        // references/inspect without reclassifying constant-member arms as types.
+        // issue #732: switch 式 arm head も `case` ラベルと同じ type-vs-constant 判定を通し、
+        // modern C# pattern arm を references/inspect から見えるようにしつつ定数 member arm を
+        // 型依存へ誤分類しない。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+            class Shape {}
+            enum Color { Red }
+
+            class Demo
+            {
+                int Match(object value) => value switch
+                {
+                    Point => 1,
+                    Point or Shape => 2,
+                    Color.Red => 3,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+        var shapeRefs = references.Where(r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference").ToList();
+
+        Assert.Equal(2, pointRefs.Count);
+        Assert.Single(shapeRefs);
+        Assert.All(pointRefs, r => Assert.Equal("Match", r.ContainerName));
+        Assert.All(shapeRefs, r => Assert.Equal("Match", r.ContainerName));
+        Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Color" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+    }
+
+    [Fact]
+    public void Extract_CsharpSwitchExpressionGenericTypePatterns_DoNotSplitAtTypeArgumentCommas()
+    {
+        // issue #732 follow-up: generic type-argument commas inside a switch-expression arm
+        // are part of the type head, not arm separators.
+        // issue #732 の追補: switch 式 arm 内の generic 型引数カンマは arm 区切りではなく
+        // 型 head の一部として扱う必要がある。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+            class Shape {}
+            class Wrapper<TLeft, TRight> {}
+
+            class Demo
+            {
+                int Match(object value) => value switch
+                {
+                    Wrapper<Point, Shape> => 1,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Wrapper" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+    }
+
+    [Fact]
+    public void Extract_CsharpSwitchExpressionGenericDeclarationPatternWithRelationalWhenGuard_KeepsArmHead()
+    {
+        // issue #732 follow-up: relational `>` inside a `when` guard must not steal the
+        // arm-head generic close and make the declaration-pattern type disappear.
+        // issue #732 の追補: `when` guard 内の relational `>` が arm head 側の generic close を
+        // 奪って、宣言パターンの型依存を消してはいけない。
+        const string content = """
+            namespace Probe;
+
+            class Wrapper<TLeft, TRight> {}
+            class Point { public int X { get; init; } }
+            class Shape {}
+
+            class Demo
+            {
+                int Match(object value, int limit) => value switch
+                {
+                    Wrapper<Point, Shape> p when p is Wrapper<Point, Shape> && limit > p.GetHashCode() => 1,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var wrapperRefs = references
+            .Where(r => r.SymbolName == "Wrapper" && r.ReferenceKind == "type_reference")
+            .OrderBy(r => r.Column)
+            .ToList();
+
+        Assert.Equal(2, wrapperRefs.Count);
+        Assert.Equal([9, 43], wrapperRefs.Select(r => r.Column).ToArray());
+        Assert.All(wrapperRefs, r => Assert.Equal("Match", r.ContainerName));
+    }
+
+    [Fact]
+    public void Extract_CsharpSwitchExpressionGenericDeclarationPatternWithFunctionWhenGuard_KeepsArmHead()
+    {
+        // issue #732 follow-up: a bare helper call at the end of a `when` guard still leaves the
+        // switch arm arrow as a pattern arm, not a lambda. The arm-head type must survive.
+        // issue #732 の追補: `when` guard 末尾の bare helper call があっても、その `=>` は lambda
+        // ではなく switch arm の矢印であり、arm head の型依存を落としてはいけない。
+        const string content = """
+            namespace Probe;
+
+            class Wrapper<TLeft, TRight> {}
+            class Point {}
+            class Shape {}
+
+            class Demo
+            {
+                static bool Check(object value) => true;
+
+                int Match(object value) => value switch
+                {
+                    Wrapper<Point, Shape> p when Check(p) => 1,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var wrapperRefs = references
+            .Where(r => r.SymbolName == "Wrapper" && r.ReferenceKind == "type_reference")
+            .OrderBy(r => r.Column)
+            .ToList();
+
+        Assert.Single(wrapperRefs);
+        Assert.Equal(9, wrapperRefs[0].Column);
+        Assert.Equal("Match", wrapperRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpSwitchExpressionLaterArmAfterWhenGuard_StillEmitsTypeHead()
+    {
+        // issue #732 follow-up: a `when` clause on an earlier arm must not truncate the rest of
+        // the switch-expression body and hide later arm heads.
+        // issue #732 の追補: 先行 arm の `when` 句で後続 arm まで切り落としてはならない。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+            class Shape {}
+
+            class Demo
+            {
+                int Match(object value) => value switch
+                {
+                    Point p when p.GetHashCode() > 0 => 1,
+                    Shape => 2,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+    }
+
+    [Fact]
     public void Extract_CsharpVerbatimPatternTypeNames_DoNotCollapseIntoBarePatternTokens()
     {
         // issue #677: `@not` / `@default` are legal type names, so the non-type pattern
