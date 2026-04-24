@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Changed
+- **Hardened licensing and distribution policy against unauthorized productized forks** — Replaced the package and repository licensing metadata with PolyForm Perimeter 1.0.0, added commercial-use and trademark policy documents, embedded the policy files into NuGet packages and release payloads, gated official release publishing to the canonical repository, added `cdidx license`, and documented legacy package handling. Affected: `LICENSE`, `COMMERCIAL_LICENSE.md`, `TRADEMARKS.md`, `README.md`, `DEVELOPER_GUIDE.md`, `src/CodeIndex/CodeIndex.csproj`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Cli/ProgramRunner.cs`, `.github/workflows/release.yml`, `.github/workflows/license-policy.yml`, `tests/CodeIndex.Tests/LicensePolicyTests.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`, `tests/CodeIndex.Tests/ProgramCliTests.cs`.
+
 #### Fixed
 - **C# enum member collisions no longer hide unused symbols (#701, #931, #932)** — `unused` now keeps C# enum members with duplicate names conservative instead of treating them as authoritative unused hits, so a reference to `Color.None` no longer suppresses `Status.None` in the same workspace. The collision guard now uses qualified container identity when available and applies the caller's path / test scope to peer checks, so out-of-scope duplicates do not distort scoped `unused` results. Unique enum members still appear normally. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/DbSymbolReader.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`. Closes #701, #931, #932.
 - **Regression coverage for C# switch-expression arm type references after guarded or relational earlier arms (#851, #852)** — Added extractor and built-CLI regressions that lock later switch-expression arm type heads as visible after an earlier `when`-guarded arm, after earlier recursive patterns with relational `<` / `>` operators, and after later generic arm heads such as `Wrapper<Point, Shape>`. Affected: `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`. Closes #851, #852.
@@ -886,6 +889,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 変更
+- **無断の商品化 Fork に対するライセンスと配布ポリシーを強化** — package / repository のライセンス metadata を PolyForm Perimeter 1.0.0 に置き換え、商用利用ポリシーと商標ポリシーを追加し、NuGet package と release payload にポリシー文書を同梱し、公式 release publish を canonical repository に限定し、`cdidx license` を追加し、legacy package の扱いを文書化しました。対象: `LICENSE`, `COMMERCIAL_LICENSE.md`, `TRADEMARKS.md`, `README.md`, `DEVELOPER_GUIDE.md`, `src/CodeIndex/CodeIndex.csproj`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Cli/ProgramRunner.cs`, `.github/workflows/release.yml`, `.github/workflows/license-policy.yml`, `tests/CodeIndex.Tests/LicensePolicyTests.cs`, `tests/CodeIndex.Tests/ConsoleUiTests.cs`, `tests/CodeIndex.Tests/ProgramCliTests.cs`。
 
 #### 修正
 - **C# の enum メンバー名衝突で未使用シンボルが隠れないように修正 (#701, #931, #932)** — `unused` は、同名の C# enum メンバーが複数ある場合にそれらを authoritative な未使用候補として扱わず、`Color.None` への参照が同じワークスペース内の `Status.None` を誤って消さないようにしました。衝突ガードは利用可能な場合に qualified な container identity を使い、peer 側の判定にも呼び出し側の path / test スコープを適用するため、スコープ外の重複が scoped な `unused` 結果を歪めません。重複しない enum メンバーは従来どおり表示されます。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/DbSymbolReader.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`。Closes #701, #931, #932。

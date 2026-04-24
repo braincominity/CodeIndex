@@ -35,6 +35,7 @@ public static class ConsoleUi
         ("hotspots", "cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--count] [--group-by-name]"),
         ("languages", "cdidx languages [--json]"),
         ("mcp", "cdidx mcp [--db <path>]"),
+        ("license", "cdidx license"),
     ];
 
     private const int SpinnerFrameDelayMs = 100;
@@ -354,6 +355,7 @@ public static class ConsoleUi
         Console.WriteLine("  hotspots                   Find high-impact symbols; duplicate-name families may fall back conservatively");
         Console.WriteLine("  languages                  List supported languages and their capabilities");
         Console.WriteLine("  mcp                        Start MCP server (for AI tools: Claude, Cursor, etc.)");
+        Console.WriteLine("  license                    Show licensing, trademark, and commercial-use summary");
         Console.WriteLine();
         Console.WriteLine("Index and update options:");
         Console.WriteLine("  --db <path>                Database file path (default for index: <projectPath>/.cdidx/codeindex.db)");
@@ -365,6 +367,7 @@ public static class ConsoleUi
         Console.WriteLine("  --files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed");
         Console.WriteLine("  --help, -h                 Show this help message");
         Console.WriteLine("  --version, -V              Show version information");
+        Console.WriteLine("  --license                  Show licensing, trademark, and commercial-use summary");
         Console.WriteLine("  --completions <shell>      Generate shell completions (bash, zsh, fish)");
         Console.WriteLine();
         Console.WriteLine("Update workflows:");
@@ -435,6 +438,20 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx files --since 2024-01-01                 Files modified since a date");
         Console.WriteLine("  cdidx status --json                            DB stats as JSON");
         Console.WriteLine("  cdidx languages                                Show supported languages");
+        Console.WriteLine("  cdidx license                                  Show licensing and commercial-use terms");
+    }
+
+    public static void PrintLicenseSummary()
+    {
+        Console.WriteLine("cdidx / CodeIndex license");
+        Console.WriteLine();
+        Console.WriteLine("License: PolyForm Perimeter License 1.0.0");
+        Console.WriteLine("Copyright: Copyright 2026 Widthdom.");
+        Console.WriteLine("Summary: use, modification, and distribution are allowed, except for providing a product that competes with CodeIndex.");
+        Console.WriteLine("Providing a competing commercial product or service requires a separate written agreement with Widthdom.");
+        Console.WriteLine("Names and trademarks: CodeIndex and cdidx are not licensed for derivative product, package, or service branding.");
+        Console.WriteLine();
+        Console.WriteLine("See LICENSE, COMMERCIAL_LICENSE.md, and TRADEMARKS.md for the controlling terms.");
     }
 
     public static string? GetUsageLine(string command)
@@ -515,7 +532,7 @@ public static class ConsoleUi
     [
         "index", "backfill-fold", "search", "definition", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots", "languages", "mcp",
+        "validate", "deps", "impact", "unused", "hotspots", "languages", "mcp", "license",
     ];
 
     /// <summary>
@@ -565,7 +582,7 @@ public static class ConsoleUi
     commands=""{cmds}""
 
     if [ $COMP_CWORD -eq 1 ]; then
-        COMPREPLY=($(compgen -W ""$commands --help --version"" -- ""$cur""))
+        COMPREPLY=($(compgen -W ""$commands --help --version --license"" -- ""$cur""))
         return
     fi
 
@@ -735,6 +752,7 @@ _cdidx");
             Console.WriteLine($"complete -c cdidx -n '__fish_use_subcommand' -a '{cmd}' -d '{cmd} command'");
         Console.WriteLine("complete -c cdidx -n '__fish_use_subcommand' -l help -d 'Show help'");
         Console.WriteLine("complete -c cdidx -n '__fish_use_subcommand' -l version -d 'Show version'");
+        Console.WriteLine("complete -c cdidx -n '__fish_use_subcommand' -l license -d 'Show license summary'");
 
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find excerpt map inspect outline status' -l db -r -d 'Database path'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find excerpt map inspect outline status' -l json -d 'JSON output'");
