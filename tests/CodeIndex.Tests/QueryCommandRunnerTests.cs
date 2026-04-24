@@ -3741,8 +3741,10 @@ public class QueryCommandRunnerTests
                 public class @class
                 {
                     public int @int() => 0;
+                    public void @caller() => @int();
                 }
                 """);
+            MarkGraphAndFoldReady(dbPath);
 
             var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["--db", dbPath, "--json", "--name", "@int", "--exact-name", "--count"],
@@ -3753,12 +3755,27 @@ public class QueryCommandRunnerTests
             var (definitionExitCode, definitionStdout, definitionStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
                 ["@class", "--db", dbPath, "--json", "--exact-name", "--count"],
                 _jsonOptions));
+            var (referencesExitCode, referencesStdout, referencesStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["@int", "--db", dbPath, "--json", "--exact-name", "--count"],
+                _jsonOptions));
+            var (callersExitCode, callersStdout, callersStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["@int", "--db", dbPath, "--json", "--exact-name"],
+                _jsonOptions));
+            var (calleesExitCode, calleesStdout, calleesStderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                ["@caller", "--db", dbPath, "--json", "--exact-name"],
+                _jsonOptions));
+            var (impactExitCode, impactStdout, impactStderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["@int", "--db", dbPath, "--json"],
+                _jsonOptions));
             var (inspectExitCode, inspectStdout, inspectStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
                 ["@class", "--db", dbPath, "--json", "--exact"],
                 _jsonOptions));
 
             using var symbolsDocument = ParseJsonOutput(symbolsStdout);
             using var definitionDocument = ParseJsonOutput(definitionStdout);
+            using var referencesDocument = ParseJsonOutput(referencesStdout);
+            using var callersDocument = ParseJsonOutput(callersStdout);
+            using var calleesDocument = ParseJsonOutput(calleesStdout);
             using var inspectDocument = ParseJsonOutput(inspectStdout);
 
             Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
@@ -3771,6 +3788,29 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, definitionExitCode);
             Assert.Equal(string.Empty, definitionStderr);
             Assert.Equal(1, definitionDocument.RootElement.GetProperty("count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.Success, referencesExitCode);
+            Assert.Equal(string.Empty, referencesStderr);
+            Assert.True(referencesDocument.RootElement.GetProperty("count").GetInt32() > 0);
+
+            Assert.Equal(CommandExitCodes.Success, callersExitCode);
+            Assert.Equal(string.Empty, callersStderr);
+            Assert.Equal("caller", callersDocument.RootElement.GetProperty("caller_name").GetString());
+            Assert.Equal("int", callersDocument.RootElement.GetProperty("callee_name").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, calleesExitCode);
+            Assert.Equal(string.Empty, calleesStderr);
+            Assert.Equal("caller", calleesDocument.RootElement.GetProperty("caller_name").GetString());
+            Assert.Equal("int", calleesDocument.RootElement.GetProperty("callee_name").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, impactExitCode);
+            Assert.Equal(string.Empty, impactStderr);
+            Assert.NotEmpty(impactStdout);
+
+            using var impactDocument = ParseJsonOutput(impactStdout);
+
+            Assert.NotEqual("none", impactDocument.RootElement.GetProperty("impact_mode").GetString());
+            Assert.True(impactDocument.RootElement.GetProperty("count").GetInt32() > 0);
 
             Assert.Equal(CommandExitCodes.Success, inspectExitCode);
             Assert.Equal(string.Empty, inspectStderr);

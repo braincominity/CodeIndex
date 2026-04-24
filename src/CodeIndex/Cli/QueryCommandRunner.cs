@@ -176,7 +176,7 @@ public static class QueryCommandRunner
             WriteUsageError(
                 "definition requires a symbol query argument",
                 GetUsageLineOrThrow("definition"),
-                "Add a real symbol name after the command; bare verbatim prefixes like `@` and lone `|` separators are not valid queries.");
+                "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
             return CommandExitCodes.UsageError;
         }
         if (TryWriteUnexpectedExtraPositionals("definition", options))
@@ -313,7 +313,7 @@ public static class QueryCommandRunner
             WriteUsageError(
                 "references requires a symbol query argument",
                 GetUsageLineOrThrow("references"),
-                "Add a real symbol name after the command; bare verbatim prefixes like `@` and lone `|` separators are not valid queries.");
+                "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
             return CommandExitCodes.UsageError;
         }
         if (TryWriteUnexpectedExtraPositionals("references", options))
@@ -435,7 +435,7 @@ public static class QueryCommandRunner
             WriteUsageError(
                 "callers requires a symbol query argument",
                 GetUsageLineOrThrow("callers"),
-                "Add a real symbol name after the command; bare verbatim prefixes like `@` and lone `|` separators are not valid queries.");
+                "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
             return CommandExitCodes.UsageError;
         }
         if (TryWriteUnexpectedExtraPositionals("callers", options))
@@ -553,7 +553,7 @@ public static class QueryCommandRunner
             WriteUsageError(
                 "callees requires a caller query argument",
                 GetUsageLineOrThrow("callees"),
-                "Add a real symbol name after the command; bare verbatim prefixes like `@` and lone `|` separators are not valid queries.");
+                "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
             return CommandExitCodes.UsageError;
         }
         if (TryWriteUnexpectedExtraPositionals("callees", options))
@@ -1298,7 +1298,7 @@ public static class QueryCommandRunner
             WriteUsageError(
                 "inspect requires a symbol query argument",
                 GetUsageLineOrThrow("inspect"),
-                "Add a real symbol name after the command; bare verbatim prefixes like `@` and lone `|` separators are not valid queries.");
+                "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
             return CommandExitCodes.UsageError;
         }
         if (TryWriteUnexpectedExtraPositionals("inspect", options))
@@ -1705,7 +1705,7 @@ public static class QueryCommandRunner
             WriteUsageError(
                 "impact requires a symbol query argument",
                 GetUsageLineOrThrow("impact"),
-                "Add a real symbol name after the command; bare verbatim prefixes like `@` and lone `|` separators are not valid queries.");
+                "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
             return CommandExitCodes.UsageError;
         }
         if (TryWriteUnexpectedExtraPositionals("impact", options))
@@ -3945,7 +3945,7 @@ public static class QueryCommandRunner
     private static bool IsBareVerbatimQueryToken(string value)
     {
         var trimmed = value.Trim();
-        return trimmed.Length > 0 && trimmed.All(ch => ch is '@' or '|');
+        return trimmed.Length > 0 && trimmed.All(ch => ch == '@');
     }
 
     private static bool TrySplitInlineOptionValue(string token, out string? optionName)
