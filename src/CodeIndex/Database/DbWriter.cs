@@ -901,9 +901,6 @@ public class DbWriter
         if (rows.Count == 0)
             return;
 
-        // Simple-name index: head identifier (no namespace) -> ids.
-        // 単純名の頭識別子（名前空間なし）-> ids の索引。
-        var nameToIds = new Dictionary<string, List<long>>(StringComparer.Ordinal);
         // Fully-qualified-name index: `Namespace.TypeName` -> ids. Used when the base type
         // in a signature is qualified (`: A.BaseAttr`) so we do not resolve against an
         // unrelated same-simple-name class in another namespace. A LIST is required here
@@ -915,15 +912,23 @@ public class DbWriter
         // 完全修飾名 `Namespace.TypeName` -> ids の索引。`partial class` で同一 FQN が複数行に
         // 分割されても、どのファイルが先に読まれても解決が安定するように List で保持する。
         var qualifiedToIds = new Dictionary<string, List<long>>(StringComparer.Ordinal);
+        // Scope-aware simple-name index: (enclosing scope, simple name) -> ids. Unqualified
+        // bases must resolve through the deriving class's own namespace / nesting chain so
+        // a non-attribute impostor in an UNRELATED namespace does not falsely promote the
+        // deriving class to `is_metadata_target=1` just because another namespace happens
+        // to contain a same-named real attribute. A global simple-name bucket was the
+        // earlier design and was rejected in #435 codex review iter 4 with a reproducible
+        // false-positive: `A.BaseAttr : Attribute` + `B.BaseAttr : BaseService` + deriving
+        // `namespace B { class FooAttribute : BaseAttr {} }` previously returned a false
+        // metadata edge for `[Foo] class Svc {}`. Issue #435 codex review iter 4.
+        // スコープ対応の単純名索引。(外側スコープ, 単純名) -> ids。非修飾基底は deriving の
+        // 名前空間 / 入れ子チェーンを辿って解決し、無関係な名前空間に同名の本物 attribute が
+        // 存在するだけで非 attribute impostor が `is_metadata_target=1` に昇格するのを防ぐ。
+        var scopeNameToIds = new Dictionary<(string Scope, string Name), List<long>>();
+        var rowScope = new Dictionary<long, string>();
         var bases = new Dictionary<long, List<string>>();
         foreach (var row in rows)
         {
-            if (!nameToIds.TryGetValue(row.Name, out var bucket))
-            {
-                bucket = new List<long>();
-                nameToIds[row.Name] = bucket;
-            }
-            bucket.Add(row.Id);
             foreach (var fq in EnumerateQualifiedKeys(row.QualifiedName, row.Name))
             {
                 if (!qualifiedToIds.TryGetValue(fq, out var qbucket))
@@ -933,6 +938,15 @@ public class DbWriter
                 }
                 qbucket.Add(row.Id);
             }
+            string scope = GetEnclosingScope(row.QualifiedName, row.Name);
+            rowScope[row.Id] = scope;
+            var scopeKey = (scope, row.Name);
+            if (!scopeNameToIds.TryGetValue(scopeKey, out var sbucket))
+            {
+                sbucket = new List<long>();
+                scopeNameToIds[scopeKey] = sbucket;
+            }
+            sbucket.Add(row.Id);
             bases[row.Id] = ParseCSharpBaseIdentifiers(row.Signature);
         }
 
@@ -945,7 +959,7 @@ public class DbWriter
             {
                 if (targets.Contains(row.Id))
                     continue;
-                if (IsMetadataTargetByBases(bases[row.Id], targets, nameToIds, qualifiedToIds))
+                if (IsMetadataTargetByBases(bases[row.Id], rowScope[row.Id], targets, scopeNameToIds, qualifiedToIds))
                 {
                     targets.Add(row.Id);
                     changed = true;
@@ -1043,10 +1057,38 @@ public class DbWriter
         }
     }
 
+    // Derive the deriving class's enclosing scope from its container_qualified_name.
+    // For `namespace A.B { class Foo { } }` the QualifiedName is `A.B.Foo`, and stripping
+    // the trailing simple name yields `A.B`. Nested types (`namespace A { class Outer {
+    // class Inner { } } }` → `A.Outer.Inner`) yield `A.Outer`. Top-level non-namespaced
+    // types yield `""`. A null / empty QualifiedName also yields `""`, which matches
+    // the implicit "global" scope bucket populated in `ResolveCSharpMetadataTargets`.
+    // Issue #435 codex review iter 4.
+    // 非修飾基底解決で使う deriving の外側スコープを container_qualified_name から導く。
+    // `namespace A.B { class Foo { } }` の QualifiedName `A.B.Foo` からは末尾の Foo を
+    // 除いた `A.B` を返し、ネストした `A.Outer.Inner` は `A.Outer`、トップレベル型や
+    // null / 空の場合は `""`（グローバルスコープ）を返す。
+    private static string GetEnclosingScope(string? qualifiedName, string simpleName)
+    {
+        var fq = qualifiedName?.Trim();
+        if (string.IsNullOrEmpty(fq))
+            return string.Empty;
+        int lastDot = fq.LastIndexOf('.');
+        string tail = lastDot >= 0 ? fq.Substring(lastDot + 1) : fq;
+        if (string.Equals(tail, simpleName, StringComparison.Ordinal))
+            return lastDot >= 0 ? fq.Substring(0, lastDot) : string.Empty;
+        // container_qualified_name does not end with the row's simple name (unexpected
+        // shape from older extractors). Treat the whole container as the enclosing scope
+        // so at least exact-same-scope matches still work; the chain walk will still
+        // climb outward. / 想定外の container 形状では container 全体をスコープ扱いする。
+        return fq;
+    }
+
     private static bool IsMetadataTargetByBases(
         List<string> baseIdentifiers,
+        string derivingScope,
         HashSet<long> resolvedTargets,
-        Dictionary<string, List<long>> nameToIds,
+        Dictionary<(string Scope, string Name), List<long>> scopeNameToIds,
         Dictionary<string, List<long>> qualifiedToIds)
     {
         foreach (var baseName in baseIdentifiers)
@@ -1061,10 +1103,16 @@ public class DbWriter
                 return true;
 
             // Split qualified vs unqualified. Qualified bases (containing `.` or `::`)
-            // must resolve against the fully-qualified index so we do not leak into
-            // unrelated same-simple-name classes. Unqualified bases use the historical
-            // simple-name index. / 修飾名（`.` または `::` を含む）は完全修飾索引で解決し、
-            // 別名前空間の同名 class に解決してしまうのを防ぐ。非修飾名は従来どおり単純名索引を使う。
+            // resolve against the fully-qualified index so we do not leak into unrelated
+            // same-simple-name classes in another namespace. Unqualified bases resolve
+            // against the deriving class's own scope chain (same namespace / nesting
+            // chain only) — NOT against a global simple-name bucket, because that bucket
+            // would false-match a real attribute in an unrelated namespace when the
+            // deriving file has the same simple name for a non-attribute class. Issue
+            // #435 codex review iter 4.
+            // 修飾名（`.` または `::` を含む）は完全修飾索引で解決し、別名前空間の同名 class
+            // に解決してしまうのを防ぐ。非修飾名は deriving 自身のスコープチェーン（同一
+            // 名前空間 / 入れ子チェーン）のみで解決し、グローバル単純名索引は使わない。
             bool isQualified = baseName.IndexOf('.') >= 0 || baseName.IndexOf("::", StringComparison.Ordinal) >= 0;
             var head = baseName;
             int lastDot = head.LastIndexOf('.');
@@ -1113,10 +1161,36 @@ public class DbWriter
                 continue;
             }
 
-            if (nameToIds.TryGetValue(head, out var ids))
+            // Scope-aware unqualified resolution: walk the deriving class's scope chain
+            // from innermost outward, stopping at the first level that has a same-name
+            // row. Only that bucket is consulted — we do NOT fall back to a global
+            // simple-name bucket, because that would false-promote when a same-named
+            // real attribute happens to live in an unrelated namespace. The chain walk
+            // also naturally handles nested types (e.g. `Outer.Inner : Base` checks
+            // `Outer` before `""`) and top-level types (scope starts at `""`). Issue
+            // #435 codex review iter 4.
+            // 非修飾基底の解決は deriving のスコープチェーンを内側から外側へ辿り、最初に
+            // 同名行が見つかった階層のバケットだけで判定する。グローバル単純名へのフォール
+            // バックは行わない（無関係な名前空間の本物 attribute で偽昇格するため）。
+            List<long>? scopedIds = null;
+            string? scope = derivingScope;
+            while (scope != null)
+            {
+                if (scopeNameToIds.TryGetValue((scope, head), out var found))
+                {
+                    scopedIds = found;
+                    break;
+                }
+                if (scope.Length == 0)
+                    break;
+                int lastDotInScope = scope.LastIndexOf('.');
+                scope = lastDotInScope >= 0 ? scope.Substring(0, lastDotInScope) : string.Empty;
+            }
+
+            if (scopedIds != null)
             {
                 bool anyResolved = false;
-                foreach (var id in ids)
+                foreach (var id in scopedIds)
                 {
                     if (resolvedTargets.Contains(id))
                     {
@@ -1126,16 +1200,18 @@ public class DbWriter
                 }
                 if (anyResolved)
                     return true;
-                // In-repo class with the same name exists but is not (yet) a target — wait
-                // for the next fixed-point iteration. Don't fall through to the BCL heuristic
-                // because that would incorrectly promote a non-attribute in-repo class.
-                // 同名の in-repo class があるなら BCL ヒューリスティックに落とさず、次回反復に委ねる。
+                // Same-scope in-repo class exists but is not (yet) a target — wait for
+                // the next fixed-point iteration. Don't fall through to the BCL
+                // heuristic because that would incorrectly promote a non-attribute
+                // in-repo class that literally shadows the base name.
+                // 同スコープに in-repo class があるなら BCL ヒューリスティックに落とさず、次回反復に委ねる。
                 continue;
             }
 
-            // External base: BCL convention says any class ending in "Attribute" derives from
-            // System.Attribute. Used as a conservative fallback when the base type is not
-            // resolvable in-repo. / 外部基底は BCL 慣習で末尾 "Attribute" を target とみなす。
+            // No in-scope same-name row — treat as external and use the BCL suffix
+            // fallback. Intentionally does NOT consult a global simple-name bucket;
+            // that was the iter 4 false-positive. / スコープチェーンに同名行が無ければ
+            // 外部基底として扱い、末尾サフィックス規約のみにフォールバックする。
             if (head.Length > "Attribute".Length && head.EndsWith("Attribute", StringComparison.Ordinal))
                 return true;
         }

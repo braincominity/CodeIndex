@@ -3491,6 +3491,102 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverPrefersSameNamespaceBaseOverGlobalImpostor()
+    {
+        // issue #435 codex review iter 4: unqualified base names must resolve through
+        // the deriving class's own namespace / nesting chain — NOT through a global
+        // simple-name bucket. Before the iter-4 fix, `namespace B { class FooAttribute
+        // : BaseAttr {} }` could be falsely promoted to `is_metadata_target=1` solely
+        // because an unrelated `namespace A { class BaseAttr : Attribute {} }` existed
+        // elsewhere in the repo, even though B's own `BaseAttr : BaseService` was the
+        // actually reachable base for the unqualified reference. The result was a false
+        // `deps` / `impact` edge from `[Foo] class Svc` to `B.FooAttribute`. The fix
+        // indexes classes under `(enclosing scope, simple name)` and walks the deriving
+        // row's scope chain inside → outside, consulting only the first scope level
+        // that has a same-name row. If no scope level matches, the resolver falls back
+        // to the BCL `Attribute`-suffix heuristic for external bases — the global
+        // simple-name bucket is no longer consulted.
+        // issue #435 codex review iter 4: 非修飾基底は deriving の名前空間 /
+        // 入れ子チェーンのみで解決する。グローバル単純名索引に落とすと、別名前空間に
+        // 同名の本物 Attribute 派生が居るだけで非 Attribute 派生 class が偽の
+        // `is_metadata_target=1` に昇格し、`deps` / `impact` に偽エッジが残る。
+        InsertIndexedFile("src/A/BaseAttr.cs", "csharp",
+            """
+            using System;
+
+            namespace A
+            {
+                public class BaseAttr : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/B/BaseAttr.cs", "csharp",
+            """
+            namespace B
+            {
+                public class BaseService
+                {
+                }
+
+                public class BaseAttr : BaseService
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/B/FooAttribute.cs", "csharp",
+            """
+            namespace B
+            {
+                public class FooAttribute : BaseAttr
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            namespace B
+            {
+                [Foo]
+                public class Svc
+                {
+                }
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/B/FooAttribute.cs");
+
+        // Column-level invariant: the scope-aware resolver must classify each row
+        // against its own scope chain. A.BaseAttr is a real Attribute derivative;
+        // B.BaseAttr (same simple name, different namespace) derives from an unrelated
+        // BaseService and must stay non-target; B.FooAttribute's unqualified `BaseAttr`
+        // must resolve to B.BaseAttr (not A.BaseAttr), so it also stays non-target.
+        // 列レベル不変条件: scope-aware resolver は各行を自身のスコープチェーンで判定する。
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT f.path, s.is_metadata_target
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE s.kind = 'class' AND s.name IN ('BaseAttr', 'FooAttribute')
+            ORDER BY f.path, s.name";
+        var rows = new List<(string Path, long Flag)>();
+        using (var reader = cmd.ExecuteReader())
+        {
+            while (reader.Read())
+                rows.Add((reader.GetString(0), reader.GetInt64(1)));
+        }
+        Assert.Contains(rows, r => r.Path == "src/A/BaseAttr.cs" && r.Flag == 1);
+        Assert.Contains(rows, r => r.Path == "src/B/BaseAttr.cs" && r.Flag == 0);
+        Assert.Contains(rows, r => r.Path == "src/B/FooAttribute.cs" && r.Flag == 0);
+    }
+
+    [Fact]
     public void ResolveCSharpMetadataTargets_DoesNotMistakeGenericConstraintForBaseList()
     {
         // issue #435 codex review iter 1: `class Foo<T> where T : Attribute {}` has no

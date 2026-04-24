@@ -2048,7 +2048,18 @@ public partial class DbReader
         cmd.CommandText = sql;
         cmd.Parameters.AddWithValue("@metadataAmbigName", definition.Name);
         var count = Convert.ToInt32(cmd.ExecuteScalar() ?? 0);
-        return count <= 1;
+        // Require exactly one authoritative metadata target named `definition.Name`.
+        // `count == 0` is also unsafe for the bypass — if no class-like symbol with
+        // that name is a valid metadata target, then a `[Foo]` reference cannot
+        // resolve to the passed-in definition either. `count <= 1` would let the
+        // bypass fire with zero candidates and falsely attribute `[Foo]` sites to a
+        // non-attribute definition (e.g. `class FooAttribute : BaseService` post
+        // #435 iter 4 scope-aware resolver). Issue #435 codex review iter 4.
+        // 1 件厳密一致のみ unambiguous とみなす。count=0 はメタデータターゲットが
+        // 一つも無い状態であり、`[Foo]` が passed-in 定義へ解決する根拠も無いため
+        // bypass は発動させない。`<= 1` だと #435 iter 4 のスコープ対応で非属性
+        // 派生になったクラスに `[Foo]` 参照を誤帰属させる。
+        return count == 1;
     }
 
     private bool SourceFileHasStructuredTypeEvidence(long fileId, string typeName)
