@@ -8852,6 +8852,23 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_DetectsModuleInfoDirectivesOnAllmanBraceLine()
+    {
+        const string content = """
+            module com.example.app
+            { requires java.base;
+              exports com.example.api;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var imports = symbols.Where(s => s.Kind == "import").ToList();
+        Assert.Equal(2, imports.Count);
+        Assert.Contains(imports, s => s.Name == "java.base" && s.ContainerName == "com.example.app");
+        Assert.Contains(imports, s => s.Name == "com.example.api" && s.ContainerName == "com.example.app");
+    }
+
+    [Fact]
     public void Extract_Java_DetectsModuleInfoDirectivesWithMultilineListsAndComments()
     {
         const string content = """

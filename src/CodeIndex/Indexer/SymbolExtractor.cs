@@ -2603,7 +2603,7 @@ public static class SymbolExtractor
             var sliceStart = 0;
             var sliceEnd = rawLine.Length;
 
-            if (lineIndex == startLineIndex && bodyStartLine == moduleDeclaration.StartLine)
+            if (lineIndex == startLineIndex)
             {
                 var openingBrace = structuralLine.IndexOf('{');
                 if (openingBrace >= 0)
