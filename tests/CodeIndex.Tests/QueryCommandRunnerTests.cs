@@ -3699,6 +3699,9 @@ public class QueryCommandRunnerTests
             var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["--db", dbPath, "--json", "--name", "@int", "--exact-name", "--count"],
                 _jsonOptions));
+            var (invalidVerbatimExitCode, invalidVerbatimStdout, invalidVerbatimStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--name", "@", "--exact-name", "--count"],
+                _jsonOptions));
             var (definitionExitCode, definitionStdout, definitionStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
                 ["@class", "--db", dbPath, "--json", "--exact-name", "--count"],
                 _jsonOptions));
@@ -3713,6 +3716,9 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
             Assert.Equal(string.Empty, symbolsStderr);
             Assert.Equal(1, symbolsDocument.RootElement.GetProperty("count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.UsageError, invalidVerbatimExitCode);
+            Assert.Contains("empty after normalization", invalidVerbatimStderr, StringComparison.Ordinal);
 
             Assert.Equal(CommandExitCodes.Success, definitionExitCode);
             Assert.Equal(string.Empty, definitionStderr);

@@ -101,7 +101,7 @@ public partial class DbReader
 
     public bool AnySearchSymbols(IReadOnlyList<string>? queries, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
-        var validQueries = queries?.Select(query => NormalizeCSharpVerbatimQuery(query) ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        var validQueries = queries?.Select(query => NormalizeCSharpVerbatimQuery(query) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
         if (validQueries == null || validQueries.Count == 0)
             return CountSearchSymbols(validQueries, 1, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact) > 0;
 
@@ -116,7 +116,7 @@ public partial class DbReader
 
     public int CountSearchSymbols(IReadOnlyList<string>? queries, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
-        var validQueries = queries?.Select(query => NormalizeCSharpVerbatimQuery(query) ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        var validQueries = queries?.Select(query => NormalizeCSharpVerbatimQuery(query) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
         if (validQueries != null && validQueries.Count > 1)
             return SearchSymbols(validQueries, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact).Count;
 
@@ -197,7 +197,7 @@ public partial class DbReader
                 JOIN files f ON s.file_id = f.id
                 WHERE 1=1";
 
-        var effectiveQueries = queries?.Select(query => NormalizeCSharpVerbatimQuery(query) ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        var effectiveQueries = queries?.Select(query => NormalizeCSharpVerbatimQuery(query) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
         if (effectiveQueries != null && effectiveQueries.Count > 0)
         {
             var orClauses = exact
@@ -272,7 +272,7 @@ public partial class DbReader
         // public `limit` contract stays "Max total results", not per-name.
         // 複数名指定: 名前ごとに独立検索して候補プールを確保した上で、round-robin で統合し、
         // 最終的に全体で `limit` 件に収める。`limit` は従来どおり「合計の上限」。
-        var validQueries = queries?.Select(NormalizeCSharpVerbatimQuery).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        var validQueries = queries?.Select(query => NormalizeCSharpVerbatimQuery(query) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
         if (validQueries != null && validQueries.Count > 1)
         {
             var perName = new List<List<SymbolResult>>(validQueries.Count);
