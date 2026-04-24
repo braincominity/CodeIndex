@@ -10608,6 +10608,106 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SqlQualifiedDefinition_DoesNotEmitPhantomSelfReference()
+    {
+        // Schema-qualified SQL symbols keep their qualified definition name (`dbo.fn_X`), while
+        // CallRegex only captures the leaf call token (`fn_X`). The definition-line suppression
+        // must therefore compare both the full and leaf forms so the header is not misindexed as
+        // a self-call. Issue #296.
+        // SQL の定義名は `dbo.fn_X` のように修飾付きだが、CallRegex は leaf の `fn_X` だけを拾う。
+        // そのため定義行の自己呼び出し抑止は full/leaf の両方を比較し、ヘッダを幽霊 call にしない必要がある。
+        const string content = """
+            CREATE FUNCTION dbo.fn_GetOrderItems(@orderId INT)
+            RETURNS TABLE
+            AS
+            RETURN (SELECT * FROM dbo.OrderItems WHERE OrderId = @orderId);
+            GO
+
+            CREATE PROCEDURE dbo.usp_GetOrders
+            AS
+            BEGIN
+                SELECT *
+                FROM dbo.Orders o
+                CROSS APPLY dbo.fn_GetOrderItems(o.OrderId) fi;
+            END
+            GO
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRefs = references
+            .Where(r => r.SymbolName == "fn_GetOrderItems" && r.ReferenceKind == "call")
+            .ToList();
+
+        var realCall = Assert.Single(targetRefs);
+        Assert.Equal(12, realCall.Line);
+        Assert.Equal("dbo.usp_GetOrders", realCall.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_SqlQualifiedDefinition_SameLineCrossSchemaCallStillEmitsReference()
+    {
+        const string content = """
+            CREATE PROCEDURE sales.fn_Target AS EXEC dbo.fn_Target;
+            GO
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRef = Assert.Single(references.Where(r => r.SymbolName == "fn_Target" && r.ReferenceKind == "call"));
+        Assert.Equal(1, targetRef.Line);
+        Assert.Equal("sales.fn_Target", targetRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_SqlQualifiedDefinition_SameLineCallAfterStringLiteralPreservesRawColumn()
+    {
+        const string content = """
+            CREATE PROCEDURE sales.host
+            AS
+            BEGIN
+                SELECT 'prefix'; EXEC dbo.fn_Target;
+            END
+            GO
+            CREATE PROCEDURE dbo.fn_Target AS SELECT 1;
+            GO
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRef = Assert.Single(references.Where(r => r.SymbolName == "fn_Target" && r.ReferenceKind == "call"));
+        Assert.Equal(4, targetRef.Line);
+        Assert.Equal(31, targetRef.Column);
+        Assert.Equal("sales.host", targetRef.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_SqlQualifiedDefinition_SameLineCallAfterInlineBlockCommentPreservesRawColumn()
+    {
+        const string content = """
+            CREATE PROCEDURE sales.host
+            AS
+            BEGIN
+                SELECT /*note*/ 1; EXEC dbo.fn_Target;
+            END
+            GO
+            CREATE PROCEDURE dbo.fn_Target AS SELECT 1;
+            GO
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRef = Assert.Single(references.Where(r => r.SymbolName == "fn_Target" && r.ReferenceKind == "call"));
+        Assert.Equal(4, targetRef.Line);
+        Assert.Equal(33, targetRef.Column);
+        Assert.Equal("sales.host", targetRef.ContainerName);
+    }
+
+    [Fact]
     public void Extract_SqlExecDynamicSql_DoesNotEmitPhantomKeywordReference()
     {
         // T-SQL dynamic-SQL execution `EXEC(@sql)` / `EXEC('...')` / `EXECUTE(@sql)` pass a string or
@@ -10831,6 +10931,25 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SqlExecQualifiedIdentifierWithWhitespaceAroundDots_CapturesTerminalIdentifier()
+    {
+        const string content = """
+            EXEC [server1] . [AdventureWorks] . [dbo] . [sp_GetCustomer];
+            CALL sales . proc_name;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "sp_GetCustomer" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "proc_name" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.DoesNotContain(references, r => r.SymbolName == "server1" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "AdventureWorks" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "dbo" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "sales" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_SqlCallBacktickQuotedIdentifier_IsCapturedAndDoesNotMisattributeQualifier()
     {
         // MySQL / MariaDB use backticks to quote identifiers. The shared PrepareLine
@@ -10857,6 +10976,34 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "do_stuff" && r.ReferenceKind == "call" && r.Line == 3);
         Assert.DoesNotContain(references, r => r.SymbolName == "db" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "mydb" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SqlCallDoubleQuotedIdentifier_IsCapturedAndDoesNotMisattributeQualifier()
+    {
+        // PostgreSQL / ANSI SQL use double quotes for delimited identifiers. The SQL no-parens
+        // scan must preserve `"..."` so `CALL "sales"."proc_name"` and `EXEC "dbo"."fn_Target"`
+        // still emit the leaf call edge instead of dropping the call entirely or misattributing
+        // the qualifier as a separate target. Single-quoted string literals must remain masked.
+        // PostgreSQL / ANSI SQL では二重引用符で識別子を区切る。SQL の括弧なし scan は `"..."` を
+        // 保持し、`CALL "sales"."proc_name"` や `EXEC "dbo"."fn_Target"` で call を落とさず、
+        // 修飾子を別ターゲットとして誤発行しない必要がある。単引用符の文字列リテラルは引き続き無視する。
+        const string content = """
+            CALL "proc_name";
+            CALL "sales"."proc_name";
+            EXEC "dbo"."fn_Target";
+            CALL 'not_a_proc';
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "proc_name" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "proc_name" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "fn_Target" && r.ReferenceKind == "call" && r.Line == 3);
+        Assert.DoesNotContain(references, r => r.SymbolName == "sales" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "dbo" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "not_a_proc" && r.ReferenceKind == "call");
     }
 
     [Fact]
@@ -12237,5 +12384,120 @@ public class ReferenceExtractorTests
 
         var test = Assert.Single(references.Where(r => r.SymbolName == "Test"));
         Assert.Equal("annotation", test.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_Csharp_LeadingBom_ExtractsReferencesOnFirstLine()
+    {
+        // BOM-prefixed C# source: reference extraction on line 1 must still work.
+        // Closes #183.
+        // BOM 付き C# ソース: 1 行目の参照抽出も機能する。Closes #183.
+        const string content = "\uFEFFusing System;\n\nnamespace BomRef;\n\npublic class C\n{\n    public void Run() { Helper(); }\n    public void Helper() { }\n}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System" && s.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Helper");
+    }
+
+    [Fact]
+    public void Extract_Csharp_MidFileBom_ExtractsReferencesOnAffectedLine()
+    {
+        // Mid-file BOM right before a call site: the reference must still be captured
+        // on its real line number. Closes #183.
+        // mid-file BOM が呼び出し行直前に挟まっても、実際の行番号で参照を拾う。Closes #183.
+        const string content = "namespace BomRef;\npublic class C\n{\n    public void Run()\n    {\n\uFEFF        Helper();\n    }\n    public void Helper() { }\n}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var helperRef = Assert.Single(references.Where(r => r.SymbolName == "Helper"));
+        Assert.Equal(6, helperRef.Line);
+    }
+
+    [Fact]
+    public void Extract_NullContent_ReturnsEmpty()
+    {
+        // Direct callers that pass `null` must not throw. The #183 CRLF-normalization
+        // step added ahead of StripLineLeadingBom would otherwise dereference `null`
+        // before the helper's IsNullOrEmpty guard could run. Closes #183.
+        // direct call で `null` を渡してもスローしない。#183 で StripLineLeadingBom
+        // の前段に CRLF 正規化を入れたため、helper 側 IsNullOrEmpty まで届かず
+        // `null` を逆参照してしまう回帰を防ぐ。Closes #183.
+        Assert.Empty(ReferenceExtractor.Extract(1, "csharp", null!, Array.Empty<CodeIndex.Models.SymbolRecord>()));
+    }
+
+    [Fact]
+    public void Extract_EmptyContent_ReturnsEmpty()
+    {
+        // Empty content returns no references and does not throw. Closes #183.
+        // 空入力は参照 0 個で、例外にならない。Closes #183.
+        Assert.Empty(ReferenceExtractor.Extract(1, "csharp", string.Empty, Array.Empty<CodeIndex.Models.SymbolRecord>()));
+    }
+
+    [Fact]
+    public void Extract_Csharp_CrlfLeadingBom_ExtractsReferencesOnFirstLine()
+    {
+        // Direct-call input with CRLF line endings AND a leading BOM: the CRLF → LF
+        // normalization must run before StripLineLeadingBom so call sites on mid-file
+        // BOM lines are still captured. Closes #183.
+        // CRLF 改行 + 先頭 BOM の direct call: CRLF → LF 正規化を helper より先に通す
+        // ことで、mid-file 行頭 BOM 直後の呼び出しも参照として拾える。Closes #183.
+        const string content = "\uFEFFnamespace BomRefCrlf;\r\npublic class C\r\n{\r\n    public void Run()\r\n    {\r\n\uFEFF        Helper();\r\n    }\r\n    public void Helper() { }\r\n}\r\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var helperRef = Assert.Single(references.Where(r => r.SymbolName == "Helper"));
+        Assert.Equal(6, helperRef.Line);
+    }
+
+    [Fact]
+    public void Extract_Csharp_BareCrLeadingBom_ExtractsReferenceOnBomLine()
+    {
+        // Bare-`\r` direct-call input with a leading BOM + mid-file line-leading
+        // BOM in front of the call site: the in-extractor `\r` → `\n`
+        // normalization must run so `StripLineLeadingBom` (which treats `\n` as
+        // the sole line separator) still sees the mid-file BOM as line-leading
+        // and strips it, letting the regex capture the call site on the
+        // BOM-prefixed line. Closes #183.
+        // bare `\r` 改行 + 先頭 BOM + 呼び出し行頭 BOM の direct call: `\r` → `\n`
+        // 正規化を helper より先に通し、classic-Mac 改行でも BOM 行の呼び出し
+        // 参照が拾えることを固定。Closes #183.
+        const string content = "\uFEFFnamespace BomRefBareCr;\rpublic class C\r{\r    public void Run()\r    {\r\uFEFF        Helper();\r    }\r    public void Helper() { }\r}\r";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var helperRef = Assert.Single(references.Where(r => r.SymbolName == "Helper"));
+        Assert.Equal(6, helperRef.Line);
+    }
+
+    [Fact]
+    public void Extract_Csharp_MixedLineEndingsLeadingBom_ExtractsReferenceOnBomLine()
+    {
+        // Mixed line endings (`\r\n`, bare `\r`, bare `\n`) interleaved with a
+        // leading BOM and a mid-file line-leading BOM positioned immediately
+        // after a real `\r\n\r` boundary (the blank line uses bare `\r`, so the
+        // BOM follows `\r\n` + `\r`). The call site on the BOM-prefixed line is
+        // only captured when the normalization collapses `\r\n` AND bare `\r`
+        // to `\n` before `StripLineLeadingBom` runs — otherwise the `\r`
+        // immediately preceding the mid-file BOM would keep the BOM
+        // non-line-leading (helper treats `\n` as the sole line separator).
+        // Line 7 assertion accounts for the blank line inserted by that extra
+        // `\r`. Closes #183.
+        // 混在改行（`\r\n` / bare `\r` / bare `\n`）+ 先頭 BOM + `\r\n\r` 境界直後の
+        // mid-file 行頭 BOM の direct call: `\r\n` と bare `\r` の双方を `\n` に
+        // 正規化してからでないと、BOM 直前の `\r` のせいで helper からは BOM が
+        // 行頭扱いされず呼び出し参照が拾えない。bare `\r` による空行が挟まる分、
+        // Helper は行 7。Closes #183.
+        const string content = "\uFEFFnamespace BomRefMixed;\r\npublic class C\r{\n    public void Run()\r\n    {\r\n\r\uFEFF        Helper();\n    }\r    public void Helper() { }\r\n}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var helperRef = Assert.Single(references.Where(r => r.SymbolName == "Helper"));
+        Assert.Equal(7, helperRef.Line);
     }
 }

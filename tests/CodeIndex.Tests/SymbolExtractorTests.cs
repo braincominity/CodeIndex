@@ -3813,6 +3813,60 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_NewEnumModifier_ExtractsEnumSymbol()
+    {
+        // Closes #353: nested `new enum` (member hiding in derived type) must be captured.
+        // Modifier order is free, so both `public new enum` and `new public enum` work, and
+        // an explicit underlying-type colon must still classify as kind `enum`.
+        // Closes #353: 派生型で親のネスト enum を隠蔽する `new enum` は enum としてキャプチャする。
+        // 修飾子の順序は自由で、`public new enum` と `new public enum` の両方、
+        // 明示的な基底型指定 `: byte` が付いた場合でも kind `enum` として分類する。
+        var content = """
+            namespace Demo;
+
+            public class Derived : Base
+            {
+                public new enum Kind { A }
+                public new enum KindByte : byte { A }
+                new public enum KindReversed { A }
+                new enum KindPrivate { A }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Kind" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "KindByte" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "KindReversed" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "KindPrivate");
+    }
+
+    [Fact]
+    public void Extract_CSharp_NewDelegateModifier_ExtractsDelegateSymbol()
+    {
+        // Regression for #353 companion: nested `new delegate` (member hiding in derived type)
+        // must stay captured. Modifier order is free, so both `public new delegate` and
+        // `new public delegate` work.
+        // #353 関連の回帰テスト: 派生型で親のネスト delegate を隠蔽する `new delegate` は
+        // delegate としてキャプチャし続ける。修飾子の順序は自由で、`public new delegate` と
+        // `new public delegate` の両方を受け付ける。
+        var content = """
+            namespace Demo;
+
+            public class Derived : Base
+            {
+                public new delegate int Handler(int x);
+                new public delegate int Reversed();
+                new delegate int PrivateD();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "Handler" && s.Visibility == "public" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "Reversed" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "PrivateD");
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineClassHeader_SignatureUnchanged()
     {
         var content = """
@@ -5434,6 +5488,57 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_ConstField_TupleReturnTypes()
+    {
+        // Closes #346: const fields with tuple / named-tuple / nullable-tuple /
+        // generic-over-tuple / global::-qualified / tuple-array return types were silently
+        // dropped because the const row's returnType char class had no `(`, `)`, `\s`, and no
+        // tuple alternative. The method row at the next priority was already immunized by
+        // the post-#349 CSharpNonTypeKeywordPattern / CSharpTypePattern consolidation, so no
+        // phantom `function const` row was emitted — the symbols simply vanished. Switching
+        // the const returnType to the shared CSharpTypePattern token restores capture for all
+        // of these shapes and preserves baselines (`public const int Plain = 42;`,
+        // `new public const int HiddenConst = 2;`).
+        // Closes #346: tuple / 名前付き tuple / nullable tuple / generic-over-tuple /
+        // `global::` 修飾 / tuple-array を戻り値型とする const フィールドは、const 行の
+        // returnType 文字クラスに `(` / `)` / `\s` も tuple 代替もなかったため、サイレントに
+        // drop されていた。method 行は #349 以後の CSharpNonTypeKeywordPattern /
+        // CSharpTypePattern 統合で既にこの後方参照経路を塞いでいるため、phantom `function const`
+        // 行は出ずに単に消えていた。const の returnType を共有トークン CSharpTypePattern に
+        // 差し替えることで、以下のすべての形を捕捉し、既存の baseline（`public const int Plain = 42;`
+        // / `new public const int HiddenConst = 2;`）も維持する。
+        var content = """
+            namespace ConstTuple;
+
+            public class Cfg
+            {
+                public const (int, int) Pair = (1, 2);
+                public const (int a, int b) NamedPair = (1, 2);
+                public const (int, int)? MaybePair = null;
+                public const (int, int)[] PairArray = null;
+                public const global::System.Int32 Qualified = 7;
+                public const int Plain = 42;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Pair" && s.Visibility == "public" && s.ReturnType == "(int, int)");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "NamedPair" && s.Visibility == "public" && s.ReturnType == "(int a, int b)");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MaybePair" && s.Visibility == "public" && s.ReturnType == "(int, int)?");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "PairArray" && s.Visibility == "public" && s.ReturnType == "(int, int)[]");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Qualified" && s.Visibility == "public" && s.ReturnType == "global::System.Int32");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Plain" && s.Visibility == "public" && s.ReturnType == "int");
+
+        // The method row must not emit a phantom `function const` row for any of the tuple
+        // shapes above. `const` itself as a name would only appear via the post-#349 backtrack
+        // the issue describes. Assert the negative so any regression of that phantom is caught.
+        // tuple 形に対して method 行が phantom `function const` 行を発行していないことを
+        // 明示的に確認する。`const` 自体が name として現れるのは #349 以後は起きないはずの
+        // 後方参照経路のみなので、将来その regression が起きたらここで検出できる。
+        Assert.DoesNotContain(symbols, s => s.Name == "const");
+    }
+
+    [Fact]
     public void Extract_CSharp_PlainField_FreeModifierOrder()
     {
         // Closes #355: plain fields (kind `property`) and multi-line field headers must also
@@ -5554,6 +5659,37 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_FileDelegate_Issue303Repro()
+    {
+        // Closes #303: the `file` modifier on a top-level delegate must not be dropped by
+        // the modifier slot, regardless of whether other variants share the same file.
+        // v1.10.0 captured plain / public / unsafe delegates but silently missed
+        // `file delegate`. The #355 fix (free modifier order; accept `file` / `new`) covers
+        // this, so this test locks in the behavior against the exact reproducer from #303.
+        // Closes #303: トップレベル delegate の `file` 修飾子が modifier スロットで落ちないこと。
+        // v1.10.0 では plain / public / unsafe delegate は拾えていたが `file delegate` だけが
+        // 黙って欠落していた。#355 の修正 (修飾子順序を自由化し `file` / `new` を受理) が
+        // 本件も解消するため、#303 の再現 fixture で挙動を固定する。
+        var content = """
+            namespace Demo;
+
+            public delegate void PublicHandler(object sender);
+
+            file delegate void FileOnlyHandler(object sender);
+
+            delegate void PlainHandler(object sender);
+
+            unsafe delegate void UnsafeHandler(object sender);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "PublicHandler" && s.Visibility == "public" && s.ReturnType == "void");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "FileOnlyHandler" && s.ReturnType == "void");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "PlainHandler" && s.ReturnType == "void");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "UnsafeHandler" && s.ReturnType == "void");
+    }
+
+    [Fact]
     public void Extract_CSharp_EventModifierCombinations_Issue334Repro()
     {
         // Closes #334: the full issue repro must survive extraction, including class events
@@ -5667,6 +5803,107 @@ public class SymbolExtractorTests
         Assert.Equal(2, nested.Count);
         Assert.Contains(nested, s => s.ContainerName == "Base");
         Assert.Contains(nested, s => s.ContainerName == "Derived");
+    }
+
+    [Fact]
+    public void Extract_CSharp_Interface_ModifierSlotMatrix_LocksInCommonLegalShapes()
+    {
+        // Closes #302: the C# interface row's modifier slot must accept the common
+        // legal declaration shapes in a single fixture so a future modifier-slot
+        // refactor (mirror of the #238 `operator checked`, #244 `static abstract`,
+        // #355 `file`, and #376 `new` families) cannot silently drop one variant.
+        // The fixture is intentionally hand-verified to be legal C# — `partial`
+        // must appear immediately before the `interface` keyword (CS0267 otherwise)
+        // so `partial public interface` is NOT a legal ordering and is intentionally
+        // absent. Non-canonical modifier order is instead demonstrated by
+        // `unsafe public interface` (the `unsafe` type modifier has no required
+        // position relative to accessibility). Covers plain `interface`, `public
+        // interface`, explicit `internal interface`, `file interface` (C# 11
+        // file-scoped, cannot combine with accessibility), bare `partial interface`,
+        // `public partial interface`, non-canonical `unsafe public interface`,
+        // `unsafe interface`, the nested `public new interface` that hides a
+        // same-named base-type member, and the nested `public new partial interface`
+        // that exercises the `new + partial` modifier interaction on nested types.
+        // Each unique name is pinned with `Assert.Single` so a silent duplicate row
+        // or a kind/visibility relabel on a sibling variant cannot make this test
+        // pass via a second matching row. The total interface-symbol count for the
+        // fixture is also asserted so a phantom extra interface emission anywhere
+        // in the file cannot slip past the per-name predicates.
+        // Closes #302: C# interface 行の修飾子スロットが、単一 fixture で代表的な
+        // 合法宣言形を受理することを固定する。修飾子スロットの将来的な再編（#238
+        // の `operator checked`、#244 の `static abstract`、#355 の `file`、#376
+        // の `new` と同じファミリの問題）で、いずれか1形を黙って落とす回帰を防ぐ。
+        // fixture は手で合法性を検証済みで、`partial` は `interface` キーワード
+        // 直前にしか置けず（違反すると CS0267）、`partial public interface` は
+        // 合法な順序ではないので意図的に含めない。非正準順序は `unsafe public
+        // interface`（`unsafe` 型修飾子は可視性に対して順序の制約がない）で代替
+        // する。plain `interface`、`public interface`、明示 `internal interface`、
+        // `file interface`（C# 11 file-scoped、accessibility と併用不可）、素の
+        // `partial interface`、`public partial interface`、非正準順の `unsafe
+        // public interface`、`unsafe interface`、同名ベースメンバを隠蔽する
+        // ネストの `public new interface`、`new + partial` 修飾子相互作用を
+        // 検証するネストの `public new partial interface` を網羅する。各ユニーク
+        // 名は `Assert.Single` で固定し、兄弟変種に silent duplicate や kind /
+        // visibility relabel が入っても別行のヒットで silent pass しないように
+        // する。fixture 全体の interface シンボル総数もアサートして、ファイル内
+        // のどこかで phantom interface が追加された場合でも per-name predicate
+        // をすり抜けないようにする。
+        var content = """
+            namespace ModifierSlotMatrix;
+
+            interface IPlain { void Do(); }
+            public interface IPublic { void Do(); }
+            internal interface IInternal { void Do(); }
+            file interface IFile { void Do(); }
+            partial interface IPartial { void Do(); }
+            public partial interface IPublicPartial { void Do(); }
+            unsafe public interface IUnsafePublic { void Do(); }
+            unsafe interface IUnsafe { void Do(); }
+
+            public class Base
+            {
+                public interface INested { void Do(); }
+            }
+            public class Derived : Base
+            {
+                public new interface INested { void Do(); }
+                public new partial interface IPartialNested { void Do(); }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IPlain" && string.IsNullOrEmpty(s.Visibility));
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IPublic" && s.Visibility == "public");
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IInternal" && s.Visibility == "internal");
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IFile" && string.IsNullOrEmpty(s.Visibility));
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IPartial" && string.IsNullOrEmpty(s.Visibility));
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IPublicPartial" && s.Visibility == "public");
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IUnsafePublic" && s.Visibility == "public");
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IUnsafe" && string.IsNullOrEmpty(s.Visibility));
+
+        // Nested `public new interface INested` must produce a second symbol attributed
+        // to the `Derived` container alongside the base-side `INested` on `Base`.
+        // `public new partial interface IPartialNested` covers the `new + partial`
+        // modifier interaction on nested types.
+        // ネストの `public new interface INested` は、基底側の `Base.INested` に加えて
+        // `Derived` コンテナ下の独立シンボルとして抽出される必要がある。
+        // `public new partial interface IPartialNested` はネスト型の `new + partial`
+        // 修飾子相互作用を検証する。
+        var nested = symbols.Where(s => s.Kind == "interface" && s.Name == "INested").ToList();
+        Assert.Equal(2, nested.Count);
+        Assert.Single(nested, s => s.ContainerName == "Base" && s.Visibility == "public");
+        Assert.Single(nested, s => s.ContainerName == "Derived" && s.Visibility == "public");
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IPartialNested" && s.ContainerName == "Derived" && s.Visibility == "public");
+
+        // Fixture contains exactly 11 legal interface declarations (8 top-level +
+        // 3 nested: Base.INested, Derived.INested, Derived.IPartialNested). Pinning
+        // the aggregate count here prevents a phantom interface emission elsewhere
+        // in the file from slipping past the per-name `Assert.Single` predicates.
+        // fixture 全体の合法 interface 宣言は正確に 11 件（top-level 8 件 + nested 3
+        // 件: Base.INested、Derived.INested、Derived.IPartialNested）。集計数も
+        // アサートすることで、ファイル中のどこかで phantom interface が発生しても
+        // per-name `Assert.Single` をすり抜けないようにする。
+        Assert.Equal(11, symbols.Count(s => s.Kind == "interface"));
     }
 
     [Fact]
@@ -7545,6 +7782,21 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_QualifiedNamesAllowWhitespaceAroundDots()
+    {
+        var content =
+            "CREATE PROCEDURE [sales] . [sp_Report] AS SELECT 1;\n" +
+            "CREATE VIEW dbo . v_Orders AS SELECT 1;\n" +
+            "CREATE TYPE sales . Money AS ENUM ('usd');\n";
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name.Contains("sp_Report", StringComparison.Ordinal));
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name.Contains("v_Orders", StringComparison.Ordinal));
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name.Contains("Money", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Extract_SQL_ProcedureBodyRange_TSqlBeginEnd()
     {
         // Multi-line T-SQL CREATE PROCEDURE with explicit BEGIN/END body terminated by GO.
@@ -8012,6 +8264,46 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "remote_db" && s.Signature != null && s.Signature.StartsWith("ALTER DATABASE LINK", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "data_dir" && s.Signature != null && s.Signature.StartsWith("ALTER DIRECTORY", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "app_profile" && s.Signature != null && s.Signature.StartsWith("ALTER PROFILE", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Extract_SQL_KeepsQualifiedNamesWhenDotsHaveSurroundingWhitespace()
+    {
+        var content =
+            "CREATE SCHEMA sales . reporting;\n" +
+            "CREATE SCHEMA AUTHORIZATION sales . auth_owner;\n" +
+            "CREATE SEQUENCE sales . seq_orders START WITH 1;\n" +
+            "CREATE EXTENSION \"sales\" . \"ext_demo\";\n" +
+            "CREATE SYNONYM [sales] . [syn_demo] FOR dbo.target;\n" +
+            "CREATE DATABASE LINK sales . remote_db CONNECT TO app IDENTIFIED BY 'x' USING 'REMOTE';\n" +
+            "CREATE LOGIN sales . app_login WITH PASSWORD = 'x';\n" +
+            "CREATE PARTITION FUNCTION sales . pf_orders (int) AS RANGE LEFT FOR VALUES (1);\n" +
+            "CREATE PARTITION SCHEME sales . ps_orders AS PARTITION sales . pf_orders ALL TO ([PRIMARY]);\n" +
+            "CREATE FULLTEXT CATALOG sales . ft_catalog;\n" +
+            "CREATE INDEX sales . idx_users_email ON dbo.Users (Email);\n" +
+            "ALTER PARTITION FUNCTION sales . pf_orders() SPLIT RANGE (2);\n" +
+            "ALTER SCHEMA sales . reporting TRANSFER dbo.Users;\n" +
+            "ALTER EXTENSION \"sales\" . \"ext_demo\" UPDATE TO '2.0';\n" +
+            "ALTER DATABASE LINK sales . remote_db;\n" +
+            "ALTER SEQUENCE sales . seq_orders RESTART WITH 10;\n" +
+            "ALTER SYNONYM [sales] . [syn_demo] FOR dbo.target;\n" +
+            "ALTER LOGIN sales . app_login WITH DEFAULT_DATABASE = master;\n" +
+            "ALTER INDEX sales . idx_users_email REBUILD;\n" +
+            "ALTER PARTITION SCHEME sales . ps_orders NEXT USED [PRIMARY];\n" +
+            "ALTER FULLTEXT CATALOG sales . ft_catalog REORGANIZE;\n";
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "sales.reporting");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "sales.auth_owner");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.seq_orders");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "\"sales\".\"ext_demo\"");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "[sales].[syn_demo]");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.remote_db");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.app_login");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "sales.pf_orders");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.ps_orders");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.ft_catalog");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "sales.idx_users_email");
     }
 
     [Fact]
@@ -11730,6 +12022,81 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DoesNotMatchNewExpressionStatementsAsExplicitInterfaceDefinitions()
+    {
+        // Issue #362: `new System.Text.StringBuilder().Append(...)` などの式文が、
+        // 正規表現が最初の `(` で止まるために returnType=`new` / interface=手前の修飾チェーン
+        // （namespace `System.Text` / 外側型 `Outer` / `MyApp.Outer` のような両者の混在など、
+        // ドット連鎖そのもの。この位置では namespace と外側型を区別しない）/
+        // name=構築されている型（`StringBuilder` / `HttpClient` / `Inner`）として
+        // 明示的インターフェースメソッド定義に化けないこと。ブレース初期化子形
+        // (`new Outer.Inner { A = 1 }.Consume();`) と `_ = new ...` 形も同じフィクスチャで
+        // 固定し、brace-initializer 側では `Outer.Inner` / `Inner.Consume` のコンテナ関係
+        // と `Consume` が全体 1 本だけ（= brace-init から phantom `function Consume` が
+        // 増えない、別コンテナ配下や container 未設定の phantom も出ない）ことまで
+        // ピン留めする。
+        // Issue #362: expression statements like `new System.Text.StringBuilder().Append(...)`
+        // must not masquerade as explicit interface method definitions. The phantom name would
+        // be the identifier right before the first `(` — the type being constructed
+        // (`StringBuilder` / `HttpClient` / `Inner`), because the explicit-interface regex
+        // stops at the first `(` and consumes the preceding dot-chain as the would-be
+        // interface qualifier. That qualifier may be a namespace prefix (`System.Text` in
+        // `new System.Text.StringBuilder()`), an enclosing-type chain (`Outer` in
+        // `new Outer.Inner()` where `Outer` is an outer class, not a namespace), or a
+        // mix of both (e.g. `new MyApp.Outer.Inner()` where `MyApp` is a namespace and
+        // `Outer` is an enclosing type) — the regex does not distinguish which segments are
+        // namespaces and which are enclosing types at this position. Brace-initializer forms
+        // (`new Outer.Inner { A = 1 }.Consume();`) and discard forms (`_ = new ...`) are
+        // also pinned here; the brace-initializer case additionally pins the real
+        // `Outer` → `Inner` → `Consume` container chain and that exactly one `Consume`
+        // row is emitted (no phantom `function Consume` leaking out of the brace-init site).
+        var content = "public class Svc\n{\n    public int Real() => 42;\n\n    public void ChainedNew()\n    {\n        new System.Text.StringBuilder().Append(\"a\").Append(\"b\").ToString();\n    }\n\n    public void DiscardNew()\n    {\n        _ = new System.Text.RegularExpressions.Regex(\"pattern\");\n    }\n\n    public void UseNew()\n    {\n        new System.Net.Http.HttpClient().Dispose();\n    }\n\n    public void BraceInitNew()\n    {\n        new Outer.Inner { A = 1 }.Consume();\n    }\n}\n\npublic class Outer\n{\n    public class Inner { public int A { get; set; } public void Consume() { } }\n}\n\npublic class Consumer : System.IDisposable\n{\n    void System.IDisposable.Dispose() { }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        // Real definitions should be extracted / 実際の定義は抽出されるべき
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Svc");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Real");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ChainedNew");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "DiscardNew");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "UseNew");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "BraceInitNew");
+        // Nested Outer.Inner container chain must be preserved, and exactly one Consume symbol
+        // must exist in total — emitted under Inner. Two guards here:
+        //   (a) the total `Consume` count across ALL kinds / containers must be 1, so a
+        //       phantom `function Consume` emitted under `Svc` (or with no container at all)
+        //       from `new Outer.Inner { A = 1 }.Consume();` cannot sneak past by living
+        //       outside `ContainerName == "Inner"`; and
+        //   (b) that single `Consume` must be a `function` under `Inner` under `Outer`, so a
+        //       broken container chain also fails.
+        // ネストした Outer.Inner のコンテナ関係を固定。`Consume` は全体 1 本のみ（別コンテナ
+        // 配下や container 未設定の phantom も弾く）かつ、その 1 本は `Inner` 配下に属する
+        // `function` である、という二段のガードで brace-init phantom を検出する。
+        Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Outer"));
+        Assert.Single(symbols.Where(s => s.Name == "Inner"));
+        Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Inner" && s.ContainerKind == "class" && s.ContainerName == "Outer"));
+        Assert.Single(symbols.Where(s => s.Name == "Consume"));
+        Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Consume" && s.ContainerKind == "class" && s.ContainerName == "Inner"));
+        // Explicit interface impl on Consumer class must still be captured (regression guard)
+        // Consumer クラスの明示的インターフェース実装は引き続き抽出されること（回帰防止）
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Dispose" && s.ReturnType == "void");
+        // Phantom function rows from new-expression statements must NOT be produced,
+        // whether the chain ends in parentheses (`new T().M(...)`) or a brace-initializer
+        // (`new T { ... }.M(...)`). 構築される型名 (`StringBuilder` / `HttpClient` / `Regex`
+        // / `Inner`) が function 行として出ないこと。
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "StringBuilder");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Regex");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "HttpClient");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Inner" && s.ReturnType == "new");
+        // Kind-agnostic guard specifically against this #362 phantom shape: the `new` keyword
+        // itself must not sneak in under ANY kind inside this fixture. This is a targeted
+        // guard, not a general "the word `new` can never be a symbol name anywhere" claim.
+        // Issue #362 の phantom が将来別 kind に分類し直されても取りこぼさないための
+        // kind 非依存ガード。ここでの意味は「このフィクスチャの範囲内で `new` が名前に
+        // 出てこない」ことに限定しており、一般命題として主張するものではない。
+        Assert.DoesNotContain(symbols, s => s.Name == "new");
+    }
+
+    [Fact]
     public void Extract_CSharp_DoesNotMatchQualifiedNewExpressionsAsExplicitInterfaceDefinitions()
     {
         // Issue #362: qualified constructor expressions (`new Namespace.Type()`) must not be
@@ -13250,6 +13617,134 @@ public class SymbolExtractorTests
         Assert.Single(ctors);
         Assert.Equal(8, ctors[0].Line);
         Assert.Contains("public static extern G(string s)", ctors[0].Signature);
+    }
+
+    [Fact]
+    public void Extract_Csharp_LeadingBom_IndexesFirstLineImport()
+    {
+        // BOM-prefixed C# source: `using System;` on line 1 must still be captured.
+        // Closes #183.
+        // BOM 付き C# ソース: 1 行目の `using System;` も取りこぼさない。Closes #183.
+        const string content = "\uFEFFusing System;\n\nnamespace BomTest;\n\npublic class WithBom {\n    public void Run() { }\n}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var bomLess = SymbolExtractor.Extract(2, "csharp", content[1..]);
+        Assert.Equal(bomLess.Count, symbols.Count);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System" && s.Line == 1);
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "BomTest");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "WithBom");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Run");
+    }
+
+    [Fact]
+    public void Extract_Python_LeadingBom_IndexesFirstLineDef()
+    {
+        // BOM-prefixed Python: `def at_start():` on line 1 must still be captured.
+        // Closes #183.
+        // BOM 付き Python: 1 行目の `def at_start():` も取りこぼさない。Closes #183.
+        const string content = "\uFEFFdef at_start():\n    pass\n";
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "at_start" && s.Line == 1);
+    }
+
+    [Fact]
+    public void Extract_Csharp_MidFileBom_IndexesAffectedLine()
+    {
+        // Mid-file BOM (e.g. from file concatenation): the `\uFEFFnamespace MidBom;` line
+        // must still yield a namespace symbol, on its real line number. Closes #183.
+        // ファイル連結などで挟まった mid-file BOM: `\uFEFFnamespace MidBom;` 行も
+        // 実際の行番号で namespace として拾う。Closes #183.
+        const string content = "using System;\n\n\uFEFFnamespace MidBom;\n\npublic class X { }\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var ns = Assert.Single(symbols.Where(s => s.Kind == "namespace"));
+        Assert.Equal("MidBom", ns.Name);
+        Assert.Equal(3, ns.Line);
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "X");
+    }
+
+    [Fact]
+    public void Extract_NullContent_ReturnsEmpty()
+    {
+        // Direct callers that pass `null` must not throw. The #183 CRLF-normalization
+        // step added ahead of StripLineLeadingBom would otherwise dereference `null`
+        // before the helper's IsNullOrEmpty guard could run. Closes #183.
+        // direct call で `null` を渡してもスローしない。#183 で StripLineLeadingBom
+        // の前段に CRLF 正規化を入れたため、helper 側 IsNullOrEmpty まで届かず
+        // `null` を逆参照してしまう回帰を防ぐ。Closes #183.
+        Assert.Empty(SymbolExtractor.Extract(1, "csharp", null!));
+    }
+
+    [Fact]
+    public void Extract_EmptyContent_ReturnsEmpty()
+    {
+        // Empty content returns no symbols and does not throw. Closes #183.
+        // 空入力はシンボル 0 個で、例外にならない。Closes #183.
+        Assert.Empty(SymbolExtractor.Extract(1, "csharp", string.Empty));
+    }
+
+    [Fact]
+    public void Extract_Csharp_CrlfLeadingBom_IndexesFirstLineImport()
+    {
+        // Direct-call input with CRLF line endings AND a leading BOM: the CRLF → LF
+        // normalization must run before StripLineLeadingBom so the line-leading BOM
+        // logic still recognizes mid-file BOMs (helper treats `\n` as the sole line
+        // separator). Closes #183.
+        // CRLF 改行 + 先頭 BOM の direct call: StripLineLeadingBom は `\n` を唯一の
+        // 行区切りとして扱うので、CRLF → LF 正規化を helper より先に通さないと
+        // mid-file 行頭 BOM を剥がし損ねる。Closes #183.
+        const string content = "\uFEFFusing System;\r\n\r\n\uFEFFnamespace CrlfBom;\r\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System" && s.Line == 1);
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "CrlfBom" && s.Line == 3);
+    }
+
+    [Fact]
+    public void Extract_Csharp_BareCrLeadingBom_IndexesFirstLineImport()
+    {
+        // Bare-`\r` direct-call input with a leading BOM: the in-extractor
+        // normalization must also rewrite `\r` → `\n`, otherwise a file
+        // authored under classic-Mac-style line endings would keep mid-file
+        // line-leading BOMs invisible to `StripLineLeadingBom` (which treats
+        // `\n` as the sole separator). Closes #183.
+        // bare `\r` 改行 + 先頭 BOM の direct call: `\r` → `\n` 正規化も必要で、
+        // classic-Mac 改行のファイルに対して mid-file 行頭 BOM を剥がし損ねる
+        // のを防ぐ。Closes #183.
+        const string content = "\uFEFFusing System;\r\r\uFEFFnamespace BareCrBom;\r";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System" && s.Line == 1);
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "BareCrBom" && s.Line == 3);
+    }
+
+    [Fact]
+    public void Extract_Csharp_MixedLineEndingsLeadingBom_IndexesDeclarationsOnAllLines()
+    {
+        // Mixed line endings (`\r\n`, bare `\r`, bare `\n`) interleaved with
+        // leading + mid-file line-leading BOMs: the in-extractor normalization
+        // must reduce the whole content to a `\n`-only stream before the
+        // helper runs, otherwise mid-file BOMs following `\r` or `\r\n\r`
+        // boundaries would survive and `^\s*`-anchored patterns would miss
+        // the next declaration. Closes #183.
+        // 混在改行（`\r\n` / bare `\r` / bare `\n`）+ 先頭/中間行頭 BOM の direct call:
+        // 正規化を helper より先に通し、`\r\n\r` や `\r` 直後の mid-file 行頭 BOM も
+        // 剥がせるようにする。Closes #183.
+        const string content = "\uFEFFusing System;\r\n\r\uFEFFnamespace MixedEnds;\n\uFEFFpublic class X { }\r\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System" && s.Line == 1);
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MixedEnds" && s.Line == 3);
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "X" && s.Line == 4);
     }
 
     [Fact]

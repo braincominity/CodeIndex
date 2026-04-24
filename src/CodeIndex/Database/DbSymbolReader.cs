@@ -128,11 +128,16 @@ public partial class DbReader
 
         if (validQueries != null && validQueries.Count == 1)
         {
-            var exactColumn = exact && _foldReady ? "s.name_folded" : "s.name";
-            var exactSuffix = exact && _foldReady ? string.Empty : " COLLATE NOCASE";
+            var allowLeafFallback = !SqlNameResolver.HasQualifier(validQueries[0]);
             innerSql += exact
-                ? $" AND {exactColumn} = @query0{exactSuffix}"
-                : " AND s.name LIKE @query0 ESCAPE '\\'";
+                ? _foldReady
+                    ? allowLeafFallback
+                        ? " AND (s.name_folded = @query0 OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name_folded(s.name) = @query0NormalizedFolded) OR sql_leaf_name_folded(s.name) = @query0LeafFolded)))"
+                        : " AND (s.name_folded = @query0 OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name_folded(s.name) = @query0NormalizedFolded))"
+                    : allowLeafFallback
+                        ? " AND (s.name = @query0 COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name(s.name) = @query0Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query0Leaf COLLATE NOCASE)))"
+                        : " AND (s.name = @query0 COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name(s.name) = @query0Normalized COLLATE NOCASE))"
+                : " AND (s.name LIKE @query0 ESCAPE '\\' OR (f.lang = 'sql' AND sql_normalize_name(s.name) LIKE @query0NormalizedLike ESCAPE '\\'))";
         }
         if (kind != null)
             innerSql += " AND s.kind = @kind";
@@ -153,6 +158,12 @@ public partial class DbReader
                     ? NameFold.Fold(value) ?? value
                     : value;
             cmd.Parameters.AddWithValue("@query0", paramValue);
+            cmd.Parameters.AddWithValue("@query0Normalized", SqlNameResolver.NormalizeQualifiedName(value));
+            cmd.Parameters.AddWithValue("@query0NormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(value)) ?? SqlNameResolver.NormalizeQualifiedName(value));
+            cmd.Parameters.AddWithValue("@query0Leaf", SqlNameResolver.GetLeafName(value));
+            cmd.Parameters.AddWithValue("@query0LeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(value)) ?? SqlNameResolver.GetLeafName(value));
+            cmd.Parameters.AddWithValue("@query0SegmentCount", SqlNameResolver.GetSegmentCount(value));
+            cmd.Parameters.AddWithValue("@query0NormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(value))}%");
         }
         if (kind != null)
             cmd.Parameters.AddWithValue("@kind", kind);
@@ -187,11 +198,19 @@ public partial class DbReader
         var effectiveQueries = queries?.Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
         if (effectiveQueries != null && effectiveQueries.Count > 0)
         {
-            var exactColumn = exact && _foldReady ? "s.name_folded" : "s.name";
-            var exactSuffix = exact && _foldReady ? string.Empty : " COLLATE NOCASE";
             var orClauses = exact
-                ? string.Join(" OR ", effectiveQueries.Select((_, idx) => $"{exactColumn} = @query{idx}{exactSuffix}"))
-                : string.Join(" OR ", effectiveQueries.Select((_, idx) => $"s.name LIKE @query{idx} ESCAPE '\\'"));
+                ? string.Join(" OR ", effectiveQueries.Select((queryValue, idx) =>
+                {
+                    var allowLeafFallback = !SqlNameResolver.HasQualifier(queryValue);
+                    return _foldReady
+                        ? allowLeafFallback
+                            ? $"(s.name_folded = @query{idx} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded) OR sql_leaf_name_folded(s.name) = @query{idx}LeafFolded)))"
+                            : $"(s.name_folded = @query{idx} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded))"
+                        : allowLeafFallback
+                            ? $"(s.name = @query{idx} COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
+                            : $"(s.name = @query{idx} COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE))";
+                }))
+                : string.Join(" OR ", effectiveQueries.Select((_, idx) => $"(s.name LIKE @query{idx} ESCAPE '\\' OR (f.lang = 'sql' AND sql_normalize_name(s.name) LIKE @query{idx}NormalizedLike ESCAPE '\\'))"));
             sql += $" AND ({orClauses})";
         }
         if (kind != null)
@@ -215,6 +234,12 @@ public partial class DbReader
                         ? NameFold.Fold(value) ?? value
                         : value;
                 cmd.Parameters.AddWithValue($"@query{i}", paramValue);
+                cmd.Parameters.AddWithValue($"@query{i}Normalized", SqlNameResolver.NormalizeQualifiedName(value));
+                cmd.Parameters.AddWithValue($"@query{i}NormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(value)) ?? SqlNameResolver.NormalizeQualifiedName(value));
+                cmd.Parameters.AddWithValue($"@query{i}Leaf", SqlNameResolver.GetLeafName(value));
+                cmd.Parameters.AddWithValue($"@query{i}LeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(value)) ?? SqlNameResolver.GetLeafName(value));
+                cmd.Parameters.AddWithValue($"@query{i}SegmentCount", SqlNameResolver.GetSegmentCount(value));
+                cmd.Parameters.AddWithValue($"@query{i}NormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(value))}%");
             }
         }
         if (kind != null)
@@ -302,11 +327,19 @@ public partial class DbReader
             // Fallback: `s.name = @q COLLATE NOCASE` (indexed by idx_symbols_name_nocase). Both
             // paths stay SARGable. Using `lower(col)` would force a full scan per name.
             // --exact: FoldReady なら Unicode 折り畳み経路、未 ready ならレガシー NOCASE 経路へ fallback。
-            var exactColumn = exact && _foldReady ? "s.name_folded" : "s.name";
-            var exactSuffix = exact && _foldReady ? string.Empty : " COLLATE NOCASE";
             var orClauses = exact
-                ? string.Join(" OR ", effectiveQueries.Select((_, idx) => $"{exactColumn} = @query{idx}{exactSuffix}"))
-                : string.Join(" OR ", effectiveQueries.Select((_, idx) => $"s.name LIKE @query{idx} ESCAPE '\\'"));
+                ? string.Join(" OR ", effectiveQueries.Select((queryValue, idx) =>
+                {
+                    var allowLeafFallback = !SqlNameResolver.HasQualifier(queryValue);
+                    return _foldReady
+                        ? allowLeafFallback
+                            ? $"(s.name_folded = @query{idx} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded) OR sql_leaf_name_folded(s.name) = @query{idx}LeafFolded)))"
+                            : $"(s.name_folded = @query{idx} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded))"
+                        : allowLeafFallback
+                            ? $"(s.name = @query{idx} COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
+                            : $"(s.name = @query{idx} COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE))";
+                }))
+                : string.Join(" OR ", effectiveQueries.Select((_, idx) => $"(s.name LIKE @query{idx} ESCAPE '\\' OR (f.lang = 'sql' AND sql_normalize_name(s.name) LIKE @query{idx}NormalizedLike ESCAPE '\\'))"));
             sql += $" AND ({orClauses})";
         }
         if (kind != null)
@@ -318,8 +351,11 @@ public partial class DbReader
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += $" ORDER BY CASE " +
             "WHEN @preferLiteralExactMatch = 1 AND s.name = @rawQuery THEN 0 " +
-            "WHEN @preferCaseInsensitiveExactMatch = 1 AND s.name = @rawQuery COLLATE NOCASE THEN 1 " +
-            "ELSE 2 END, " +
+            "WHEN @preferLiteralNormalizedSqlMatch = 1 AND f.lang = 'sql' AND sql_segment_count(s.name) = @rawQuerySegmentCount AND sql_normalize_name(s.name) = @rawQueryNormalized THEN 1 " +
+            "WHEN @preferCaseInsensitiveExactMatch = 1 AND s.name = @rawQuery COLLATE NOCASE THEN 2 " +
+            "WHEN @preferCaseInsensitiveNormalizedSqlMatch = 1 AND f.lang = 'sql' AND sql_segment_count(s.name) = @rawQuerySegmentCount AND sql_normalize_name_folded(s.name) = @rawQueryNormalizedFolded THEN 3 " +
+            "WHEN @preferCaseInsensitiveSqlLeafMatch = 1 AND f.lang = 'sql' AND sql_leaf_name_folded(s.name) = @rawQueryLeafFolded THEN 4 " +
+            "ELSE 5 END, " +
             $"{PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line LIMIT @limit";
 
         cmd.CommandText = sql;
@@ -335,13 +371,28 @@ public partial class DbReader
                 else
                     paramValue = effectiveQueries[idx];
                 cmd.Parameters.AddWithValue($"@query{idx}", paramValue);
+                cmd.Parameters.AddWithValue($"@query{idx}Normalized", SqlNameResolver.NormalizeQualifiedName(effectiveQueries[idx]));
+                cmd.Parameters.AddWithValue($"@query{idx}NormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(effectiveQueries[idx])) ?? SqlNameResolver.NormalizeQualifiedName(effectiveQueries[idx]));
+                cmd.Parameters.AddWithValue($"@query{idx}Leaf", SqlNameResolver.GetLeafName(effectiveQueries[idx]));
+                cmd.Parameters.AddWithValue($"@query{idx}LeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(effectiveQueries[idx])) ?? SqlNameResolver.GetLeafName(effectiveQueries[idx]));
+                cmd.Parameters.AddWithValue($"@query{idx}SegmentCount", SqlNameResolver.GetSegmentCount(effectiveQueries[idx]));
+                cmd.Parameters.AddWithValue($"@query{idx}NormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(effectiveQueries[idx]))}%");
             }
         }
         var preferLiteralExactMatch = effectiveQueries != null && effectiveQueries.Count == 1;
         var preferCaseInsensitiveExactMatch = effectiveQueries != null && effectiveQueries.Count == 1;
+        var preferSqlLeafMatch = preferCaseInsensitiveExactMatch && !SqlNameResolver.HasQualifier(effectiveQueries![0]);
         cmd.Parameters.AddWithValue("@preferLiteralExactMatch", preferLiteralExactMatch ? 1 : 0);
+        cmd.Parameters.AddWithValue("@preferLiteralNormalizedSqlMatch", preferLiteralExactMatch ? 1 : 0);
         cmd.Parameters.AddWithValue("@preferCaseInsensitiveExactMatch", preferCaseInsensitiveExactMatch ? 1 : 0);
+        cmd.Parameters.AddWithValue("@preferCaseInsensitiveNormalizedSqlMatch", preferCaseInsensitiveExactMatch ? 1 : 0);
+        cmd.Parameters.AddWithValue("@preferCaseInsensitiveSqlLeafMatch", preferSqlLeafMatch ? 1 : 0);
         cmd.Parameters.AddWithValue("@rawQuery", preferLiteralExactMatch ? effectiveQueries![0] : string.Empty);
+        cmd.Parameters.AddWithValue("@rawQueryNormalized", preferLiteralExactMatch ? SqlNameResolver.NormalizeQualifiedName(effectiveQueries![0]) : string.Empty);
+        cmd.Parameters.AddWithValue("@rawQueryNormalizedFolded", preferLiteralExactMatch ? NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(effectiveQueries![0])) ?? SqlNameResolver.NormalizeQualifiedName(effectiveQueries![0]) : string.Empty);
+        cmd.Parameters.AddWithValue("@rawQueryLeaf", preferLiteralExactMatch ? SqlNameResolver.GetLeafName(effectiveQueries![0]) : string.Empty);
+        cmd.Parameters.AddWithValue("@rawQueryLeafFolded", preferLiteralExactMatch ? NameFold.Fold(SqlNameResolver.GetLeafName(effectiveQueries![0])) ?? SqlNameResolver.GetLeafName(effectiveQueries![0]) : string.Empty);
+        cmd.Parameters.AddWithValue("@rawQuerySegmentCount", preferLiteralExactMatch ? SqlNameResolver.GetSegmentCount(effectiveQueries![0]) : 0);
         if (kind != null)
             cmd.Parameters.AddWithValue("@kind", kind);
         if (lang != null)
@@ -436,11 +487,16 @@ public partial class DbReader
 
         if (!string.IsNullOrWhiteSpace(query))
         {
-            var exactColumn = exact && _foldReady ? "s.name_folded" : "s.name";
-            var exactSuffix = exact && _foldReady ? string.Empty : " COLLATE NOCASE";
+            var allowLeafFallback = !SqlNameResolver.HasQualifier(query);
             sql += exact
-                ? $" AND {exactColumn} = @query{exactSuffix}"
-                : " AND s.name LIKE @query ESCAPE '\\'";
+                ? _foldReady
+                    ? allowLeafFallback
+                        ? " AND (s.name_folded = @query OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name_folded(s.name) = @queryNormalizedFolded) OR sql_leaf_name_folded(s.name) = @queryLeafFolded)))"
+                        : " AND (s.name_folded = @query OR (f.lang = 'sql' AND sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name_folded(s.name) = @queryNormalizedFolded))"
+                    : allowLeafFallback
+                        ? " AND (s.name = @query COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @queryLeaf COLLATE NOCASE)))"
+                        : " AND (s.name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE))"
+                : " AND (s.name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND sql_normalize_name(s.name) LIKE @queryNormalizedLike ESCAPE '\\'))";
         }
         if (kind != null)
             sql += " AND s.kind = @kind";
@@ -468,6 +524,12 @@ public partial class DbReader
                     ? NameFold.Fold(query) ?? query
                     : query;
             cmd.Parameters.AddWithValue("@query", paramValue);
+            cmd.Parameters.AddWithValue("@queryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
+            cmd.Parameters.AddWithValue("@queryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
+            cmd.Parameters.AddWithValue("@queryLeaf", SqlNameResolver.GetLeafName(query));
+            cmd.Parameters.AddWithValue("@queryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
+            cmd.Parameters.AddWithValue("@querySegmentCount", SqlNameResolver.GetSegmentCount(query));
+            cmd.Parameters.AddWithValue("@queryNormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(query))}%");
         }
         if (kind != null)
             cmd.Parameters.AddWithValue("@kind", kind);
@@ -686,9 +748,14 @@ public partial class DbReader
     {
         using var cmd = _conn.CreateCommand();
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "supportedGraphLang");
+        var allowLeafFallback = !SqlNameResolver.HasQualifier(query);
         var nameCondition = _foldReady
-            ? "s.name_folded = @query"
-            : "s.name = @query COLLATE NOCASE";
+            ? allowLeafFallback
+                ? "(s.name_folded = @queryFolded OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name_folded(s.name) = @queryNormalizedFolded) OR sql_leaf_name_folded(s.name) = @queryLeafFolded)))"
+                : "(s.name_folded = @queryFolded OR (f.lang = 'sql' AND sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name_folded(s.name) = @queryNormalizedFolded))"
+            : allowLeafFallback
+                ? "(s.name = @queryRaw COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @queryLeaf COLLATE NOCASE)))"
+                : "(s.name = @queryRaw COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE))";
 
         var sql = @"
             SELECT f.lang
@@ -704,7 +771,13 @@ public partial class DbReader
         sql += " LIMIT 1";
 
         cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@query", _foldReady ? NameFold.Fold(query) ?? query : query);
+        cmd.Parameters.AddWithValue("@queryRaw", query);
+        cmd.Parameters.AddWithValue("@queryFolded", NameFold.Fold(query) ?? query);
+        cmd.Parameters.AddWithValue("@queryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
+        cmd.Parameters.AddWithValue("@queryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
+        cmd.Parameters.AddWithValue("@queryLeaf", SqlNameResolver.GetLeafName(query));
+        cmd.Parameters.AddWithValue("@queryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
+        cmd.Parameters.AddWithValue("@querySegmentCount", SqlNameResolver.GetSegmentCount(query));
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
@@ -724,9 +797,14 @@ public partial class DbReader
     {
         using var ownedCommand = command == null ? _conn.CreateCommand() : null;
         var cmd = command ?? ownedCommand!;
+        var allowLeafFallback = !SqlNameResolver.HasQualifier(query);
         var nameCondition = _foldReady
-            ? "s.name_folded = @query"
-            : "s.name = @query COLLATE NOCASE";
+            ? allowLeafFallback
+                ? "(s.name_folded = @queryFolded OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name_folded(s.name) = @queryNormalizedFolded) OR sql_leaf_name_folded(s.name) = @queryLeafFolded)))"
+                : "(s.name_folded = @queryFolded OR (f.lang = 'sql' AND sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name_folded(s.name) = @queryNormalizedFolded))"
+            : allowLeafFallback
+                ? "(s.name = @queryRaw COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @queryLeaf COLLATE NOCASE)))"
+                : "(s.name = @queryRaw COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name(s.name) = @queryNormalized COLLATE NOCASE))";
 
         var sql = @"
             SELECT 1
@@ -740,7 +818,13 @@ public partial class DbReader
         sql += " LIMIT 1";
 
         cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@query", _foldReady ? NameFold.Fold(query) ?? query : query);
+        cmd.Parameters.AddWithValue("@queryRaw", query);
+        cmd.Parameters.AddWithValue("@queryFolded", NameFold.Fold(query) ?? query);
+        cmd.Parameters.AddWithValue("@queryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
+        cmd.Parameters.AddWithValue("@queryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
+        cmd.Parameters.AddWithValue("@queryLeaf", SqlNameResolver.GetLeafName(query));
+        cmd.Parameters.AddWithValue("@queryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
+        cmd.Parameters.AddWithValue("@querySegmentCount", SqlNameResolver.GetSegmentCount(query));
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
@@ -1024,21 +1108,35 @@ public partial class DbReader
             logical_references AS (
                 SELECT sr.file_id,
                        rf.lang,
-                       sr.symbol_name,
+                       sr.symbol_name AS raw_symbol_name,
+                       " + BuildLogicalReferenceNameExpr("rf.lang", "sr.symbol_name", "sr.context", "sr.container_name", "sr.column_number") + @" AS symbol_name,
+                       " + BuildLogicalReferenceSegmentCountExpr("rf.lang", "sr.symbol_name", "sr.context", "sr.container_name", "sr.column_number") + @" AS symbol_segment_count,
+                       " + BuildLogicalReferenceLeafFallbackAllowedExpr("rf.lang", "sr.symbol_name", "sr.context", "sr.container_name", "sr.column_number") + @" AS allow_leaf_fallback,
                        sr.line,
                        sr.column_number,
                        " + GetLogicalReferenceKindSql("sr.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references sr
                 JOIN files rf ON rf.id = sr.file_id
                 WHERE sr.reference_kind IN " + CallGraphReferenceKindsSql + @"
-                GROUP BY rf.lang, sr.file_id, sr.symbol_name, sr.line, sr.column_number, logical_reference_kind
+                GROUP BY rf.lang, sr.file_id, raw_symbol_name, symbol_name, symbol_segment_count, allow_leaf_fallback, sr.line, sr.column_number, logical_reference_kind
             ),
-            global_reference_counts AS (
+            global_exact_reference_counts AS (
                 SELECT lang,
                        symbol_name,
+                       symbol_segment_count,
                        COUNT(*) AS ref_count
                 FROM logical_references
-                GROUP BY lang, symbol_name
+                GROUP BY lang, symbol_name, symbol_segment_count
+            ),
+            global_leaf_reference_counts AS (
+                SELECT lang,
+                       raw_symbol_name,
+                       symbol_name AS resolved_symbol_name,
+                       symbol_segment_count AS resolved_symbol_segment_count,
+                       COUNT(*) AS ref_count
+                FROM logical_references
+                WHERE allow_leaf_fallback = 1
+                GROUP BY lang, raw_symbol_name, resolved_symbol_name, resolved_symbol_segment_count
             ),
             file_target_cardinality AS (
                 SELECT lang,
@@ -1057,19 +1155,31 @@ public partial class DbReader
                        logical_target_key
                 FROM filtered_candidates
             ),
-            file_reference_counts AS (
+            file_reference_counts_exact AS (
                 SELECT lang,
                        file_id,
                        symbol_name,
+                       symbol_segment_count,
                        COUNT(*) AS ref_count
                 FROM logical_references
-                GROUP BY lang, file_id, symbol_name
+                GROUP BY lang, file_id, symbol_name, symbol_segment_count
+            ),
+            file_reference_counts_leaf AS (
+                SELECT lang,
+                       file_id,
+                       raw_symbol_name,
+                       symbol_name AS resolved_symbol_name,
+                       symbol_segment_count AS resolved_symbol_segment_count,
+                       COUNT(*) AS ref_count
+                FROM logical_references
+                WHERE allow_leaf_fallback = 1
+                GROUP BY lang, file_id, raw_symbol_name, resolved_symbol_name, resolved_symbol_segment_count
             ),
             conservative_reference_counts AS (
                 SELECT ctf.logical_target_key,
                        ctf.name,
                        ctf.kind,
-                       SUM(COALESCE(frc.ref_count, 0)) AS ref_count
+                       SUM(COALESCE(frc_exact.ref_count, 0) + COALESCE(frc_leaf.ref_count, 0)) AS ref_count
                 FROM conservative_target_files ctf
                 JOIN file_target_cardinality ftc
                   ON ftc.lang = ctf.lang
@@ -1077,27 +1187,76 @@ public partial class DbReader
                  AND ftc.name = ctf.name
                  AND ftc.kind = ctf.kind
                  AND ftc.target_count = 1
-                LEFT JOIN file_reference_counts frc
-                  ON frc.lang = ctf.lang
-                 AND frc.file_id = ctf.file_id
-                 AND frc.symbol_name = ctf.name
+                LEFT JOIN file_reference_counts_exact frc_exact
+                  ON frc_exact.lang = ctf.lang
+                 AND frc_exact.file_id = ctf.file_id
+                 AND (
+                         (ctf.lang != 'sql' AND frc_exact.symbol_name = ctf.name)
+                      OR (ctf.lang = 'sql' AND (
+                             (frc_exact.symbol_segment_count = sql_segment_count(ctf.name) AND frc_exact.symbol_name = sql_normalize_name(ctf.name) COLLATE NOCASE)
+                      ))
+                  )
+                LEFT JOIN file_reference_counts_leaf frc_leaf
+                  ON frc_leaf.lang = ctf.lang
+                 AND frc_leaf.file_id = ctf.file_id
+                 AND ctf.lang = 'sql'
+                 AND sql_segment_count(ctf.name) > 1
+                 AND frc_leaf.raw_symbol_name = sql_leaf_name(ctf.name) COLLATE NOCASE
+                 AND NOT EXISTS (
+                        SELECT 1
+                        FROM filtered_candidates fc_resolved
+                        WHERE fc_resolved.lang = ctf.lang
+                          AND sql_segment_count(fc_resolved.name) = frc_leaf.resolved_symbol_segment_count
+                          AND sql_normalize_name(fc_resolved.name) = frc_leaf.resolved_symbol_name COLLATE NOCASE
+                    )
+                 AND NOT EXISTS (
+                        SELECT 1
+                        FROM filtered_candidates fc_exact
+                        WHERE fc_exact.lang = ctf.lang
+                          AND sql_segment_count(fc_exact.name) = 1
+                          AND sql_normalize_name(fc_exact.name) = frc_leaf.raw_symbol_name COLLATE NOCASE
+                    )
                 GROUP BY ctf.logical_target_key, ctf.name, ctf.kind
             ),
             reference_counts AS (
                 SELECT gr.symbol_id,
                        CASE
-                           WHEN nc.defs = 1
-                             OR (nc.count_safe_defs = nc.defs AND nc.count_safe_groups = 1)
-                               THEN COALESCE(grc.ref_count, 0)
-                           ELSE COALESCE(crc.ref_count, 0)
-                       END AS ref_count
+                            WHEN nc.defs = 1
+                              OR (nc.count_safe_defs = nc.defs AND nc.count_safe_groups = 1)
+                                THEN COALESCE(gerc.ref_count, 0) + COALESCE(glrc.ref_count, 0)
+                            ELSE COALESCE(crc.ref_count, 0)
+                        END AS ref_count
                 FROM grouped_rows gr
                 JOIN name_cardinality nc
                   ON nc.lang = gr.lang
-                 AND nc.name = gr.name
-                LEFT JOIN global_reference_counts grc
-                  ON grc.lang = gr.lang
-                 AND grc.symbol_name = gr.name
+                  AND nc.name = gr.name
+                LEFT JOIN global_exact_reference_counts gerc
+                  ON gerc.lang = gr.lang
+                 AND (
+                         (gr.lang != 'sql' AND gerc.symbol_name = gr.name)
+                      OR (gr.lang = 'sql' AND (
+                             (gerc.symbol_segment_count = sql_segment_count(gr.name) AND gerc.symbol_name = sql_normalize_name(gr.name) COLLATE NOCASE)
+                      ))
+                  )
+                LEFT JOIN global_leaf_reference_counts glrc
+                  ON glrc.lang = gr.lang
+                 AND gr.lang = 'sql'
+                 AND sql_segment_count(gr.name) > 1
+                 AND glrc.raw_symbol_name = sql_leaf_name(gr.name) COLLATE NOCASE
+                 AND NOT EXISTS (
+                        SELECT 1
+                        FROM filtered_candidates fc_resolved
+                        WHERE fc_resolved.lang = gr.lang
+                          AND sql_segment_count(fc_resolved.name) = glrc.resolved_symbol_segment_count
+                          AND sql_normalize_name(fc_resolved.name) = glrc.resolved_symbol_name COLLATE NOCASE
+                    )
+                 AND NOT EXISTS (
+                        SELECT 1
+                        FROM filtered_candidates fc_exact
+                        WHERE fc_exact.lang = gr.lang
+                          AND sql_segment_count(fc_exact.name) = 1
+                          AND sql_normalize_name(fc_exact.name) = glrc.raw_symbol_name COLLATE NOCASE
+                    )
                 LEFT JOIN conservative_reference_counts crc
                   ON crc.logical_target_key = gr.logical_target_key
                  AND crc.name = gr.name
@@ -1238,21 +1397,23 @@ public partial class DbReader
             logical_references AS (
                 SELECT sr.file_id,
                        rf.lang,
-                       sr.symbol_name,
+                       " + BuildLogicalReferenceNameExpr("rf.lang", "sr.symbol_name", "sr.context", "sr.container_name", "sr.column_number") + @" AS symbol_name,
+                       " + BuildLogicalReferenceSegmentCountExpr("rf.lang", "sr.symbol_name", "sr.context", "sr.container_name", "sr.column_number") + @" AS symbol_segment_count,
                        sr.line,
                        sr.column_number,
                        " + GetLogicalReferenceKindSql("sr.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references sr
                 JOIN files rf ON rf.id = sr.file_id
                 WHERE sr.reference_kind IN " + CallGraphReferenceKindsSql + @"
-                GROUP BY rf.lang, sr.file_id, sr.symbol_name, sr.line, sr.column_number, logical_reference_kind
+                GROUP BY rf.lang, sr.file_id, symbol_name, symbol_segment_count, sr.line, sr.column_number, logical_reference_kind
             ),
             global_reference_counts AS (
                 SELECT lang,
                        symbol_name,
+                       symbol_segment_count,
                        COUNT(*) AS ref_count
                 FROM logical_references
-                GROUP BY lang, symbol_name
+                GROUP BY lang, symbol_name, symbol_segment_count
             ),
             file_target_cardinality AS (
                 SELECT lang,
@@ -1275,9 +1436,10 @@ public partial class DbReader
                 SELECT lang,
                        file_id,
                        symbol_name,
+                       symbol_segment_count,
                        COUNT(*) AS ref_count
                 FROM logical_references
-                GROUP BY lang, file_id, symbol_name
+                GROUP BY lang, file_id, symbol_name, symbol_segment_count
             ),
             conservative_reference_counts AS (
                 SELECT ctf.logical_target_key,
@@ -1294,7 +1456,13 @@ public partial class DbReader
                 LEFT JOIN file_reference_counts frc
                   ON frc.lang = ctf.lang
                  AND frc.file_id = ctf.file_id
-                 AND frc.symbol_name = ctf.name
+                 AND (
+                        (ctf.lang != 'sql' AND frc.symbol_name = ctf.name)
+                     OR (ctf.lang = 'sql' AND (
+                            (frc.symbol_segment_count = sql_segment_count(ctf.name) AND frc.symbol_name = sql_normalize_name(ctf.name) COLLATE NOCASE)
+                         OR (frc.symbol_segment_count = 1 AND frc.symbol_name = sql_leaf_name(ctf.name) COLLATE NOCASE)
+                     ))
+                 )
                 GROUP BY ctf.logical_target_key, ctf.name, ctf.kind
             ),
             site_reference_counts AS (
@@ -1311,7 +1479,13 @@ public partial class DbReader
                  AND nc.name = fc.name
                 LEFT JOIN global_reference_counts grc
                   ON grc.lang = fc.lang
-                 AND grc.symbol_name = fc.name
+                 AND (
+                        (fc.lang != 'sql' AND grc.symbol_name = fc.name)
+                     OR (fc.lang = 'sql' AND (
+                            (grc.symbol_segment_count = sql_segment_count(fc.name) AND grc.symbol_name = sql_normalize_name(fc.name) COLLATE NOCASE)
+                         OR (grc.symbol_segment_count = 1 AND grc.symbol_name = sql_leaf_name(fc.name) COLLATE NOCASE)
+                     ))
+                 )
                 LEFT JOIN conservative_reference_counts crc
                   ON crc.logical_target_key = fc.logical_target_key
                  AND crc.name = fc.name
@@ -1538,7 +1712,25 @@ public partial class DbReader
                 JOIN files f ON s.file_id = f.id
                 WHERE s.kind NOT IN ('import', 'namespace')
                   AND NOT EXISTS (
-                      SELECT 1 FROM symbol_references sr WHERE sr.symbol_name = s.name
+                      SELECT 1
+                      FROM symbol_references sr
+                      JOIN files rf ON rf.id = sr.file_id
+                      WHERE sr.symbol_name = s.name
+                         OR (f.lang = 'sql' AND rf.lang = 'sql' AND (
+                                (sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_segment_count(s.name)
+                                 AND sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_normalize_name(s.name) COLLATE NOCASE)
+                         OR (sql_segment_count(sr.symbol_name) = 1
+                             AND sql_allow_leaf_fallback_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = 1
+                             AND sr.symbol_name = sql_leaf_name(s.name) COLLATE NOCASE
+                             AND NOT EXISTS (
+                                    SELECT 1
+                                    FROM symbols s_exact
+                                    JOIN files f_exact ON f_exact.id = s_exact.file_id
+                                    WHERE f_exact.lang = 'sql'
+                                      AND sql_segment_count(s_exact.name) = sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number)
+                                      AND sql_normalize_name(s_exact.name) = sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) COLLATE NOCASE
+                                ))
+                         ))
                   )";
 
         if (lang != null)
@@ -1662,7 +1854,25 @@ public partial class DbReader
             JOIN files f ON s.file_id = f.id
             WHERE s.kind NOT IN ('import', 'namespace')
               AND NOT EXISTS (
-                  SELECT 1 FROM symbol_references sr WHERE sr.symbol_name = s.name
+                  SELECT 1
+                  FROM symbol_references sr
+                  JOIN files rf ON rf.id = sr.file_id
+                  WHERE sr.symbol_name = s.name
+                     OR (f.lang = 'sql' AND rf.lang = 'sql' AND (
+                            (sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_segment_count(s.name)
+                             AND sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_normalize_name(s.name) COLLATE NOCASE)
+                         OR (sql_segment_count(sr.symbol_name) = 1
+                             AND sql_allow_leaf_fallback_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = 1
+                             AND sr.symbol_name = sql_leaf_name(s.name) COLLATE NOCASE
+                             AND NOT EXISTS (
+                                    SELECT 1
+                                    FROM symbols s_exact
+                                    JOIN files f_exact ON f_exact.id = s_exact.file_id
+                                    WHERE f_exact.lang = 'sql'
+                                      AND sql_segment_count(s_exact.name) = sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number)
+                                      AND sql_normalize_name(s_exact.name) = sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) COLLATE NOCASE
+                                ))
+                     ))
               )";
 
         if (lang != null)

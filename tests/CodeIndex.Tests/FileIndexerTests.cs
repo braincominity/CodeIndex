@@ -1602,6 +1602,113 @@ public class FileIndexerTests
     }
 
     [Fact]
+    public void BuildRecord_LeadingBomStrippedFromContent()
+    {
+        // Files whose on-disk bytes begin with UTF-8 BOM (EF BB BF) must have the BOM
+        // stripped from the decoded content so downstream consumers never see a phantom
+        // U+FEFF glyph on line 1. The raw-byte checksum must still reflect the on-disk
+        // file (BOM included) so incremental change detection keeps working. Closes #183.
+        // オンディスク先頭に UTF-8 BOM (EF BB BF) を持つファイルは、デコード後の content
+        // から BOM を剥がし、下流に幽霊 U+FEFF を渡さないようにする。checksum は生バイト
+        // ベース（BOM を含む）のまま維持し、インクリメンタル更新判定が壊れないようにする。Closes #183.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var filePath = Path.Combine(tempDir, "bom.cs");
+            var rawBytes = new byte[] { 0xEF, 0xBB, 0xBF }
+                .Concat(System.Text.Encoding.UTF8.GetBytes("using System;\nnamespace BomTest;\n"))
+                .ToArray();
+            File.WriteAllBytes(filePath, rawBytes);
+
+            var indexer = new FileIndexer(tempDir);
+            var (record, content, _) = indexer.BuildRecord(filePath);
+
+            Assert.StartsWith("using System;", content);
+            // Culture-aware IndexOf treats U+FEFF as ignorable and spuriously matches at pos 0,
+            // so assert on the raw code-point instead of the string overload.
+            // カルチャ依存の IndexOf は U+FEFF を無視扱いで pos 0 に誤マッチするため、
+            // 文字列オーバーロードではなくコードポイントで確認する。
+            Assert.DoesNotContain('\uFEFF', content);
+            Assert.Equal(2, record.Lines);
+            // Pin the backward-compatibility requirement: checksum must be SHA256 over the
+            // raw on-disk bytes (BOM included) so that adding or removing a BOM is detected
+            // as a file change by incremental re-indexing. Closes #183.
+            // 後方互換性の要件を固定: checksum は生のオンディスクバイト（BOM 含む）の
+            // SHA256 で、BOM の追加 / 削除をインクリメンタル再索引で検知できること。Closes #183.
+            var expectedChecksum = Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(rawBytes)).ToLowerInvariant();
+            Assert.Equal(expectedChecksum, record.Checksum);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void BuildRecord_BomOnlyFile_ReportsZeroLines()
+    {
+        // A file whose on-disk bytes are exactly the UTF-8 BOM (EF BB BF) and
+        // nothing else must report `Lines == 0` so `files --json` stays consistent
+        // with ChunkSplitter.Split's 0-chunk contract for the same content. Before
+        // the fix the line count came from `"".Split('\n') == [""]`, yielding
+        // a phantom `Lines = 1`. Closes #183.
+        // オンディスクバイト列が UTF-8 BOM (EF BB BF) のみのファイルは Lines == 0 と
+        // すべき。そうしないと `files --json` が同じ内容に対する ChunkSplitter.Split の
+        // 0 チャンク契約と矛盾する。修正前は `"".Split('\n') == [""]` 由来で
+        // 幽霊の Lines = 1 を返していた。Closes #183.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var filePath = Path.Combine(tempDir, "bomonly.cs");
+            File.WriteAllBytes(filePath, new byte[] { 0xEF, 0xBB, 0xBF });
+
+            var indexer = new FileIndexer(tempDir);
+            var (record, content, _) = indexer.BuildRecord(filePath);
+
+            Assert.Equal(string.Empty, content);
+            Assert.Equal(0, record.Lines);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void BuildRecord_MidFileBom_StrippedFromContent()
+    {
+        // Mid-file UTF-8 BOM (e.g. from accidental file concatenation or tool insertion)
+        // must also be stripped from decoded content so `search` / `excerpt` do not emit
+        // a phantom glyph. Closes #183.
+        // mid-file UTF-8 BOM (ファイル連結やツール挿入) もデコード後の content から
+        // 剥がし、search / excerpt に幽霊グリフを漏らさないようにする。Closes #183.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"codeindex_test_{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var filePath = Path.Combine(tempDir, "midbom.cs");
+            var rawBytes = System.Text.Encoding.UTF8.GetBytes("using System;\n")
+                .Concat(new byte[] { 0xEF, 0xBB, 0xBF })
+                .Concat(System.Text.Encoding.UTF8.GetBytes("namespace MidBom;\n"))
+                .ToArray();
+            File.WriteAllBytes(filePath, rawBytes);
+
+            var indexer = new FileIndexer(tempDir);
+            var (_, content, _) = indexer.BuildRecord(filePath);
+
+            Assert.DoesNotContain('\uFEFF', content);
+            Assert.Contains("namespace MidBom;", content);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void BuildRecord_ThrowsForOversizedFile()
     {
         // Files exceeding 10 MB should throw InvalidOperationException

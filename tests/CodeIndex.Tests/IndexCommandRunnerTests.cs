@@ -3118,6 +3118,88 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_ReindexesUnchangedSqlFilesWhenSqlGraphContractChanged()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "sql", "target.sql"),
+                """
+                CREATE FUNCTION dbo.fn_Target()
+                RETURNS INT
+                AS
+                BEGIN
+                    RETURN 1;
+                END;
+                GO
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "sql", "caller.sql"),
+                """
+                CREATE PROCEDURE dbo.usp_Caller
+                AS
+                BEGIN
+                    SELECT dbo.fn_Target();
+                END;
+                GO
+                """);
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbol_references
+                    SET symbol_name = 'fn_Target',
+                        symbol_name_folded = 'fn_target',
+                        column_number = 1
+                    WHERE symbol_name = 'dbo.fn_Target';
+                    DELETE FROM codeindex_meta WHERE key = 'sql_graph_contract_version';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+            Assert.True(json.GetProperty("sql_graph_contract_ready").GetBoolean());
+
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+
+            using var referenceCmd = verify.CreateCommand();
+            referenceCmd.CommandText = """
+                SELECT symbol_name, column_number
+                FROM symbol_references
+                WHERE container_name = 'dbo.usp_Caller'
+                LIMIT 1
+                """;
+            using var reader = referenceCmd.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal("fn_Target", reader.GetString(0));
+            Assert.NotEqual(1L, reader.GetInt64(1));
+
+            using var contractCmd = verify.CreateCommand();
+            contractCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'sql_graph_contract_version'";
+            Assert.Equal(
+                DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                contractCmd.ExecuteScalar() as string);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_DegradedWarningSummarizesRemainingFoldGap()
     {
         var projectRoot = CreateTempProject();

@@ -1458,22 +1458,78 @@ public class FileIndexer
         }
         // Normalize line endings to LF / 改行をLFに正規化
         content = content.Replace("\r\n", "\n").Replace("\r", "\n");
-        // Accurate line count: ignore trailing newline / 正確な行数: 末尾改行を無視
-        var lines = content.EndsWith('\n')
-            ? content[..^1].Split('\n')
-            : content.Split('\n');
+        // Strip every line-leading UTF-8 BOM (U+FEFF): the leading BOM at offset 0
+        // and any BOM that immediately follows a `\n` (e.g. from accidental file
+        // concatenation or tool insertion). Leading BOM alone would make `^\s*`-
+        // anchored regexes silently miss line-1 declarations in BOM-prefixed
+        // Windows-authored sources; a BOM at the start of a mid-file line would
+        // additionally leak a phantom glyph through `search` / `excerpt` chunk
+        // output. Non-line-leading U+FEFF (Unicode 3.2+ ZWNBSP inside a string
+        // literal, identifier, or comment — e.g. `const s = "A\uFEFFB"`) is kept
+        // verbatim: stripping it would corrupt content fidelity for intentional
+        // mid-line ZWNBSP use. The raw-byte checksum is computed above and remains
+        // BOM-inclusive so incremental re-index still detects BOM add / removal.
+        // Closes #183.
+        // 行頭の UTF-8 BOM (U+FEFF) だけを剥がす — オフセット 0 の先頭 BOM と、
+        // `\n` の直後にある BOM (ファイル連結やツール挿入で発生) が対象。先頭 BOM
+        // だけでも行指向の `^\s*` 固定正規表現で BOM 付き Windows 作成ソースの
+        // 1 行目宣言を黙って取りこぼし、mid-file 行頭 BOM は `search` / `excerpt`
+        // のチャンク出力にそのまま幽霊グリフを漏らす。行頭以外の U+FEFF
+        // (Unicode 3.2+ の ZWNBSP を文字列リテラル・識別子・コメントで意図的に
+        // 使用しているケース、例: `const s = "A\uFEFFB"`) はそのまま保持する:
+        // これを剥がすと mid-line ZWNBSP の意図的利用に対して内容が壊れる。
+        // checksum は BOM を含む生バイトから上で算出済みで、インクリメンタル更新
+        // 判定は BOM 追加 / 削除を引き続き検知する。Closes #183.
+        content = StripLineLeadingBom(content);
+        // Accurate line count: ignore trailing newline, and treat content that became
+        // empty after CRLF / BOM stripping as zero lines (not `"".Split('\n') == [""]`'s
+        // off-by-one of 1) so `files.lines` stays consistent with the 0-chunk contract
+        // ChunkSplitter.Split applies to the same content. Closes #183.
+        // 正確な行数: 末尾改行を無視し、CRLF / BOM 剥がしの結果として空になった
+        // コンテンツは 0 行として扱う (`"".Split('\n') == [""]` の 1 件ずれを避ける)。
+        // これにより `files.lines` が ChunkSplitter.Split が同じ内容に対して適用する
+        // 0 チャンク契約と整合する。Closes #183.
+        var lineCount = content.Length == 0
+            ? 0
+            : (content.EndsWith('\n')
+                ? content[..^1].Split('\n').Length
+                : content.Split('\n').Length);
 
         var record = new FileRecord
         {
             Path = NormalizePathSeparators(relativePath),
             Lang = TryDetectLanguage(absolutePath).Language,
             Size = info.Length,
-            Lines = lines.Length,
+            Lines = lineCount,
             Checksum = checksum,
             Modified = info.LastWriteTimeUtc,
         };
 
         return (record, content, bytes, warning);
+    }
+
+    /// <summary>
+    /// Strip every line-leading UTF-8 BOM (U+FEFF). Assumes CRLF has already been
+    /// normalized to LF so `\n` is the sole line separator. Preserves non-line-
+    /// leading U+FEFF verbatim (intentional ZWNBSP inside string literals etc.).
+    /// 行頭の UTF-8 BOM (U+FEFF) のみ剥がす。呼び出し前に CRLF が LF へ
+    /// 正規化済みであることを前提とする。行頭以外の U+FEFF (文字列リテラル等で
+    /// 意図的に使われる ZWNBSP) はそのまま保持する。
+    /// </summary>
+    internal static string StripLineLeadingBom(string content)
+    {
+        if (string.IsNullOrEmpty(content) || !content.Contains('\uFEFF'))
+            return content;
+        var sb = new StringBuilder(content.Length);
+        bool atLineStart = true;
+        foreach (char c in content)
+        {
+            if (c == '\uFEFF' && atLineStart)
+                continue;
+            sb.Append(c);
+            atLineStart = c == '\n';
+        }
+        return sb.ToString();
     }
 
     /// <summary>

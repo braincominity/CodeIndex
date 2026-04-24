@@ -544,6 +544,7 @@ public partial class McpServer
         {
             var results = reader.GetCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
             var exactSignal = reader.GetCallersExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests);
+            var sqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
                 () => reader.CountCallers(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false) > 0,
@@ -566,6 +567,7 @@ public partial class McpServer
             };
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
+            AddSqlGraphContractSignal(payload, sqlGraphSignal);
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);
@@ -600,6 +602,7 @@ public partial class McpServer
         {
             var results = reader.GetCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
             var exactSignal = reader.GetCalleesExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests);
+            var sqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
                 () => reader.CountCallees(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false) > 0,
@@ -622,6 +625,7 @@ public partial class McpServer
             };
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
+            AddSqlGraphContractSignal(payload, sqlGraphSignal);
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);
@@ -762,6 +766,21 @@ public partial class McpServer
         AddExactSignalAliases(payload);
     }
 
+    private static void AddSqlGraphContractSignal(JsonObject payload, SqlGraphContractSignal signal)
+    {
+        payload["sql_graph_contract_ready"] = signal.Ready;
+        payload["sqlGraphContractReady"] = signal.Ready;
+        if (!signal.Ready)
+        {
+            payload["degraded"] = true;
+            if (signal.DegradedReason != null)
+            {
+                payload["sql_graph_contract_degraded_reason"] = signal.DegradedReason;
+                payload["sqlGraphContractDegradedReason"] = signal.DegradedReason;
+            }
+        }
+    }
+
     private static void AddExactSignalAliases(JsonObject payload)
     {
         if (payload["exact_index_available"] is JsonNode snakeExact && payload["exactIndexAvailable"] is null)
@@ -866,6 +885,9 @@ public partial class McpServer
             structured["hotspotFamilyReady"] = status.HotspotFamilyReady;
             if (status.HotspotFamilyDegradedReason != null)
                 structured["hotspotFamilyDegradedReason"] = status.HotspotFamilyDegradedReason;
+            structured["sqlGraphContractReady"] = status.SqlGraphContractReady;
+            if (status.SqlGraphContractDegradedReason != null)
+                structured["sqlGraphContractDegradedReason"] = status.SqlGraphContractDegradedReason;
             return CreateToolResult(id, "Database stats returned.", structured);
         });
     }
@@ -1147,11 +1169,13 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.GetFileDependencies(limit, lang, pathPatterns, excludePaths, excludeTests, reverse);
+            var sqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
             var payload = new JsonObject
             {
                 ["count"] = results.Count,
                 ["edges"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            AddSqlGraphContractSignal(payload, sqlGraphSignal);
             var summary = results.Count > 0
                 ? $"Found {results.Count} dependency edge(s)."
                 : "No file dependencies found.";
@@ -1272,6 +1296,7 @@ public partial class McpServer
         {
             var results = reader.GetSymbolHotspots(limit, kind, lang, pathPatterns, excludePaths, excludeTests);
             var hotspotSignal = reader.GetHotspotFamilySignal(lang);
+            var sqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
             var items = results.Select(r => new
             {
                 name = r.Symbol.Name,
@@ -1288,6 +1313,7 @@ public partial class McpServer
                 ["hotspots"] = JsonSerializer.SerializeToNode(items, _jsonOptions)
             };
             AddHotspotFamilySignal(payload, hotspotSignal);
+            AddSqlGraphContractSignal(payload, sqlGraphSignal);
             var summary = results.Count > 0
                 ? $"Found {results.Count} symbol hotspot(s)."
                 : "No symbol hotspots found.";
@@ -1319,6 +1345,7 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.GetUnusedSymbols(limit, kind, lang, pathPatterns, excludePaths, excludeTests);
+            var sqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
             var bucketCounts = results
                 .GroupBy(result => result.UnusedBucket, StringComparer.Ordinal)
                 .OrderBy(group => Array.IndexOf(new[] { "likely_unused_private", "maybe_unused_nonpublic", "public_or_exported_no_refs", "reflection_or_config_suspect" }, group.Key))
@@ -1331,6 +1358,7 @@ public partial class McpServer
                 ["returned_bucket_counts"] = JsonSerializer.SerializeToNode(bucketCounts, _jsonOptions),
                 ["symbols"] = JsonSerializer.SerializeToNode(results, _jsonOptions)
             };
+            AddSqlGraphContractSignal(payload, sqlGraphSignal);
             var summary = results.Count > 0
                 ? $"Found {results.Count} potentially unused symbol(s) across {bucketCounts.Count} returned bucket(s). Private hits are ranked ahead of exported/config suspects, but not labeled high-confidence from indexed refs alone. Note: name-based matching — same-named symbols in different contexts may mask true unused symbols."
                 : "No unused symbols found.";
@@ -1425,6 +1453,7 @@ public partial class McpServer
         var priorFoldVersion = db.GetMetaString("fold_key_version");
         var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
         var priorCSharpSymbolNameContractVersion = db.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey);
+        var priorSqlGraphContractVersion = db.GetMetaString(DbContext.SqlGraphContractVersionMetaKey);
         var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
         var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
         var priorIndexedProjectRoot = db.GetMetaString(DbContext.IndexedProjectRootMetaKey);
@@ -1449,6 +1478,8 @@ public partial class McpServer
         var currentHotspotFamilyMarkerFingerprints = GetHotspotFamilyMarkerFingerprints(indexer);
         var currentCSharpSymbolNameContractVersion = DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var csharpSymbolNameContractMatchesCurrent = priorCSharpSymbolNameContractVersion == currentCSharpSymbolNameContractVersion;
+        var currentSqlGraphContractVersion = DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var sqlGraphContractMatchesCurrent = priorSqlGraphContractVersion == currentSqlGraphContractVersion;
         var hotspotFamilyTrustMatchesCurrent = GetHotspotFamilyTrustMatchesCurrent(
             priorHotspotFamilyVersions,
             priorHotspotFamilyMarkerFingerprints,
@@ -1507,6 +1538,7 @@ public partial class McpServer
                     record.Modified,
                     record.Checksum,
                     allowReuse: (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
+                        && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)
                         && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
                 if (existingId != null)
                 {
@@ -1547,14 +1579,17 @@ public partial class McpServer
         // throwing, so a partial failure leaves trust degraded and `validate` still surfaces it.
         // MCP index は CLI と同等に file_issues を永続化するため、成功時は graph / issues の両方を stamp する。
         var csharpSymbolNameReadyAfter = !writer.HasAnyFilesWithLanguage("csharp");
+        var sqlGraphContractReadyAfter = !writer.HasAnyFilesWithLanguage("sql");
         var foldReadyAfter = false;
         string? foldReadyReason = null;
         if (errors == 0)
         {
             writer.MarkGraphReady();
             writer.MarkIssuesReady();
+            writer.MarkSqlGraphContractReady();
             writer.MarkCSharpSymbolNameContractReady();
             csharpSymbolNameReadyAfter = true;
+            sqlGraphContractReadyAfter = true;
             RestampHotspotFamilyTrust(
                 writer,
                 reusedHotspotFamilyLanguages,
@@ -1612,12 +1647,19 @@ public partial class McpServer
                 ["purged"] = purged,
                 ["errors"] = errors
             },
+            ["sql_graph_contract_ready"] = sqlGraphContractReadyAfter,
+            ["sqlGraphContractReady"] = sqlGraphContractReadyAfter,
             ["csharp_symbol_name_ready"] = csharpSymbolNameReadyAfter,
             // #86 codex review: AI clients use this to tell whether --exact will use the
             // Unicode fold path or silently fall back to ASCII NOCASE. If false after a clean
             ["fold_ready"] = foldReadyAfter,
             ["fold_ready_reason"] = foldReadyReason
         };
+        if (!sqlGraphContractReadyAfter)
+        {
+            var signalReader = new DbReader(writer.Connection);
+            AddSqlGraphContractSignal(structured, signalReader.GetSqlGraphContractSignal());
+        }
         return CreateToolResult(id,
             errors == 0 && !foldReadyAfter
                 ? foldReadyReason switch
