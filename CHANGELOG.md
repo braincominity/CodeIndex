@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### Fixed
+- **SQLite connection setup now retries transient busy/locked errors during concurrent reads** — `DbContext` now retries a few times when opening a connection or registering SQLite functions fails with a transient `SQLITE_BUSY` / `SQLITE_LOCKED` condition, which makes the concurrent-read test path more stable on Linux CI without changing the observable database contract. Affected: `src/CodeIndex/Database/DbContext.cs`.
 - **Long single-line query payloads can now be left untruncated with `--max-line-width 0` (#830)** — `search`, `references`, `find`, `excerpt`, and `inspect` now accept `--max-line-width 0` as an explicit full-line mode, so long Markdown or audit lines can be reviewed without `...(+N)...` elision when the caller needs the entire physical line. The MCP counterparts now expose the same zero-as-full-line contract through `maxLineWidth: 0`, `LineWidthFormatter` preserves the full line in that mode, and the CLI help/docs now describe the no-truncation escape hatch. Affected: `src/CodeIndex/Database/LineWidthFormatter.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`, `tests/CodeIndex.Tests/SearchSnippetFormatterTests.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CHANGELOG.md`. Closes #830.
 
 ### [1.15.1] - 2026-04-24
