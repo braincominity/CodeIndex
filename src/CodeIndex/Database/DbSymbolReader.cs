@@ -1617,12 +1617,20 @@ public partial class DbReader
     /// 参照テーブルに一致する参照がないシンボルを検索する（潜在的なデッドコード）。
     /// グラフ対応言語でのみ意味がある — 未対応言語はデフォルトで除外。
     /// </summary>
-    private string BuildAmbiguousCSharpEnumMemberExclusionSql(string symbolAlias, string fileAlias)
+    private string BuildAmbiguousCSharpEnumMemberExclusionSql(
+        string symbolAlias,
+        string fileAlias,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests)
     {
         var symbolContainerKindSql = GetSymbolColumnSql("container_kind", "''", symbolAlias);
         var symbolContainerNameSql = GetSymbolColumnSql("container_name", "''", symbolAlias);
+        var symbolContainerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name", symbolContainerNameSql, symbolAlias);
         var peerContainerKindSql = GetSymbolColumnSql("container_kind", "''", "s_peer");
         var peerContainerNameSql = GetSymbolColumnSql("container_name", "''", "s_peer");
+        var peerContainerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name", peerContainerNameSql, "s_peer");
+        var peerPathFiltersSql = BuildPathFiltersSql("f_peer", pathPatterns, excludePathPatterns, excludeTests);
 
         return $@"
                 NOT (
@@ -1634,10 +1642,11 @@ public partial class DbReader
                         FROM symbols s_peer
                         JOIN files f_peer ON f_peer.id = s_peer.file_id
                         WHERE f_peer.lang = 'csharp'
+                          {peerPathFiltersSql}
                           AND s_peer.kind = 'enum'
                           AND {peerContainerKindSql} = 'enum'
                           AND s_peer.name = {symbolAlias}.name
-                          AND {peerContainerNameSql} <> {symbolContainerNameSql}
+                          AND {peerContainerQualifiedNameSql} <> {symbolContainerQualifiedNameSql}
                     )
                 )";
     }
@@ -1766,7 +1775,7 @@ public partial class DbReader
                                 ))
                          ))
                   )";
-        sql += $"\n              AND {BuildAmbiguousCSharpEnumMemberExclusionSql("s", "f")}";
+        sql += $"\n              AND {BuildAmbiguousCSharpEnumMemberExclusionSql("s", "f", pathPatterns, excludePathPatterns, excludeTests)}";
 
         if (lang != null)
             sql += " AND f.lang = @lang";
@@ -1909,7 +1918,7 @@ public partial class DbReader
                                 ))
                      ))
               )";
-        sql += $"\n              AND {BuildAmbiguousCSharpEnumMemberExclusionSql("s", "f")}";
+        sql += $"\n              AND {BuildAmbiguousCSharpEnumMemberExclusionSql("s", "f", pathPatterns, excludePathPatterns, excludeTests)}";
 
         if (lang != null)
             sql += " AND f.lang = @lang";

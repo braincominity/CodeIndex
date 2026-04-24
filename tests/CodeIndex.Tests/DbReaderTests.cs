@@ -9426,6 +9426,9 @@ public class DbReaderTests : IDisposable
                 EndLine = 4,
                 Signature = "public enum Color",
                 Visibility = "public",
+                ContainerKind = "namespace",
+                ContainerName = "Demo",
+                ContainerQualifiedName = "Demo.Color",
             },
             new SymbolRecord
             {
@@ -9438,6 +9441,7 @@ public class DbReaderTests : IDisposable
                 Signature = "None,",
                 ContainerKind = "enum",
                 ContainerName = "Color",
+                ContainerQualifiedName = "Demo.Color",
             },
             new SymbolRecord
             {
@@ -9450,6 +9454,7 @@ public class DbReaderTests : IDisposable
                 Signature = "Red",
                 ContainerKind = "enum",
                 ContainerName = "Color",
+                ContainerQualifiedName = "Demo.Color",
             },
             new SymbolRecord
             {
@@ -9461,6 +9466,9 @@ public class DbReaderTests : IDisposable
                 EndLine = 9,
                 Signature = "public enum Status",
                 Visibility = "public",
+                ContainerKind = "namespace",
+                ContainerName = "Demo",
+                ContainerQualifiedName = "Demo.Status",
             },
             new SymbolRecord
             {
@@ -9473,6 +9481,7 @@ public class DbReaderTests : IDisposable
                 Signature = "None,",
                 ContainerKind = "enum",
                 ContainerName = "Status",
+                ContainerQualifiedName = "Demo.Status",
             },
             new SymbolRecord
             {
@@ -9485,30 +9494,9 @@ public class DbReaderTests : IDisposable
                 Signature = "Started",
                 ContainerKind = "enum",
                 ContainerName = "Status",
+                ContainerQualifiedName = "Demo.Status",
             },
         ]);
-        _writer.InsertReferences(
-        [
-            new ReferenceRecord
-            {
-                FileId = fileId,
-                SymbolName = "Color",
-                ReferenceKind = "type_reference",
-                Line = 12,
-                Column = 12,
-                Context = "public Color Shade => Color.None;",
-            },
-            new ReferenceRecord
-            {
-                FileId = fileId,
-                SymbolName = "None",
-                ReferenceKind = "call",
-                Line = 12,
-                Column = 30,
-                Context = "public Color Shade => Color.None;",
-            },
-        ]);
-
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: "enum", lang: "csharp",
             pathPatterns: ["unused_enum_collision_fixture.cs"], excludePathPatterns: null, excludeTests: false);
         var count = _reader.CountUnusedSymbols(kind: "enum", lang: "csharp",
@@ -9518,6 +9506,238 @@ public class DbReaderTests : IDisposable
         Assert.Contains(unused, symbol => symbol.Name == "Red");
         Assert.Contains(unused, symbol => symbol.Name == "Status");
         Assert.Contains(unused, symbol => symbol.Name == "Started");
+        Assert.Equal(4, count.Count);
+        Assert.Equal(1, count.FileCount);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_CSharpEnumMemberCollisionsRespectPathScope()
+    {
+        var srcFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/active.cs",
+            Lang = "csharp",
+            Size = 140,
+            Lines = 8,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var testFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "tests/peer.cs",
+            Lang = "csharp",
+            Size = 140,
+            Lines = 8,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = srcFileId,
+                Kind = "enum",
+                Name = "Color",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 4,
+                Signature = "public enum Color",
+                Visibility = "public",
+                ContainerKind = "namespace",
+                ContainerName = "Demo",
+                ContainerQualifiedName = "Demo.Color",
+            },
+            new SymbolRecord
+            {
+                FileId = srcFileId,
+                Kind = "enum",
+                Name = "None",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "None,",
+                ContainerKind = "enum",
+                ContainerName = "Color",
+                ContainerQualifiedName = "Demo.Color",
+            },
+            new SymbolRecord
+            {
+                FileId = srcFileId,
+                Kind = "enum",
+                Name = "Red",
+                Line = 4,
+                StartLine = 4,
+                EndLine = 4,
+                Signature = "Red",
+                ContainerKind = "enum",
+                ContainerName = "Color",
+                ContainerQualifiedName = "Demo.Color",
+            },
+            new SymbolRecord
+            {
+                FileId = testFileId,
+                Kind = "enum",
+                Name = "Status",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 4,
+                Signature = "public enum Status",
+                Visibility = "public",
+                ContainerKind = "namespace",
+                ContainerName = "Demo",
+                ContainerQualifiedName = "Demo.Status",
+            },
+            new SymbolRecord
+            {
+                FileId = testFileId,
+                Kind = "enum",
+                Name = "None",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "None,",
+                ContainerKind = "enum",
+                ContainerName = "Status",
+                ContainerQualifiedName = "Demo.Status",
+            },
+            new SymbolRecord
+            {
+                FileId = testFileId,
+                Kind = "enum",
+                Name = "Stopped",
+                Line = 4,
+                StartLine = 4,
+                EndLine = 4,
+                Signature = "Stopped",
+                ContainerKind = "enum",
+                ContainerName = "Status",
+                ContainerQualifiedName = "Demo.Status",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "enum", lang: "csharp",
+            pathPatterns: ["src/"], excludePathPatterns: null, excludeTests: false);
+        var count = _reader.CountUnusedSymbols(kind: "enum", lang: "csharp",
+            pathPatterns: ["src/"], excludePathPatterns: null, excludeTests: false);
+
+        Assert.Contains(unused, symbol => symbol.Name == "None");
+        Assert.Contains(unused, symbol => symbol.Name == "Red");
+        Assert.Contains(unused, symbol => symbol.Name == "Color");
+        Assert.DoesNotContain(unused, symbol => symbol.Path.StartsWith("tests/", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(3, count.Count);
+        Assert.Equal(1, count.FileCount);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_CSharpEnumMemberCollisionsRespectExcludeTestsScope()
+    {
+        var srcFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/active.cs",
+            Lang = "csharp",
+            Size = 140,
+            Lines = 8,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var testFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "tests/peer.cs",
+            Lang = "csharp",
+            Size = 140,
+            Lines = 8,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = srcFileId,
+                Kind = "enum",
+                Name = "Color",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 4,
+                Signature = "public enum Color",
+                Visibility = "public",
+                ContainerKind = "namespace",
+                ContainerName = "Demo",
+                ContainerQualifiedName = "Demo.Color",
+            },
+            new SymbolRecord
+            {
+                FileId = srcFileId,
+                Kind = "enum",
+                Name = "None",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "None,",
+                ContainerKind = "enum",
+                ContainerName = "Color",
+                ContainerQualifiedName = "Demo.Color",
+            },
+            new SymbolRecord
+            {
+                FileId = srcFileId,
+                Kind = "enum",
+                Name = "Red",
+                Line = 4,
+                StartLine = 4,
+                EndLine = 4,
+                Signature = "Red",
+                ContainerKind = "enum",
+                ContainerName = "Color",
+                ContainerQualifiedName = "Demo.Color",
+            },
+            new SymbolRecord
+            {
+                FileId = testFileId,
+                Kind = "enum",
+                Name = "Status",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 4,
+                Signature = "public enum Status",
+                Visibility = "public",
+                ContainerKind = "namespace",
+                ContainerName = "Demo",
+                ContainerQualifiedName = "Demo.Status",
+            },
+            new SymbolRecord
+            {
+                FileId = testFileId,
+                Kind = "enum",
+                Name = "None",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "None,",
+                ContainerKind = "enum",
+                ContainerName = "Status",
+                ContainerQualifiedName = "Demo.Status",
+            },
+            new SymbolRecord
+            {
+                FileId = testFileId,
+                Kind = "enum",
+                Name = "Stopped",
+                Line = 4,
+                StartLine = 4,
+                EndLine = 4,
+                Signature = "Stopped",
+                ContainerKind = "enum",
+                ContainerName = "Status",
+                ContainerQualifiedName = "Demo.Status",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "enum", lang: "csharp",
+            pathPatterns: null, excludePathPatterns: null, excludeTests: true);
+        var count = _reader.CountUnusedSymbols(kind: "enum", lang: "csharp",
+            pathPatterns: null, excludePathPatterns: null, excludeTests: true);
+
+        Assert.Contains(unused, symbol => symbol.Name == "None");
+        Assert.Contains(unused, symbol => symbol.Name == "Red");
+        Assert.Contains(unused, symbol => symbol.Name == "Color");
+        Assert.DoesNotContain(unused, symbol => symbol.Path.StartsWith("tests/", StringComparison.OrdinalIgnoreCase));
         Assert.Equal(3, count.Count);
         Assert.Equal(1, count.FileCount);
     }
