@@ -76,6 +76,15 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void ParseArgs_AllowsZeroMaxLineWidthForNoTruncation()
+    {
+        var options = QueryCommandRunner.ParseArgs(["myquery", "--max-line-width", "0"], jsonDefault: false);
+
+        Assert.Equal(0, options.MaxLineWidth);
+        Assert.Equal("myquery", options.Query);
+    }
+
+    [Fact]
     public void ParseArgs_AllowsDashPrefixedPositionalQueryLiteral()
     {
         var options = QueryCommandRunner.ParseArgs(["--open-reports", "--db", "query.db"], jsonDefault: false, allowNamedQuery: true);
@@ -1119,7 +1128,7 @@ public class QueryCommandRunnerTests
     }
 
     [Theory]
-    [InlineData("0")]
+    [InlineData("-1")]
     [InlineData("abc")]
     public void RunReferences_RejectsInvalidMaxLineWidthValue(string invalidValue)
     {
@@ -1133,7 +1142,7 @@ public class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Contains("--max-line-width requires a positive integer", stderr);
+            Assert.Contains("--max-line-width requires a non-negative integer", stderr);
         }
         finally
         {
@@ -1518,6 +1527,67 @@ public class QueryCommandRunnerTests
             Assert.True(json.GetProperty("content_truncated").GetBoolean());
             Assert.DoesNotContain(longLine, json.GetProperty("content").GetString());
             Assert.True(json.GetProperty("content").GetString()!.Length <= 96);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExcerpt_JsonLeavesLongSingleLineContentUnclampedWhenMaxLineWidthIsZero()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_excerpt_long_line_no_truncate");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var longLine = new string('a', 320) + "TARGET" + new string('b', 320);
+            TestProjectHelper.InsertIndexedFile(dbPath, "dist/data.txt", "text", longLine);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
+                ["dist/data.txt", "--db", dbPath, "--start", "1", "--end", "1", "--json", "--max-line-width", "0"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.False(json.GetProperty("content_truncated").GetBoolean());
+            Assert.Equal(longLine, json.GetProperty("content").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_JsonLeavesLongSingleLineSnippetUnclampedWhenMaxLineWidthIsZero()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_long_line_no_truncate");
+        try
+        {
+            var longLine = new string('a', 320) + " TARGET " + new string('b', 320);
+            var sourcePath = Path.Combine(projectRoot, "notes.md");
+            File.WriteAllText(sourcePath, longLine);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["TARGET", "--db", dbPath, "--json", "--max-line-width", "0"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains(longLine, stdout);
+            Assert.DoesNotContain("...(+", stdout);
         }
         finally
         {
