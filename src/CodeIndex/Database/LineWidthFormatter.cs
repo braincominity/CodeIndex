@@ -17,7 +17,6 @@ public static class LineWidthFormatter
         maxLineWidth = ClampMaxLineWidth(maxLineWidth);
         if (maxLineWidth <= 0)
             return new ClampedTextResult(line, false);
-
         if (line.Length <= maxLineWidth)
             return new ClampedTextResult(line, false);
 
@@ -35,7 +34,6 @@ public static class LineWidthFormatter
         maxLineWidth = ClampMaxLineWidth(maxLineWidth);
         if (maxLineWidth <= 0)
             return new ClampedTextResult(string.Join('\n', lines), false);
-
         var output = new string[lines.Count];
         var anyTruncated = false;
         for (var i = 0; i < lines.Count; i++)
