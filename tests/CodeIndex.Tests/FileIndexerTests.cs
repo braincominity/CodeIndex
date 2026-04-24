@@ -97,6 +97,10 @@ public class FileIndexerTests
     [InlineData("schema.pgsql", "sql")]
     [InlineData("proc.tsql", "sql")]
     [InlineData("pkg.plsql", "sql")]
+    [InlineData("orders_pkg.pls", "sql")]
+    [InlineData("orders_pkg.pks", "sql")]
+    [InlineData("orders_pkg.pkb", "sql")]
+    [InlineData("orders_pkg.plb", "sql")]
     [InlineData("migrate.psql", "sql")]
     // Issue #189: filename prefix matching for Dockerfile.* / Makefile.* / GNUmakefile.*
     [InlineData("Dockerfile.dev", "dockerfile")]

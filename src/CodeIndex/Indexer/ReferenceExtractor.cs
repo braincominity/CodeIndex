@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Models;
 
@@ -143,21 +144,38 @@ public static class ReferenceExtractor
     private static readonly Regex StringLiteralRegex = new(
         "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`",
         RegexOptions.Compiled);
-    // SQL-specific string-literal stripper: preserve backticks because MySQL / MariaDB use them
-    // for identifier quoting (`` CALL `proc-name`; ``) rather than string literals. Strip only
-    // ANSI single-quoted and double-quoted literals plus comments. ANSI / SQL-PSM delimited
-    // identifiers (`"..."`) are intentionally treated as string literals here because the dominant
-    // real-world SQL codebase uses `"..."` for string content when double-quoted identifiers are
-    // not in effect, and #232 focuses on T-SQL brackets + MySQL backticks — not ANSI delimited
-    // identifiers.
-    // SQL 専用の文字列リテラル除去: MySQL / MariaDB はバッククォートを識別子引用に使うため保持し、
-    // `'...'` / `"..."` のみを除去する。ANSI / SQL-PSM の `"..."` delimited identifier は
-    // 実運用で文字列として使われる頻度が高く、今回の #232 の対象から外れるため意図的に文字列扱いとする。
-    private static readonly Regex SqlStringLiteralRegex = new(
-        "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'",
+    // SQL-specific single-quoted string stripper: preserve identifier quoting (`[...]`, `` `...` ``,
+    // and ANSI `"..."`) so the SQL graph path can still see real object names while literal payloads
+    // stay masked.
+    // SQL 専用の単引用符文字列リテラル除去。識別子引用（`[...]` / `` `...` `` / ANSI `"..."`）は
+    // 残しつつ、文字列リテラルだけを隠して SQL graph 抽出が実オブジェクト名を見失わないようにする。
+    private static readonly Regex SqlSingleQuotedStringLiteralRegex = new(
+        "'(?:''|\\\\.|[^'\\\\])*'",
         RegexOptions.Compiled);
     private static readonly Regex InlineBlockCommentRegex = new(@"/\*.*?\*/", RegexOptions.Compiled);
-    private static readonly Regex CallRegex = new(@"(?<![\w$])(?<name>[A-Za-z_]\w*)(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
+    private const string CSharpIdentifierPattern = @"@?[_\p{L}]\w*";
+    private const string CSharpTypeExpressionPattern =
+        @"(?:global::)?(?:"
+        + CSharpIdentifierPattern
+        + @"\s*(?:(?:\.|::)\s*"
+        + CSharpIdentifierPattern
+        + @")*)(?:\s*<[^)\];{}]+>)?(?:\s*\[[^\]\n]*\])*";
+    // The `(?:\?\.)?` segment captures JavaScript / TypeScript optional chaining calls such as
+    // `callback?.()` and `callback?.<T>()`. Without it the `?.` stops the regex from reaching the
+    // trailing `(`, and the call reference to `callback` is silently dropped. Other supported
+    // languages that use `?.` (C# / Kotlin / Swift / Dart) place an identifier between `?.` and
+    // `(`, so their existing call sites continue to match via the identifier itself. See issue #294.
+    // `(?:\?\.)?` は JavaScript / TypeScript の optional chaining 呼び出し (`callback?.()` や
+    // `callback?.<T>()`) を捕捉するための segment。これが無いと `?.` の存在で末尾 `(` に到達できず、
+    // `callback` への call 参照が黙って欠落する。C# / Kotlin / Swift / Dart などの `?.` は後ろに
+    // 識別子が続くため、従来通り識別子自身が CallRegex にマッチして影響を受けない。issue #294 参照。
+    // Nested generic call sites such as `Foo<Bar<int>>()` / `new Dict<K, List<V>>()` are
+    // recovered by a depth-aware fallback scanner because the flat `<[^>\n]+>` segment cannot
+    // balance the closing `>>`. See issue #263.
+    // `Foo<Bar<int>>()` や `new Dict<K, List<V>>()` のようなネスト generic 呼び出しは、
+    // 平坦な `<[^>\n]+>` では末尾 `>>` を釣り合わせられないため、depth-aware な fallback scanner
+    // で補完する。issue #263 参照。
+    private static readonly Regex CallRegex = new($@"(?<![\w$])(?<name>{CSharpIdentifierPattern})(?:\?\.)?(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
     // SQL stored-procedure call without parentheses: T-SQL `EXEC` / `EXECUTE` and MySQL / MariaDB `CALL`.
     // The shared CallRegex requires a trailing `(`, which misses the dominant real-world form such as
     // `EXEC dbo.sp_Target;`, `EXEC dbo.sp_Target @x = 1, @y = 2;`, `CALL sp_Helper;`, and the bracketed
@@ -185,9 +203,97 @@ public static class ReferenceExtractor
     // 修飾子の各セグメントを optional にすることで、`EXEC AdventureWorks..sp_GetCustomer;` のように
     // SQL Server が許す省略形（`..`）でも末尾の proc 名まで到達できる。識別子候補にはバッククォート引用も含め、
     // MySQL / MariaDB の `` `proc-name` `` 形にも対応する。
+    private const string SqlDoubleQuotedIdentifierPattern = "\"(?:\"\"|[^\"\\r\\n])+\"";
+    private const string SqlQuotedIdentifierPattern =
+        @"(?:\[[^\[\]\r\n]+\]|`[^`\r\n]+`|" + SqlDoubleQuotedIdentifierPattern + @")";
+    private const string SqlBareIdentifierPattern = @"(?:##?\w+|[_\p{L}][\p{L}\p{Mn}\p{Mc}\p{Nd}\p{Pc}$]*)";
+    private const string SqlTempIdentifierPattern =
+        @"(?:\[(?:##?\w+)\]|`(?:##?\w+)`|" + "\"(?:##?\\w+)\"" + @"|##?\w+)";
+    private const string SqlQualifiedIdentifierNoCapturePattern =
+        @"(?:(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")\s*\.\s*)*(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")";
+    private const string SqlQualifiedIdentifierPattern =
+        @"(?:(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")\s*\.\s*)*(?<name>" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")";
+    private const string SqlTopTargetModifierPattern =
+        @"TOP\s*\([^)\r\n]*\)(?:\s+PERCENT)?(?:\s+WITH\s+TIES)?";
+    private const string SqlMergeTargetHintPattern =
+        @"WITH\s*\((?:[^()]|\([^()]*\))*\)";
     private static readonly Regex SqlProcCallRegex = new(
-        @"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?(?:(?:\[[^\[\]\r\n]+\]|`[^`\r\n]+`|\w+)?\.)*(?<name>\[[^\[\]\r\n]+\]|`[^`\r\n]+`|\w+)",
+        $@"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?(?:(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern})?\.)*(?<name>{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // SQL named source references that should become `reference` edges rather than `call` edges.
+    // Bare `USING` is intentionally excluded because SQL dialects also reuse it for non-source
+    // syntax such as `CREATE INDEX ... USING btree (...)` and `ALTER TABLE ... USING expr`.
+    // `FROM dbo.fn_TableValued(...)` intentionally stays out because the trailing `(` means the
+    // shared CallRegex already captures it as a function call. issues #284 / #695.
+    // SQL のソース参照で、`call` ではなく `reference` として扱うべき形。
+    // bare な `USING` は `CREATE INDEX ... USING btree (...)` や
+    // `ALTER TABLE ... USING expr` のような非 source 構文にも使われるため意図的に除外する。
+    // `FROM dbo.fn_TableValued(...)` は末尾 `(` により既存 CallRegex が `call` を出すため除外する。
+    private static readonly Regex SqlSourceReferenceRegex = new(
+        $@"(?<![\w$])(?:FROM|JOIN|(?:CROSS|OUTER)\s+APPLY)\b\s+(?:(?:ONLY|LATERAL)\b\s+)*{SqlQualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlMergeUsingSourceRegex = new(
+        $@"(?<![\w$])MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?\s+{SqlQualifiedIdentifierNoCapturePattern}(?:\s+{SqlMergeTargetHintPattern})?(?:\s+(?:AS\s+)?(?!USING\b|WITH\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s+USING\b\s+(?:(?:ONLY|LATERAL)\b\s+)*{SqlQualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlMergeUsingPrefixRegex = new(
+        $@"(?<![\w$])MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?\s+{SqlQualifiedIdentifierNoCapturePattern}(?:\s+{SqlMergeTargetHintPattern})?(?:\s+(?:AS\s+)?(?!USING\b|WITH\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlDeleteUsingSourceRegex = new(
+        $@"(?<![\w$])DELETE\b(?:\s+{SqlTopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?\s+{SqlQualifiedIdentifierNoCapturePattern}(?:\s+(?:AS\s+)?(?!USING\b|WHERE\b|RETURNING\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s+USING\b\s+(?:(?:ONLY|LATERAL)\b\s+)?{SqlQualifiedIdentifierPattern}(?:\s+(?:AS\s+)?(?!WHERE\b|RETURNING\b|ON\b|USING\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?(?:\s*,\s*(?:(?:ONLY|LATERAL)\b\s+)?{SqlQualifiedIdentifierPattern}(?:\s+(?:AS\s+)?(?!WHERE\b|RETURNING\b|ON\b|USING\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?)*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlDeleteUsingPrefixRegex = new(
+        $@"(?<![\w$])DELETE\b(?:\s+{SqlTopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?\s+{SqlQualifiedIdentifierNoCapturePattern}(?:\s+(?:AS\s+)?(?!USING\b|WHERE\b|RETURNING\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlDeleteUsingListContinuationPrefixRegex = new(
+        @"(?<![\w$])DELETE\b[\s\S]*\bUSING\b[\s\S]*,\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlTargetReferencePrefixRegex = new(
+        $@"(?<![\w$])(?:INSERT(?:\s+{SqlTopTargetModifierPattern})?\s+INTO|UPDATE\b(?:\s+(?:{SqlTopTargetModifierPattern}|ONLY\b))*|DELETE\b(?:\s+{SqlTopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?|TRUNCATE\s+TABLE(?:\s+ONLY\b)?|CREATE(?:\s+(?:TEMP|TEMPORARY))?\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?)\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // SQL mutation targets such as `INSERT INTO tbl (...)` / `UPDATE tbl`.
+    // `INSERT INTO tbl (` is a table reference, not a function call; we later suppress the generic
+    // CallRegex match at the same identifier when an opening `(` immediately follows the target.
+    // `INSERT INTO tbl (...)` / `UPDATE tbl` などの更新対象。
+    // `INSERT INTO tbl (` は関数呼び出しではなくテーブル参照なので、直後に `(` がある場合は後段で
+    // 同じ識別子の generic CallRegex を抑止する。
+    private static readonly Regex SqlTargetReferenceRegex = new(
+        $@"(?<![\w$])(?:INSERT(?:\s+{SqlTopTargetModifierPattern})?\s+INTO|UPDATE\b(?:\s+(?:{SqlTopTargetModifierPattern}|ONLY\b))*|MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?|DELETE\b(?:\s+{SqlTopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?)\s+{SqlQualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlTruncateTargetRegex = new(
+        $@"(?<![\w$])TRUNCATE\s+TABLE\s+(?:(?:ONLY)\b\s+)?{SqlQualifiedIdentifierPattern}(?:\s*,\s*(?:(?:ONLY)\b\s+)?{SqlQualifiedIdentifierPattern})*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlTopCallSuppressionRegex = new(
+        @"(?<![\w$])(?:SELECT|INSERT|UPDATE|MERGE|DELETE)\b\s+(?<name>TOP)\s*\(",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlAccessMethodCallSuppressionRegex = new(
+        $@"(?<![\w$])CREATE\b(?:\s+UNIQUE\b)?\s+INDEX\b[\s\S]*?\bUSING\b\s+(?<name>{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern})(?=\s*\()",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // SQL Server temp-table materialization: `SELECT ... INTO #tmp` / `SELECT ... INTO ##tmp`.
+    // Procedural `SELECT ... INTO variable` remains intentionally excluded. issue #649.
+    // SQL Server の temp table 作成: `SELECT ... INTO #tmp` / `SELECT ... INTO ##tmp`。
+    // 手続き系の `SELECT ... INTO variable` は意図的に除外したままにする。issue #649。
+    private static readonly Regex SqlSelectIntoTempTargetRegex = new(
+        $@"(?<![\w$])SELECT\b.*?\bINTO\s+(?<name>{SqlTempIdentifierPattern})",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlSelectIntoTempTargetStatementRegex = new(
+        $@"(?<![\w$])SELECT\b.*?\bINTO\s+(?<name>{SqlTempIdentifierPattern})",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
+    private static readonly Regex SqlSelectIntoTempPrefixRegex = new(
+        @"(?<![\w$])SELECT\b.*?\bINTO\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlCreateTempTableRegex = new(
+        $@"(?<![\w$])CREATE(?:\s+(?:TEMP|TEMPORARY))?\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+(?<name>{SqlTempIdentifierPattern})",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlTrailingOnlyQualifiedIdentifierRegex = new(
+        $@"(?:(?:ONLY)\b\s+)?{SqlQualifiedIdentifierNoCapturePattern}\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlMergeTargetHintContinuationPrefixRegex = new(
+        $@"(?<![\w$])MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?\s+{SqlQualifiedIdentifierNoCapturePattern}\s+WITH\s*\((?:[^()]|\([^()]*\))*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private readonly record struct SqlIdentifierScanState(
+        bool InBlockComment,
+        string? DollarQuoteDelimiter,
+        bool InSingleQuotedString);
     // C# event subscription/unsubscription: Click += OnClick — both LHS and RHS must be PascalCase identifiers
     // C# イベント購読・解除: Click += OnClick — LHS と RHS の両方が PascalCase 識別子のみ
     private static readonly Regex EventSubscriptionRegex = new(@"(?<name>[A-Z]\w*)\s*[+-]=\s*(?:new\s+)?[A-Z]\w*", RegexOptions.Compiled);
@@ -199,6 +305,75 @@ public static class ReferenceExtractor
     // Java コンストラクタ連鎖文。`Leaf(int x){super(x);}` のように `{` 直後に連鎖文が続く
     // single-line body 形式にも対応する。
     private static readonly Regex JavaCtorChainRegex = new(@"(?:^\s*|\{\s*)(?<kind>this|super)\s*\(", RegexOptions.Compiled);
+    // C# / Java parenless object / collection / dictionary / array initializer such as
+    // `new Foo { X = 1 }`, `new List<int> { 1, 2, 3 }`, `new Dictionary<K, V> { [k] = v }`,
+    // `new Foo[] { ... }`, `new Foo[N] { ... }`, `new Foo[,] { ... }`, `new Foo[][] { ... }`,
+    // and qualified type names like `new N.Foo { X = 1 }` / `new global::N.Foo { X = 1 }`.
+    // CallRegex requires a trailing `(`, so these forms are otherwise dropped from the
+    // reference table even though the type is genuinely instantiated. Anonymous types
+    // (`new { Name = ... }`), target-typed `new()`, and collection expressions (`new[] { ... }`)
+    // intentionally do not match because they have no named target. Nested generics deeper than
+    // one `<...>` level (e.g. `new Dictionary<string, List<int>> { ... }`) follow the same
+    // limitation as the existing CallRegex generics handling. See issue #286.
+    // C# / Java の括弧省略インスタンス化（オブジェクト / コレクション / ディクショナリ /
+    // 配列イニシャライザ）。CallRegex は `(` が必須なため取りこぼすが、実体は型のインスタンス化なので
+    // `instantiate` として拾う。匿名型 `new { ... }`、target-typed `new()`、
+    // collection expression `new[] { ... }` は対象を持たないため意図的にマッチさせない。
+    // 1 段を超えるネストした generic（`Dictionary<string, List<int>>` 等）は既存 CallRegex と同様の制限。issue #286 参照。
+    private static readonly Regex CSharpJavaInitializerRegex = new(
+        $@"\bnew\s+(?:global::)?(?:{CSharpIdentifierPattern}(?:\s*::\s*|\s*\.\s*))*(?<name>{CSharpIdentifierPattern})(?:\s*<[^>\n]+>)?(?:\s*\[[^\[\]\n]*\])*\s*\{{",
+        RegexOptions.Compiled);
+    // Allman-style C# / Java parenless initializer where `{` sits on the next non-empty
+    // line. The trailing regex captures `new <Type>` ending the current line (with optional
+    // generic + array shape), and the caller peeks forward to confirm the next non-blank
+    // prepared line begins with `{` before emitting an `instantiate` edge. See issue #286.
+    // Allman スタイルの多行 parenless initializer。`new <Type>` が行末で終わり、次の非空 prepared line が
+    // `{` から始まる場合にだけ `instantiate` を発行する。issue #286 参照。
+    private static readonly Regex CSharpJavaInitializerTrailingRegex = new(
+        $@"\bnew\s+(?:global::)?(?:{CSharpIdentifierPattern}(?:\s*::\s*|\s*\.\s*))*(?<name>{CSharpIdentifierPattern})(?:\s*<[^>\n]+>)?(?:\s*\[[^\[\]\n]*\])*\s*$",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpUsingAliasRegex = new(
+        @"^\s*(?:global\s+)?using\s+(?!static\b)(?<alias>@?[A-Za-z_]\w*)\s*=\s*(?<target>[^;]+)",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpUsingStaticRegex = new(
+        @"^\s*(?:global\s+)?using\s+static\s+(?<target>[^;]+)",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpUsingNamespaceRegex = new(
+        @"^\s*(?:global\s+)?using\s+(?!static\b)(?<target>[^;=]+)",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpLocalValueNameRegex = new(
+        @"(?:^\s*|[;{}]\s*)(?:(?:(?:await\s+)?using\s+var)|var|(?:(?:const\s+)?[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*))\s+(?<name>@?[A-Za-z_]\w*)\s*(?==|;|,)",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpForeachValueNameRegex = new(
+        @"\bforeach\s*\(\s*(?:var|(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*))\s+(?<name>@?[A-Za-z_]\w*)\s+in\b",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpQueryRangeValueNameRegex = new(
+        @"\b(?:from|join)\s+(?<name>@?[A-Za-z_]\w*)\s+in\b|\blet\s+(?<name>@?[A-Za-z_]\w*)\s*=|\binto\s+(?<name>@?[A-Za-z_]\w*)\b",
+        RegexOptions.Compiled);
+    private const string CSharpDeclarationPatternTypeRegex = @"(?:var|(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*))";
+    private const string CSharpRecursivePatternClauseRegex = @"(?:\s*\{[^\n]*\})?";
+    private static readonly Regex CSharpDeclarationPatternValueNameRegex = new(
+        @"\bis\s+" + CSharpDeclarationPatternTypeRegex + CSharpRecursivePatternClauseRegex + @"\s+(?<name>@?[A-Za-z_]\w*)\b",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpSwitchExpressionDeclarationPatternValueNameRegex = new(
+        @"^\s*" + CSharpDeclarationPatternTypeRegex + @"\s+(?<name>@?[A-Za-z_]\w*)\s*$",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpCaseDeclarationPatternValueNameRegex = new(
+        @"\bcase\s+" + CSharpDeclarationPatternTypeRegex + CSharpRecursivePatternClauseRegex + @"\s+(?<name>@?[A-Za-z_]\w*)\b(?=\s*(?::|\bwhen\b))",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpOutValueNameRegex = new(
+        @"\bout\s+(?:var|(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*))\s+(?<name>@?[A-Za-z_]\w*)(?=\s*[\),])",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpCatchValueNameRegex = new(
+        @"\bcatch\s*\(\s*(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*)\s+(?<name>@?[A-Za-z_]\w*)",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpUsingStatementValueNameRegex = new(
+        @"\busing\s*\(\s*(?:var|(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*))\s+(?<name>@?[A-Za-z_]\w*)\s*=",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpFixedValueNameRegex = new(
+        @"\bfixed\s*\(\s*(?:var|(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*))\s+(?<name>@?[A-Za-z_]\w*)\s*=",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpStaticModifierRegex = new(@"\bstatic\b", RegexOptions.Compiled);
     // Java access/method modifier set used by the same-line ctor scanner.
     // same-line ctor 本体のスキャナで使うアクセス / メソッド修飾子一覧。
     private static readonly HashSet<string> JavaCtorModifiers = new(StringComparer.Ordinal)
@@ -216,7 +391,7 @@ public static class ReferenceExtractor
     // C# record のプライマリーコンストラクタ宣言を検出し、base primary-ctor 呼び出しの
     // 参照を record の合成コンストラクタに紐付けるために使う。
     private static readonly Regex CSharpRecordPrimaryCtorSignatureRegex = new(
-        @"\brecord\s+(?:class\s+|struct\s+)?\w+(?:<[^>]+>)?\s*\(",
+        $@"\brecord\s+(?:class\s+|struct\s+)?{CSharpIdentifierPattern}(?:<[^>]+>)?\s*\(",
         RegexOptions.Compiled);
     // Same intent as CSharpRecordPrimaryCtorSignatureRegex but applied to the joined multi-line
     // header produced by CollectCSharpRecordHeader, so split-line forms like
@@ -229,7 +404,7 @@ public static class ReferenceExtractor
     // `struct` と `(` が別行に分かれる書式でも primary-ctor 宣言と判定できるようにする。
     // C# 12 以降の class / struct primary constructor にも同じ合成コンテナ経路を適用する。
     private static readonly Regex CSharpPrimaryCtorHeaderRegex = new(
-        @"\b(?:record\s+(?:class\s+|struct\s+)?|class\s+|struct\s+)\w+(?:\s*<[^>]+>)?\s*\(",
+        $@"\b(?:record\s+(?:class\s+|struct\s+)?|class\s+|struct\s+){CSharpIdentifierPattern}(?:\s*<[^>]+>)?\s*\(",
         RegexOptions.Compiled);
     // C# compile-time type/member references: `nameof(X.Y)`, `typeof(T)`, `sizeof(T)`, `default(T)`.
     // Keywords are in SharedIgnoredCallNames so CallRegex skips them, but their arguments have no
@@ -256,6 +431,34 @@ public static class ReferenceExtractor
     private static readonly Regex JavaDotClassArgRegex = new(
         @"(?<![\w$.])(?<arg>[A-Za-z_][\w.]*)\s*(?:\[\s*\])*\s*\.class\b",
         RegexOptions.Compiled);
+    // C# type tests (`o is Base`, `o is not Base`, `o as Base`).
+    // `is` / `is not` / `as` の型位置 (`o is Base`, `o is not Base`, `o as Base`)。
+    private static readonly Regex CSharpIsAsTypeTestRegex = new(
+        $@"(?<![\w$])(?:is\s+(?:not\s+)?|as\s+)(?<type>{CSharpTypeExpressionPattern})",
+        RegexOptions.Compiled);
+    // C# `case` labels use a small structural follow-token check so declaration / recursive /
+    // positional/logical patterns stay visible while constant member labels like
+    // `case Color.Red:` and `case Color.Red or Color.Blue:` do not leak
+    // `type_reference` edges.
+    // C# の `case` ラベルは後続 token を小さく構文判定し、declaration / recursive /
+    // positional / logical pattern を残しつつ `case Color.Red:` や
+    // `case Color.Red or Color.Blue:` のような定数ラベルは `type_reference` にしない。
+    private static readonly Regex CSharpCaseLabelRegex = new(
+        @"(?<![\w$])case\s+",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpTypeExpressionAtCursorRegex = new(
+        $@"\G(?<type>{CSharpTypeExpressionPattern})",
+        RegexOptions.Compiled);
+    // C# XML-doc cross-reference (`<see cref="Base.Do"/>`, `<seealso cref="ILogger.Log"/>`).
+    // C# XML doc の `<see cref="Base.Do"/>` / `<seealso cref="ILogger.Log"/>`。
+    private static readonly Regex CSharpDocCrefRegex = new(
+        @"<(?:see|seealso)\s+cref\s*=\s*""(?<cref>[^""]+)""",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // Java type test (`instanceof Foo`).
+    // Java の型テスト (`instanceof Foo`)。
+    private static readonly Regex JavaInstanceofRegex = new(
+        @"(?<![\w$])instanceof\s+(?<type>[A-Za-z_]\w*(?:\s*\.\s*[A-Za-z_]\w*)*(?:\s*<[^)\];{}]+>)?(?:\s*\[\s*\])*)",
+        RegexOptions.Compiled);
 
     // Java primitive type names that can precede `.class` (e.g. `int.class`, `void.class`).
     // Skipped from reference rows because they are language-level keywords, not indexed types.
@@ -276,6 +479,16 @@ public static class ReferenceExtractor
         "nint", "nuint", "char", "float", "double", "decimal",
         "string", "object", "void", "dynamic", "var",
     };
+    // C# pattern-only keywords / literals that can appear after `is` / `case not` but are never
+    // real user-defined types. Filter them before AddTypeExpressionSegments so `is not null`,
+    // `is default`, and similar constant patterns do not surface phantom `type_reference` rows.
+    // `is` / `case not` の後ろに現れうるが、実在型ではない C# のパターン専用キーワード / リテラル。
+    // AddTypeExpressionSegments 前に落とし、`is not null` や `is default` などの定数パターンから
+    // phantom な `type_reference` 行が出ないようにする。
+    private static readonly HashSet<string> CSharpNonTypePatternTokens = new(StringComparer.Ordinal)
+    {
+        "default", "false", "not", "null", "true",
+    };
 
     // No-arg C# attribute name (`[Serializable]`, `[assembly: CLSCompliant]`, `[System.Obsolete]`,
     // `[global::System.Obsolete]`, `[Alias::MyAttr]`, `[Required, Key]`, and their multi-line
@@ -294,7 +507,7 @@ public static class ReferenceExtractor
     // （CallRegex 経路）や `.` / `::`（qualifier 継続）なら名前を確定させず、行末（`$`）・`]`・`,`
     // のいずれかで初めて採用する。
     private static readonly Regex CSharpNoArgAttributeRegex = new(
-        @"(?<!\w)(?:[A-Za-z_]\w*\s*:\s*)?(?:[A-Za-z_]\w*\s*(?:\.|::)\s*)*(?<name>[A-Za-z_]\w*)(?:\s*<[^\n]+?>)?\s*(?=[\],]|$)",
+        $@"(?<!\w)(?:{CSharpIdentifierPattern}\s*:\s*)?(?:{CSharpIdentifierPattern}\s*(?:\.|::)\s*)*(?<name>{CSharpIdentifierPattern})(?:\s*<[^\n]+?>)?\s*(?=[\],]|$)",
         RegexOptions.Compiled);
 
     // No-arg Java-family annotation (`@Deprecated`, `@Override`, `@org.junit.Test`, `@field:Deprecated`).
@@ -341,19 +554,12 @@ public static class ReferenceExtractor
         if (lang == null)
             return null;
 
-        if (!SupportsLanguage(lang))
-            return false;
-
-        return IsUnsupportedCSharpEnumMemberSymbol(lang, kind, containerKind)
-            ? false
-            : true;
+        return SupportsLanguage(lang);
     }
 
     public static string? GetUnsupportedSymbolKind(string? lang, string? kind, string? containerKind)
     {
-        return IsUnsupportedCSharpEnumMemberSymbol(lang, kind, containerKind)
-            ? "enum_member"
-            : null;
+        return null;
     }
 
     /// <summary>
@@ -365,9 +571,6 @@ public static class ReferenceExtractor
     {
         if (lang == null || graphSupported == null)
             return null;
-
-        if (IsUnsupportedCSharpEnumMemberSymbol(lang, kind, containerKind))
-            return "Call-graph extraction is indexed for 'csharp', but enum-member access edges are not indexed yet.";
 
         if (graphSupported.Value)
             return $"Call-graph extraction is indexed for '{lang}'.";
@@ -398,9 +601,7 @@ public static class ReferenceExtractor
 
     private static bool IsUnsupportedCSharpEnumMemberSymbol(string? lang, string? kind, string? containerKind)
     {
-        return string.Equals(lang, "csharp", StringComparison.Ordinal)
-            && string.Equals(kind, "enum", StringComparison.Ordinal)
-            && string.Equals(containerKind, "enum", StringComparison.Ordinal);
+        return false;
     }
 
     /// <summary>
@@ -495,15 +696,57 @@ public static class ReferenceExtractor
         // C# のプライマリコンストラクタ宣言（record / class / struct）で base primary-ctor を呼んでいる場合、
         // 宣言ヘッダー全体を合成コンテナで上書きする。`{` / `;` 以降の本体行は通常の container に戻す。
         var recordPrimaryCtorRanges = BuildCSharpPrimaryCtorContainers(language, symbols, structuralLines);
+        var csharpQualifiedEnumMemberLookup = BuildCSharpQualifiedEnumMemberLookup(language, symbols);
+        var csharpQualifiedConstantPatternMemberLookup = BuildCSharpQualifiedConstantPatternMemberLookup(language, symbols);
+        var csharpQualifiedTypePatternLookup = BuildCSharpQualifiedTypePatternLookup(language, symbols);
+        var csharpKnownTypeNames = BuildCSharpKnownTypeNames(language, symbols);
+        var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols, csharpKnownTypeNames);
+        var csharpUsingStatics = BuildCSharpUsingStatics(language, symbols);
+        var csharpValueReceiverNames = BuildCSharpValueReceiverNamesByContainingType(language, symbols);
+        var csharpFunctionValueReceiverNames = BuildCSharpValueReceiverNamesByFunctionStartLine(
+            language,
+            symbols,
+            structuralLines,
+            csharpKnownTypeNames,
+            csharpUsingAliases);
+        // Workspace-wide same-name type rescue needs cross-file visibility, so the
+        // extractor leaves ambiguous unqualified using-static pattern heads for the
+        // read path to disambiguate.
+        // ワークスペース全体の同名型 rescue には cross-file 可視性が必要なため、
+        // extractor は曖昧な unqualified using-static pattern head を残し、
+        // read path 側で判定させる。
+        static bool HasActiveSameFileCSharpTypeCandidate(string typeExpression, int lineNumber) => false;
 
         var references = new List<ReferenceRecord>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string>? sqlEstablishedTempObjectNames = null;
+        string? sqlStatementPrefix = null;
+        var sqlIdentifierScanState = default(SqlIdentifierScanState);
+        if (language == "sql")
+        {
+            sqlEstablishedTempObjectNames = new HashSet<string>(StringComparer.Ordinal);
+            sqlStatementPrefix = string.Empty;
+        }
 
         for (int i = 0; i < lines.Length; i++)
         {
             var lineNumber = i + 1;
             var originalLine = lines[i];
             var preparedLine = preparedLines[i];
+            if (language == "csharp"
+                && originalLine.IndexOf("cref=\"", StringComparison.OrdinalIgnoreCase) >= 0
+                && IsCSharpXmlDocCommentLine(originalLine))
+            {
+                var docContainer = FindDocumentedContainer(containerCandidates, lineNumber);
+                EmitCSharpDocCrefReferences(
+                    originalLine,
+                    references,
+                    seen,
+                    fileId,
+                    originalLine.Trim(),
+                    lineNumber,
+                    docContainer);
+            }
             if (string.IsNullOrWhiteSpace(preparedLine))
                 continue;
             var csharpAttrRangesOnLine = csharpAttrRanges?[i];
@@ -540,7 +783,7 @@ public static class ReferenceExtractor
             // lives past the header-terminating `{` and must stay with its real innermost container.
             // 同一行 record で `{` より後ろの本体呼び出しまで合成 ctor に奪われないよう、コール単位で
             // ヘッダ範囲（end line の end column より前）に入っているかを判定して差し替える。
-            SymbolRecord ResolveContainerForCall(int column)
+            SymbolRecord? ResolveContainerForCall(int column)
             {
                 foreach (var (rangeStart, rangeStartColumn, rangeEnd, rangeEndColumn, syntheticRecordCtor) in recordPrimaryCtorRanges)
                 {
@@ -572,7 +815,18 @@ public static class ReferenceExtractor
                     }
                 }
 
-                return container!;
+                if (language == "csharp")
+                {
+                    var sameLineContainer = FindInnermostSameLineCSharpContainer(
+                        containerCandidates,
+                        structuralLines[i],
+                        lineNumber,
+                        column);
+                    if (sameLineContainer != null)
+                        return sameLineContainer;
+                }
+
+                return container;
             }
 
             // Event subscription/unsubscription (C#) / イベント購読・解除 (C#)
@@ -622,6 +876,46 @@ public static class ReferenceExtractor
                 }
             }
 
+            // Type-position references without an introducing keyword-call: base lists,
+            // declaration types, generic constraints, throws clauses, type tests, and
+            // XML-doc crefs. These are dependency edges for `references` / `impact`, but
+            // not invocation edges for default `callers` / `callees`. See issue #256.
+            // キーワード呼び出しの外にある型位置参照（継承リスト、宣言型、generic 制約、
+            // throws、型テスト、XML doc cref）。`references` / `impact` では依存として扱うが、
+            // 既定の `callers` / `callees` では呼び出しエッジではない。issue #256 参照。
+            if (language == "csharp")
+            {
+                EmitCSharpTypePositionReferences(
+                    preparedLine,
+                    originalLine,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpQualifiedTypePatternLookup,
+                    csharpUsingAliases,
+                    csharpUsingStatics,
+                    HasActiveSameFileCSharpTypeCandidate,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall,
+                    container);
+            }
+            else if (language == "java")
+            {
+                EmitJavaTypePositionReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall,
+                    container);
+            }
+
+            var sqlSuppressedCallIndices = language is "sql" ? new HashSet<int>() : null;
+
             // SQL stored-procedure calls without parentheses: `EXEC`, `EXECUTE`, and `CALL` forms that
             // the shared CallRegex cannot see because there is no trailing `(`. Emits the same
             // reference kind ("call") so the edge merges with the rare parenthesized form via dedupe.
@@ -632,64 +926,409 @@ public static class ReferenceExtractor
             {
                 // The shared PrepareLine strips backtick-quoted content because several other
                 // languages use backticks for string literals (shell command substitution,
-                // JavaScript template literals, Go raw strings). In SQL, backticks quote
-                // identifiers (MySQL / MariaDB), so we re-prepare the raw line with
-                // a SQL-aware stripper that only drops `'...'` / `"..."` literals and comments.
+                // JavaScript template literals, Go raw strings). In SQL, backticks and double
+                // quotes can both quote identifiers, so we re-prepare the raw line with a
+                // SQL-aware stripper that only drops single-quoted literals and comments.
                 // 共有 PrepareLine はバッククォート内容を文字列として除去する（他言語のテンプレート
-                // リテラル等に対応するため）。SQL ではバッククォートは識別子引用なので、SQL 向けに
-                // `'...'` / `"..."` とコメントだけを除去する sanitization を別途適用する。
-                var sqlScanLine = PrepareSqlLineForIdentifierScan(structuralLines[i]);
-                if (!string.IsNullOrWhiteSpace(sqlScanLine))
+                // リテラル等に対応するため）。SQL ではバッククォートと二重引用符が識別子引用になり得る
+                // ため、単引用符リテラル、複数行 block comment、PostgreSQL dollar quote、行コメント
+                // だけを除去する stateful sanitization を別途適用する。
+                var sqlLineFragment = PrepareSqlLineForIdentifierScan(
+                    structuralLines[i],
+                    sqlIdentifierScanState,
+                    sqlStatementPrefix,
+                    out var sqlLineEndedByLineComment,
+                    out sqlIdentifierScanState);
+                if (!string.IsNullOrWhiteSpace(sqlLineFragment))
                 {
-                    foreach (Match match in SqlProcCallRegex.Matches(sqlScanLine))
+                    if (ShouldFlushSqlTempObjectPrefixAtLineBoundary(sqlStatementPrefix!, sqlLineFragment))
                     {
-                        var nameGroup = match.Groups["name"];
-                        var rawName = nameGroup.Value;
-                        int nameIndex = nameGroup.Index;
-                        string resolvedName;
-                        bool wasQuoted;
-                        if (rawName.Length >= 2
-                            && ((rawName[0] == '[' && rawName[^1] == ']')
-                                || (rawName[0] == '`' && rawName[^1] == '`')))
+                        CollectSqlTempObjectNamesFromStatement(sqlStatementPrefix!, sqlEstablishedTempObjectNames!);
+                        sqlStatementPrefix = string.Empty;
+                    }
+
+                    var sqlCombinedLine = CombineSqlStatementPrefix(sqlStatementPrefix!, sqlLineFragment, out var sqlLineOffset);
+                    int sqlStatementStart = 0;
+
+                    while (true)
+                    {
+                        int terminatorIndex = FindSqlStatementTerminator(sqlCombinedLine, sqlStatementStart);
+                        int statementEnd = terminatorIndex >= 0 ? terminatorIndex + 1 : sqlCombinedLine.Length;
+                        var sqlStatement = sqlCombinedLine[sqlStatementStart..statementEnd];
+                        int sqlStatementLineOffset = Math.Max(0, sqlLineOffset - sqlStatementStart);
+
+                        if (!string.IsNullOrWhiteSpace(sqlStatement))
                         {
-                            // Normalize `[sp_Target]` / `` `sp_Target` `` to `sp_Target` so it matches the
-                            // indexed symbol name, and point the column at the inner identifier instead
-                            // of the opening quote.
-                            // `[sp_Target]` / `` `sp_Target` `` は識別子名と一致させるため引用を除去し、
-                            // 列位置は中身の先頭に寄せる。
-                            resolvedName = rawName.Substring(1, rawName.Length - 2);
-                            nameIndex += 1;
-                            wasQuoted = true;
-                        }
-                        else
-                        {
-                            resolvedName = rawName;
-                            wasQuoted = false;
+                            HashSet<int>? sqlUsingSourceIndices = null;
+                            foreach (Match match in SqlMergeUsingSourceRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+
+                                (sqlUsingSourceIndices ??= []).Add(nameGroup.Index);
+                            }
+
+                            foreach (Match match in SqlDeleteUsingSourceRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+
+                                foreach (Capture capture in match.Groups["name"].Captures)
+                                {
+                                    if (capture.Index < sqlStatementLineOffset)
+                                        continue;
+
+                                    (sqlUsingSourceIndices ??= []).Add(capture.Index);
+                                }
+                            }
+
+                            foreach (Match match in SqlTopCallSuppressionRegex.Matches(sqlStatement))
+                            {
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+
+                                sqlSuppressedCallIndices?.Add(nameGroup.Index + sqlStatementStart - sqlLineOffset);
+                            }
+
+                            foreach (Match match in SqlAccessMethodCallSuppressionRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+                                if (sqlUsingSourceIndices != null && sqlUsingSourceIndices.Contains(nameGroup.Index))
+                                    continue;
+
+                                sqlSuppressedCallIndices?.Add(nameGroup.Index + sqlStatementStart - sqlLineOffset);
+                            }
+
+                            foreach (Match match in SqlProcCallRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+                                NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+
+                                // Bracketed / backtick-quoted identifiers are explicitly quoted to allow reserved
+                                // words (`[ORDER]`, `[USER]`, `[AS]`, `[IMMEDIATE]`, `` `order` ``) as real object
+                                // names. Skip the keyword ignore list so a legitimate `EXEC [ORDER]` or
+                                // `` CALL `order` `` is not silently dropped.
+                                // 角括弧 / バッククォート付き識別子は予約語を識別子として使うための引用形。
+                                // `[ORDER]` / `` `order` `` のような正当な名前を落とさないため keyword ignore list をスキップする。
+                                if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                    continue;
+                                if (definitionNames != null && definitionNames.Contains(resolvedName))
+                                    continue;
+
+                                var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
+                                AddChainReference(
+                                    references, seen, fileId, resolvedName, nameColumn + 1,
+                                    "call", context, lineNumber, sqlCallContainer);
+                            }
+
+                            foreach (Match match in SqlSourceReferenceRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+                                var followedByOpenParen = IsFollowedByOpenParen(sqlStatement, nameGroup.Index + nameGroup.Length);
+                                NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+                                if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                    continue;
+                                if (followedByOpenParen)
+                                {
+                                    var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
+                                    AddChainReference(
+                                        references, seen, fileId, resolvedName, nameColumn + 1,
+                                        "call", context, lineNumber, sqlCallContainer);
+                                    if (!wasQuoted)
+                                    {
+                                        sqlSuppressedCallIndices?.Add(
+                                            GetSqlCallLikeSuppressionIndex(sqlStatement, nameGroup.Index) + sqlStatementStart - sqlLineOffset);
+                                    }
+                                    continue;
+                                }
+                                if (resolvedName.StartsWith("#", StringComparison.Ordinal)
+                                    && (sqlEstablishedTempObjectNames == null || !sqlEstablishedTempObjectNames.Contains(resolvedName)))
+                                    continue;
+
+                                var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
+                                AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                            }
+
+                            foreach (Match match in SqlMergeUsingSourceRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+                                var followedByOpenParen = IsFollowedByOpenParen(sqlStatement, nameGroup.Index + nameGroup.Length);
+                                NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+                                if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                    continue;
+                                if (followedByOpenParen)
+                                {
+                                    var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
+                                    AddChainReference(
+                                        references, seen, fileId, resolvedName, nameColumn + 1,
+                                        "call", context, lineNumber, sqlCallContainer);
+                                    if (!wasQuoted)
+                                    {
+                                        sqlSuppressedCallIndices?.Add(
+                                            GetSqlCallLikeSuppressionIndex(sqlStatement, nameGroup.Index) + sqlStatementStart - sqlLineOffset);
+                                    }
+                                    continue;
+                                }
+                                if (resolvedName.StartsWith("#", StringComparison.Ordinal)
+                                    && (sqlEstablishedTempObjectNames == null || !sqlEstablishedTempObjectNames.Contains(resolvedName)))
+                                    continue;
+
+                                var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
+                                AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                            }
+
+                            foreach (Match match in SqlDeleteUsingSourceRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+
+                                foreach (Capture capture in match.Groups["name"].Captures)
+                                {
+                                    if (capture.Index < sqlStatementLineOffset)
+                                        continue;
+                                    var followedByOpenParen = IsFollowedByOpenParen(sqlStatement, capture.Index + capture.Length);
+                                    NormalizeSqlIdentifier(capture.Value, capture.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                    int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+                                    if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                        continue;
+                                    if (followedByOpenParen)
+                                    {
+                                        var sqlCallContainer = ResolveContainerForCall(capture.Index);
+                                        AddChainReference(
+                                            references, seen, fileId, resolvedName, nameColumn + 1,
+                                            "call", context, lineNumber, sqlCallContainer);
+                                        if (!wasQuoted)
+                                        {
+                                            sqlSuppressedCallIndices?.Add(
+                                                GetSqlCallLikeSuppressionIndex(sqlStatement, capture.Index) + sqlStatementStart - sqlLineOffset);
+                                        }
+                                        continue;
+                                    }
+                                    if (resolvedName.StartsWith("#", StringComparison.Ordinal)
+                                        && (sqlEstablishedTempObjectNames == null || !sqlEstablishedTempObjectNames.Contains(resolvedName)))
+                                        continue;
+
+                                    var sqlReferenceContainer = ResolveContainerForCall(capture.Index);
+                                    AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                                }
+                            }
+
+                            foreach (Match match in SqlSelectIntoTempTargetStatementRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+                                NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+                                if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                    continue;
+
+                                var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
+                                AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                            }
+
+                            foreach (Match match in SqlTargetReferenceRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+                                NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+                                if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                    continue;
+                                if (!wasQuoted
+                                    && string.Equals(resolvedName, "SET", StringComparison.OrdinalIgnoreCase)
+                                    && match.Value.StartsWith("UPDATE", StringComparison.OrdinalIgnoreCase))
+                                    continue;
+
+                                var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
+                                AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                                if (IsFollowedByOpenParen(sqlStatement, nameGroup.Index + nameGroup.Length))
+                                {
+                                    sqlSuppressedCallIndices?.Add(
+                                        GetSqlCallLikeSuppressionIndex(sqlStatement, nameGroup.Index) + sqlStatementStart - sqlLineOffset);
+                                }
+                            }
+
+                            foreach (Match match in SqlTruncateTargetRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+
+                                foreach (Capture capture in match.Groups["name"].Captures)
+                                {
+                                    if (capture.Index < sqlStatementLineOffset)
+                                        continue;
+                                    NormalizeSqlIdentifier(capture.Value, capture.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                    int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+                                    if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                        continue;
+
+                                    var sqlReferenceContainer = ResolveContainerForCall(capture.Index);
+                                    AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                                }
+                            }
                         }
 
-                        // Bracketed / backtick-quoted identifiers are explicitly quoted to allow reserved
-                        // words (`[ORDER]`, `[USER]`, `[AS]`, `[IMMEDIATE]`, `` `order` ``) as real object
-                        // names. Skip the keyword ignore list so a legitimate `EXEC [ORDER]` or
-                        // `` CALL `order` `` is not silently dropped.
-                        // 角括弧 / バッククォート付き識別子は予約語を識別子として使うための引用形。
-                        // `[ORDER]` / `` `order` `` のような正当な名前を落とさないため keyword ignore list をスキップする。
-                        if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
-                            continue;
-                        if (definitionNames != null && definitionNames.Contains(resolvedName))
+                        if (terminatorIndex < 0)
+                            break;
+
+                        CollectSqlTempObjectNamesFromStatement(sqlStatement, sqlEstablishedTempObjectNames!);
+                        sqlStatementStart = terminatorIndex + 1;
+                        while (sqlStatementStart < sqlCombinedLine.Length && char.IsWhiteSpace(sqlCombinedLine[sqlStatementStart]))
+                            sqlStatementStart++;
+                    }
+
+                    sqlStatementPrefix = AdvanceSqlStatementPrefix(sqlCombinedLine, sqlStatementStart, sqlLineEndedByLineComment);
+                }
+            }
+
+            // C# / Java parenless initializers: `new T { ... }` / `new T<U> { ... }` /
+            // `new T[] { ... }` etc. CallRegex requires a trailing `(`, so these forms slip
+            // through and the type is otherwise never recorded as instantiated. Emit an
+            // `instantiate` row here so `references` / `callers` / `impact` see the edge.
+            // See issue #286.
+            // 括弧省略の C# / Java インスタンス化 (`new T { ... }` 等) は CallRegex で拾えないため、
+            // 専用パスで `instantiate` を発行する。issue #286 参照。
+            if (language is "csharp" or "java")
+            {
+                var matchedInitializerIndices = new HashSet<int>();
+                foreach (Match match in CSharpJavaInitializerRegex.Matches(preparedLine))
+                {
+                    var rawName = match.Groups["name"].Value;
+                    var nameIndex = match.Groups["name"].Index;
+                    matchedInitializerIndices.Add(nameIndex);
+                    if (ShouldSkipInitializerName(language, rawName))
+                        continue;
+                    // Do NOT skip when the type is defined in the same file — the CallRegex
+                    // `IsConstructorCallName` path emits `instantiate` without a definitionNames
+                    // filter, so `new Foo { ... }` and `new Foo()` should behave the same way.
+                    // 同一ファイル内定義でもスキップしない。`IsConstructorCallName` 経路の
+                    // `instantiate` が同様の扱いをしているため、括弧あり/なしで挙動を揃える。
+                    var initContainer = ResolveContainerForCall(nameIndex);
+                    var name = language == "csharp" ? NormalizeCSharpIdentifier(rawName) : rawName;
+                    AddReference(references, seen, fileId, name, nameIndex, "instantiate", context, lineNumber, initContainer);
+                }
+
+                // The initializer regex has the same one-level generic ceiling as CallRegex,
+                // so nested generic targets like `new Dictionary<string, List<int>> { ... }`
+                // need a depth-aware fallback to keep the outer `instantiate` edge.
+                // initializer regex も CallRegex と同じく generic を 1 段までしか見ないため、
+                // `new Dictionary<string, List<int>> { ... }` の外側型は depth-aware fallback
+                // で補って `instantiate` を落とさないようにする。
+                if (language == "csharp")
+                {
+                    foreach (var candidate in EnumerateNestedGenericInitializerCandidates(
+                                 preparedLine,
+                                 matchedInitializerIndices,
+                                 requireOpeningBrace: true))
+                    {
+                        if (ShouldSkipInitializerName(language, candidate.Name))
                             continue;
 
-                        var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
-                        AddChainReference(
-                            references, seen, fileId, resolvedName, nameIndex + 1,
-                            "call", context, lineNumber, sqlCallContainer);
+                        var initContainer = ResolveContainerForCall(candidate.NameIndex);
+                        AddReference(
+                            references,
+                            seen,
+                            fileId,
+                            candidate.Name,
+                            candidate.NameIndex,
+                            "instantiate",
+                            context,
+                            lineNumber,
+                            initContainer);
+                    }
+                }
+
+                // Allman-style multi-line form: `new T` at end of current line with the
+                // opening `{` on the next non-blank prepared line. Peek forward to confirm
+                // before emitting, so trailing `new T` patterns that are not followed by `{`
+                // (e.g. `var a = new Foo\n;` or `var a = new Foo\n(1, 2);`) do not produce
+                // phantom `instantiate` rows.
+                // Allman スタイルの多行形式: 現在行末の `new T` と次の非空 prepared line 冒頭の
+                // `{` を合わせて 1 つの instantiate として扱う。`{` が続かない場合（`;` や `(` が
+                // 後続する等）には幻行を出さないため、peek で確認してから発行する。
+                var trailingMatch = CSharpJavaInitializerTrailingRegex.Match(preparedLine);
+                var peek = i + 1;
+                while (peek < preparedLines.Length && string.IsNullOrWhiteSpace(preparedLines[peek]))
+                    peek++;
+                if (peek < preparedLines.Length)
+                {
+                    var nextContent = preparedLines[peek].TrimStart();
+                    if (nextContent.Length > 0 && nextContent[0] == '{')
+                    {
+                        if (trailingMatch.Success)
+                        {
+                            var rawName = trailingMatch.Groups["name"].Value;
+                            var nameIndex = trailingMatch.Groups["name"].Index;
+                            matchedInitializerIndices.Add(nameIndex);
+                            if (!ShouldSkipInitializerName(language, rawName))
+                            {
+                                var initContainer = ResolveContainerForCall(nameIndex);
+                                var name = language == "csharp" ? NormalizeCSharpIdentifier(rawName) : rawName;
+                                AddReference(references, seen, fileId, name, nameIndex, "instantiate", context, lineNumber, initContainer);
+                            }
+
+                        }
+
+                        if (language == "csharp")
+                        {
+                            foreach (var candidate in EnumerateNestedGenericInitializerCandidates(
+                                         preparedLine,
+                                         matchedInitializerIndices,
+                                         requireOpeningBrace: false))
+                            {
+                                if (ShouldSkipInitializerName(language, candidate.Name))
+                                    continue;
+
+                                var initContainer = ResolveContainerForCall(candidate.NameIndex);
+                                var name = language == "csharp" ? NormalizeCSharpIdentifier(candidate.Name) : candidate.Name;
+                                AddReference(
+                                    references,
+                                    seen,
+                                    fileId,
+                                    name,
+                                    candidate.NameIndex,
+                                    "instantiate",
+                                    context,
+                                    lineNumber,
+                                    initContainer);
+                            }
+                        }
                     }
                 }
             }
 
-            foreach (Match match in CallRegex.Matches(preparedLine))
+            void AddCallLikeReference(string name, int callIndex)
             {
-                var name = match.Groups["name"].Value;
-                var callIndex = match.Groups["name"].Index;
+                var normalizedName = NormalizeAtPrefixedIdentifier(name);
 
                 // Suppress the same-line Java ctor declarator's self-call. CallRegex matches
                 // `CtorName(` at the declarator once per same-line ctor, but it is a declaration
@@ -699,21 +1338,21 @@ public static class ReferenceExtractor
                 // 同一行 ctor の宣言子 `CtorName(` は呼び出しではないため CallRegex の対象から除外する。
                 if (javaSameLineCtor != null
                     && callIndex == javaSameLineCtor.Value.NameIndex
-                    && string.Equals(name, javaSameLineCtor.Value.Synthetic.Name, StringComparison.Ordinal))
+                    && string.Equals(normalizedName, javaSameLineCtor.Value.Synthetic.Name, StringComparison.Ordinal))
                 {
-                    continue;
+                    return;
                 }
 
                 var callContainer = ResolveContainerForCall(callIndex);
                 if (IsConstructorCallName(language, preparedLine, callIndex))
                 {
-                    AddReference(references, seen, fileId, match, "instantiate", context, lineNumber, callContainer);
-                    continue;
+                    AddReference(references, seen, fileId, normalizedName, callIndex, "instantiate", context, lineNumber, callContainer);
+                    return;
                 }
                 if (IsIgnoredCallName(language, name))
-                    continue;
-                if (definitionNames != null && definitionNames.Contains(name))
-                    continue;
+                    return;
+                if (definitionNames != null && definitionNames.Contains(normalizedName))
+                    return;
 
                 // issue #293: reclassify C# attribute / Java/Kotlin/Scala/TypeScript annotation
                 // usages with arguments so they do not pollute the call-graph as phantom `call` rows.
@@ -722,7 +1361,54 @@ public static class ReferenceExtractor
                 var insideCSharpAttributeRange = csharpAttrRangesOnLine != null
                     && IsInsideCSharpAttributeRange(csharpAttrRangesOnLine, callIndex);
                 var metadataKind = TryClassifyMetadataReference(language, preparedLine, callIndex, insideCSharpAttributeRange);
-                AddReference(references, seen, fileId, match, metadataKind ?? "call", context, lineNumber, callContainer);
+                AddReference(references, seen, fileId, normalizedName, callIndex, metadataKind ?? "call", context, lineNumber, callContainer);
+            }
+
+            var matchedCallIndices = new HashSet<int>();
+            foreach (Match match in CallRegex.Matches(preparedLine))
+            {
+                var name = match.Groups["name"].Value;
+                var callIndex = match.Groups["name"].Index;
+                if (sqlSuppressedCallIndices != null && sqlSuppressedCallIndices.Contains(callIndex))
+                    continue;
+                matchedCallIndices.Add(callIndex);
+                AddCallLikeReference(name, callIndex);
+            }
+
+            // The flat CallRegex misses nested generic tails like `>>(` because `<[^>\n]+>`
+            // stops at the first `>`. Add a depth-aware fallback so `Foo<Bar<int>>()` and
+            // `new Dict<K, List<V>>()` still emit call/instantiate rows. See issue #263.
+            // 平坦な CallRegex は `<[^>\n]+>` が最初の `>` で止まるため `>>(` 形を取りこぼす。
+            // depth-aware な fallback を足し、`Foo<Bar<int>>()` や `new Dict<K, List<V>>()` でも
+            // `call` / `instantiate` を発行する。issue #263 参照。
+            foreach (var candidate in EnumerateNestedGenericCallCandidates(preparedLine, matchedCallIndices))
+                AddCallLikeReference(candidate.Name, candidate.NameIndex);
+
+            // Qualified C# enum-member access such as `Nested.A` or `Outer.First.None` is not
+            // a method call, but downstream symbol workflows (`references`, `callers`,
+            // `callees`, `inspect`, `impact`) still need an edge anchored to the narrowest
+            // real owner symbol. Ordinary code paths stay `call` so existing graph readers
+            // keep working, while C# attribute metadata sites are downgraded to `attribute`
+            // to stay out of runtime call-graph traversals (issue #293 / #492).
+            // `Nested.A` や `Outer.First.None` のような C# enum member の修飾アクセスは
+            // メソッド呼び出しではないが、下流の symbol workflow では実 owner に紐づく edge が必要。
+            // 通常コードでは既存 reader / SQL 契約を守るため kind は `call` を維持し、C# 属性メタデータ内だけ
+            // `attribute` に落として runtime call-graph への混入を防ぐ (issue #293 / #492)。
+            if (language == "csharp" && csharpQualifiedEnumMemberLookup.Count > 0)
+            {
+                EmitCSharpQualifiedEnumMemberReferences(
+                    preparedLine,
+                    csharpQualifiedEnumMemberLookup,
+                    csharpAttrRangesOnLine,
+                    csharpUsingAliases,
+                    csharpValueReceiverNames,
+                    csharpFunctionValueReceiverNames,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    ResolveContainerForCall);
             }
 
             // issue #293: bare no-arg attributes / annotations are invisible to CallRegex because
@@ -734,7 +1420,8 @@ public static class ReferenceExtractor
             {
                 foreach (Match match in CSharpNoArgAttributeRegex.Matches(preparedLine))
                 {
-                    var name = match.Groups["name"].Value;
+                    var rawName = match.Groups["name"].Value;
+                    var name = NormalizeCSharpIdentifier(rawName);
                     var nameIndex = match.Groups["name"].Index;
                     // Gate on the attribute-section top-level (paren-depth 0) zones only, so
                     // identifiers that sit inside an attribute's argument list (e.g.
@@ -745,11 +1432,11 @@ public static class ReferenceExtractor
                     // の `AllowNumbers` など）を no-arg 属性として誤分類しないため。
                     if (!IsInsideCSharpAttributeRange(csharpAttrTopLevelOnLine, nameIndex))
                         continue;
-                    if (IsIgnoredCallName(language, name))
+                    if (IsIgnoredCallName(language, rawName))
                         continue;
                     if (definitionNames != null && definitionNames.Contains(name))
                         continue;
-                    AddReference(references, seen, fileId, match, "attribute", context, lineNumber, container);
+                    AddReference(references, seen, fileId, name, nameIndex, "attribute", context, lineNumber, container);
                 }
             }
             else if (AnnotationLanguages.Contains(language))
@@ -779,8 +1466,30 @@ public static class ReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
-        var name = match.Groups["name"].Value;
-        var column = match.Groups["name"].Index + 1;
+        AddReference(
+            references,
+            seen,
+            fileId,
+            match.Groups["name"].Value,
+            match.Groups["name"].Index,
+            referenceKind,
+            context,
+            lineNumber,
+            container);
+    }
+
+    private static void AddReference(
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string name,
+        int nameIndex,
+        string referenceKind,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        var column = nameIndex + 1;
         var dedupeKey = $"{lineNumber}:{column}:{referenceKind}:{name}";
         if (!seen.Add(dedupeKey))
             return;
@@ -796,6 +1505,321 @@ public static class ReferenceExtractor
             ContainerKind = container?.Kind,
             ContainerName = container?.Name,
         });
+    }
+
+    private static void NormalizeSqlIdentifier(
+        string rawName,
+        int rawIndex,
+        out string resolvedName,
+        out int resolvedIndex,
+        out bool wasQuoted)
+    {
+        if (rawName.Length >= 2
+            && ((rawName[0] == '[' && rawName[^1] == ']')
+                || (rawName[0] == '`' && rawName[^1] == '`')
+                || (rawName[0] == '"' && rawName[^1] == '"')))
+        {
+            // Normalize `[name]` / `` `name` `` / `"name"` to `name` so SQL-specific regexes and the shared
+            // CallRegex converge on the same symbol spelling and dedupe key.
+            // `[name]` / `` `name` `` / `"name"` を `name` に正規化し、SQL 専用 regex と共有 CallRegex の
+            // symbol 名と dedupe key を一致させる。
+            resolvedName = rawName.Substring(1, rawName.Length - 2);
+            if (rawName[0] == '"')
+                resolvedName = resolvedName.Replace("\"\"", "\"", StringComparison.Ordinal);
+            resolvedIndex = rawIndex + 1;
+            wasQuoted = true;
+            return;
+        }
+
+        resolvedName = rawName;
+        resolvedIndex = rawIndex;
+        wasQuoted = false;
+    }
+
+    private static bool IsFollowedByOpenParen(string line, int index)
+    {
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+
+        return index < line.Length && line[index] == '(';
+    }
+
+    private static int GetSqlCallLikeSuppressionIndex(string line, int index)
+    {
+        while (index < line.Length && line[index] == '#')
+            index++;
+
+        return index;
+    }
+
+    private static string CombineSqlStatementPrefix(string prefix, string line, out int lineOffset)
+    {
+        if (string.IsNullOrEmpty(prefix))
+        {
+            lineOffset = 0;
+            return line;
+        }
+
+        lineOffset = prefix.Length + 1;
+        return prefix + "\n" + line;
+    }
+
+    private static string AdvanceSqlStatementPrefix(
+        string combined,
+        int statementStart,
+        bool lineEndedByLineComment)
+    {
+        var remaining = statementStart == 0 ? combined : combined[statementStart..];
+        if (!lineEndedByLineComment)
+            return remaining;
+
+        return CanSqlStatementRequireLineCommentCarry(remaining) ? remaining : string.Empty;
+    }
+
+    private static bool ShouldFlushSqlTempObjectPrefixAtLineBoundary(
+        string prefix,
+        string nextLine)
+    {
+        if (string.IsNullOrWhiteSpace(prefix) || string.IsNullOrWhiteSpace(nextLine))
+            return false;
+        if (!CanSqlStatementEstablishTempObject(prefix))
+            return false;
+
+        return StartsSqlTopLevelStatement(nextLine);
+    }
+
+    private static bool CanSqlStatementEstablishTempObject(string statement)
+    {
+        if (statement.IndexOf('#') < 0)
+            return false;
+
+        return SqlTargetReferenceRegex.IsMatch(statement)
+            || SqlTruncateTargetRegex.IsMatch(statement)
+            || SqlSelectIntoTempTargetStatementRegex.IsMatch(statement)
+            || SqlCreateTempTableRegex.IsMatch(statement);
+    }
+
+    private static bool CanSqlStatementRequireLineCommentCarry(string statement)
+    {
+        if (string.IsNullOrWhiteSpace(statement))
+            return false;
+
+        return CanSqlStatementEstablishTempObject(statement)
+            || SqlTargetReferencePrefixRegex.IsMatch(statement)
+            || SqlSelectIntoTempPrefixRegex.IsMatch(statement)
+            || SqlDeleteUsingPrefixRegex.IsMatch(statement)
+            || SqlDeleteUsingListContinuationPrefixRegex.IsMatch(statement)
+            || SqlMergeUsingPrefixRegex.IsMatch(statement)
+            || SqlMergeTargetHintContinuationPrefixRegex.IsMatch(statement);
+    }
+
+    private static bool StartsSqlTopLevelStatement(string line)
+    {
+        int index = 0;
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+        if (index >= line.Length || !char.IsLetter(line[index]))
+            return false;
+
+        int start = index;
+        while (index < line.Length && char.IsLetter(line[index]))
+            index++;
+
+        var keyword = line[start..index].ToUpperInvariant();
+        if (keyword == "WITH")
+        {
+            while (index < line.Length && char.IsWhiteSpace(line[index]))
+                index++;
+
+            return index >= line.Length || line[index] != '(';
+        }
+
+        return keyword switch
+        {
+            "SELECT" => true,
+            "INSERT" => true,
+            "UPDATE" => true,
+            "DELETE" => true,
+            "MERGE" => true,
+            "CREATE" => true,
+            "ALTER" => true,
+            "DROP" => true,
+            "TRUNCATE" => true,
+            "SET" => true,
+            "DECLARE" => true,
+            "IF" => true,
+            "WHILE" => true,
+            "DO" => true,
+            "BEGIN" => true,
+            "EXEC" => true,
+            "EXECUTE" => true,
+            "CALL" => true,
+            _ => false,
+        };
+    }
+
+    private static int FindSqlStatementTerminator(string text, int startIndex)
+    {
+        for (int i = startIndex; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (c == ';')
+                return i;
+            if (c == '`')
+            {
+                int closing = text.IndexOf('`', i + 1);
+                if (closing < 0)
+                    return -1;
+                i = closing;
+                continue;
+            }
+            if (c == '[')
+            {
+                int closing = text.IndexOf(']', i + 1);
+                if (closing < 0)
+                    return -1;
+                i = closing;
+                continue;
+            }
+            if (c == '"')
+            {
+                int closing = FindClosingSqlDoubleQuote(text, i + 1);
+                if (closing < 0)
+                    return -1;
+                i = closing;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int FindClosingSqlDoubleQuote(string text, int startIndex)
+    {
+        for (int i = startIndex; i < text.Length; i++)
+        {
+            if (text[i] != '"')
+                continue;
+            if (i + 1 < text.Length && text[i + 1] == '"')
+            {
+                i++;
+                continue;
+            }
+
+            return i;
+        }
+
+        return -1;
+    }
+
+    private static int FindClosingSqlSingleQuote(string text, int startIndex)
+    {
+        for (int i = startIndex; i < text.Length; i++)
+        {
+            if (text[i] == '\\' && i + 1 < text.Length)
+            {
+                i++;
+                continue;
+            }
+            if (text[i] != '\'')
+                continue;
+            if (i + 1 < text.Length && text[i + 1] == '\'')
+            {
+                i++;
+                continue;
+            }
+
+            return i;
+        }
+
+        return -1;
+    }
+
+    private static bool IsInsideSqlDoubleQuotedRegion(string text, int index)
+    {
+        if (index <= 0)
+            return false;
+
+        bool inside = false;
+        for (int i = 0; i < index && i < text.Length; i++)
+        {
+            if (text[i] != '"')
+                continue;
+            if (inside && i + 1 < index && text[i + 1] == '"')
+            {
+                i++;
+                continue;
+            }
+
+            inside = !inside;
+        }
+
+        return inside;
+    }
+
+    private static bool TryReadSqlDollarQuoteDelimiter(
+        string line,
+        int index,
+        out string delimiter)
+    {
+        delimiter = string.Empty;
+        if (index < 0 || index >= line.Length || line[index] != '$')
+            return false;
+        if (index > 0 && (char.IsLetterOrDigit(line[index - 1]) || line[index - 1] == '_'))
+            return false;
+        if (index + 1 >= line.Length)
+            return false;
+        if (line[index + 1] == '$')
+        {
+            delimiter = "$$";
+            return true;
+        }
+        if (!(char.IsLetter(line[index + 1]) || line[index + 1] == '_'))
+            return false;
+
+        int probe = index + 2;
+        while (probe < line.Length && (char.IsLetterOrDigit(line[probe]) || line[probe] == '_'))
+            probe++;
+        if (probe >= line.Length || line[probe] != '$')
+            return false;
+
+        delimiter = line[index..(probe + 1)];
+        return true;
+    }
+
+    private static int SkipWhitespaceAhead(string text, int index)
+    {
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+            index++;
+        return index;
+    }
+
+    private static void CollectSqlTempObjectNamesFromStatement(
+        string statement,
+        HashSet<string> names)
+    {
+        CollectSqlTempObjectNamesFromMatches(SqlTargetReferenceRegex.Matches(statement), statement, names);
+        CollectSqlTempObjectNamesFromMatches(SqlTruncateTargetRegex.Matches(statement), statement, names);
+        CollectSqlTempObjectNamesFromMatches(SqlSelectIntoTempTargetStatementRegex.Matches(statement), statement, names);
+        CollectSqlTempObjectNamesFromMatches(SqlCreateTempTableRegex.Matches(statement), statement, names);
+    }
+
+    private static void CollectSqlTempObjectNamesFromMatches(MatchCollection matches, string statement, HashSet<string> names)
+    {
+        foreach (Match match in matches)
+        {
+            if (IsInsideSqlDoubleQuotedRegion(statement, match.Index))
+                continue;
+            var nameGroup = match.Groups["name"];
+            if (nameGroup.Captures.Count == 0)
+                continue;
+
+            foreach (Capture capture in nameGroup.Captures)
+            {
+                NormalizeSqlIdentifier(capture.Value, capture.Index, out var resolvedName, out _, out _);
+                if (resolvedName.StartsWith("#", StringComparison.Ordinal))
+                    names.Add(resolvedName);
+            }
+        }
     }
 
     /// <summary>
@@ -823,16 +1847,18 @@ public static class ReferenceExtractor
                 continue;
             }
 
-            if (!IsIgnoredTypeReferenceSegment(language, segment))
+            var normalizedSegment = language == "csharp" ? NormalizeCSharpIdentifier(segment) : segment;
+            var isEscapedCSharpIdentifier = language == "csharp" && segment[0] == '@';
+            if (!IsIgnoredTypeReferenceSegment(language, normalizedSegment, isEscapedCSharpIdentifier))
             {
                 int column = argStartInLine + offset + 1; // 1-based / 1始まり
-                var dedupeKey = $"{lineNumber}:{column}:type_reference:{segment}";
+                var dedupeKey = $"{lineNumber}:{column}:type_reference:{normalizedSegment}";
                 if (seen.Add(dedupeKey))
                 {
                     references.Add(new ReferenceRecord
                     {
                         FileId = fileId,
-                        SymbolName = segment,
+                        SymbolName = normalizedSegment,
                         ReferenceKind = "type_reference",
                         Line = lineNumber,
                         Column = column,
@@ -847,15 +1873,34 @@ public static class ReferenceExtractor
         }
     }
 
-    private static bool IsIgnoredTypeReferenceSegment(string language, string segment)
+    private static bool IsIgnoredTypeReferenceSegment(string language, string segment, bool isEscapedCSharpIdentifier = false)
     {
+        if (isEscapedCSharpIdentifier)
+            return false;
         if (IsIgnoredCallName(language, segment))
             return true;
         if (language == "java" && JavaPrimitiveTypeNames.Contains(segment))
             return true;
         if (language == "csharp" && CSharpBuiltInTypeNames.Contains(segment))
             return true;
+        if (IsLikelyGenericTypeParameter(segment))
+            return true;
         return false;
+    }
+
+    private static bool IsLikelyGenericTypeParameter(string segment)
+    {
+        if (segment.Length == 1)
+            return char.IsUpper(segment[0]);
+        if (segment.Length < 2 || segment[0] != 'T' || !char.IsUpper(segment[1]))
+            return false;
+        for (int i = 2; i < segment.Length; i++)
+        {
+            if (!(char.IsLetterOrDigit(segment[i]) || segment[i] == '_'))
+                return false;
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -916,9 +1961,13 @@ public static class ReferenceExtractor
             if (expectSegment && IsCSharpIdentifierStart(c))
             {
                 int segStart = i;
+                if (line[i] == '@')
+                    i++;
                 while (i < line.Length && IsCSharpIdentifierPart(line[i]))
                     i++;
-                var segment = line.Substring(segStart, i - segStart);
+                var rawSegment = line.Substring(segStart, i - segStart);
+                var segment = NormalizeCSharpIdentifier(rawSegment);
+                var isEscapedCSharpIdentifier = rawSegment.Length > 0 && rawSegment[0] == '@';
                 // `Alias::Member` — the left-hand side is a namespace alias, not an indexed
                 // type. Drop it instead of emitting it, and treat what follows the `::` as a
                 // fresh segment head.
@@ -931,7 +1980,7 @@ public static class ReferenceExtractor
                     continue;
                 }
 
-                AddTypeReferenceSegment(references, seen, fileId, segment, segStart, context, lineNumber, container, language);
+                AddTypeReferenceSegment(references, seen, fileId, segment, segStart, context, lineNumber, container, language, isEscapedCSharpIdentifier);
                 expectSegment = false;
                 continue;
             }
@@ -973,6 +2022,782 @@ public static class ReferenceExtractor
         }
     }
 
+    private static void EmitCSharpTypePositionReferences(
+        string preparedLine,
+        string originalLine,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        SymbolRecord? container)
+    {
+        TryEmitCSharpBaseListReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitCSharpWhereConstraintReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitDeclarationTypeReferences("csharp", preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+
+        foreach (Match match in CSharpIsAsTypeTestRegex.Matches(preparedLine))
+        {
+            var typeGroup = match.Groups["type"];
+            int continuationIndex = SkipWhitespace(preparedLine, typeGroup.Index + typeGroup.Length);
+            if (TryEmitCSharpLogicalTypePatternHeads(
+                    preparedLine,
+                    typeGroup.Value,
+                    typeGroup.Index,
+                    continuationIndex,
+                    lineNumber,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpQualifiedTypePatternLookup,
+                    csharpUsingAliases,
+                    csharpUsingStatics,
+                    hasActiveSameFileCSharpTypeCandidate,
+                    (logicalTypeExpression, logicalTypeIndex) => AddTypeExpressionSegments(
+                        references,
+                        seen,
+                        fileId,
+                        logicalTypeExpression,
+                        logicalTypeIndex,
+                        context,
+                        lineNumber,
+                        resolveContainerForColumn(logicalTypeIndex),
+                        "csharp")))
+            {
+                continue;
+            }
+
+            if (IsCSharpNonTypePatternExpression(typeGroup.Value)
+                || IsCSharpConstantPatternMemberHead(
+                    typeGroup.Value,
+                    lineNumber,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpUsingAliases,
+                    csharpUsingStatics,
+                    hasActiveSameFileCSharpTypeCandidate)
+                || IsCSharpLogicalConstantPatternAtCursor(
+                    preparedLine,
+                    typeGroup.Value,
+                    continuationIndex,
+                    lineNumber,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpQualifiedTypePatternLookup,
+                    csharpUsingAliases,
+                    csharpUsingStatics,
+                    hasActiveSameFileCSharpTypeCandidate))
+            {
+                continue;
+            }
+
+            AddTypeExpressionSegments(
+                references,
+                seen,
+                fileId,
+                typeGroup.Value,
+                typeGroup.Index,
+                context,
+                lineNumber,
+                resolveContainerForColumn(typeGroup.Index),
+                "csharp");
+        }
+
+        EmitCSharpCaseTypePatternReferences(
+            preparedLine,
+            csharpQualifiedConstantPatternMemberLookup,
+            csharpQualifiedTypePatternLookup,
+            csharpUsingAliases,
+            csharpUsingStatics,
+            hasActiveSameFileCSharpTypeCandidate,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn);
+    }
+
+    private static void EmitCSharpCaseTypePatternReferences(
+        string preparedLine,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (Match caseMatch in CSharpCaseLabelRegex.Matches(preparedLine))
+        {
+            int cursor = SkipWhitespace(preparedLine, caseMatch.Index + caseMatch.Length);
+            bool hadLeadingNot = TryConsumeCSharpPatternKeyword(preparedLine, ref cursor, "not");
+            if (hadLeadingNot)
+                cursor = SkipWhitespace(preparedLine, cursor);
+
+            var typeMatch = CSharpTypeExpressionAtCursorRegex.Match(preparedLine, cursor);
+            if (!typeMatch.Success)
+                continue;
+
+            var typeGroup = typeMatch.Groups["type"];
+            int continuationIndex = SkipWhitespace(preparedLine, typeGroup.Index + typeGroup.Length);
+            if (TryEmitCSharpLogicalTypePatternHeads(
+                    preparedLine,
+                    typeGroup.Value,
+                    typeGroup.Index,
+                    continuationIndex,
+                    lineNumber,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpQualifiedTypePatternLookup,
+                    csharpUsingAliases,
+                    csharpUsingStatics,
+                    hasActiveSameFileCSharpTypeCandidate,
+                    (logicalTypeExpression, logicalTypeIndex) => AddTypeExpressionSegments(
+                        references,
+                        seen,
+                        fileId,
+                        logicalTypeExpression,
+                        logicalTypeIndex,
+                        context,
+                        lineNumber,
+                        resolveContainerForColumn(logicalTypeIndex),
+                        "csharp")))
+            {
+                continue;
+            }
+
+            if (!IsCSharpCaseTypePatternContinuation(
+                    preparedLine,
+                    typeGroup.Value,
+                    continuationIndex,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpQualifiedTypePatternLookup,
+                    csharpUsingAliases,
+                    csharpUsingStatics,
+                    hasActiveSameFileCSharpTypeCandidate,
+                    lineNumber))
+                continue;
+
+            AddTypeExpressionSegments(
+                references,
+                seen,
+                fileId,
+                typeGroup.Value,
+                typeGroup.Index,
+                context,
+                lineNumber,
+                resolveContainerForColumn(typeGroup.Index),
+                "csharp");
+        }
+    }
+
+    private static void EmitJavaTypePositionReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn,
+        SymbolRecord? container)
+    {
+        TryEmitJavaKeywordTypeListReferences(preparedLine, "extends", references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        TryEmitJavaKeywordTypeListReferences(preparedLine, "implements", references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitJavaThrowsReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+        EmitDeclarationTypeReferences("java", preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
+
+        foreach (Match match in JavaInstanceofRegex.Matches(preparedLine))
+        {
+            var typeGroup = match.Groups["type"];
+            AddTypeExpressionSegments(
+                references,
+                seen,
+                fileId,
+                typeGroup.Value,
+                typeGroup.Index,
+                context,
+                lineNumber,
+                resolveContainerForColumn(typeGroup.Index),
+                "java");
+        }
+    }
+
+    private static void EmitCSharpDocCrefReferences(
+        string originalLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        foreach (Match match in CSharpDocCrefRegex.Matches(originalLine))
+        {
+            var crefGroup = match.Groups["cref"];
+            var normalized = NormalizeCSharpDocCref(crefGroup.Value);
+            if (normalized.Length == 0)
+                continue;
+            AddTypeExpressionSegments(
+                references,
+                seen,
+                fileId,
+                normalized,
+                crefGroup.Index,
+                context,
+                lineNumber,
+                container,
+                "csharp");
+        }
+    }
+
+    private static void TryEmitCSharpBaseListReferences(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        var trimmed = line.TrimStart();
+        if (!(trimmed.Contains(" class ", StringComparison.Ordinal)
+              || trimmed.Contains(" struct ", StringComparison.Ordinal)
+              || trimmed.Contains(" interface ", StringComparison.Ordinal)
+              || trimmed.StartsWith("class ", StringComparison.Ordinal)
+              || trimmed.StartsWith("struct ", StringComparison.Ordinal)
+              || trimmed.StartsWith("interface ", StringComparison.Ordinal)
+              || trimmed.Contains(" record ", StringComparison.Ordinal)
+              || trimmed.StartsWith("record ", StringComparison.Ordinal)))
+        {
+            return;
+        }
+
+        var colonIndex = FindSignatureColonIndex(line);
+        if (colonIndex < 0)
+            return;
+
+        var baseList = line.Substring(colonIndex + 1);
+        var whereMatch = CSharpWhereClauseRegex.Match(baseList);
+        if (whereMatch.Success)
+            baseList = baseList.Substring(0, whereMatch.Index);
+        baseList = TrimTrailingTypeListTerminator(baseList);
+        foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(baseList))
+        {
+            var rawSegment = baseList.Substring(segmentStart, segmentLength).Trim();
+            if (rawSegment.Length == 0 || rawSegment.Contains('('))
+                continue;
+            var absoluteStart = colonIndex + 1 + segmentStart + CountLeadingWhitespace(baseList, segmentStart, segmentLength);
+            AddTypeExpressionSegments(
+                references,
+                seen,
+                fileId,
+                rawSegment,
+                absoluteStart,
+                context,
+                lineNumber,
+                resolveContainerForColumn(absoluteStart),
+                "csharp");
+        }
+    }
+
+    private static void EmitCSharpWhereConstraintReferences(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (Match match in CSharpWhereClauseRegex.Matches(line))
+        {
+            int listStart = match.Index + match.Length;
+            var remaining = line.Substring(listStart);
+            int nextWhere = CSharpWhereClauseRegex.Match(remaining).Success ? CSharpWhereClauseRegex.Match(remaining).Index : -1;
+            int end = FindTypeListTerminator(remaining, allowArrow: true);
+            if (nextWhere >= 0 && (end < 0 || nextWhere < end))
+                end = nextWhere;
+            if (end < 0)
+                end = remaining.Length;
+            var constraintList = remaining.Substring(0, end);
+            foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(constraintList))
+            {
+                var rawSegment = constraintList.Substring(segmentStart, segmentLength).Trim();
+                if (rawSegment.Length == 0 || rawSegment.Contains('('))
+                    continue;
+                var absoluteStart = listStart + segmentStart + CountLeadingWhitespace(constraintList, segmentStart, segmentLength);
+                AddTypeExpressionSegments(
+                    references,
+                    seen,
+                    fileId,
+                    rawSegment,
+                    absoluteStart,
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn(absoluteStart),
+                    "csharp");
+            }
+        }
+    }
+
+    private static void TryEmitJavaKeywordTypeListReferences(
+        string line,
+        string keyword,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        int keywordIndex = FindTopLevelKeyword(line, keyword);
+        if (keywordIndex < 0)
+            return;
+
+        int listStart = keywordIndex + keyword.Length;
+        while (listStart < line.Length && char.IsWhiteSpace(line[listStart]))
+            listStart++;
+
+        int listEnd = FindJavaTypeListTerminator(line, listStart);
+        if (listEnd < 0)
+            listEnd = line.Length;
+        var typeList = line.Substring(listStart, listEnd - listStart);
+        foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(typeList))
+        {
+            var rawSegment = typeList.Substring(segmentStart, segmentLength).Trim();
+            if (rawSegment.Length == 0)
+                continue;
+            var absoluteStart = listStart + segmentStart + CountLeadingWhitespace(typeList, segmentStart, segmentLength);
+            AddTypeExpressionSegments(
+                references,
+                seen,
+                fileId,
+                rawSegment,
+                absoluteStart,
+                context,
+                lineNumber,
+                resolveContainerForColumn(absoluteStart),
+                "java");
+        }
+    }
+
+    private static void EmitJavaThrowsReferences(
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        int keywordIndex = FindTopLevelKeyword(line, "throws");
+        if (keywordIndex < 0)
+            return;
+
+        int listStart = keywordIndex + "throws".Length;
+        while (listStart < line.Length && char.IsWhiteSpace(line[listStart]))
+            listStart++;
+        int listEnd = FindTypeListTerminator(line.Substring(listStart), allowArrow: false);
+        if (listEnd < 0)
+            listEnd = line.Length - listStart;
+        var typeList = line.Substring(listStart, listEnd);
+        foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(typeList))
+        {
+            var rawSegment = typeList.Substring(segmentStart, segmentLength).Trim();
+            if (rawSegment.Length == 0)
+                continue;
+            var absoluteStart = listStart + segmentStart + CountLeadingWhitespace(typeList, segmentStart, segmentLength);
+            AddTypeExpressionSegments(
+                references,
+                seen,
+                fileId,
+                rawSegment,
+                absoluteStart,
+                context,
+                lineNumber,
+                resolveContainerForColumn(absoluteStart),
+                "java");
+        }
+    }
+
+    private static void EmitDeclarationTypeReferences(
+        string language,
+        string line,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        if (TryFindCallableParameterList(line, language, out var callableNameStart, out var paramStart, out var paramEnd))
+        {
+            if (TryGetCallableReturnTypeSpan(line, callableNameStart, language, out var typeStart, out var typeLength))
+            {
+                AddTypeExpressionSegments(
+                    references,
+                    seen,
+                    fileId,
+                    line.Substring(typeStart, typeLength),
+                    typeStart,
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn(typeStart),
+                    language);
+            }
+
+            EmitParameterTypeReferences(
+                language,
+                line,
+                paramStart,
+                paramEnd,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn);
+        }
+
+        if (TryGetSimpleDeclarationTypeSpan(line, language, out var declarationTypeStart, out var declarationTypeLength))
+        {
+            AddTypeExpressionSegments(
+                references,
+                seen,
+                fileId,
+                line.Substring(declarationTypeStart, declarationTypeLength),
+                declarationTypeStart,
+                context,
+                lineNumber,
+                resolveContainerForColumn(declarationTypeStart),
+                language);
+        }
+    }
+
+    private static bool TryFindCallableParameterList(
+        string line,
+        string language,
+        out int callableNameStart,
+        out int paramStart,
+        out int paramEnd)
+    {
+        callableNameStart = -1;
+        paramStart = -1;
+        paramEnd = -1;
+
+        if (IsDefinitelyNotTypeDeclarationLine(line, language))
+            return false;
+
+        int openParen = FindFirstTopLevelChar(line, '(');
+        if (openParen <= 0)
+            return false;
+        if (!TryFindCallableName(line, openParen, language, out callableNameStart))
+            return false;
+
+        int closeParen = FindMatchingChar(line, openParen, '(', ')');
+        if (closeParen < 0)
+            return false;
+
+        paramStart = openParen + 1;
+        paramEnd = closeParen;
+        return true;
+    }
+
+    private static bool TryFindCallableName(string line, int openParen, string language, out int nameStart)
+    {
+        nameStart = -1;
+        int i = openParen - 1;
+        while (i >= 0 && char.IsWhiteSpace(line[i]))
+            i--;
+        if (i < 0)
+            return false;
+
+        if (line[i] == '>')
+        {
+            int depth = 1;
+            i--;
+            while (i >= 0 && depth > 0)
+            {
+                if (line[i] == '>')
+                    depth++;
+                else if (line[i] == '<')
+                    depth--;
+                i--;
+            }
+            while (i >= 0 && char.IsWhiteSpace(line[i]))
+                i--;
+        }
+
+        if (i < 0 || !IsTypeExpressionIdentifierPart(language, line[i]))
+            return false;
+        int end = i + 1;
+        while (i >= 0 && IsTypeExpressionIdentifierPart(language, line[i]))
+            i--;
+        nameStart = i + 1;
+
+        var name = line.Substring(nameStart, end - nameStart);
+        if (IsIgnoredCallName(language, name))
+            return false;
+        return true;
+    }
+
+    private static bool TryGetCallableReturnTypeSpan(string line, int callableNameStart, string language, out int typeStart, out int typeLength)
+    {
+        typeStart = -1;
+        typeLength = 0;
+        var prefix = line.Substring(0, callableNameStart);
+        if (prefix.IndexOf('=') >= 0 || prefix.Contains("=>", StringComparison.Ordinal))
+            return false;
+
+        var tokens = GetTopLevelTokenSpans(prefix);
+        if (tokens.Count == 0)
+            return false;
+
+        for (int i = tokens.Count - 1; i >= 0; i--)
+        {
+            var token = prefix.Substring(tokens[i].Start, tokens[i].Length);
+            if (IsCallablePrefixModifier(language, token) || token.StartsWith("[", StringComparison.Ordinal) || token.StartsWith("@", StringComparison.Ordinal))
+                continue;
+            if (!HasWhitespaceGap(prefix, tokens[i].Start + tokens[i].Length))
+                return false;
+            typeStart = tokens[i].Start;
+            typeLength = tokens[i].Length;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static void EmitParameterTypeReferences(
+        string language,
+        string line,
+        int paramStart,
+        int paramEnd,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        if (paramEnd <= paramStart)
+            return;
+
+        var parameterList = line.Substring(paramStart, paramEnd - paramStart);
+        foreach (var (segmentStart, segmentLength) in SplitTopLevelCommaSpans(parameterList))
+        {
+            var fragment = parameterList.Substring(segmentStart, segmentLength);
+            if (!TryGetParameterTypeRelativeSpan(fragment, language, out var typeRelativeStart, out var typeRelativeLength))
+                continue;
+
+            int absoluteStart = paramStart + segmentStart + typeRelativeStart;
+            AddTypeExpressionSegments(
+                references,
+                seen,
+                fileId,
+                fragment.Substring(typeRelativeStart, typeRelativeLength),
+                absoluteStart,
+                context,
+                lineNumber,
+                resolveContainerForColumn(absoluteStart),
+                language);
+        }
+    }
+
+    private static bool TryGetParameterTypeRelativeSpan(string parameterFragment, string language, out int typeStart, out int typeLength)
+    {
+        typeStart = -1;
+        typeLength = 0;
+
+        int end = FindTopLevelAssignmentIndex(parameterFragment);
+        if (end < 0)
+            end = parameterFragment.Length;
+        var candidate = parameterFragment.Substring(0, end);
+        var tokens = GetTopLevelTokenSpans(candidate);
+        if (tokens.Count < 2)
+            return false;
+
+        int first = 0;
+        while (first < tokens.Count)
+        {
+            var token = candidate.Substring(tokens[first].Start, tokens[first].Length);
+            if (token.StartsWith("[", StringComparison.Ordinal) || token.StartsWith("@", StringComparison.Ordinal) || IsParameterModifier(language, token))
+            {
+                first++;
+                continue;
+            }
+
+            break;
+        }
+
+        if (first >= tokens.Count - 1)
+            return false;
+
+        typeStart = tokens[first].Start;
+        int lastTypeToken = tokens.Count - 2;
+        while (lastTypeToken >= first)
+        {
+            var token = candidate.Substring(tokens[lastTypeToken].Start, tokens[lastTypeToken].Length);
+            if (IsParameterModifier(language, token))
+            {
+                lastTypeToken--;
+                continue;
+            }
+
+            break;
+        }
+
+        if (lastTypeToken < first)
+            return false;
+        typeLength = tokens[lastTypeToken].Start + tokens[lastTypeToken].Length - typeStart;
+        return true;
+    }
+
+    private static bool TryGetSimpleDeclarationTypeSpan(string line, string language, out int typeStart, out int typeLength)
+    {
+        typeStart = -1;
+        typeLength = 0;
+
+        if (IsDefinitelyNotTypeDeclarationLine(line, language))
+            return false;
+
+        int firstParen = FindFirstTopLevelChar(line, '(');
+        int firstTerminator = FindFirstTopLevelChar(line, ';');
+        int firstBrace = FindFirstTopLevelChar(line, '{');
+        int firstEquals = FindFirstTopLevelChar(line, '=');
+        int firstComma = FindFirstTopLevelChar(line, ',');
+        int boundary = int.MaxValue;
+        if (firstTerminator >= 0) boundary = Math.Min(boundary, firstTerminator);
+        if (firstBrace >= 0) boundary = Math.Min(boundary, firstBrace);
+        if (firstEquals >= 0) boundary = Math.Min(boundary, firstEquals);
+        if (firstComma >= 0) boundary = Math.Min(boundary, firstComma);
+        if (boundary == int.MaxValue)
+            return false;
+        if (firstParen >= 0 && firstParen < boundary)
+            return false;
+
+        var head = line.Substring(0, boundary);
+        var tokens = GetTopLevelTokenSpans(head);
+        if (tokens.Count < 2)
+            return false;
+
+        int first = 0;
+        while (first < tokens.Count)
+        {
+            var token = head.Substring(tokens[first].Start, tokens[first].Length);
+            if (token.StartsWith("[", StringComparison.Ordinal) || token.StartsWith("@", StringComparison.Ordinal) || IsDeclarationModifier(language, token))
+            {
+                first++;
+                continue;
+            }
+
+            break;
+        }
+
+        if (first >= tokens.Count - 1)
+            return false;
+
+        var declaredNameToken = head.Substring(tokens[^1].Start, tokens[^1].Length);
+        if (!IsSimpleDeclarationIdentifier(language, declaredNameToken))
+            return false;
+
+        typeStart = tokens[first].Start;
+        int lastTypeToken = tokens.Count - 2;
+        typeLength = tokens[lastTypeToken].Start + tokens[lastTypeToken].Length - typeStart;
+        return true;
+    }
+
+    private static bool IsDefinitelyNotTypeDeclarationLine(string line, string language)
+    {
+        var trimmed = line.TrimStart();
+        if (trimmed.Length == 0)
+            return true;
+        if (trimmed.StartsWith("using ", StringComparison.Ordinal)
+            || trimmed.StartsWith("namespace ", StringComparison.Ordinal)
+            || trimmed.StartsWith("package ", StringComparison.Ordinal)
+            || trimmed.StartsWith("import ", StringComparison.Ordinal)
+            || trimmed.StartsWith("return ", StringComparison.Ordinal)
+            || trimmed.StartsWith("throw ", StringComparison.Ordinal)
+            || trimmed.StartsWith("if ", StringComparison.Ordinal)
+            || trimmed.StartsWith("if(", StringComparison.Ordinal)
+            || trimmed.StartsWith("switch ", StringComparison.Ordinal)
+            || trimmed.StartsWith("switch(", StringComparison.Ordinal)
+            || trimmed.StartsWith("while ", StringComparison.Ordinal)
+            || trimmed.StartsWith("while(", StringComparison.Ordinal)
+            || trimmed.StartsWith("for ", StringComparison.Ordinal)
+            || trimmed.StartsWith("for(", StringComparison.Ordinal)
+            || trimmed.StartsWith("foreach ", StringComparison.Ordinal)
+            || trimmed.StartsWith("foreach(", StringComparison.Ordinal)
+            || trimmed.StartsWith("catch ", StringComparison.Ordinal)
+            || trimmed.StartsWith("catch(", StringComparison.Ordinal)
+            || trimmed.StartsWith("lock ", StringComparison.Ordinal)
+            || trimmed.StartsWith("lock(", StringComparison.Ordinal)
+            || trimmed.StartsWith("case ", StringComparison.Ordinal)
+            || trimmed.StartsWith("else", StringComparison.Ordinal)
+            || trimmed.StartsWith("do", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return trimmed.StartsWith("class ", StringComparison.Ordinal)
+            || trimmed.StartsWith("struct ", StringComparison.Ordinal)
+            || trimmed.StartsWith("interface ", StringComparison.Ordinal)
+            || trimmed.StartsWith("record ", StringComparison.Ordinal)
+            || (language == "java" && trimmed.StartsWith("enum ", StringComparison.Ordinal));
+    }
+
+    private static void AddTypeExpressionSegments(
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string expression,
+        int expressionStartInLine,
+        string context,
+        int lineNumber,
+        SymbolRecord? container,
+        string language)
+    {
+        for (int i = 0; i < expression.Length; i++)
+        {
+            char c = expression[i];
+            if (language == "java" && c == '@')
+            {
+                i = SkipJavaAnnotation(expression, i);
+                continue;
+            }
+
+            if (!IsTypeExpressionIdentifierStart(language, c))
+                continue;
+
+            int segmentStart = i;
+            if (language == "csharp" && expression[i] == '@')
+                i++;
+            while (i < expression.Length && IsTypeExpressionIdentifierPart(language, expression[i]))
+                i++;
+
+            var rawSegment = expression.Substring(segmentStart, i - segmentStart);
+            var isEscapedCSharpIdentifier = language == "csharp" && rawSegment.Length > 0 && rawSegment[0] == '@';
+            var segment = rawSegment;
+            if (language == "csharp")
+                segment = NormalizeCSharpIdentifier(rawSegment);
+
+            if (i + 1 < expression.Length && expression[i] == ':' && expression[i + 1] == ':')
+            {
+                i++;
+                continue;
+            }
+
+            AddTypeReferenceSegment(references, seen, fileId, segment, expressionStartInLine + segmentStart, context, lineNumber, container, language, isEscapedCSharpIdentifier);
+            i--;
+        }
+    }
+
     private static int SkipBalanced(string line, int start, char open, char close)
     {
         int depth = 0;
@@ -993,8 +2818,4639 @@ public static class ReferenceExtractor
         return i;
     }
 
+    private static int SkipJavaAnnotation(string text, int start)
+    {
+        int i = start + 1;
+        while (i < text.Length && (IsJavaIdentifierPart(text[i]) || text[i] == '.'))
+            i++;
+        if (i < text.Length && text[i] == '(')
+        {
+            int close = FindMatchingChar(text, i, '(', ')');
+            if (close >= 0)
+                return close;
+        }
+
+        return i - 1;
+    }
+
+    private static int FindMatchingChar(string text, int openIndex, char open, char close)
+    {
+        int depth = 0;
+        for (int i = openIndex; i < text.Length; i++)
+        {
+            if (text[i] == open)
+                depth++;
+            else if (text[i] == close)
+            {
+                depth--;
+                if (depth == 0)
+                    return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int FindFirstTopLevelChar(string text, char target)
+    {
+        int angleDepth = 0;
+        int parenDepth = 0;
+        int squareDepth = 0;
+        int braceDepth = 0;
+        for (int i = 0; i < text.Length; i++)
+        {
+            if (text[i] == target && angleDepth == 0 && parenDepth == 0 && squareDepth == 0 && braceDepth == 0)
+                return i;
+
+            switch (text[i])
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0) angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0) parenDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0) squareDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0) braceDepth--;
+                    break;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int FindTopLevelAssignmentIndex(string text)
+    {
+        int angleDepth = 0;
+        int parenDepth = 0;
+        int squareDepth = 0;
+        int braceDepth = 0;
+        for (int i = 0; i < text.Length; i++)
+        {
+            switch (text[i])
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0) angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0) parenDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0) squareDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0) braceDepth--;
+                    break;
+                case '=' when angleDepth == 0 && parenDepth == 0 && squareDepth == 0 && braceDepth == 0:
+                    if (i + 1 >= text.Length || text[i + 1] != '>')
+                        return i;
+                    break;
+            }
+        }
+
+        return -1;
+    }
+
+    private static List<(int Start, int Length)> GetTopLevelTokenSpans(string text)
+    {
+        var tokens = new List<(int Start, int Length)>();
+        int angleDepth = 0;
+        int parenDepth = 0;
+        int squareDepth = 0;
+        int braceDepth = 0;
+        int tokenStart = -1;
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            switch (c)
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0) angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0) parenDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0) squareDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0) braceDepth--;
+                    break;
+            }
+
+            bool topLevelWhitespace = char.IsWhiteSpace(c) && angleDepth == 0 && parenDepth == 0 && squareDepth == 0 && braceDepth == 0;
+            if (topLevelWhitespace)
+            {
+                if (tokenStart >= 0)
+                {
+                    tokens.Add((tokenStart, i - tokenStart));
+                    tokenStart = -1;
+                }
+                continue;
+            }
+
+            if (tokenStart < 0)
+                tokenStart = i;
+        }
+
+        if (tokenStart >= 0)
+            tokens.Add((tokenStart, text.Length - tokenStart));
+        return tokens;
+    }
+
+    private static List<(int Start, int Length)> SplitTopLevelCommaSpans(string text)
+    {
+        var spans = new List<(int Start, int Length)>();
+        int angleDepth = 0;
+        int parenDepth = 0;
+        int squareDepth = 0;
+        int braceDepth = 0;
+        int start = 0;
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            switch (text[i])
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0) angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0) parenDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0) squareDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0) braceDepth--;
+                    break;
+                case ',' when angleDepth == 0 && parenDepth == 0 && squareDepth == 0 && braceDepth == 0:
+                    spans.Add((start, i - start));
+                    start = i + 1;
+                    break;
+            }
+        }
+
+        spans.Add((start, text.Length - start));
+        return spans;
+    }
+
+    private static int CountLeadingWhitespace(string text, int start, int length)
+    {
+        int count = 0;
+        while (count < length && char.IsWhiteSpace(text[start + count]))
+            count++;
+        return count;
+    }
+
+    private static int FindTypeListTerminator(string text, bool allowArrow)
+    {
+        int brace = FindFirstTopLevelChar(text, '{');
+        int semi = FindFirstTopLevelChar(text, ';');
+        int end = -1;
+        if (brace >= 0) end = brace;
+        if (semi >= 0 && (end < 0 || semi < end)) end = semi;
+        if (allowArrow)
+        {
+            int arrow = text.IndexOf("=>", StringComparison.Ordinal);
+            if (arrow >= 0 && (end < 0 || arrow < end))
+                end = arrow;
+        }
+        return end;
+    }
+
+    private static string TrimTrailingTypeListTerminator(string text)
+    {
+        int end = FindTypeListTerminator(text, allowArrow: true);
+        return end >= 0 ? text.Substring(0, end) : text;
+    }
+
+    private static int FindJavaTypeListTerminator(string text, int start)
+    {
+        int angleDepth = 0;
+        int parenDepth = 0;
+        for (int i = start; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (c == '<')
+                angleDepth++;
+            else if (c == '>')
+            {
+                if (angleDepth > 0) angleDepth--;
+            }
+            else if (c == '(')
+                parenDepth++;
+            else if (c == ')')
+            {
+                if (parenDepth > 0) parenDepth--;
+            }
+            else if (angleDepth == 0 && parenDepth == 0)
+            {
+                if (c == '{' || c == ';')
+                    return i;
+                if (IsJavaBaseListTerminatorKeyword(text, i, start, "implements")
+                    || IsJavaBaseListTerminatorKeyword(text, i, start, "permits")
+                    || IsJavaBaseListTerminatorKeyword(text, i, start, "throws"))
+                {
+                    return i;
+                }
+            }
+        }
+
+        return -1;
+    }
+
+    private static int FindTopLevelKeyword(string text, string keyword)
+    {
+        int angleDepth = 0;
+        int parenDepth = 0;
+        int squareDepth = 0;
+        int braceDepth = 0;
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            switch (c)
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0) angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0) parenDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0) squareDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0) braceDepth--;
+                    break;
+            }
+
+            if (angleDepth != 0 || parenDepth != 0 || squareDepth != 0 || braceDepth != 0)
+                continue;
+            if (i > 0 && IsJavaIdentifierPart(text[i - 1]))
+                continue;
+            if (i + keyword.Length > text.Length || string.CompareOrdinal(text, i, keyword, 0, keyword.Length) != 0)
+                continue;
+            int after = i + keyword.Length;
+            if (after < text.Length && IsJavaIdentifierPart(text[after]))
+                continue;
+            return i;
+        }
+
+        return -1;
+    }
+
+    private static bool IsCallablePrefixModifier(string language, string token) =>
+        language == "csharp"
+            ? token is "public" or "private" or "protected" or "internal" or "file" or "static" or "readonly" or "required" or "volatile" or "const"
+                or "unsafe" or "new" or "sealed" or "abstract" or "virtual" or "override" or "extern" or "partial" or "async" or "ref" or "scoped"
+            : token is "public" or "private" or "protected" or "static" or "final" or "abstract" or "synchronized" or "native" or "strictfp" or "default";
+
+    private static bool IsParameterModifier(string language, string token) =>
+        language == "csharp"
+            ? token is "ref" or "out" or "in" or "params" or "this" or "scoped" or "readonly"
+            : token is "final";
+
+    private static bool IsDeclarationModifier(string language, string token) =>
+        language == "csharp"
+            ? token is "public" or "private" or "protected" or "internal" or "file" or "static" or "readonly" or "required" or "volatile" or "const"
+                or "unsafe" or "new" or "sealed" or "abstract" or "virtual" or "override" or "extern" or "partial" or "async" or "ref" or "scoped" or "event"
+            : token is "public" or "private" or "protected" or "static" or "final" or "abstract" or "volatile" or "transient" or "synchronized" or "native" or "strictfp";
+
+    private static bool IsSimpleDeclarationIdentifier(string language, string token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return false;
+        if (!IsTypeExpressionIdentifierStart(language, token[0]))
+            return false;
+        for (int i = 1; i < token.Length; i++)
+        {
+            if (!IsTypeExpressionIdentifierPart(language, token[i]))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool HasWhitespaceGap(string text, int start)
+    {
+        if (start >= text.Length)
+            return false;
+        for (int i = start; i < text.Length; i++)
+        {
+            if (!char.IsWhiteSpace(text[i]))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static string NormalizeCSharpDocCref(string cref)
+    {
+        var text = cref.Trim();
+        if (text.Length >= 2 && char.IsLetter(text[0]) && text[1] == ':')
+            text = text.Substring(2);
+        int paren = text.IndexOf('(');
+        if (paren >= 0)
+            text = text.Substring(0, paren);
+        int brace = text.IndexOf('{');
+        if (brace >= 0)
+            text = text.Substring(0, brace);
+        return text.Trim();
+    }
+
     private static bool IsCSharpIdentifierStart(char c) =>
         c == '_' || c == '@' || char.IsLetter(c);
+
+    private static bool IsJavaIdentifierStart(char c) =>
+        c == '_' || c == '$' || char.IsLetter(c);
+
+    private static bool IsTypeExpressionIdentifierStart(string language, char c) =>
+        language == "csharp" ? IsCSharpIdentifierStart(c) : IsJavaIdentifierStart(c);
+
+    private static bool IsTypeExpressionIdentifierPart(string language, char c) =>
+        language == "csharp" ? IsCSharpIdentifierPart(c) : IsJavaIdentifierPart(c);
+
+    private readonly record struct CSharpLineColumn(int Line, int Column);
+    private readonly record struct CSharpRecursivePatternValueNameRecord(string Name, int Offset, bool IsCasePattern, int ArrowIndex = -1);
+    private sealed record CSharpNamespaceScope(string QualifiedName, int ScopeStartLine, int ScopeEndLine);
+    private sealed record CSharpUsingNamespaceScope(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
+    private sealed record CSharpContainingTypeScope(string QualifiedName, int ScopeStartLine, int ScopeEndLine);
+    private sealed record CSharpUsingAliasRecord(string AliasName, string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine, bool TargetsType);
+    private sealed record CSharpUsingStaticRecord(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
+    private sealed record CSharpCastTypeShape(IReadOnlyList<string> IdentifierSegments, string? SimpleQualifiedName, bool HasTypeOnlySyntax, bool AllIdentifiersTypeLike);
+    private sealed record CSharpContainingTypeValueReceiverNames(HashSet<string> InstanceNames, HashSet<string> StaticNames);
+    private sealed record CSharpFunctionValueReceiverNameRecord(string Name, int ScopeStartLine, int ScopeStartColumn, int ScopeEndLine, int ScopeEndColumn);
+
+    private static List<CSharpUsingAliasRecord> BuildCSharpUsingAliases(string language, IReadOnlyList<SymbolRecord> symbols, IReadOnlySet<string> csharpKnownTypeNames)
+    {
+        var aliases = new List<CSharpUsingAliasRecord>();
+        if (language != "csharp")
+            return aliases;
+
+        var namespaceScopes = symbols
+            .Where(symbol => symbol.Kind == "namespace")
+            .Select(symbol => (
+                StartLine: symbol.BodyStartLine ?? symbol.StartLine,
+                EndLine: symbol.BodyEndLine ?? symbol.EndLine))
+            .Where(scope => scope.StartLine > 0 && scope.EndLine >= scope.StartLine)
+            .ToList();
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "import" || string.IsNullOrWhiteSpace(symbol.Signature))
+                continue;
+
+            var match = CSharpUsingAliasRegex.Match(symbol.Signature!);
+            if (!match.Success)
+                continue;
+
+            var alias = NormalizeCSharpIdentifier(match.Groups["alias"].Value);
+            var target = TryNormalizeCSharpQualifiedName(match.Groups["target"].Value);
+            if (string.IsNullOrWhiteSpace(alias) || string.IsNullOrWhiteSpace(target))
+                continue;
+
+            var scopeStartLine = 1;
+            var scopeEndLine = int.MaxValue;
+            var scopeWidth = int.MaxValue;
+            foreach (var (startLine, endLine) in namespaceScopes)
+            {
+                if (symbol.Line < startLine || symbol.Line > endLine)
+                    continue;
+
+                var width = endLine - startLine;
+                if (width > scopeWidth)
+                    continue;
+
+                scopeStartLine = startLine;
+                scopeEndLine = endLine;
+                scopeWidth = width;
+            }
+
+            aliases.Add(new CSharpUsingAliasRecord(
+                alias,
+                target,
+                symbol.Line,
+                scopeStartLine,
+                scopeEndLine,
+                IsCSharpUsingAliasTypeTarget(target, csharpKnownTypeNames)));
+        }
+
+        aliases.Sort(static (left, right) => left.Line.CompareTo(right.Line));
+        return aliases;
+    }
+
+    private static List<CSharpUsingStaticRecord> BuildCSharpUsingStatics(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        var imports = new List<CSharpUsingStaticRecord>();
+        if (language != "csharp")
+            return imports;
+
+        var namespaceScopes = symbols
+            .Where(symbol => symbol.Kind == "namespace")
+            .Select(symbol => (
+                StartLine: symbol.BodyStartLine ?? symbol.StartLine,
+                EndLine: symbol.BodyEndLine ?? symbol.EndLine))
+            .Where(scope => scope.StartLine > 0 && scope.EndLine >= scope.StartLine)
+            .ToList();
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "import" || string.IsNullOrWhiteSpace(symbol.Signature))
+                continue;
+
+            var match = CSharpUsingStaticRegex.Match(symbol.Signature!);
+            if (!match.Success)
+                continue;
+
+            var target = TryNormalizeCSharpQualifiedName(match.Groups["target"].Value);
+            if (string.IsNullOrWhiteSpace(target))
+                continue;
+
+            var scopeStartLine = 1;
+            var scopeEndLine = int.MaxValue;
+            var scopeWidth = int.MaxValue;
+            foreach (var (startLine, endLine) in namespaceScopes)
+            {
+                if (symbol.Line < startLine || symbol.Line > endLine)
+                    continue;
+
+                var width = endLine - startLine;
+                if (width > scopeWidth)
+                    continue;
+
+                scopeStartLine = startLine;
+                scopeEndLine = endLine;
+                scopeWidth = width;
+            }
+
+            imports.Add(new CSharpUsingStaticRecord(target, symbol.Line, scopeStartLine, scopeEndLine));
+        }
+
+        imports.Sort(static (left, right) => left.Line.CompareTo(right.Line));
+        return imports;
+    }
+
+    private static List<CSharpUsingNamespaceScope> BuildCSharpUsingNamespaceScopes(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        var scopes = new List<CSharpUsingNamespaceScope>();
+        if (language != "csharp")
+            return scopes;
+
+        var namespaceScopes = symbols
+            .Where(symbol => symbol.Kind == "namespace")
+            .Select(symbol => (
+                StartLine: symbol.BodyStartLine ?? symbol.StartLine,
+                EndLine: symbol.BodyEndLine ?? symbol.EndLine))
+            .Where(scope => scope.StartLine > 0 && scope.EndLine >= scope.StartLine)
+            .ToList();
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "import" || string.IsNullOrWhiteSpace(symbol.Signature))
+                continue;
+
+            if (!TryParseCSharpUsingNamespaceImport(symbol.Signature!, out var target, out _))
+                continue;
+
+            var scopeStartLine = 1;
+            var scopeEndLine = int.MaxValue;
+            var scopeWidth = int.MaxValue;
+            foreach (var (startLine, endLine) in namespaceScopes)
+            {
+                if (symbol.Line < startLine || symbol.Line > endLine)
+                    continue;
+
+                var width = endLine - startLine;
+                if (width > scopeWidth)
+                    continue;
+
+                scopeStartLine = startLine;
+                scopeEndLine = endLine;
+                scopeWidth = width;
+            }
+
+            scopes.Add(new CSharpUsingNamespaceScope(target!, symbol.Line, scopeStartLine, scopeEndLine));
+        }
+
+        scopes.Sort(static (left, right) => left.Line.CompareTo(right.Line));
+        return scopes;
+    }
+
+    private static List<CSharpNamespaceScope> BuildCSharpNamespaceScopes(string language, IReadOnlyList<SymbolRecord> symbols, int totalLineCount)
+    {
+        var scopes = new List<CSharpNamespaceScope>();
+        if (language != "csharp")
+            return scopes;
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "namespace" || string.IsNullOrWhiteSpace(symbol.Name))
+                continue;
+
+            var startLine = symbol.BodyStartLine ?? symbol.StartLine;
+            var endLine = symbol.BodyEndLine ?? symbol.EndLine;
+            if (!string.IsNullOrWhiteSpace(symbol.Signature)
+                && symbol.Signature.TrimEnd().EndsWith(';'))
+            {
+                endLine = Math.Max(endLine, totalLineCount);
+            }
+
+            if (startLine <= 0 || endLine < startLine)
+                continue;
+
+            var qualifiedName = TryNormalizeCSharpQualifiedName(symbol.Name) ?? string.Empty;
+            scopes.Add(new CSharpNamespaceScope(qualifiedName, startLine, endLine));
+        }
+
+        return scopes;
+    }
+
+    private static bool TryParseCSharpUsingNamespaceImport(string signature, out string? target, out bool isGlobal)
+    {
+        target = null;
+        isGlobal = false;
+        if (string.IsNullOrWhiteSpace(signature) || signature.IndexOf('=') >= 0)
+            return false;
+
+        var match = CSharpUsingNamespaceRegex.Match(signature);
+        if (!match.Success)
+            return false;
+
+        target = TryNormalizeCSharpQualifiedName(match.Groups["target"].Value);
+        if (string.IsNullOrWhiteSpace(target))
+            return false;
+
+        isGlobal = signature.TrimStart().StartsWith("global using ", StringComparison.Ordinal);
+        return true;
+    }
+
+    private static List<CSharpContainingTypeScope> BuildCSharpContainingTypeScopes(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        var scopes = new List<CSharpContainingTypeScope>();
+        if (language != "csharp")
+            return scopes;
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is not ("class" or "struct" or "interface")
+                || string.IsNullOrWhiteSpace(symbol.Name))
+            {
+                continue;
+            }
+
+            var startLine = symbol.BodyStartLine ?? symbol.StartLine;
+            var endLine = symbol.BodyEndLine ?? symbol.EndLine;
+            if (startLine <= 0 || endLine < startLine)
+                continue;
+
+            var qualifiedName = CombineQualifiedName(symbol.ContainerQualifiedName, NormalizeCSharpIdentifier(symbol.Name));
+            if (string.IsNullOrWhiteSpace(qualifiedName))
+                qualifiedName = NormalizeCSharpIdentifier(symbol.Name);
+            if (string.IsNullOrWhiteSpace(qualifiedName))
+                continue;
+
+            scopes.Add(new CSharpContainingTypeScope(qualifiedName!, startLine, endLine));
+        }
+
+        return scopes;
+    }
+
+    private static Dictionary<string, HashSet<string>> BuildCSharpTopLevelTypeNamespacesByName(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        var lookup = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        if (language != "csharp")
+            return lookup;
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is not ("class" or "struct" or "interface" or "enum" or "delegate")
+                || string.IsNullOrWhiteSpace(symbol.Name))
+            {
+                continue;
+            }
+
+            if (symbol.ContainerKind is not (null or "namespace"))
+                continue;
+
+            var name = NormalizeCSharpIdentifier(symbol.Name);
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            if (!lookup.TryGetValue(name, out var namespaces))
+            {
+                namespaces = new HashSet<string>(StringComparer.Ordinal);
+                lookup[name] = namespaces;
+            }
+
+            var qualifiedNamespace = symbol.ContainerQualifiedName;
+            if (string.IsNullOrWhiteSpace(qualifiedNamespace) && symbol.ContainerKind == "namespace")
+                qualifiedNamespace = symbol.ContainerName;
+            namespaces.Add(TryNormalizeCSharpQualifiedName(qualifiedNamespace ?? string.Empty) ?? string.Empty);
+        }
+
+        return lookup;
+    }
+
+    private static Dictionary<string, HashSet<string>> BuildCSharpNestedTypeContainersByName(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        var lookup = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        if (language != "csharp")
+            return lookup;
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is not ("class" or "struct" or "interface" or "enum" or "delegate")
+                || string.IsNullOrWhiteSpace(symbol.Name))
+            {
+                continue;
+            }
+
+            if (symbol.ContainerKind is not ("class" or "struct" or "interface"))
+                continue;
+
+            var name = NormalizeCSharpIdentifier(symbol.Name);
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            if (!lookup.TryGetValue(name, out var containingTypes))
+            {
+                containingTypes = new HashSet<string>(StringComparer.Ordinal);
+                lookup[name] = containingTypes;
+            }
+
+            var qualifiedContainer = !string.IsNullOrWhiteSpace(symbol.ContainerQualifiedName)
+                ? symbol.ContainerQualifiedName
+                : NormalizeCSharpIdentifier(symbol.ContainerName ?? string.Empty);
+            if (!string.IsNullOrWhiteSpace(qualifiedContainer))
+                containingTypes.Add(qualifiedContainer!);
+        }
+
+        return lookup;
+    }
+
+    private static HashSet<string> BuildCSharpKnownTypeNames(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        if (language != "csharp")
+            return names;
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is not ("class" or "struct" or "interface" or "enum" or "delegate"))
+                continue;
+
+            var normalizedName = NormalizeCSharpIdentifier(symbol.Name);
+            if (!string.IsNullOrWhiteSpace(normalizedName))
+                names.Add(normalizedName);
+
+            var qualifiedContainer = !string.IsNullOrWhiteSpace(symbol.ContainerQualifiedName)
+                ? symbol.ContainerQualifiedName
+                : symbol.ContainerKind == "namespace" && !string.IsNullOrWhiteSpace(symbol.ContainerName)
+                    ? symbol.ContainerName
+                    : null;
+            if (!string.IsNullOrWhiteSpace(qualifiedContainer) && !string.IsNullOrWhiteSpace(normalizedName))
+                names.Add(qualifiedContainer + "." + normalizedName);
+        }
+
+        return names;
+    }
+
+    private static bool IsCSharpUsingAliasTypeTarget(string targetQualifiedName, IReadOnlySet<string> csharpKnownTypeNames)
+    {
+        var normalizedTarget = NormalizeCSharpAliasTargetForTypeLookup(targetQualifiedName);
+        return normalizedTarget.Length > 0 && csharpKnownTypeNames.Contains(normalizedTarget);
+    }
+
+    private static string NormalizeCSharpAliasTargetForTypeLookup(string targetQualifiedName)
+    {
+        if (string.IsNullOrWhiteSpace(targetQualifiedName))
+            return string.Empty;
+
+        var trimmed = targetQualifiedName.Trim();
+        var builder = new System.Text.StringBuilder(trimmed.Length);
+        var genericDepth = 0;
+        for (var i = 0; i < trimmed.Length; i++)
+        {
+            var ch = trimmed[i];
+            if (ch == '<')
+            {
+                genericDepth++;
+                continue;
+            }
+
+            if (ch == '>')
+            {
+                if (genericDepth > 0)
+                    genericDepth--;
+                continue;
+            }
+
+            if (genericDepth == 0)
+                builder.Append(ch);
+        }
+
+        var normalized = builder.ToString().Trim();
+        while (normalized.EndsWith("?", StringComparison.Ordinal))
+            normalized = normalized[..^1].TrimEnd();
+        while (normalized.EndsWith("[]", StringComparison.Ordinal))
+            normalized = normalized[..^2].TrimEnd();
+
+        return normalized;
+    }
+
+    private static Dictionary<string, CSharpContainingTypeValueReceiverNames> BuildCSharpValueReceiverNamesByContainingType(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        var lookup = new Dictionary<string, CSharpContainingTypeValueReceiverNames>(StringComparer.Ordinal);
+        if (language != "csharp")
+            return lookup;
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "property" || string.IsNullOrWhiteSpace(symbol.Name))
+                continue;
+
+            var containingType = GetContainingTypeQualifiedName(symbol);
+            if (string.IsNullOrWhiteSpace(containingType))
+                continue;
+
+            if (!lookup.TryGetValue(containingType!, out var names))
+            {
+                names = new CSharpContainingTypeValueReceiverNames(
+                    new HashSet<string>(StringComparer.Ordinal),
+                    new HashSet<string>(StringComparer.Ordinal));
+                lookup[containingType!] = names;
+            }
+
+            if (IsStaticCSharpSymbol(symbol))
+                names.StaticNames.Add(symbol.Name);
+            else
+                names.InstanceNames.Add(symbol.Name);
+        }
+
+        return lookup;
+    }
+
+    private static Dictionary<int, List<CSharpFunctionValueReceiverNameRecord>> BuildCSharpValueReceiverNamesByFunctionStartLine(
+        string language,
+        IReadOnlyList<SymbolRecord> symbols,
+        IReadOnlyList<string> structuralLines,
+        IReadOnlySet<string> csharpKnownTypeNames,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
+    {
+        var lookup = new Dictionary<int, List<CSharpFunctionValueReceiverNameRecord>>();
+        if (language != "csharp")
+            return lookup;
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is not ("function" or "property") || symbol.StartLine <= 0)
+                continue;
+
+            var names = new List<CSharpFunctionValueReceiverNameRecord>();
+            if (symbol.BodyStartLine != null && symbol.BodyEndLine != null)
+            {
+                var start = Math.Max(symbol.BodyStartLine.Value - 1, 0);
+                var end = Math.Min(symbol.BodyEndLine.Value - 1, structuralLines.Count - 1);
+                var bodyText = string.Join("\n", structuralLines.Skip(start).Take(end - start + 1));
+                if (symbol.Kind == "function")
+                    AddCSharpParameterNames(names, symbol.Signature, symbol.BodyStartLine.Value, 0, symbol.BodyEndLine.Value, int.MaxValue);
+                for (var i = start; i <= end; i++)
+                {
+                    foreach (Match match in CSharpLocalValueNameRegex.Matches(structuralLines[i]))
+                        AddCSharpFunctionValueReceiverName(
+                            names,
+                            NormalizeCSharpIdentifier(match.Groups["name"].Value),
+                            i + 1,
+                            match.Index,
+                            FindInnermostCSharpBlockEndLine(structuralLines, start, end, i, match.Index),
+                            int.MaxValue);
+                    foreach (Match match in CSharpForeachValueNameRegex.Matches(structuralLines[i]))
+                    {
+                        var scopeEnd = FindFollowingCSharpEmbeddedStatementEndPosition(structuralLines, end, i, match.Index);
+                        AddCSharpFunctionValueReceiverName(
+                            names,
+                            NormalizeCSharpIdentifier(match.Groups["name"].Value),
+                            i + 1,
+                            match.Index,
+                            scopeEnd.Line,
+                            scopeEnd.Column);
+                    }
+                    foreach (Match match in CSharpQueryRangeValueNameRegex.Matches(structuralLines[i]))
+                    {
+                        var scopeEnd = FindCSharpQueryExpressionEndPosition(
+                            structuralLines,
+                            end,
+                            i,
+                            match.Index,
+                            csharpKnownTypeNames,
+                            csharpUsingAliases,
+                            names);
+                        AddCSharpFunctionValueReceiverName(
+                            names,
+                            NormalizeCSharpIdentifier(match.Groups["name"].Value),
+                            i + 1,
+                            match.Index,
+                            scopeEnd.Line,
+                            scopeEnd.Column);
+                    }
+                    foreach (Match match in CSharpDeclarationPatternValueNameRegex.Matches(structuralLines[i]))
+                    {
+                        if (!TryFindCSharpDeclarationPatternScopeEndPosition(structuralLines, start, end, i, match.Index, out var scopeEnd))
+                            continue;
+
+                        AddCSharpFunctionValueReceiverName(
+                            names,
+                            NormalizeCSharpIdentifier(match.Groups["name"].Value),
+                            i + 1,
+                            match.Index,
+                            scopeEnd.Line,
+                            scopeEnd.Column);
+                    }
+                    foreach (Match match in CSharpCaseDeclarationPatternValueNameRegex.Matches(structuralLines[i]))
+                    {
+                        if (!TryFindCSharpSwitchCaseScopeEndPosition(structuralLines, end, i, match.Index, out var scopeEnd))
+                            continue;
+
+                        AddCSharpFunctionValueReceiverName(
+                            names,
+                            NormalizeCSharpIdentifier(match.Groups["name"].Value),
+                            i + 1,
+                            match.Index,
+                            scopeEnd.Line,
+                            scopeEnd.Column);
+                    }
+                    foreach (Match match in CSharpOutValueNameRegex.Matches(structuralLines[i]))
+                        AddCSharpFunctionValueReceiverName(names, NormalizeCSharpIdentifier(match.Groups["name"].Value), i + 1, match.Index, symbol.BodyEndLine.Value, int.MaxValue);
+                    foreach (Match match in CSharpCatchValueNameRegex.Matches(structuralLines[i]))
+                    {
+                        var scopeEnd = FindFollowingCSharpEmbeddedStatementEndPosition(structuralLines, end, i, match.Index);
+                        AddCSharpFunctionValueReceiverName(
+                            names,
+                            NormalizeCSharpIdentifier(match.Groups["name"].Value),
+                            i + 1,
+                            match.Index,
+                            scopeEnd.Line,
+                            scopeEnd.Column);
+                    }
+                    foreach (Match match in CSharpUsingStatementValueNameRegex.Matches(structuralLines[i]))
+                    {
+                        var scopeEnd = FindFollowingCSharpEmbeddedStatementEndPosition(structuralLines, end, i, match.Index);
+                        AddCSharpFunctionValueReceiverName(
+                            names,
+                            NormalizeCSharpIdentifier(match.Groups["name"].Value),
+                            i + 1,
+                            match.Index,
+                            scopeEnd.Line,
+                            scopeEnd.Column);
+                    }
+                    foreach (Match match in CSharpFixedValueNameRegex.Matches(structuralLines[i]))
+                    {
+                        var scopeEnd = FindFollowingCSharpEmbeddedStatementEndPosition(structuralLines, end, i, match.Index);
+                        AddCSharpFunctionValueReceiverName(
+                            names,
+                            NormalizeCSharpIdentifier(match.Groups["name"].Value),
+                            i + 1,
+                            match.Index,
+                            scopeEnd.Line,
+                            scopeEnd.Column);
+                    }
+                }
+
+                AddCSharpRecursivePatternValueReceiverNames(names, bodyText, structuralLines, start, end);
+                AddCSharpLambdaParameterNames(
+                    names,
+                    bodyText,
+                    start + 1,
+                    symbol.BodyEndLine.Value);
+            }
+
+            if (names.Count > 0)
+                lookup[symbol.StartLine] = names;
+        }
+
+        return lookup;
+    }
+
+    private static Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> BuildCSharpQualifiedEnumMemberLookup(
+        string language,
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        var lookup = new Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
+        if (language != "csharp")
+            return lookup;
+
+        var conflictingNonEnumTypeNames = new HashSet<string>(
+            symbols
+                .Where(symbol => symbol.Kind is "class" or "struct" or "interface" or "delegate")
+                .Select(symbol => symbol.Name)
+                .Where(name => !string.IsNullOrWhiteSpace(name))!,
+            StringComparer.Ordinal);
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "enum" || symbol.ContainerKind != "enum")
+                continue;
+            if (string.IsNullOrWhiteSpace(symbol.Name) || string.IsNullOrWhiteSpace(symbol.ContainerName))
+                continue;
+
+            if (!lookup.TryGetValue(symbol.Name, out var targets))
+            {
+                targets = [];
+                lookup[symbol.Name] = targets;
+            }
+
+            bool exists = false;
+            foreach (var target in targets)
+            {
+                if (string.Equals(target.EnumName, symbol.ContainerName, StringComparison.Ordinal)
+                    && string.Equals(target.QualifiedEnumName, symbol.ContainerQualifiedName, StringComparison.Ordinal))
+                {
+                    exists = true;
+                    break;
+                }
+            }
+
+            if (!exists)
+                targets.Add((
+                    symbol.ContainerName!,
+                    symbol.ContainerQualifiedName,
+                    AllowShortNameFallback: !conflictingNonEnumTypeNames.Contains(symbol.ContainerName!)));
+        }
+
+        return lookup;
+    }
+
+    private static Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> BuildCSharpQualifiedConstantPatternMemberLookup(
+        string language,
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        var lookup = new Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
+        if (language != "csharp")
+            return lookup;
+
+        var conflictingNonEnumTypeNames = new HashSet<string>(
+            symbols
+                .Where(symbol => symbol.Kind is "class" or "struct" or "interface" or "delegate")
+                .Select(symbol => symbol.Name)
+                .Where(name => !string.IsNullOrWhiteSpace(name))!,
+            StringComparer.Ordinal);
+
+        foreach (var symbol in symbols)
+        {
+            if (string.IsNullOrWhiteSpace(symbol.Name) || string.IsNullOrWhiteSpace(symbol.ContainerName))
+                continue;
+
+            var target = symbol switch
+            {
+                { Kind: "enum", ContainerKind: "enum" } => (
+                    Included: true,
+                    AllowShortNameFallback: !conflictingNonEnumTypeNames.Contains(symbol.ContainerName!)),
+                _ when IsCSharpConstMemberSymbol(symbol) => (
+                    Included: true,
+                    AllowShortNameFallback: true),
+                _ => (Included: false, AllowShortNameFallback: false)
+            };
+
+            if (!target.Included)
+                continue;
+
+            if (!lookup.TryGetValue(symbol.Name, out var targets))
+            {
+                targets = [];
+                lookup[symbol.Name] = targets;
+            }
+
+            bool exists = false;
+            foreach (var existing in targets)
+            {
+                if (string.Equals(existing.ContainerName, symbol.ContainerName, StringComparison.Ordinal)
+                    && string.Equals(existing.QualifiedContainerName, symbol.ContainerQualifiedName, StringComparison.Ordinal))
+                {
+                    exists = true;
+                    break;
+                }
+            }
+
+            if (!exists)
+                targets.Add((
+                    symbol.ContainerName!,
+                    symbol.ContainerQualifiedName,
+                    target.AllowShortNameFallback));
+        }
+
+        return lookup;
+    }
+
+    private static Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> BuildCSharpQualifiedTypePatternLookup(
+        string language,
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        var lookup = new Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
+        if (language != "csharp")
+            return lookup;
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is not ("class" or "struct" or "interface" or "enum" or "delegate")
+                || string.IsNullOrWhiteSpace(symbol.Name)
+                || string.IsNullOrWhiteSpace(symbol.ContainerName))
+            {
+                continue;
+            }
+
+            if (!lookup.TryGetValue(symbol.Name, out var targets))
+            {
+                targets = [];
+                lookup[symbol.Name] = targets;
+            }
+
+            bool exists = false;
+            foreach (var existing in targets)
+            {
+                if (string.Equals(existing.ContainerName, symbol.ContainerName, StringComparison.Ordinal)
+                    && string.Equals(existing.QualifiedContainerName, symbol.ContainerQualifiedName, StringComparison.Ordinal))
+                {
+                    exists = true;
+                    break;
+                }
+            }
+
+            if (!exists)
+                targets.Add((symbol.ContainerName!, symbol.ContainerQualifiedName, AllowShortNameFallback: true));
+        }
+
+        return lookup;
+    }
+
+    private static bool IsCSharpConstMemberSymbol(SymbolRecord symbol)
+    {
+        if (symbol.ContainerKind is not ("class" or "struct"))
+            return false;
+        if (string.IsNullOrWhiteSpace(symbol.Signature))
+            return false;
+
+        return symbol.Signature!.Contains(" const ", StringComparison.Ordinal)
+            || symbol.Signature.StartsWith("const ", StringComparison.Ordinal);
+    }
+
+    private static void EmitCSharpQualifiedEnumMemberReferences(
+        string preparedLine,
+        IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> enumMemberLookup,
+        IReadOnlyList<(int start, int end)>? csharpAttrRangesOnLine,
+        IReadOnlyList<CSharpUsingAliasRecord> usingAliases,
+        IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> valueReceiverNamesByContainingType,
+        IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> valueReceiverNamesByFunctionStartLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForCall)
+    {
+        var scan = 0;
+        while (scan < preparedLine.Length)
+        {
+            if (!TryReadCSharpQualifiedAccess(preparedLine, scan, out var parsed))
+            {
+                scan++;
+                continue;
+            }
+
+            scan = Math.Max(scan + 1, parsed.NextIndex);
+            if (!parsed.LastSeparatorWasDot || parsed.Segments.Count < 2)
+                continue;
+
+            var member = parsed.Segments[^1];
+            var memberName = preparedLine.Substring(member.Start, member.End - member.Start);
+            if (!enumMemberLookup.TryGetValue(memberName, out var targets))
+                continue;
+
+            var callContainer = resolveContainerForCall(member.Start);
+            var qualifier = TrimLeadingCSharpGlobalQualifier(NormalizeCSharpQualifiedSegments(preparedLine, parsed.Segments, parsed.Segments.Count - 1));
+            var resolvedQualifier = parsed.HasLeadingGlobalQualifier
+                ? qualifier
+                : ResolveCSharpQualifiedAliasTarget(qualifier, lineNumber, usingAliases);
+            if (!parsed.HasLeadingGlobalQualifier
+                && HasCSharpValueReceiverConflict(qualifier, resolvedQualifier, lineNumber, member.Start, callContainer, valueReceiverNamesByContainingType, valueReceiverNamesByFunctionStartLine))
+                continue;
+            if (!MatchesQualifiedConstantContainer(
+                    resolvedQualifier,
+                    targets,
+                    allowShortNameFallback: !parsed.HasLeadingGlobalQualifier,
+                    allowSingleSegmentQualifiedMatch: parsed.HasLeadingGlobalQualifier))
+                continue;
+
+            var nextTokenIndex = SkipWhitespace(preparedLine, member.End);
+            if (nextTokenIndex < preparedLine.Length && preparedLine[nextTokenIndex] == '(')
+                continue;
+
+            var insideCSharpAttributeRange = csharpAttrRangesOnLine != null
+                && IsInsideCSharpAttributeRange(csharpAttrRangesOnLine, member.Start);
+            var referenceKind = TryClassifyMetadataReference("csharp", preparedLine, member.Start, insideCSharpAttributeRange) ?? "call";
+
+            AddReference(
+                references,
+                seen,
+                fileId,
+                memberName,
+                member.Start,
+                referenceKind,
+                context,
+                lineNumber,
+                callContainer);
+        }
+    }
+
+    private static bool TryReadCSharpQualifiedAccess(
+        string preparedLine,
+        int start,
+        out (List<(int Start, int End)> Segments, int NextIndex, bool LastSeparatorWasDot, bool HasLeadingGlobalQualifier) parsed)
+    {
+        parsed = (new List<(int Start, int End)>(), start, false, false);
+
+        if (start > 0 && IsCSharpIdentifierPart(preparedLine[start - 1]))
+            return false;
+        if (start >= preparedLine.Length || !IsCSharpIdentifierStart(preparedLine[start]))
+            return false;
+
+        var segments = new List<(int Start, int End)>();
+        var cursor = start;
+        var lastSeparatorWasDot = false;
+        var hasLeadingGlobalQualifier = false;
+        while (true)
+        {
+            if (!TryConsumeCSharpIdentifier(preparedLine, ref cursor, out var segmentStart, out var segmentEnd))
+                return false;
+
+            segments.Add((segmentStart, segmentEnd));
+
+            var separatorStart = SkipWhitespace(preparedLine, cursor);
+            if (separatorStart + 1 < preparedLine.Length
+                && preparedLine[separatorStart] == ':'
+                && preparedLine[separatorStart + 1] == ':')
+            {
+                if (segments.Count == 1
+                    && segmentEnd - segmentStart == "global".Length
+                    && string.CompareOrdinal(preparedLine, segmentStart, "global", 0, "global".Length) == 0)
+                {
+                    hasLeadingGlobalQualifier = true;
+                }
+
+                cursor = SkipWhitespace(preparedLine, separatorStart + 2);
+                lastSeparatorWasDot = false;
+                continue;
+            }
+
+            if (separatorStart < preparedLine.Length && preparedLine[separatorStart] == '.')
+            {
+                cursor = SkipWhitespace(preparedLine, separatorStart + 1);
+                lastSeparatorWasDot = true;
+                continue;
+            }
+
+            parsed = (segments, cursor, lastSeparatorWasDot, hasLeadingGlobalQualifier);
+            return true;
+        }
+    }
+
+    private static bool TryConsumeCSharpIdentifier(
+        string preparedLine,
+        ref int cursor,
+        out int start,
+        out int end)
+    {
+        start = cursor;
+        if (cursor >= preparedLine.Length || !IsCSharpIdentifierStart(preparedLine[cursor]))
+        {
+            end = cursor;
+            return false;
+        }
+
+        cursor++;
+        while (cursor < preparedLine.Length && IsCSharpIdentifierPart(preparedLine[cursor]))
+            cursor++;
+
+        end = cursor;
+        return true;
+    }
+
+    private static bool TryConsumeCSharpPatternKeyword(string preparedLine, ref int cursor, string keyword)
+    {
+        if (!preparedLine.AsSpan(cursor).StartsWith(keyword, StringComparison.Ordinal))
+            return false;
+
+        int afterKeyword = cursor + keyword.Length;
+        if (afterKeyword < preparedLine.Length && !char.IsWhiteSpace(preparedLine[afterKeyword]))
+            return false;
+
+        cursor = afterKeyword;
+        return true;
+    }
+
+    private static bool IsCSharpCaseTypePatternContinuation(
+        string preparedLine,
+        string typeExpression,
+        int cursor,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
+        int lineNumber)
+    {
+        if (IsCSharpNonTypePatternExpression(typeExpression))
+            return false;
+
+        if (cursor >= preparedLine.Length)
+            return false;
+
+        return preparedLine[cursor] switch
+        {
+            ':' => !IsCSharpConstantPatternMemberHead(
+                    typeExpression,
+                    lineNumber,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpUsingAliases,
+                    csharpUsingStatics,
+                    hasActiveSameFileCSharpTypeCandidate),
+            '{' or '(' or '[' => true,
+            _ => IsCSharpCaseTypePatternIdentifier(
+                preparedLine,
+                typeExpression,
+                cursor,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpQualifiedTypePatternLookup,
+                csharpUsingAliases,
+                csharpUsingStatics,
+                hasActiveSameFileCSharpTypeCandidate,
+                lineNumber)
+        };
+    }
+
+    private static bool IsCSharpCaseTypePatternIdentifier(
+        string preparedLine,
+        string typeExpression,
+        int cursor,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
+        int lineNumber)
+    {
+        int tokenCursor = cursor;
+        if (!TryConsumeCSharpIdentifier(preparedLine, ref tokenCursor, out var start, out var end))
+            return false;
+
+        var rawToken = preparedLine[start..end];
+        if (rawToken.Length > 0 && rawToken[0] == '@')
+            return true;
+
+        return rawToken switch
+        {
+            "when" => !IsCSharpConstantPatternMemberHead(
+                    typeExpression,
+                    lineNumber,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpUsingAliases,
+                    csharpUsingStatics,
+                    hasActiveSameFileCSharpTypeCandidate),
+            "or" or "and" => !IsCSharpLogicalConstantPatternHead(
+                preparedLine,
+                typeExpression,
+                tokenCursor,
+                lineNumber,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpQualifiedTypePatternLookup,
+                csharpUsingAliases,
+                csharpUsingStatics,
+                hasActiveSameFileCSharpTypeCandidate),
+            _ => true,
+        };
+    }
+
+    private static bool TryEmitCSharpLogicalTypePatternHeads(
+        string preparedLine,
+        string initialTypeExpression,
+        int initialTypeIndex,
+        int continuationIndex,
+        int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
+        Action<string, int> emitTypeExpression)
+    {
+        var currentTypeExpression = initialTypeExpression;
+        var currentTypeIndex = initialTypeIndex;
+        var currentContinuationIndex = continuationIndex;
+        var sawLogicalKeyword = false;
+        var emittedAny = false;
+        while (TryConsumeCSharpLogicalPatternKeyword(preparedLine, currentContinuationIndex, out var nextHeadCursor))
+        {
+            sawLogicalKeyword = true;
+            if (!IsCSharpLogicalConstantPatternHead(
+                    preparedLine,
+                    currentTypeExpression,
+                    nextHeadCursor,
+                    lineNumber,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpQualifiedTypePatternLookup,
+                    csharpUsingAliases,
+                    csharpUsingStatics,
+                    hasActiveSameFileCSharpTypeCandidate))
+            {
+                emitTypeExpression(currentTypeExpression, currentTypeIndex);
+                emittedAny = true;
+            }
+
+            int nextTypeCursor = nextHeadCursor;
+            if (TryConsumeCSharpPatternKeyword(preparedLine, ref nextTypeCursor, "not"))
+                nextTypeCursor = SkipWhitespace(preparedLine, nextTypeCursor);
+
+            var nextMatch = CSharpTypeExpressionAtCursorRegex.Match(preparedLine, nextTypeCursor);
+            if (!nextMatch.Success)
+                return false;
+
+            var nextTypeGroup = nextMatch.Groups["type"];
+            currentTypeExpression = nextTypeGroup.Value;
+            currentTypeIndex = nextTypeGroup.Index;
+            currentContinuationIndex = SkipWhitespace(preparedLine, nextTypeGroup.Index + nextTypeGroup.Length);
+        }
+
+        if (sawLogicalKeyword
+            && !IsCSharpNonTypePatternExpression(currentTypeExpression)
+            && !IsCSharpConstantPatternMemberHead(
+                currentTypeExpression,
+                lineNumber,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpUsingAliases,
+                csharpUsingStatics,
+                hasActiveSameFileCSharpTypeCandidate))
+        {
+            emitTypeExpression(currentTypeExpression, currentTypeIndex);
+            emittedAny = true;
+        }
+
+        return emittedAny;
+    }
+
+    private static bool IsCSharpLogicalConstantPatternAtCursor(
+        string preparedLine,
+        string typeExpression,
+        int cursor,
+        int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
+    {
+        int tokenCursor = cursor;
+        if (!TryConsumeCSharpIdentifier(preparedLine, ref tokenCursor, out var start, out var end))
+            return false;
+
+        var rawToken = preparedLine[start..end];
+        if (rawToken is not ("or" or "and"))
+            return false;
+
+        return IsCSharpLogicalConstantPatternHead(
+            preparedLine,
+            typeExpression,
+            tokenCursor,
+            lineNumber,
+            csharpQualifiedConstantPatternMemberLookup,
+            csharpQualifiedTypePatternLookup,
+            csharpUsingAliases,
+            csharpUsingStatics,
+            hasActiveSameFileCSharpTypeCandidate);
+    }
+
+    private static bool TryConsumeCSharpLogicalPatternKeyword(
+        string preparedLine,
+        int cursor,
+        out int nextHeadCursor)
+    {
+        nextHeadCursor = cursor;
+        int tokenCursor = cursor;
+        if (!TryConsumeCSharpIdentifier(preparedLine, ref tokenCursor, out var start, out var end))
+            return false;
+
+        var rawToken = preparedLine[start..end];
+        if (rawToken is not ("or" or "and"))
+            return false;
+
+        nextHeadCursor = SkipWhitespace(preparedLine, tokenCursor);
+        return true;
+    }
+
+    private static bool IsCSharpLogicalConstantPatternHead(
+        string preparedLine,
+        string typeExpression,
+        int cursor,
+        int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
+    {
+        if (IsCSharpConstantPatternMemberHead(
+                typeExpression,
+                lineNumber,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpUsingAliases,
+                csharpUsingStatics,
+                hasActiveSameFileCSharpTypeCandidate))
+        {
+            return true;
+        }
+
+        if (IsCSharpQualifiedTypePatternHead(
+                typeExpression,
+                lineNumber,
+                csharpQualifiedTypePatternLookup,
+                csharpUsingAliases))
+        {
+            return false;
+        }
+
+        if (!TryReadCSharpQualifiedAccess(typeExpression, 0, out var currentParsed)
+            || !currentParsed.LastSeparatorWasDot
+            || currentParsed.Segments.Count < 2)
+        {
+            return false;
+        }
+
+        var currentQualifier = ResolveCSharpQualifiedConstantPatternQualifier(typeExpression, currentParsed, lineNumber, csharpUsingAliases);
+        if (string.IsNullOrWhiteSpace(currentQualifier))
+            return false;
+
+        int nextCursor = SkipWhitespace(preparedLine, cursor);
+        if (TryConsumeCSharpPatternKeyword(preparedLine, ref nextCursor, "not"))
+            nextCursor = SkipWhitespace(preparedLine, nextCursor);
+
+        var nextMatch = CSharpTypeExpressionAtCursorRegex.Match(preparedLine, nextCursor);
+        if (!nextMatch.Success)
+            return false;
+
+        var nextTypeExpression = nextMatch.Groups["type"].Value;
+        if (IsCSharpQualifiedTypePatternHead(
+                nextTypeExpression,
+                lineNumber,
+                csharpQualifiedTypePatternLookup,
+                csharpUsingAliases))
+        {
+            return false;
+        }
+
+        if (!TryReadCSharpQualifiedAccess(nextTypeExpression, 0, out var nextParsed)
+            || !nextParsed.LastSeparatorWasDot
+            || nextParsed.Segments.Count < 2)
+        {
+            return false;
+        }
+
+        var nextQualifier = ResolveCSharpQualifiedConstantPatternQualifier(nextTypeExpression, nextParsed, lineNumber, csharpUsingAliases);
+        return string.Equals(currentQualifier, nextQualifier, StringComparison.Ordinal);
+    }
+
+    private static bool IsCSharpQualifiedTypePatternHead(
+        string typeExpression,
+        int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
+    {
+        if (!TryReadCSharpQualifiedAccess(typeExpression, 0, out var parsed)
+            || !parsed.LastSeparatorWasDot
+            || parsed.Segments.Count < 2)
+        {
+            return false;
+        }
+
+        var member = parsed.Segments[^1];
+        var memberName = typeExpression.Substring(member.Start, member.End - member.Start);
+        if (!csharpQualifiedTypePatternLookup.TryGetValue(memberName, out var targets))
+            return false;
+
+        var resolvedQualifier = ResolveCSharpQualifiedConstantPatternQualifier(typeExpression, parsed, lineNumber, csharpUsingAliases);
+        bool qualifierHasMultipleSegments = resolvedQualifier.Contains('.') || resolvedQualifier.Contains("::", StringComparison.Ordinal);
+        return MatchesQualifiedConstantContainer(
+            resolvedQualifier,
+            targets,
+            allowShortNameFallback: !parsed.HasLeadingGlobalQualifier && !qualifierHasMultipleSegments,
+            allowSingleSegmentQualifiedMatch: parsed.HasLeadingGlobalQualifier);
+    }
+
+    private static string ResolveCSharpQualifiedConstantPatternQualifier(
+        string typeExpression,
+        (List<(int Start, int End)> Segments, int NextIndex, bool LastSeparatorWasDot, bool HasLeadingGlobalQualifier) parsed,
+        int lineNumber,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
+    {
+        var qualifier = TrimLeadingCSharpGlobalQualifier(NormalizeCSharpQualifiedSegments(typeExpression, parsed.Segments, parsed.Segments.Count - 1));
+        return parsed.HasLeadingGlobalQualifier
+            ? qualifier
+            : ResolveCSharpQualifiedAliasTarget(qualifier, lineNumber, csharpUsingAliases);
+    }
+
+    private static bool IsCSharpQualifiedConstantPatternMemberHead(
+        string typeExpression,
+        int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
+    {
+        if (!TryReadCSharpQualifiedAccess(typeExpression, 0, out var parsed)
+            || !parsed.LastSeparatorWasDot
+            || parsed.Segments.Count < 2)
+        {
+            return false;
+        }
+
+        var member = parsed.Segments[^1];
+        var memberName = typeExpression.Substring(member.Start, member.End - member.Start);
+        if (!csharpQualifiedConstantPatternMemberLookup.TryGetValue(memberName, out var targets))
+            return false;
+
+        var resolvedQualifier = ResolveCSharpQualifiedConstantPatternQualifier(typeExpression, parsed, lineNumber, csharpUsingAliases);
+        bool qualifierHasMultipleSegments = resolvedQualifier.Contains('.') || resolvedQualifier.Contains("::", StringComparison.Ordinal);
+        return MatchesQualifiedConstantContainer(
+            resolvedQualifier,
+            targets,
+            allowShortNameFallback: !parsed.HasLeadingGlobalQualifier && !qualifierHasMultipleSegments,
+            allowSingleSegmentQualifiedMatch: parsed.HasLeadingGlobalQualifier);
+    }
+
+    private static bool IsCSharpConstantPatternMemberHead(
+        string typeExpression,
+        int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
+    {
+        return IsCSharpQualifiedConstantPatternMemberHead(
+            typeExpression,
+            lineNumber,
+            csharpQualifiedConstantPatternMemberLookup,
+            csharpUsingAliases);
+    }
+
+    private static bool IsCSharpNonTypePatternExpression(string typeExpression)
+    {
+        var trimmed = typeExpression.Trim();
+        if (trimmed.Length == 0)
+            return false;
+
+        if (trimmed[0] == '@')
+            return false;
+
+        return trimmed.IndexOf('.') < 0
+            && trimmed.IndexOf(':') < 0
+            && trimmed.IndexOf('<') < 0
+            && trimmed.IndexOf('[') < 0
+            && trimmed.IndexOf('?') < 0
+            && trimmed.IndexOf(' ') < 0
+            && CSharpNonTypePatternTokens.Contains(trimmed);
+    }
+
+    private static int SkipWhitespace(string text, int index)
+    {
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+            index++;
+        return index;
+    }
+
+    private static string NormalizeCSharpIdentifier(string identifier) =>
+        !string.IsNullOrEmpty(identifier) && identifier[0] == '@'
+            ? identifier[1..]
+            : identifier;
+
+    private static string NormalizeAtPrefixedIdentifier(string identifier) =>
+        !string.IsNullOrEmpty(identifier) && identifier[0] == '@'
+            ? identifier[1..]
+            : identifier;
+
+    private static string NormalizeCSharpQualifiedSegments(
+        string preparedLine,
+        IReadOnlyList<(int Start, int End)> segments,
+        int count)
+    {
+        var builder = new StringBuilder();
+        for (var i = 0; i < count; i++)
+        {
+            if (i > 0)
+                builder.Append('.');
+            var (start, end) = segments[i];
+            var segment = preparedLine.Substring(start, end - start);
+            builder.Append(segment[0] == '@' ? segment[1..] : segment);
+        }
+        return builder.ToString();
+    }
+
+    private static string TrimLeadingCSharpGlobalQualifier(string qualifiedName) =>
+        qualifiedName.StartsWith("global.", StringComparison.Ordinal)
+            ? qualifiedName["global.".Length..]
+            : qualifiedName;
+
+    private static string? TryNormalizeCSharpQualifiedName(string candidate)
+    {
+        var trimmed = candidate.Trim();
+        if (trimmed.StartsWith("global::", StringComparison.Ordinal))
+            trimmed = trimmed["global::".Length..];
+        if (string.IsNullOrWhiteSpace(trimmed))
+            return null;
+        if (!TryReadCSharpQualifiedAccess(trimmed, 0, out var parsed))
+            return null;
+        if (SkipWhitespace(trimmed, parsed.NextIndex) != trimmed.Length)
+            return null;
+        return NormalizeCSharpQualifiedSegments(trimmed, parsed.Segments, parsed.Segments.Count);
+    }
+
+    private static string ResolveCSharpQualifiedAliasTarget(string qualifier, int lineNumber, IReadOnlyList<CSharpUsingAliasRecord> usingAliases)
+    {
+        if (string.IsNullOrWhiteSpace(qualifier) || usingAliases.Count == 0)
+            return qualifier;
+
+        var firstSegment = GetFirstQualifiedSegment(qualifier);
+        string? aliasTarget = null;
+        for (var i = usingAliases.Count - 1; i >= 0; i--)
+        {
+            var alias = usingAliases[i];
+            if (alias.Line > lineNumber)
+                continue;
+            if (lineNumber < alias.ScopeStartLine || lineNumber > alias.ScopeEndLine)
+                continue;
+            if (!string.Equals(alias.AliasName, firstSegment, StringComparison.Ordinal))
+                continue;
+
+            aliasTarget = alias.TargetQualifiedName;
+            break;
+        }
+
+        if (aliasTarget == null)
+            return qualifier;
+
+        return qualifier.Length == firstSegment.Length
+            ? aliasTarget
+            : aliasTarget + qualifier[firstSegment.Length..];
+    }
+
+    private static bool IsCSharpXmlDocCommentLine(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+            return false;
+
+        var trimmed = line.TrimStart();
+        return trimmed.StartsWith("///", StringComparison.Ordinal)
+            && (trimmed.Length == 3 || trimmed[3] != '/');
+    }
+
+    private static bool HasActiveCSharpUsingStaticTarget(
+        string targetQualifiedName,
+        int lineNumber,
+        IReadOnlyList<CSharpUsingStaticRecord> usingStatics)
+    {
+        if (string.IsNullOrWhiteSpace(targetQualifiedName))
+            return false;
+
+        for (var i = usingStatics.Count - 1; i >= 0; i--)
+        {
+            var import = usingStatics[i];
+            if (import.Line > lineNumber)
+                continue;
+            if (lineNumber < import.ScopeStartLine || lineNumber > import.ScopeEndLine)
+                continue;
+            if (string.Equals(import.TargetQualifiedName, targetQualifiedName, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool HasCSharpValueReceiverConflict(
+        string qualifier,
+        string resolvedQualifier,
+        int lineNumber,
+        int column,
+        SymbolRecord? callContainer,
+        IReadOnlyDictionary<string, CSharpContainingTypeValueReceiverNames> valueReceiverNamesByContainingType,
+        IReadOnlyDictionary<int, List<CSharpFunctionValueReceiverNameRecord>> valueReceiverNamesByFunctionStartLine)
+    {
+        if (string.IsNullOrWhiteSpace(qualifier)
+            || (valueReceiverNamesByContainingType.Count == 0 && valueReceiverNamesByFunctionStartLine.Count == 0))
+            return false;
+        if (!string.Equals(qualifier, resolvedQualifier, StringComparison.Ordinal))
+            return false;
+
+        var receiverName = GetFirstQualifiedSegment(qualifier);
+        if (string.IsNullOrWhiteSpace(receiverName))
+            return false;
+
+        if (callContainer != null
+            && (callContainer.Kind == "function" || callContainer.Kind == "property")
+            && valueReceiverNamesByFunctionStartLine.TryGetValue(callContainer.StartLine, out var functionNames)
+            && functionNames.Any(record => IsWithinCSharpScope(record, lineNumber, column)
+                && string.Equals(record.Name, receiverName, StringComparison.Ordinal)))
+        {
+            return true;
+        }
+
+        var containingType = GetContainingTypeQualifiedName(callContainer);
+        return containingType != null
+            && valueReceiverNamesByContainingType.TryGetValue(containingType, out var names)
+            && (IsStaticCSharpSymbol(callContainer)
+                ? names.StaticNames.Contains(receiverName)
+                : names.StaticNames.Contains(receiverName) || names.InstanceNames.Contains(receiverName));
+    }
+
+    private static string? GetContainingTypeQualifiedName(SymbolRecord? symbol)
+    {
+        if (symbol == null)
+            return null;
+        if (IsTypeLikeSymbolKind(symbol.Kind))
+            return CombineQualifiedName(symbol.ContainerQualifiedName, symbol.Name);
+        return symbol.ContainerQualifiedName;
+    }
+
+    private static bool IsTypeLikeSymbolKind(string? kind) =>
+        kind is "class" or "struct" or "interface";
+
+    private static string? CombineQualifiedName(string? parentQualifiedName, string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return null;
+        if (string.IsNullOrWhiteSpace(parentQualifiedName))
+            return name;
+        return $"{parentQualifiedName}.{name}";
+    }
+
+    private static bool IsWithinCSharpScope(CSharpFunctionValueReceiverNameRecord record, int lineNumber, int column)
+    {
+        var startsBefore = lineNumber > record.ScopeStartLine
+            || (lineNumber == record.ScopeStartLine && column >= record.ScopeStartColumn);
+        if (!startsBefore)
+            return false;
+
+        return lineNumber < record.ScopeEndLine
+            || (lineNumber == record.ScopeEndLine && column < record.ScopeEndColumn);
+    }
+
+    private static void AddCSharpParameterNames(List<CSharpFunctionValueReceiverNameRecord> names, string? signature, int scopeStartLine, int scopeStartColumn, int scopeEndLine, int scopeEndColumn)
+    {
+        if (string.IsNullOrWhiteSpace(signature))
+            return;
+
+        var openParen = signature.IndexOf('(');
+        var closeParen = signature.LastIndexOf(')');
+        if (openParen < 0 || closeParen <= openParen)
+            return;
+
+        var parameters = signature[(openParen + 1)..closeParen];
+        foreach (var segment in SplitTopLevelCSharpParameterSegments(parameters))
+        {
+            if (TryExtractTrailingCSharpParameterName(segment, out var name))
+                AddCSharpFunctionValueReceiverName(names, name, scopeStartLine, scopeStartColumn, scopeEndLine, scopeEndColumn);
+        }
+    }
+
+    private static List<string> SplitTopLevelCSharpParameterSegments(string parameters)
+    {
+        var segments = new List<string>();
+        var depthAngle = 0;
+        var depthParen = 0;
+        var depthBracket = 0;
+        var depthBrace = 0;
+        var segmentStart = 0;
+
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            var ch = parameters[i];
+            switch (ch)
+            {
+                case '<':
+                    depthAngle++;
+                    break;
+                case '>':
+                    if (depthAngle > 0)
+                        depthAngle--;
+                    break;
+                case '(':
+                    depthParen++;
+                    break;
+                case ')':
+                    if (depthParen > 0)
+                        depthParen--;
+                    break;
+                case '[':
+                    depthBracket++;
+                    break;
+                case ']':
+                    if (depthBracket > 0)
+                        depthBracket--;
+                    break;
+                case '{':
+                    depthBrace++;
+                    break;
+                case '}':
+                    if (depthBrace > 0)
+                        depthBrace--;
+                    break;
+                case ',':
+                    if (depthAngle == 0 && depthParen == 0 && depthBracket == 0 && depthBrace == 0)
+                    {
+                        segments.Add(parameters[segmentStart..i]);
+                        segmentStart = i + 1;
+                    }
+                    break;
+            }
+        }
+
+        if (segmentStart <= parameters.Length)
+            segments.Add(parameters[segmentStart..]);
+
+        return segments;
+    }
+
+    private static bool TryExtractTrailingCSharpParameterName(string segment, out string name)
+    {
+        name = string.Empty;
+        var trimmed = segment.Trim();
+        if (trimmed.Length == 0 || trimmed == "this")
+            return false;
+
+        var end = trimmed.Length - 1;
+        while (end >= 0 && char.IsWhiteSpace(trimmed[end]))
+            end--;
+        while (end >= 0 && (trimmed[end] == '?' || trimmed[end] == '!'))
+            end--;
+        var start = end;
+        while (start >= 0 && IsCSharpIdentifierPart(trimmed[start]))
+            start--;
+        if (end < 0 || start >= end)
+            return false;
+
+        name = NormalizeCSharpIdentifier(trimmed[(start + 1)..(end + 1)]);
+        return !string.IsNullOrWhiteSpace(name);
+    }
+
+    private static void AddCSharpLambdaParameterNames(List<CSharpFunctionValueReceiverNameRecord> names, string bodyText, int startLineNumber, int scopeEndLine)
+    {
+        if (string.IsNullOrWhiteSpace(bodyText))
+            return;
+
+        var searchIndex = 0;
+        while (searchIndex < bodyText.Length)
+        {
+            var arrowIndex = bodyText.IndexOf("=>", searchIndex, StringComparison.Ordinal);
+            if (arrowIndex < 0)
+                break;
+
+            var lambdaScopeEnd = FindCSharpArrowExpressionScopeEndPosition(bodyText, arrowIndex, startLineNumber, scopeEndLine);
+            AddCSharpLambdaParametersBeforeArrow(names, bodyText, arrowIndex, startLineNumber, lambdaScopeEnd);
+            searchIndex = arrowIndex + 2;
+        }
+    }
+
+    private static void AddCSharpRecursivePatternValueReceiverNames(
+        List<CSharpFunctionValueReceiverNameRecord> names,
+        string bodyText,
+        IReadOnlyList<string> structuralLines,
+        int bodyStartIndex,
+        int bodyEndIndex)
+    {
+        if (string.IsNullOrWhiteSpace(bodyText))
+            return;
+
+        var startLineNumber = bodyStartIndex + 1;
+        foreach (var pattern in FindCSharpRecursivePatternValueNames(bodyText))
+        {
+            var position = GetLineColumnFromOffset(bodyText, pattern.Offset, startLineNumber);
+            var declarationLineIndex = position.Line - 1;
+            if (pattern.ArrowIndex >= 0)
+            {
+                var scopeEnd = FindCSharpArrowExpressionScopeEndPosition(bodyText, pattern.ArrowIndex, startLineNumber, bodyEndIndex + 1);
+                AddCSharpFunctionValueReceiverName(names, pattern.Name, position.Line, position.Column, scopeEnd.Line, scopeEnd.Column);
+                continue;
+            }
+
+            if (pattern.IsCasePattern)
+            {
+                if (!TryFindCSharpSwitchCaseScopeEndPosition(structuralLines, bodyEndIndex, declarationLineIndex, position.Column, out var scopeEnd))
+                    continue;
+
+                AddCSharpFunctionValueReceiverName(names, pattern.Name, position.Line, position.Column, scopeEnd.Line, scopeEnd.Column);
+                continue;
+            }
+
+            if (!TryFindCSharpDeclarationPatternScopeEndPosition(structuralLines, bodyStartIndex, bodyEndIndex, declarationLineIndex, position.Column, out var declarationScopeEnd))
+                continue;
+
+            AddCSharpFunctionValueReceiverName(names, pattern.Name, position.Line, position.Column, declarationScopeEnd.Line, declarationScopeEnd.Column);
+        }
+    }
+
+    private static IEnumerable<CSharpRecursivePatternValueNameRecord> FindCSharpRecursivePatternValueNames(string bodyText)
+    {
+        for (var index = 0; index < bodyText.Length; index++)
+        {
+            if (!IsCSharpIdentifierStart(bodyText[index]))
+                continue;
+
+            var tokenStart = index;
+            index++;
+            while (index < bodyText.Length && IsCSharpIdentifierPart(bodyText[index]))
+                index++;
+
+            var token = bodyText[tokenStart..index];
+            if ((string.Equals(token, "is", StringComparison.Ordinal) || string.Equals(token, "case", StringComparison.Ordinal))
+                && TryParseCSharpRecursivePatternDesignation(bodyText, index, string.Equals(token, "case", StringComparison.Ordinal), out var name, out var designationOffset))
+            {
+                yield return new CSharpRecursivePatternValueNameRecord(name, designationOffset, string.Equals(token, "case", StringComparison.Ordinal));
+            }
+
+            index--;
+        }
+
+        foreach (var pattern in FindCSharpSwitchExpressionPatternValueNames(bodyText))
+            yield return pattern;
+    }
+
+    private static IEnumerable<CSharpRecursivePatternValueNameRecord> FindCSharpSwitchExpressionPatternValueNames(string bodyText)
+    {
+        if (string.IsNullOrWhiteSpace(bodyText))
+            yield break;
+
+        for (var searchIndex = 0; searchIndex < bodyText.Length;)
+        {
+            var arrowIndex = bodyText.IndexOf("=>", searchIndex, StringComparison.Ordinal);
+            if (arrowIndex < 0)
+                yield break;
+
+            searchIndex = arrowIndex + 2;
+            if (IsPotentialCSharpLambdaArrow(bodyText, arrowIndex))
+                continue;
+
+            if (!TryFindCSharpSwitchExpressionArmStartOffset(bodyText, arrowIndex, out var armStartOffset))
+                continue;
+
+            if (!TryParseCSharpSwitchExpressionArmPatternDesignation(bodyText, armStartOffset, arrowIndex, out var name, out var designationOffset))
+                continue;
+
+            yield return new CSharpRecursivePatternValueNameRecord(name, designationOffset, false, arrowIndex);
+        }
+    }
+
+    private static bool TryFindCSharpSwitchExpressionArmStartOffset(string bodyText, int arrowIndex, out int armStartOffset)
+    {
+        armStartOffset = 0;
+        if (arrowIndex <= 0 || arrowIndex > bodyText.Length)
+            return false;
+
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        for (var index = arrowIndex - 1; index >= 0; index--)
+        {
+            var current = bodyText[index];
+            switch (current)
+            {
+                case ')':
+                    parenDepth++;
+                    break;
+                case '(':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case ']':
+                    bracketDepth++;
+                    break;
+                case '[':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    break;
+                case '}':
+                    braceDepth++;
+                    break;
+                case '{':
+                    if (braceDepth > 0)
+                    {
+                        braceDepth--;
+                        break;
+                    }
+
+                    if (parenDepth == 0 && bracketDepth == 0)
+                    {
+                        armStartOffset = SkipWhitespaceForward(bodyText, index + 1);
+                        return armStartOffset < arrowIndex;
+                    }
+
+                    break;
+                case ',':
+                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                    {
+                        armStartOffset = SkipWhitespaceForward(bodyText, index + 1);
+                        return armStartOffset < arrowIndex;
+                    }
+
+                    break;
+                case ';':
+                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                        return false;
+                    break;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryParseCSharpSwitchExpressionArmPatternDesignation(
+        string bodyText,
+        int armStartOffset,
+        int arrowIndex,
+        out string name,
+        out int designationOffset)
+    {
+        name = string.Empty;
+        designationOffset = -1;
+        if (armStartOffset < 0 || armStartOffset >= arrowIndex || arrowIndex > bodyText.Length)
+            return false;
+
+        var armText = bodyText[armStartOffset..arrowIndex];
+        var preparedArmLines = StructuralLineMasker.MaskLines("csharp", armText.Split('\n'));
+        for (var i = 0; i < preparedArmLines.Length; i++)
+            preparedArmLines[i] = PrepareLine("csharp", preparedArmLines[i]);
+
+        var preparedArmText = string.Join("\n", preparedArmLines);
+        if (!TryParseCSharpRecursivePatternDesignation(preparedArmText, 0, false, out name, out var relativeOffset)
+            && !TryParseCSharpSwitchExpressionArmDeclarationPatternDesignation(preparedArmText, out name, out relativeOffset))
+        {
+            return false;
+        }
+
+        designationOffset = armStartOffset + relativeOffset;
+        return designationOffset < arrowIndex;
+    }
+
+    private static bool TryParseCSharpSwitchExpressionArmDeclarationPatternDesignation(
+        string armText,
+        out string name,
+        out int designationOffset)
+    {
+        name = string.Empty;
+        designationOffset = -1;
+        if (string.IsNullOrWhiteSpace(armText))
+            return false;
+
+        var whenOffset = FindTopLevelCSharpWhenKeywordOffset(armText);
+        var patternText = whenOffset >= 0 ? armText[..whenOffset] : armText;
+        var match = CSharpSwitchExpressionDeclarationPatternValueNameRegex.Match(patternText);
+        if (!match.Success)
+            return false;
+
+        name = NormalizeCSharpIdentifier(match.Groups["name"].Value);
+        designationOffset = match.Groups["name"].Index;
+        return designationOffset >= 0;
+    }
+
+    private static bool TryParseCSharpRecursivePatternDesignation(
+        string bodyText,
+        int index,
+        bool isCasePattern,
+        out string name,
+        out int designationOffset)
+    {
+        name = string.Empty;
+        designationOffset = -1;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var sawRecursiveClause = false;
+        var previousTopLevelNonWhitespaceChar = '\0';
+        for (var i = index; i < bodyText.Length; i++)
+        {
+            var current = bodyText[i];
+            if (char.IsWhiteSpace(current))
+                continue;
+
+            if (braceDepth == 0 && parenDepth == 0 && bracketDepth == 0 && IsCSharpIdentifierStart(current))
+            {
+                var tokenStart = i;
+                i++;
+                while (i < bodyText.Length && IsCSharpIdentifierPart(bodyText[i]))
+                    i++;
+
+                var token = bodyText[tokenStart..i];
+                i--;
+                if (sawRecursiveClause
+                    && previousTopLevelNonWhitespaceChar is not '.' and not ':' and not '<' and not '[' and not '?'
+                    && !IsCSharpPatternControlKeyword(token))
+                {
+                    name = NormalizeCSharpIdentifier(token);
+                    designationOffset = tokenStart;
+                    return true;
+                }
+
+                previousTopLevelNonWhitespaceChar = token[^1];
+                continue;
+            }
+
+            switch (current)
+            {
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    sawRecursiveClause = true;
+                    break;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    break;
+            }
+
+            if (braceDepth == 0 && parenDepth == 0 && bracketDepth == 0)
+                previousTopLevelNonWhitespaceChar = current;
+        }
+
+        return false;
+    }
+
+    private static bool IsCSharpPatternControlKeyword(string token) =>
+        token is "and" or "or" or "not" or "when" or "null" or "true" or "false";
+
+    private static int FindTopLevelCSharpWhenKeywordOffset(string text)
+    {
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        for (var i = 0; i < text.Length; i++)
+        {
+            var current = text[i];
+            switch (current)
+            {
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    break;
+            }
+
+            if (parenDepth == 0
+                && bracketDepth == 0
+                && braceDepth == 0
+                && TryConsumeCSharpKeyword(text, i, "when", out _))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static void AddCSharpLambdaParametersBeforeArrow(
+        List<CSharpFunctionValueReceiverNameRecord> names,
+        string bodyText,
+        int arrowIndex,
+        int startLineNumber,
+        CSharpLineColumn scopeEnd)
+    {
+        var leftIndex = SkipWhitespaceBackward(bodyText, arrowIndex - 1);
+        if (leftIndex < 0)
+            return;
+
+        var declarationLine = GetLineNumberFromOffset(bodyText, arrowIndex, startLineNumber);
+        if (bodyText[leftIndex] == ')')
+        {
+            if (!TryFindMatchingOpenParen(bodyText, leftIndex, out var openParenIndex))
+                return;
+
+            var scopeStart = GetLineColumnFromOffset(bodyText, openParenIndex, startLineNumber);
+            var parameters = bodyText[(openParenIndex + 1)..leftIndex];
+            foreach (var segment in SplitTopLevelCSharpParameterSegments(parameters))
+            {
+                if (TryExtractTrailingCSharpParameterName(segment, out var parameterName))
+                    AddCSharpFunctionValueReceiverName(names, parameterName, scopeStart.Line, scopeStart.Column, scopeEnd.Line, scopeEnd.Column);
+            }
+
+            return;
+        }
+
+        var identifierEnd = leftIndex + 1;
+        var identifierStart = leftIndex;
+        while (identifierStart >= 0 && IsCSharpIdentifierPart(bodyText[identifierStart]))
+            identifierStart--;
+        identifierStart++;
+        if (identifierStart >= identifierEnd || !IsCSharpIdentifierStart(bodyText[identifierStart]))
+            return;
+
+        var parameter = NormalizeCSharpIdentifier(bodyText[identifierStart..identifierEnd]);
+        var prefixIndex = SkipWhitespaceBackward(bodyText, identifierStart - 1);
+        if (prefixIndex < 0)
+            return;
+
+        var prefixChar = bodyText[prefixIndex];
+        if (prefixChar is '=' or '(' or ',' or ':'
+            || (TryReadPreviousIdentifierToken(bodyText, prefixIndex, out var previousToken)
+                && string.Equals(previousToken, "return", StringComparison.Ordinal)))
+        {
+            AddCSharpFunctionValueReceiverName(names, parameter, declarationLine, identifierStart - GetLineStartOffset(bodyText, arrowIndex), scopeEnd.Line, scopeEnd.Column);
+        }
+    }
+
+    private static void AddCSharpFunctionValueReceiverName(List<CSharpFunctionValueReceiverNameRecord> names, string name, int scopeStartLine, int scopeStartColumn, int scopeEndLine, int scopeEndColumn)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return;
+        if (names.Any(record =>
+            record.ScopeStartLine == scopeStartLine
+            && record.ScopeStartColumn == scopeStartColumn
+            && record.ScopeEndLine == scopeEndLine
+            && record.ScopeEndColumn == scopeEndColumn
+            && string.Equals(record.Name, name, StringComparison.Ordinal)))
+            return;
+
+        names.Add(new CSharpFunctionValueReceiverNameRecord(name, scopeStartLine, scopeStartColumn, scopeEndLine, scopeEndColumn));
+    }
+
+    private static int GetLineNumberFromOffset(string text, int offset, int startLineNumber)
+    {
+        var lineNumber = startLineNumber;
+        var limit = Math.Min(offset, text.Length);
+        for (var i = 0; i < limit; i++)
+        {
+            if (text[i] == '\n')
+                lineNumber++;
+        }
+
+        return lineNumber;
+    }
+
+    private static int FindInnermostCSharpBlockEndLine(
+        IReadOnlyList<string> structuralLines,
+        int bodyStartIndex,
+        int bodyEndIndex,
+        int declarationLineIndex,
+        int declarationColumn)
+    {
+        var depth = 0;
+        for (var lineIndex = bodyStartIndex; lineIndex <= bodyEndIndex; lineIndex++)
+        {
+            var line = structuralLines[lineIndex];
+            var limit = lineIndex == declarationLineIndex ? Math.Min(declarationColumn, line.Length) : line.Length;
+            for (var column = 0; column < limit; column++)
+            {
+                if (line[column] == '{')
+                    depth++;
+                else if (line[column] == '}' && depth > 0)
+                    depth--;
+            }
+
+            if (lineIndex != declarationLineIndex)
+                continue;
+
+            var declarationDepth = depth;
+            for (var scanLine = declarationLineIndex; scanLine <= bodyEndIndex; scanLine++)
+            {
+                var scan = structuralLines[scanLine];
+                var scanStart = scanLine == declarationLineIndex ? declarationColumn : 0;
+                for (var column = scanStart; column < scan.Length; column++)
+                {
+                    if (scan[column] == '{')
+                        depth++;
+                    else if (scan[column] == '}' && depth > 0)
+                    {
+                        depth--;
+                        if (depth < declarationDepth)
+                            return scanLine + 1;
+                    }
+                }
+            }
+
+            break;
+        }
+
+        return bodyEndIndex + 1;
+    }
+
+    private static CSharpLineColumn FindFollowingCSharpEmbeddedStatementEndPosition(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int headerLineIndex,
+        int searchStartColumn)
+    {
+        var parenDepth = 0;
+        var foundHeaderOpenParen = false;
+        for (var lineIndex = headerLineIndex; lineIndex <= bodyEndIndex; lineIndex++)
+        {
+            var line = structuralLines[lineIndex];
+            var startColumn = lineIndex == headerLineIndex ? Math.Min(searchStartColumn, line.Length) : 0;
+            for (var column = startColumn; column < line.Length; column++)
+            {
+                if (line[column] == '(')
+                {
+                    parenDepth++;
+                    foundHeaderOpenParen = true;
+                }
+                else if (line[column] == ')' && foundHeaderOpenParen && parenDepth > 0)
+                {
+                    parenDepth--;
+                    if (parenDepth == 0)
+                        return FindCSharpStatementEndPosition(structuralLines, bodyEndIndex, lineIndex, column + 1);
+                }
+            }
+        }
+
+        return new CSharpLineColumn(bodyEndIndex + 1, 0);
+    }
+
+    private static bool TryFindCSharpDeclarationPatternScopeEndPosition(
+        IReadOnlyList<string> structuralLines,
+        int bodyStartIndex,
+        int bodyEndIndex,
+        int lineIndex,
+        int declarationColumn,
+        out CSharpLineColumn scopeEnd)
+    {
+        scopeEnd = new CSharpLineColumn(0, 0);
+        if (lineIndex < 0
+            || lineIndex >= structuralLines.Count
+            || bodyStartIndex < 0
+            || bodyEndIndex < bodyStartIndex)
+            return false;
+
+        var bodyText = string.Join("\n", structuralLines.Skip(bodyStartIndex).Take(bodyEndIndex - bodyStartIndex + 1));
+        if (string.IsNullOrEmpty(bodyText))
+            return false;
+
+        var targetOffset = GetBodyTextOffset(structuralLines, bodyStartIndex, bodyEndIndex, lineIndex, declarationColumn);
+        var startLineNumber = bodyStartIndex + 1;
+        if (TryFindCSharpConditionalExpressionScopeEndPosition(bodyText, startLineNumber, targetOffset, out scopeEnd))
+            return true;
+
+        if (TryFindEnclosingCSharpLambdaScopeEndPosition(
+                bodyText,
+                startLineNumber,
+                bodyEndIndex + 1,
+                targetOffset,
+                out scopeEnd))
+        {
+            return true;
+        }
+
+        if (!TryFindCSharpConditionalHeaderStartPosition(structuralLines, bodyStartIndex, lineIndex, declarationColumn, out var headerLineIndex, out var headerStartColumn))
+            return false;
+
+        scopeEnd = FindFollowingCSharpEmbeddedStatementEndPosition(structuralLines, bodyEndIndex, headerLineIndex, headerStartColumn);
+        return true;
+    }
+
+    private static bool TryFindCSharpSwitchCaseScopeEndPosition(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int lineIndex,
+        int declarationColumn,
+        out CSharpLineColumn scopeEnd)
+    {
+        scopeEnd = new CSharpLineColumn(0, 0);
+        if (lineIndex < 0 || lineIndex >= structuralLines.Count)
+            return false;
+
+        var labelLineIndex = -1;
+        var labelColumn = -1;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        for (var scanLine = lineIndex; scanLine <= bodyEndIndex; scanLine++)
+        {
+            var line = structuralLines[scanLine];
+            var startColumn = scanLine == lineIndex ? Math.Min(Math.Max(declarationColumn, 0), line.Length) : 0;
+            for (var column = startColumn; column < line.Length; column++)
+            {
+                var current = line[column];
+                switch (current)
+                {
+                    case '(':
+                        parenDepth++;
+                        break;
+                    case ')':
+                        if (parenDepth > 0)
+                            parenDepth--;
+                        break;
+                    case '[':
+                        bracketDepth++;
+                        break;
+                    case ']':
+                        if (bracketDepth > 0)
+                            bracketDepth--;
+                        break;
+                    case '{':
+                        braceDepth++;
+                        break;
+                    case '}':
+                        if (braceDepth > 0)
+                            braceDepth--;
+                        break;
+                    case ':':
+                        if (parenDepth == 0
+                            && bracketDepth == 0
+                            && braceDepth == 0
+                            && (column == 0 || line[column - 1] != ':')
+                            && (column + 1 >= line.Length || line[column + 1] != ':'))
+                        {
+                            labelLineIndex = scanLine;
+                            labelColumn = column;
+                            break;
+                        }
+
+                        break;
+                }
+
+                if (labelLineIndex >= 0)
+                    break;
+            }
+
+            if (labelLineIndex >= 0)
+                break;
+        }
+
+        if (labelLineIndex < 0)
+            return false;
+
+        braceDepth = 0;
+        for (var scanLine = labelLineIndex; scanLine <= bodyEndIndex; scanLine++)
+        {
+            var scan = structuralLines[scanLine];
+            if (scanLine > labelLineIndex && braceDepth == 0 && IsCSharpSwitchLabelLine(scan))
+            {
+                scopeEnd = new CSharpLineColumn(scanLine + 1, 0);
+                return true;
+            }
+
+            var startColumn = scanLine == labelLineIndex ? Math.Min(labelColumn + 1, scan.Length) : 0;
+            for (var column = startColumn; column < scan.Length; column++)
+            {
+                var current = scan[column];
+                if (current == '{')
+                {
+                    braceDepth++;
+                }
+                else if (current == '}')
+                {
+                    if (braceDepth == 0)
+                    {
+                        scopeEnd = new CSharpLineColumn(scanLine + 1, column);
+                        return true;
+                    }
+
+                    braceDepth--;
+                }
+            }
+        }
+
+        scopeEnd = new CSharpLineColumn(bodyEndIndex + 1, structuralLines[Math.Min(bodyEndIndex, structuralLines.Count - 1)].Length);
+        return true;
+    }
+
+    private static bool TryFindEnclosingCSharpLambdaScopeEndPosition(
+        string bodyText,
+        int startLineNumber,
+        int fallbackScopeEndLine,
+        int targetOffset,
+        out CSharpLineColumn scopeEnd)
+    {
+        scopeEnd = new CSharpLineColumn(0, 0);
+        if (string.IsNullOrEmpty(bodyText))
+            return false;
+
+        var foundEnclosingLambda = false;
+        for (var searchIndex = 0; searchIndex < bodyText.Length;)
+        {
+            var arrowIndex = bodyText.IndexOf("=>", searchIndex, StringComparison.Ordinal);
+            if (arrowIndex < 0 || arrowIndex >= targetOffset)
+                break;
+
+            searchIndex = arrowIndex + 2;
+            if (!IsPotentialCSharpLambdaArrow(bodyText, arrowIndex))
+                continue;
+
+            var lambdaScopeEnd = FindCSharpArrowExpressionScopeEndPosition(bodyText, arrowIndex, startLineNumber, fallbackScopeEndLine);
+            var lambdaScopeEndOffset = GetTextOffsetFromLineColumn(bodyText, startLineNumber, lambdaScopeEnd);
+            if (targetOffset > lambdaScopeEndOffset)
+                continue;
+
+            scopeEnd = lambdaScopeEnd;
+            foundEnclosingLambda = true;
+        }
+
+        return foundEnclosingLambda;
+    }
+
+    private static bool TryFindCSharpConditionalExpressionScopeEndPosition(
+        string bodyText,
+        int startLineNumber,
+        int targetOffset,
+        out CSharpLineColumn scopeEnd)
+    {
+        scopeEnd = new CSharpLineColumn(0, 0);
+        if (string.IsNullOrEmpty(bodyText))
+            return false;
+
+        GetCSharpDelimiterDepthsAtOffset(bodyText, targetOffset, out var baseParenDepth, out var baseBracketDepth, out var baseBraceDepth);
+        var parenDepth = baseParenDepth;
+        var bracketDepth = baseBracketDepth;
+        var braceDepth = baseBraceDepth;
+        var questionIndex = -1;
+        var nestedConditionalDepth = 0;
+        for (var i = Math.Min(targetOffset, bodyText.Length); i < bodyText.Length; i++)
+        {
+            var current = bodyText[i];
+            switch (current)
+            {
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    break;
+            }
+
+            var atBaseDepth = parenDepth == baseParenDepth
+                && bracketDepth == baseBracketDepth
+                && braceDepth == baseBraceDepth;
+            if (!atBaseDepth)
+                continue;
+
+            if (questionIndex < 0)
+            {
+                if (IsCSharpConditionalOperatorQuestionMark(bodyText, i))
+                {
+                    questionIndex = i;
+                    continue;
+                }
+
+                if (current is ';' or ',' or ')')
+                    return false;
+
+                continue;
+            }
+
+            if (IsCSharpConditionalOperatorQuestionMark(bodyText, i))
+            {
+                nestedConditionalDepth++;
+                continue;
+            }
+
+            if (current != ':')
+                continue;
+
+            if (nestedConditionalDepth == 0)
+            {
+                scopeEnd = GetLineColumnFromOffset(bodyText, i, startLineNumber);
+                return true;
+            }
+
+            nestedConditionalDepth--;
+        }
+
+        return false;
+    }
+
+    private static bool TryFindCSharpConditionalHeaderStartPosition(
+        IReadOnlyList<string> structuralLines,
+        int bodyStartIndex,
+        int lineIndex,
+        int declarationColumn,
+        out int headerLineIndex,
+        out int headerStartColumn)
+    {
+        headerLineIndex = -1;
+        headerStartColumn = -1;
+        if (lineIndex < bodyStartIndex || lineIndex >= structuralLines.Count)
+            return false;
+
+        for (var scanLine = lineIndex; scanLine >= bodyStartIndex; scanLine--)
+        {
+            var searchColumn = scanLine == lineIndex
+                ? declarationColumn
+                : structuralLines[scanLine].Length - 1;
+            if (!TryFindCSharpConditionalHeaderStartColumn(structuralLines[scanLine], searchColumn, out var column))
+                continue;
+
+            headerLineIndex = scanLine;
+            headerStartColumn = column;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryFindCSharpConditionalHeaderStartColumn(string line, int searchLimitColumn, out int headerStartColumn)
+    {
+        headerStartColumn = -1;
+        if (string.IsNullOrEmpty(line))
+            return false;
+
+        var limit = Math.Min(searchLimitColumn, line.Length - 1);
+        for (var column = limit; column >= 0; column--)
+        {
+            if (!TryConsumeCSharpKeyword(line, column, "if", out var afterKeyword)
+                && !TryConsumeCSharpKeyword(line, column, "while", out afterKeyword))
+            {
+                continue;
+            }
+
+            var openParenColumn = line.IndexOf('(', afterKeyword);
+            if (openParenColumn >= 0 && openParenColumn <= limit)
+            {
+                headerStartColumn = column;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsCSharpSwitchLabelLine(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+            return false;
+
+        var trimmed = line.TrimStart();
+        return trimmed.StartsWith("case ", StringComparison.Ordinal)
+            || string.Equals(trimmed, "default:", StringComparison.Ordinal)
+            || trimmed.StartsWith("default:", StringComparison.Ordinal);
+    }
+
+    private static int SkipWhitespaceForward(string text, int index)
+    {
+        var current = Math.Max(index, 0);
+        while (current < text.Length && char.IsWhiteSpace(text[current]))
+            current++;
+
+        return current;
+    }
+
+    private static int GetBodyTextOffset(
+        IReadOnlyList<string> structuralLines,
+        int bodyStartIndex,
+        int bodyEndIndex,
+        int lineIndex,
+        int column)
+    {
+        if (bodyEndIndex < bodyStartIndex)
+            return 0;
+
+        var clampedLineIndex = Math.Max(bodyStartIndex, Math.Min(lineIndex, bodyEndIndex));
+        var offset = 0;
+        for (var scanLine = bodyStartIndex; scanLine < clampedLineIndex; scanLine++)
+            offset += structuralLines[scanLine].Length + 1;
+
+        var line = structuralLines[clampedLineIndex];
+        return offset + Math.Max(0, Math.Min(column, line.Length));
+    }
+
+    private static CSharpLineColumn FindCSharpStatementEndPosition(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int startLineIndex,
+        int startColumn)
+    {
+        if (TrySkipCSharpWhitespace(structuralLines, bodyEndIndex, startLineIndex, startColumn, out var statementLineIndex, out var statementColumn)
+            && TryConsumeCSharpKeyword(structuralLines[statementLineIndex], statementColumn, "if", out var afterIfColumn))
+        {
+            if (TrySkipCSharpWhitespace(structuralLines, bodyEndIndex, statementLineIndex, afterIfColumn, out var openParenLineIndex, out var openParenColumn)
+                && openParenColumn < structuralLines[openParenLineIndex].Length
+                && structuralLines[openParenLineIndex][openParenColumn] == '('
+                && TryFindMatchingCSharpDelimiter(structuralLines, bodyEndIndex, openParenLineIndex, openParenColumn, '(', ')', out var closeParen))
+            {
+                var thenEnd = FindCSharpStatementEndPosition(structuralLines, bodyEndIndex, closeParen.Line, closeParen.Column + 1);
+                if (TrySkipCSharpWhitespace(structuralLines, bodyEndIndex, thenEnd.Line - 1, thenEnd.Column + 1, out var elseLineIndex, out var elseColumn)
+                    && TryConsumeCSharpKeyword(structuralLines[elseLineIndex], elseColumn, "else", out var afterElseColumn))
+                {
+                    return FindCSharpStatementEndPosition(structuralLines, bodyEndIndex, elseLineIndex, afterElseColumn);
+                }
+
+                return thenEnd;
+            }
+        }
+
+        var foundContent = false;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        for (var lineIndex = startLineIndex; lineIndex <= bodyEndIndex; lineIndex++)
+        {
+            var line = structuralLines[lineIndex];
+            var columnStart = lineIndex == startLineIndex ? Math.Min(startColumn, line.Length) : 0;
+            for (var column = columnStart; column < line.Length; column++)
+            {
+                var current = line[column];
+                if (!foundContent)
+                {
+                    if (char.IsWhiteSpace(current))
+                        continue;
+
+                    foundContent = true;
+                }
+
+                switch (current)
+                {
+                    case '(':
+                        parenDepth++;
+                        break;
+                    case ')':
+                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                            return new CSharpLineColumn(lineIndex + 1, column);
+                        if (parenDepth > 0)
+                            parenDepth--;
+                        break;
+                    case '[':
+                        bracketDepth++;
+                        break;
+                    case ']':
+                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                            return new CSharpLineColumn(lineIndex + 1, column);
+                        if (bracketDepth > 0)
+                            bracketDepth--;
+                        break;
+                    case '{':
+                        braceDepth++;
+                        break;
+                    case '}':
+                        if (braceDepth > 0)
+                        {
+                            braceDepth--;
+                            if (braceDepth == 0 && parenDepth == 0 && bracketDepth == 0)
+                                return new CSharpLineColumn(lineIndex + 1, column);
+                        }
+                        break;
+                    case ';':
+                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                            return new CSharpLineColumn(lineIndex + 1, column);
+                        break;
+                    case ',':
+                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                            return new CSharpLineColumn(lineIndex + 1, column);
+                        break;
+                }
+            }
+        }
+
+        return new CSharpLineColumn(bodyEndIndex + 1, 0);
+    }
+
+    private static bool TrySkipCSharpWhitespace(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int startLineIndex,
+        int startColumn,
+        out int nextLineIndex,
+        out int nextColumn)
+    {
+        for (var lineIndex = startLineIndex; lineIndex <= bodyEndIndex; lineIndex++)
+        {
+            var line = structuralLines[lineIndex];
+            var columnStart = lineIndex == startLineIndex ? Math.Min(startColumn, line.Length) : 0;
+            for (var column = columnStart; column < line.Length; column++)
+            {
+                if (!char.IsWhiteSpace(line[column]))
+                {
+                    nextLineIndex = lineIndex;
+                    nextColumn = column;
+                    return true;
+                }
+            }
+        }
+
+        nextLineIndex = bodyEndIndex;
+        nextColumn = structuralLines[Math.Min(bodyEndIndex, structuralLines.Count - 1)].Length;
+        return false;
+    }
+
+    private static bool TryConsumeCSharpKeyword(string line, int startColumn, string keyword, out int nextColumn)
+    {
+        nextColumn = startColumn;
+        if (startColumn < 0 || startColumn + keyword.Length > line.Length)
+            return false;
+        if (!line.AsSpan(startColumn, keyword.Length).Equals(keyword, StringComparison.Ordinal))
+            return false;
+        if (startColumn > 0 && IsCSharpIdentifierPart(line[startColumn - 1]))
+            return false;
+        if (startColumn + keyword.Length < line.Length && IsCSharpIdentifierPart(line[startColumn + keyword.Length]))
+            return false;
+
+        nextColumn = startColumn + keyword.Length;
+        return true;
+    }
+
+    private static bool TryConsumeCSharpQueryClauseKeyword(string line, int startColumn, out string keyword, out int nextColumn)
+    {
+        keyword = string.Empty;
+        nextColumn = startColumn;
+        if (startColumn < 0 || startColumn >= line.Length)
+            return false;
+
+        if (startColumn > 0)
+        {
+            if (!char.IsWhiteSpace(line[startColumn - 1]))
+                return false;
+
+            for (var probe = startColumn - 1; probe >= 0; probe--)
+            {
+                if (char.IsWhiteSpace(line[probe]))
+                    continue;
+
+                if (line[probe] == '.' || line[probe] == ':')
+                    return false;
+
+                break;
+            }
+        }
+
+        var tokenStart = startColumn;
+        if (line[tokenStart] == '@')
+            return false;
+
+        if (!IsCSharpIdentifierPart(line[tokenStart]))
+        {
+            return false;
+        }
+
+        var tokenEnd = tokenStart + 1;
+        while (tokenEnd < line.Length && IsCSharpIdentifierPart(line[tokenEnd]))
+            tokenEnd++;
+
+        keyword = line.Substring(tokenStart, tokenEnd - tokenStart);
+        nextColumn = tokenEnd;
+        return true;
+    }
+
+    private static bool IsCSharpTerminalQueryClauseKeyword(string keyword)
+    {
+        return string.Equals(keyword, "select", StringComparison.Ordinal)
+            || string.Equals(keyword, "group", StringComparison.Ordinal);
+    }
+
+    private static bool IsCSharpQueryClauseKeyword(string keyword)
+    {
+        return IsCSharpTerminalQueryClauseKeyword(keyword)
+            || string.Equals(keyword, "from", StringComparison.Ordinal)
+            || string.Equals(keyword, "let", StringComparison.Ordinal)
+            || string.Equals(keyword, "where", StringComparison.Ordinal)
+            || string.Equals(keyword, "orderby", StringComparison.Ordinal)
+            || string.Equals(keyword, "join", StringComparison.Ordinal)
+            || string.Equals(keyword, "on", StringComparison.Ordinal)
+            || string.Equals(keyword, "equals", StringComparison.Ordinal)
+            || string.Equals(keyword, "by", StringComparison.Ordinal)
+            || string.Equals(keyword, "into", StringComparison.Ordinal)
+            || string.Equals(keyword, "ascending", StringComparison.Ordinal)
+            || string.Equals(keyword, "descending", StringComparison.Ordinal);
+    }
+
+    private static bool IsCSharpQueryClauseKeywordSuffix(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int lineIndex,
+        string line,
+        int nextColumn,
+        string keyword,
+        int previousTopLevelSignificantLineIndex,
+        int previousTopLevelSignificantColumn,
+        IReadOnlySet<string> csharpKnownTypeNames,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpFunctionValueReceiverNameRecord> csharpFunctionValueReceiverNames)
+    {
+        if (IsCSharpParenthesizedQueryClauseKeyword(keyword)
+            && TryGetNextTopLevelSignificantChar(
+                structuralLines,
+                lineIndex,
+                nextColumn,
+                out _,
+                out _,
+                out var nextTopLevelSignificantChar)
+            && nextTopLevelSignificantChar == '(')
+        {
+            return CanStartCSharpParenthesizedQueryClause(
+                structuralLines,
+                bodyEndIndex,
+                previousTopLevelSignificantLineIndex,
+                previousTopLevelSignificantColumn,
+                csharpKnownTypeNames,
+                csharpUsingAliases,
+                csharpFunctionValueReceiverNames);
+        }
+
+        if (nextColumn >= line.Length)
+            return true;
+
+        var next = line[nextColumn];
+        if (char.IsWhiteSpace(next))
+            return true;
+
+        return (string.Equals(keyword, "ascending", StringComparison.Ordinal)
+                || string.Equals(keyword, "descending", StringComparison.Ordinal))
+            && (next == ',' || next == ')' || next == ']' || next == '}' || next == ';');
+    }
+
+    private static bool IsCSharpParenthesizedQueryClauseKeyword(string keyword)
+    {
+        return string.Equals(keyword, "select", StringComparison.Ordinal)
+            || string.Equals(keyword, "group", StringComparison.Ordinal)
+            || string.Equals(keyword, "orderby", StringComparison.Ordinal);
+    }
+
+    private static bool CanStartCSharpParenthesizedQueryClause(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int previousTopLevelSignificantLineIndex,
+        int previousTopLevelSignificantColumn,
+        IReadOnlySet<string> csharpKnownTypeNames,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpFunctionValueReceiverNameRecord> csharpFunctionValueReceiverNames)
+    {
+        if (previousTopLevelSignificantLineIndex < 0 || previousTopLevelSignificantColumn < 0)
+            return true;
+
+        if (!TryGetPreviousTopLevelToken(
+                structuralLines,
+                previousTopLevelSignificantLineIndex,
+                previousTopLevelSignificantColumn,
+                out var previousTokenLineIndex,
+                out var previousTokenStartColumn,
+                out var previousTokenEndColumn,
+                out var previousIdentifierToken,
+                out var previousPunctuationToken))
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrEmpty(previousIdentifierToken))
+            return !IsCSharpParenthesizedQueryClausePrefixIdentifier(
+                structuralLines[previousTokenLineIndex],
+                previousTokenStartColumn,
+                previousIdentifierToken);
+
+        return previousPunctuationToken switch
+        {
+            '(' or '[' or '{' or ',' or ';' or ':' or '*' or '/' or '%' or '&' or '|' or '^' or '=' or '~' or '<' => false,
+            ')' => !LooksLikeCSharpCastCloseParen(
+                structuralLines,
+                previousTokenLineIndex,
+                previousTokenStartColumn,
+                csharpKnownTypeNames,
+                csharpUsingAliases,
+                csharpFunctionValueReceiverNames),
+            '?' => LooksLikeCSharpNullableTypeSuffixInCastOrTypeTest(
+                structuralLines,
+                previousTokenLineIndex,
+                previousTokenStartColumn),
+            '+' or '-' => CanStartCSharpParenthesizedQueryClauseAfterPlusOrMinus(
+                structuralLines,
+                bodyEndIndex,
+                previousTokenLineIndex,
+                previousTokenStartColumn,
+                previousTokenEndColumn,
+                previousPunctuationToken),
+            '!' => CanStartCSharpParenthesizedQueryClauseAfterBang(
+                structuralLines,
+                bodyEndIndex,
+                previousTokenLineIndex,
+                previousTokenStartColumn),
+            '>' => LooksLikeCSharpQueryGenericTypeArgumentClose(
+                structuralLines,
+                bodyEndIndex,
+                previousTokenLineIndex,
+                previousTokenStartColumn),
+            _ => true
+        };
+    }
+
+    private static bool LooksLikeCSharpCastCloseParen(
+        IReadOnlyList<string> structuralLines,
+        int closeParenLineIndex,
+        int closeParenColumn,
+        IReadOnlySet<string> csharpKnownTypeNames,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpFunctionValueReceiverNameRecord> csharpFunctionValueReceiverNames)
+    {
+        if (!TryFindMatchingCSharpOpenParenBackwards(
+                structuralLines,
+                closeParenLineIndex,
+                closeParenColumn,
+                out var openParenLineIndex,
+                out var openParenColumn))
+        {
+            return false;
+        }
+
+        var castTargetText = GetCSharpTextBetween(
+            structuralLines,
+            openParenLineIndex,
+            openParenColumn + 1,
+            closeParenLineIndex,
+            closeParenColumn);
+        if (!LooksLikeCSharpCastTypeText(
+                castTargetText,
+                closeParenLineIndex + 1,
+                closeParenColumn,
+                csharpKnownTypeNames,
+                csharpUsingAliases,
+                csharpFunctionValueReceiverNames))
+            return false;
+
+        if (!TryGetPreviousTopLevelToken(
+                structuralLines,
+                openParenLineIndex,
+                openParenColumn - 1,
+                out var previousTokenLineIndex,
+                out var previousTokenStartColumn,
+                out _,
+                out var previousIdentifierToken,
+                out var previousPunctuationToken))
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrEmpty(previousIdentifierToken))
+            return IsCSharpCastPrefixIdentifier(structuralLines[previousTokenLineIndex], previousTokenStartColumn, previousIdentifierToken);
+
+        return previousPunctuationToken is not (')' or ']' or '}' or '"' or '\'' or '>');
+    }
+
+    private static bool IsCSharpCastPrefixIdentifier(string line, int tokenStartColumn, string token)
+    {
+        if (tokenStartColumn > 0 && line[tokenStartColumn - 1] == '@')
+            return false;
+
+        return string.Equals(token, "return", StringComparison.Ordinal)
+            || string.Equals(token, "await", StringComparison.Ordinal)
+            || string.Equals(token, "throw", StringComparison.Ordinal)
+            || IsCSharpQueryClauseKeyword(token);
+    }
+
+    private static bool LooksLikeCSharpCastTypeText(
+        string text,
+        int lineNumber,
+        int column,
+        IReadOnlySet<string> csharpKnownTypeNames,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpFunctionValueReceiverNameRecord> csharpFunctionValueReceiverNames)
+    {
+        var trimmed = text.Trim();
+        if (trimmed.Length == 0)
+            return false;
+
+        var index = 0;
+        if (!TryConsumeCSharpCastType(trimmed, ref index))
+            return false;
+
+        SkipCSharpCastTypeWhitespace(trimmed, ref index);
+        if (index != trimmed.Length)
+            return false;
+
+        var shape = AnalyzeCSharpCastTypeShape(trimmed);
+        if (shape.IdentifierSegments.Count == 0)
+            return shape.HasTypeOnlySyntax;
+
+        var resolvedQualifiedName = shape.SimpleQualifiedName == null
+            ? null
+            : ResolveCSharpQualifiedAliasTarget(shape.SimpleQualifiedName, lineNumber, csharpUsingAliases);
+        var resolvedBareName = resolvedQualifiedName == null
+            ? null
+            : ExtractBareTypeName(resolvedQualifiedName);
+
+        var lastSegment = shape.IdentifierSegments[^1];
+        if (HasKnownNonTerminalTypeSegment(shape.IdentifierSegments, csharpKnownTypeNames)
+            && !IsKnownCSharpCastTypeName(lastSegment, resolvedBareName, csharpKnownTypeNames))
+        {
+            return false;
+        }
+
+        if (IsKnownCSharpCastTypeName(lastSegment, resolvedBareName, csharpKnownTypeNames)
+            || (!string.IsNullOrWhiteSpace(resolvedQualifiedName) && csharpKnownTypeNames.Contains(resolvedQualifiedName)))
+        {
+            return true;
+        }
+
+        if (shape.SimpleQualifiedName != null
+            && string.Equals(shape.SimpleQualifiedName, resolvedQualifiedName, StringComparison.Ordinal)
+            && HasCSharpFunctionValueReceiverConflict(
+                GetFirstQualifiedSegment(shape.SimpleQualifiedName),
+                lineNumber,
+                column,
+                csharpFunctionValueReceiverNames))
+        {
+            return false;
+        }
+
+        if (shape.HasTypeOnlySyntax)
+            return true;
+
+        return shape.AllIdentifiersTypeLike && shape.IdentifierSegments.Count <= 2;
+    }
+
+    private static bool TryConsumeCSharpCastType(string text, ref int index)
+    {
+        if (!TryConsumeCSharpCastTypeCore(text, ref index))
+            return false;
+
+        while (true)
+        {
+            var checkpoint = index;
+            SkipCSharpCastTypeWhitespace(text, ref index);
+            if (TryConsumeCSharpCastArraySuffix(text, ref index)
+                || TryConsumeCSharpCastNullableSuffix(text, ref index))
+            {
+                continue;
+            }
+
+            index = checkpoint;
+            return true;
+        }
+    }
+
+    private static bool TryConsumeCSharpCastTypeCore(string text, ref int index)
+    {
+        SkipCSharpCastTypeWhitespace(text, ref index);
+        if (index < text.Length && text[index] == '(')
+            return TryConsumeCSharpCastTupleType(text, ref index);
+
+        return TryConsumeCSharpCastQualifiedType(text, ref index);
+    }
+
+    private static bool TryConsumeCSharpCastQualifiedType(string text, ref int index)
+    {
+        if (!TryConsumeCSharpCastIdentifier(text, ref index, out var token))
+            return false;
+
+        if (!TryConsumeCSharpCastGenericArgumentList(text, ref index))
+            return false;
+
+        while (true)
+        {
+            var checkpoint = index;
+            SkipCSharpCastTypeWhitespace(text, ref index);
+            if (!TryConsumeCSharpCastQualifiedTypeSeparator(text, ref index))
+            {
+                index = checkpoint;
+                return true;
+            }
+
+            if (!TryConsumeCSharpCastIdentifier(text, ref index, out token))
+                return false;
+
+            if (!TryConsumeCSharpCastGenericArgumentList(text, ref index))
+                return false;
+        }
+    }
+
+    private static bool TryConsumeCSharpCastTupleType(string text, ref int index)
+    {
+        if (index >= text.Length || text[index] != '(')
+            return false;
+
+        index++;
+        while (true)
+        {
+            if (!TryConsumeCSharpCastType(text, ref index))
+                return false;
+
+            var checkpoint = index;
+            if (TryConsumeCSharpCastIdentifier(text, ref index, out _))
+            {
+                // Tuple element names are optional and do not affect type-likeness.
+            }
+            else
+            {
+                index = checkpoint;
+            }
+
+            SkipCSharpCastTypeWhitespace(text, ref index);
+            if (index >= text.Length)
+                return false;
+
+            if (text[index] == ')')
+            {
+                index++;
+                return true;
+            }
+
+            if (text[index] != ',')
+                return false;
+
+            index++;
+        }
+    }
+
+    private static bool TryConsumeCSharpCastGenericArgumentList(string text, ref int index)
+    {
+        var checkpoint = index;
+        SkipCSharpCastTypeWhitespace(text, ref index);
+        if (index >= text.Length || text[index] != '<')
+        {
+            index = checkpoint;
+            return true;
+        }
+
+        index++;
+        while (true)
+        {
+            if (!TryConsumeCSharpCastType(text, ref index))
+                return false;
+
+            SkipCSharpCastTypeWhitespace(text, ref index);
+            if (index >= text.Length)
+                return false;
+
+            if (text[index] == '>')
+            {
+                index++;
+                return true;
+            }
+
+            if (text[index] != ',')
+                return false;
+
+            index++;
+        }
+    }
+
+    private static bool TryConsumeCSharpCastArraySuffix(string text, ref int index)
+    {
+        if (index >= text.Length || text[index] != '[')
+            return false;
+
+        index++;
+        SkipCSharpCastTypeWhitespace(text, ref index);
+        while (index < text.Length && text[index] == ',')
+        {
+            index++;
+            SkipCSharpCastTypeWhitespace(text, ref index);
+        }
+
+        if (index >= text.Length || text[index] != ']')
+            return false;
+
+        index++;
+        return true;
+    }
+
+    private static bool TryConsumeCSharpCastNullableSuffix(string text, ref int index)
+    {
+        if (index >= text.Length || text[index] != '?')
+            return false;
+
+        index++;
+        return true;
+    }
+
+    private static bool TryConsumeCSharpCastQualifiedTypeSeparator(string text, ref int index)
+    {
+        if (index >= text.Length)
+            return false;
+
+        if (text[index] == '.')
+        {
+            index++;
+            return true;
+        }
+
+        if (index + 1 < text.Length && text[index] == ':' && text[index + 1] == ':')
+        {
+            index += 2;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryConsumeCSharpCastIdentifier(string text, ref int index, out string token)
+    {
+        SkipCSharpCastTypeWhitespace(text, ref index);
+        token = string.Empty;
+        if (index >= text.Length)
+            return false;
+
+        var start = index;
+        if (text[index] == '@')
+        {
+            index++;
+            if (index >= text.Length || !IsCSharpIdentifierStart(text[index]))
+            {
+                index = start;
+                return false;
+            }
+        }
+        else if (!IsCSharpIdentifierStart(text[index]))
+        {
+            return false;
+        }
+
+        index++;
+        while (index < text.Length && IsCSharpIdentifierPart(text[index]))
+            index++;
+
+        token = text.Substring(start, index - start);
+        return true;
+    }
+
+    private static CSharpCastTypeShape AnalyzeCSharpCastTypeShape(string text)
+    {
+        var segments = new List<string>();
+        var simpleQualifiedName = new System.Text.StringBuilder();
+        var hasTypeOnlySyntax = false;
+        var allIdentifiersTypeLike = true;
+        var simpleQualifiedCandidate = true;
+
+        for (var index = 0; index < text.Length;)
+        {
+            var current = text[index];
+            if (char.IsWhiteSpace(current))
+            {
+                index++;
+                continue;
+            }
+
+            if (current == '@' || IsCSharpIdentifierStart(current))
+            {
+                var start = index;
+                if (current == '@')
+                    index++;
+                if (index < text.Length)
+                    index++;
+                while (index < text.Length && IsCSharpIdentifierPart(text[index]))
+                    index++;
+
+                var token = text.Substring(start, index - start);
+                segments.Add(token);
+                allIdentifiersTypeLike &= IsLikelyCSharpTypeIdentifier(token);
+                if (simpleQualifiedCandidate)
+                    simpleQualifiedName.Append(token);
+                continue;
+            }
+
+            switch (current)
+            {
+                case '.':
+                    if (simpleQualifiedCandidate)
+                        simpleQualifiedName.Append(current);
+                    index++;
+                    continue;
+                case ':':
+                    if (index + 1 < text.Length && text[index + 1] == ':')
+                    {
+                        hasTypeOnlySyntax = true;
+                        if (simpleQualifiedCandidate)
+                            simpleQualifiedName.Append("::");
+                        index += 2;
+                        continue;
+                    }
+
+                    simpleQualifiedCandidate = false;
+                    index++;
+                    continue;
+                case '<':
+                case '[':
+                case '?':
+                case '(':
+                    hasTypeOnlySyntax = true;
+                    simpleQualifiedCandidate = false;
+                    index++;
+                    continue;
+                case '>':
+                case ']':
+                case ')':
+                case ',':
+                    simpleQualifiedCandidate = false;
+                    index++;
+                    continue;
+                default:
+                    simpleQualifiedCandidate = false;
+                    index++;
+                    continue;
+            }
+        }
+
+        return new CSharpCastTypeShape(
+            segments,
+            simpleQualifiedCandidate && simpleQualifiedName.Length > 0 ? simpleQualifiedName.ToString() : null,
+            hasTypeOnlySyntax,
+            allIdentifiersTypeLike);
+    }
+
+    private static bool HasKnownNonTerminalTypeSegment(IReadOnlyList<string> segments, IReadOnlySet<string> csharpKnownTypeNames)
+    {
+        for (var index = 0; index < segments.Count - 1; index++)
+        {
+            if (csharpKnownTypeNames.Contains(NormalizeCSharpIdentifier(segments[index])))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsKnownCSharpCastTypeName(string candidate, string? resolvedCandidate, IReadOnlySet<string> csharpKnownTypeNames)
+    {
+        return csharpKnownTypeNames.Contains(NormalizeCSharpIdentifier(candidate))
+            || (!string.IsNullOrWhiteSpace(resolvedCandidate) && csharpKnownTypeNames.Contains(NormalizeCSharpIdentifier(resolvedCandidate)));
+    }
+
+    private static bool HasCSharpFunctionValueReceiverConflict(
+        string candidate,
+        int lineNumber,
+        int column,
+        IReadOnlyList<CSharpFunctionValueReceiverNameRecord> csharpFunctionValueReceiverNames)
+    {
+        if (string.IsNullOrWhiteSpace(candidate) || csharpFunctionValueReceiverNames.Count == 0)
+            return false;
+
+        var normalizedCandidate = NormalizeCSharpIdentifier(candidate);
+        return csharpFunctionValueReceiverNames.Any(record =>
+            IsWithinCSharpScope(record, lineNumber, column)
+            && string.Equals(record.Name, normalizedCandidate, StringComparison.Ordinal));
+    }
+
+    private static bool IsLikelyCSharpTypeIdentifier(string token)
+    {
+        if (string.IsNullOrEmpty(token))
+            return false;
+
+        var normalized = token[0] == '@' ? token.Substring(1) : token;
+        if (normalized.Length == 0)
+            return false;
+
+        return IsCSharpBuiltInTypeKeyword(normalized)
+            || char.IsUpper(normalized[0]);
+    }
+
+    private static void SkipCSharpCastTypeWhitespace(string text, ref int index)
+    {
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+            index++;
+    }
+
+    private static bool IsCSharpBuiltInTypeKeyword(string text)
+    {
+        return string.Equals(text, "bool", StringComparison.Ordinal)
+            || string.Equals(text, "byte", StringComparison.Ordinal)
+            || string.Equals(text, "sbyte", StringComparison.Ordinal)
+            || string.Equals(text, "short", StringComparison.Ordinal)
+            || string.Equals(text, "ushort", StringComparison.Ordinal)
+            || string.Equals(text, "int", StringComparison.Ordinal)
+            || string.Equals(text, "uint", StringComparison.Ordinal)
+            || string.Equals(text, "long", StringComparison.Ordinal)
+            || string.Equals(text, "ulong", StringComparison.Ordinal)
+            || string.Equals(text, "nint", StringComparison.Ordinal)
+            || string.Equals(text, "nuint", StringComparison.Ordinal)
+            || string.Equals(text, "char", StringComparison.Ordinal)
+            || string.Equals(text, "float", StringComparison.Ordinal)
+            || string.Equals(text, "double", StringComparison.Ordinal)
+            || string.Equals(text, "decimal", StringComparison.Ordinal)
+            || string.Equals(text, "string", StringComparison.Ordinal)
+            || string.Equals(text, "object", StringComparison.Ordinal)
+            || string.Equals(text, "dynamic", StringComparison.Ordinal);
+    }
+
+    private static bool CanStartCSharpParenthesizedQueryClauseAfterPlusOrMinus(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int operatorLineIndex,
+        int operatorColumn,
+        int operatorEndColumn,
+        char operatorToken)
+    {
+        if (operatorLineIndex < 0 || operatorColumn < 0)
+            return false;
+
+        if (!TryGetPreviousTopLevelToken(
+                structuralLines,
+                operatorLineIndex,
+                operatorColumn - 1,
+                out var previousTokenLineIndex,
+                out var previousTokenStartColumn,
+                out var previousTokenEndColumn,
+                out var previousIdentifierToken,
+                out var previousPunctuationToken))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrEmpty(previousIdentifierToken)
+            || previousPunctuationToken != operatorToken
+            || previousTokenLineIndex != operatorLineIndex
+            || previousTokenEndColumn != operatorEndColumn - 1)
+        {
+            return false;
+        }
+
+        if (!TryGetPreviousTopLevelToken(
+                structuralLines,
+                previousTokenLineIndex,
+                previousTokenStartColumn - 1,
+                out var operandTokenLineIndex,
+                out var operandTokenStartColumn,
+                out _,
+                out var operandIdentifierToken,
+                out var operandPunctuationToken))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrEmpty(operandIdentifierToken))
+            return true;
+
+        return operandPunctuationToken switch
+        {
+            ')' or ']' or '}' or '"' or '\'' => true,
+            '>' => LooksLikeCSharpQueryGenericTypeArgumentClose(
+                structuralLines,
+                bodyEndIndex,
+                operandTokenLineIndex,
+                operandTokenStartColumn),
+            _ => false
+        };
+    }
+
+    private static bool CanStartCSharpParenthesizedQueryClauseAfterBang(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int bangLineIndex,
+        int bangColumn)
+    {
+        if (!TryGetPreviousTopLevelToken(
+                structuralLines,
+                bangLineIndex,
+                bangColumn - 1,
+                out var previousTokenLineIndex,
+                out var previousTokenStartColumn,
+                out _,
+                out var previousIdentifierToken,
+                out var previousPunctuationToken))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrEmpty(previousIdentifierToken))
+            return !IsCSharpParenthesizedQueryClausePrefixIdentifier(
+                structuralLines[previousTokenLineIndex],
+                previousTokenStartColumn,
+                previousIdentifierToken);
+
+        return previousPunctuationToken switch
+        {
+            ')' or ']' or '}' or '"' or '\'' => true,
+            '>' => LooksLikeCSharpQueryGenericTypeArgumentClose(
+                structuralLines,
+                bodyEndIndex,
+                previousTokenLineIndex,
+                previousTokenStartColumn),
+            _ => false
+        };
+    }
+
+    private static bool IsCSharpParenthesizedQueryClausePrefixIdentifier(string line, int tokenStartColumn, string token)
+    {
+        if (tokenStartColumn > 0 && line[tokenStartColumn - 1] == '@')
+            return false;
+
+        return string.Equals(token, "await", StringComparison.Ordinal)
+            || string.Equals(token, "throw", StringComparison.Ordinal)
+            || IsCSharpQueryClauseKeyword(token);
+    }
+
+    private static bool LooksLikeCSharpNullableTypeSuffixInCastOrTypeTest(
+        IReadOnlyList<string> structuralLines,
+        int questionLineIndex,
+        int questionColumn)
+    {
+        var angleDepth = 0;
+        var bracketDepth = 0;
+        var currentLineIndex = questionLineIndex;
+        var currentColumn = questionColumn - 1;
+        while (TryGetPreviousTopLevelToken(
+                   structuralLines,
+                   currentLineIndex,
+                   currentColumn,
+                   out var tokenLineIndex,
+                   out var tokenStartColumn,
+                   out _,
+                   out var identifierToken,
+                   out var punctuationToken))
+        {
+            if (!string.IsNullOrEmpty(identifierToken))
+            {
+                if (angleDepth == 0
+                    && bracketDepth == 0
+                    && (string.Equals(identifierToken, "as", StringComparison.Ordinal)
+                        || string.Equals(identifierToken, "is", StringComparison.Ordinal)))
+                {
+                    return true;
+                }
+
+                currentLineIndex = tokenLineIndex;
+                currentColumn = tokenStartColumn - 1;
+                continue;
+            }
+
+            switch (punctuationToken)
+            {
+                case '.':
+                case '?':
+                    currentLineIndex = tokenLineIndex;
+                    currentColumn = tokenStartColumn - 1;
+                    continue;
+                case ',':
+                    if (angleDepth > 0 || bracketDepth > 0)
+                    {
+                        currentLineIndex = tokenLineIndex;
+                        currentColumn = tokenStartColumn - 1;
+                        continue;
+                    }
+
+                    return false;
+                case '>':
+                    angleDepth++;
+                    currentLineIndex = tokenLineIndex;
+                    currentColumn = tokenStartColumn - 1;
+                    continue;
+                case '<':
+                    if (angleDepth == 0)
+                        return false;
+
+                    angleDepth--;
+                    currentLineIndex = tokenLineIndex;
+                    currentColumn = tokenStartColumn - 1;
+                    continue;
+                case ']':
+                    bracketDepth++;
+                    currentLineIndex = tokenLineIndex;
+                    currentColumn = tokenStartColumn - 1;
+                    continue;
+                case '[':
+                    if (bracketDepth == 0)
+                        return false;
+
+                    bracketDepth--;
+                    currentLineIndex = tokenLineIndex;
+                    currentColumn = tokenStartColumn - 1;
+                    continue;
+                default:
+                    return false;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryGetPreviousTopLevelToken(
+        IReadOnlyList<string> structuralLines,
+        int startLineIndex,
+        int startColumn,
+        out int tokenLineIndex,
+        out int tokenStartColumn,
+        out int tokenEndColumn,
+        out string identifierToken,
+        out char punctuationToken)
+    {
+        tokenLineIndex = -1;
+        tokenStartColumn = -1;
+        tokenEndColumn = -1;
+        identifierToken = string.Empty;
+        punctuationToken = '\0';
+
+        if (!TryGetPreviousTopLevelSignificantChar(
+                structuralLines,
+                startLineIndex,
+                startColumn,
+                out tokenLineIndex,
+                out tokenEndColumn,
+                out var tokenChar))
+        {
+            return false;
+        }
+
+        tokenStartColumn = tokenEndColumn;
+        if (IsCSharpIdentifierPart(tokenChar))
+        {
+            var line = structuralLines[tokenLineIndex];
+            while (tokenStartColumn > 0 && IsCSharpIdentifierPart(line[tokenStartColumn - 1]))
+                tokenStartColumn--;
+
+            identifierToken = line.Substring(tokenStartColumn, tokenEndColumn - tokenStartColumn + 1);
+        }
+        else
+        {
+            punctuationToken = tokenChar;
+        }
+
+        return true;
+    }
+
+    private static bool TryGetPreviousTopLevelSignificantChar(
+        IReadOnlyList<string> structuralLines,
+        int startLineIndex,
+        int startColumn,
+        out int lineIndex,
+        out int column,
+        out char value)
+    {
+        lineIndex = -1;
+        column = -1;
+        value = '\0';
+
+        if (structuralLines.Count == 0)
+            return false;
+
+        var clampedLineIndex = Math.Min(startLineIndex, structuralLines.Count - 1);
+        for (var currentLineIndex = clampedLineIndex; currentLineIndex >= 0; currentLineIndex--)
+        {
+            var line = structuralLines[currentLineIndex];
+            var currentColumn = currentLineIndex == clampedLineIndex
+                ? Math.Min(startColumn, line.Length - 1)
+                : line.Length - 1;
+            for (var probe = currentColumn; probe >= 0; probe--)
+            {
+                if (char.IsWhiteSpace(line[probe]))
+                    continue;
+
+                lineIndex = currentLineIndex;
+                column = probe;
+                value = line[probe];
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryGetNextTopLevelSignificantChar(
+        IReadOnlyList<string> structuralLines,
+        int startLineIndex,
+        int startColumn,
+        out int lineIndex,
+        out int column,
+        out char value)
+    {
+        lineIndex = -1;
+        column = -1;
+        value = '\0';
+
+        if (structuralLines.Count == 0)
+            return false;
+
+        var clampedLineIndex = Math.Max(0, Math.Min(startLineIndex, structuralLines.Count - 1));
+        for (var currentLineIndex = clampedLineIndex; currentLineIndex < structuralLines.Count; currentLineIndex++)
+        {
+            var line = structuralLines[currentLineIndex];
+            var currentColumn = currentLineIndex == clampedLineIndex
+                ? Math.Max(0, startColumn)
+                : 0;
+            for (var probe = currentColumn; probe < line.Length; probe++)
+            {
+                if (char.IsWhiteSpace(line[probe]))
+                    continue;
+
+                lineIndex = currentLineIndex;
+                column = probe;
+                value = line[probe];
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryFindMatchingCSharpOpenParenBackwards(
+        IReadOnlyList<string> structuralLines,
+        int closeParenLineIndex,
+        int closeParenColumn,
+        out int openParenLineIndex,
+        out int openParenColumn)
+    {
+        openParenLineIndex = -1;
+        openParenColumn = -1;
+
+        var depth = 1;
+        for (var lineIndex = closeParenLineIndex; lineIndex >= 0; lineIndex--)
+        {
+            var line = structuralLines[lineIndex];
+            var columnStart = lineIndex == closeParenLineIndex ? Math.Min(closeParenColumn - 1, line.Length - 1) : line.Length - 1;
+            for (var column = columnStart; column >= 0; column--)
+            {
+                switch (line[column])
+                {
+                    case ')':
+                        depth++;
+                        break;
+                    case '(':
+                        depth--;
+                        if (depth == 0)
+                        {
+                            openParenLineIndex = lineIndex;
+                            openParenColumn = column;
+                            return true;
+                        }
+
+                        break;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static string GetCSharpTextBetween(
+        IReadOnlyList<string> structuralLines,
+        int startLineIndex,
+        int startColumn,
+        int endLineIndex,
+        int endColumn)
+    {
+        var builder = new System.Text.StringBuilder();
+        for (var lineIndex = startLineIndex; lineIndex <= endLineIndex; lineIndex++)
+        {
+            var line = structuralLines[lineIndex];
+            var segmentStart = lineIndex == startLineIndex ? Math.Max(0, startColumn) : 0;
+            var segmentEnd = lineIndex == endLineIndex ? Math.Min(endColumn, line.Length) : line.Length;
+            if (segmentStart < segmentEnd)
+                builder.Append(line, segmentStart, segmentEnd - segmentStart);
+            if (lineIndex < endLineIndex)
+                builder.Append('\n');
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool LooksLikeCSharpQueryGenericTypeArgumentClose(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int closeLineIndex,
+        int closeColumn)
+    {
+        if (closeLineIndex < 0 || closeLineIndex >= structuralLines.Count)
+            return false;
+
+        var angleDepth = 1;
+        for (var lineIndex = closeLineIndex; lineIndex >= 0; lineIndex--)
+        {
+            var line = structuralLines[lineIndex];
+            var columnStart = lineIndex == closeLineIndex ? Math.Min(closeColumn - 1, line.Length - 1) : line.Length - 1;
+            for (var column = columnStart; column >= 0; column--)
+            {
+                var current = line[column];
+                switch (current)
+                {
+                    case '>':
+                        angleDepth++;
+                        break;
+                    case '<':
+                        angleDepth--;
+                        if (angleDepth == 0)
+                            return LooksLikeCSharpQueryGenericTypeArgumentStart(structuralLines, bodyEndIndex, lineIndex, column);
+                        break;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryFindMatchingCSharpDelimiter(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int startLineIndex,
+        int startColumn,
+        char open,
+        char close,
+        out CSharpLineColumn match)
+    {
+        var depth = 0;
+        for (var lineIndex = startLineIndex; lineIndex <= bodyEndIndex; lineIndex++)
+        {
+            var line = structuralLines[lineIndex];
+            var columnStart = lineIndex == startLineIndex ? Math.Min(startColumn, line.Length) : 0;
+            for (var column = columnStart; column < line.Length; column++)
+            {
+                var current = line[column];
+                if (current == open)
+                {
+                    depth++;
+                }
+                else if (current == close && depth > 0)
+                {
+                    depth--;
+                    if (depth == 0)
+                    {
+                        match = new CSharpLineColumn(lineIndex + 1, column);
+                        return true;
+                    }
+                }
+            }
+        }
+
+        match = new CSharpLineColumn(bodyEndIndex + 1, 0);
+        return false;
+    }
+
+    private static CSharpLineColumn FindCSharpQueryExpressionEndPosition(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int startLineIndex,
+        int startColumn,
+        IReadOnlySet<string> csharpKnownTypeNames,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpFunctionValueReceiverNameRecord> csharpFunctionValueReceiverNames)
+    {
+        var foundContent = false;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var angleDepth = 0;
+        var terminalClauseSeen = false;
+        var queryClauseSeen = false;
+        var clauseHasTopLevelExpressionContent = false;
+        var lastTopLevelSignificantLineIndex = -1;
+        var lastTopLevelSignificantColumn = -1;
+
+        for (var lineIndex = startLineIndex; lineIndex <= bodyEndIndex; lineIndex++)
+        {
+            var line = structuralLines[lineIndex];
+            var columnStart = lineIndex == startLineIndex ? Math.Min(startColumn, line.Length) : 0;
+            for (var column = columnStart; column < line.Length; column++)
+            {
+                var current = line[column];
+                if (!foundContent)
+                {
+                    if (char.IsWhiteSpace(current))
+                        continue;
+
+                    foundContent = true;
+                }
+
+                if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0
+                    && TryConsumeCSharpQueryClauseKeyword(line, column, out var keyword, out var nextColumn))
+                {
+                    if ((!queryClauseSeen || clauseHasTopLevelExpressionContent)
+                        && IsCSharpQueryClauseKeyword(keyword)
+                        && IsCSharpQueryClauseKeywordSuffix(
+                            structuralLines,
+                            bodyEndIndex,
+                            lineIndex,
+                            line,
+                            nextColumn,
+                            keyword,
+                            lastTopLevelSignificantLineIndex,
+                            lastTopLevelSignificantColumn,
+                            csharpKnownTypeNames,
+                            csharpUsingAliases,
+                            csharpFunctionValueReceiverNames))
+                    {
+                        if ((string.Equals(keyword, "by", StringComparison.Ordinal)
+                                || string.Equals(keyword, "ascending", StringComparison.Ordinal)
+                                || string.Equals(keyword, "descending", StringComparison.Ordinal))
+                            && terminalClauseSeen)
+                        {
+                            terminalClauseSeen = true;
+                        }
+                        else
+                        {
+                            terminalClauseSeen = IsCSharpTerminalQueryClauseKeyword(keyword);
+                        }
+
+                        queryClauseSeen = true;
+                        clauseHasTopLevelExpressionContent = false;
+                        lastTopLevelSignificantLineIndex = lineIndex;
+                        lastTopLevelSignificantColumn = nextColumn - 1;
+                        column = nextColumn - 1;
+                        continue;
+                    }
+                }
+
+                switch (current)
+                {
+                    case '<':
+                        if (parenDepth == 0
+                            && bracketDepth == 0
+                            && braceDepth == 0
+                            && LooksLikeCSharpQueryGenericTypeArgumentStart(structuralLines, bodyEndIndex, lineIndex, column))
+                        {
+                            angleDepth++;
+                        }
+                        break;
+                    case '>':
+                        if (angleDepth > 0)
+                        {
+                            angleDepth--;
+                        }
+                        break;
+                    case '(':
+                        parenDepth++;
+                        break;
+                    case ')':
+                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0)
+                            return new CSharpLineColumn(lineIndex + 1, column);
+                        if (parenDepth > 0)
+                            parenDepth--;
+                        break;
+                    case '[':
+                        bracketDepth++;
+                        break;
+                    case ']':
+                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0)
+                            return new CSharpLineColumn(lineIndex + 1, column);
+                        if (bracketDepth > 0)
+                            bracketDepth--;
+                        break;
+                    case '{':
+                        braceDepth++;
+                        break;
+                    case '}':
+                        if (braceDepth > 0)
+                            braceDepth--;
+                        break;
+                    case ';':
+                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0)
+                            return new CSharpLineColumn(lineIndex + 1, column);
+                        break;
+                    case ',':
+                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0 && terminalClauseSeen)
+                            return new CSharpLineColumn(lineIndex + 1, column);
+                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0)
+                        {
+                            clauseHasTopLevelExpressionContent = false;
+                            lastTopLevelSignificantLineIndex = lineIndex;
+                            lastTopLevelSignificantColumn = column;
+                        }
+                        break;
+                }
+
+                if (!char.IsWhiteSpace(current)
+                    && parenDepth == 0
+                    && bracketDepth == 0
+                    && braceDepth == 0
+                    && angleDepth == 0
+                    && current != ','
+                    && current != ';')
+                {
+                    clauseHasTopLevelExpressionContent = true;
+                    lastTopLevelSignificantLineIndex = lineIndex;
+                    lastTopLevelSignificantColumn = column;
+                }
+            }
+        }
+
+        return new CSharpLineColumn(bodyEndIndex + 1, 0);
+    }
+
+    private static bool LooksLikeCSharpQueryGenericTypeArgumentStart(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int startLineIndex,
+        int startColumn)
+    {
+        var line = structuralLines[startLineIndex];
+        if (startColumn < 0 || startColumn >= line.Length || line[startColumn] != '<')
+            return false;
+        if (HasCSharpQueryGenericOperatorOnRight(line, startColumn + 1))
+            return false;
+        if (!HasCSharpQueryGenericReceiverOnLeft(line, startColumn - 1))
+            return false;
+
+        var angleDepth = 1;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        for (var lineIndex = startLineIndex; lineIndex <= bodyEndIndex; lineIndex++)
+        {
+            var currentLine = structuralLines[lineIndex];
+            var columnStart = lineIndex == startLineIndex ? startColumn + 1 : 0;
+            for (var column = columnStart; column < currentLine.Length; column++)
+            {
+                var current = currentLine[column];
+                switch (current)
+                {
+                    case '<':
+                        angleDepth++;
+                        break;
+                    case '>':
+                        angleDepth--;
+                        if (angleDepth == 0)
+                            return HasCSharpQueryGenericSuffix(structuralLines, bodyEndIndex, lineIndex, column + 1);
+                        break;
+                    case '(':
+                        parenDepth++;
+                        break;
+                    case ')':
+                        if (parenDepth == 0)
+                            return false;
+                        parenDepth--;
+                        break;
+                    case '[':
+                        bracketDepth++;
+                        break;
+                    case ']':
+                        if (bracketDepth == 0)
+                            return false;
+                        bracketDepth--;
+                        break;
+                    case '{':
+                        braceDepth++;
+                        break;
+                    case '}':
+                        if (braceDepth == 0)
+                            return false;
+                        braceDepth--;
+                        break;
+                    case ';':
+                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                            return false;
+                        break;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasCSharpQueryGenericOperatorOnRight(string line, int index)
+    {
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+        if (index >= line.Length)
+            return false;
+
+        return line[index] is '<' or '=';
+    }
+
+    private static bool HasCSharpQueryGenericReceiverOnLeft(string line, int index)
+    {
+        while (index >= 0 && char.IsWhiteSpace(line[index]))
+            index--;
+        if (index < 0)
+            return false;
+
+        var current = line[index];
+        return IsCSharpIdentifierPart(current) || current is '>' or ']' or ')';
+    }
+
+    private static bool HasCSharpQueryGenericSuffix(
+        IReadOnlyList<string> structuralLines,
+        int bodyEndIndex,
+        int startLineIndex,
+        int startColumn)
+    {
+        for (var lineIndex = startLineIndex; lineIndex <= bodyEndIndex; lineIndex++)
+        {
+            var line = structuralLines[lineIndex];
+            var columnStart = lineIndex == startLineIndex ? startColumn : 0;
+            for (var column = columnStart; column < line.Length; column++)
+            {
+                var current = line[column];
+                if (char.IsWhiteSpace(current))
+                    continue;
+
+                if (current is '(' or ')' or ']' or '[' or '.' or ',' or ';' or '{' or ':' or '?'
+                    || IsCSharpIdentifierStart(current))
+                {
+                    return true;
+                }
+
+                return IsCSharpQueryGenericComparisonOperator(line, column);
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsCSharpQueryGenericComparisonOperator(string line, int column)
+    {
+        if (column < 0 || column + 1 >= line.Length)
+            return false;
+
+        var current = line[column];
+        return (current is '!' or '=') && line[column + 1] == '=';
+    }
+
+    private static CSharpLineColumn FindCSharpArrowExpressionScopeEndPosition(string bodyText, int arrowIndex, int startLineNumber, int fallbackScopeEndLine)
+    {
+        var foundContent = false;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        for (var i = Math.Min(arrowIndex + 2, bodyText.Length); i < bodyText.Length; i++)
+        {
+            var current = bodyText[i];
+            if (!foundContent)
+            {
+                if (char.IsWhiteSpace(current))
+                    continue;
+
+                foundContent = true;
+            }
+
+            switch (current)
+            {
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                        return GetLineColumnFromOffset(bodyText, i, startLineNumber);
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']':
+                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                        return GetLineColumnFromOffset(bodyText, i, startLineNumber);
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth == 0 && parenDepth == 0 && bracketDepth == 0)
+                        return GetLineColumnFromOffset(bodyText, i + 1, startLineNumber);
+                    if (braceDepth > 0)
+                    {
+                        braceDepth--;
+                        if (braceDepth == 0 && parenDepth == 0 && bracketDepth == 0)
+                            return GetLineColumnFromOffset(bodyText, i + 1, startLineNumber);
+                    }
+                    break;
+                case ',':
+                case ';':
+                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                        return GetLineColumnFromOffset(bodyText, i, startLineNumber);
+                    break;
+            }
+        }
+
+        return new CSharpLineColumn(fallbackScopeEndLine, int.MaxValue);
+    }
+
+    private static bool IsCSharpConditionalOperatorQuestionMark(string bodyText, int index)
+    {
+        if (index < 0 || index >= bodyText.Length || bodyText[index] != '?')
+            return false;
+
+        var previous = index > 0 ? bodyText[index - 1] : '\0';
+        var next = index + 1 < bodyText.Length ? bodyText[index + 1] : '\0';
+        return previous != '?'
+            && next is not '?' and not '.' and not '[';
+    }
+
+    private static void GetCSharpDelimiterDepthsAtOffset(
+        string bodyText,
+        int offset,
+        out int parenDepth,
+        out int bracketDepth,
+        out int braceDepth)
+    {
+        parenDepth = 0;
+        bracketDepth = 0;
+        braceDepth = 0;
+        var limit = Math.Min(offset, bodyText.Length);
+        for (var i = 0; i < limit; i++)
+        {
+            switch (bodyText[i])
+            {
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    break;
+            }
+        }
+    }
+
+    private static int GetTextOffsetFromLineColumn(string bodyText, int startLineNumber, CSharpLineColumn position)
+    {
+        if (string.IsNullOrEmpty(bodyText))
+            return 0;
+
+        if (position.Line <= startLineNumber)
+            return Math.Max(0, Math.Min(position.Column, bodyText.Length));
+
+        var currentLineNumber = startLineNumber;
+        var lineStartOffset = 0;
+        while (lineStartOffset < bodyText.Length && currentLineNumber < position.Line)
+        {
+            var newlineIndex = bodyText.IndexOf('\n', lineStartOffset);
+            if (newlineIndex < 0)
+                return bodyText.Length;
+
+            currentLineNumber++;
+            lineStartOffset = newlineIndex + 1;
+        }
+
+        var lineEndOffset = bodyText.IndexOf('\n', lineStartOffset);
+        if (lineEndOffset < 0)
+            lineEndOffset = bodyText.Length;
+
+        return Math.Min(lineStartOffset + Math.Max(position.Column, 0), lineEndOffset);
+    }
+
+    private static bool IsPotentialCSharpLambdaArrow(string bodyText, int arrowIndex)
+    {
+        var leftIndex = SkipWhitespaceBackward(bodyText, arrowIndex - 1);
+        if (leftIndex < 0)
+            return false;
+
+        if (bodyText[leftIndex] == ')')
+            return TryFindMatchingOpenParen(bodyText, leftIndex, out _);
+
+        var identifierEnd = leftIndex + 1;
+        var identifierStart = leftIndex;
+        while (identifierStart >= 0 && IsCSharpIdentifierPart(bodyText[identifierStart]))
+            identifierStart--;
+        identifierStart++;
+        if (identifierStart >= identifierEnd || !IsCSharpIdentifierStart(bodyText[identifierStart]))
+            return false;
+
+        var prefixIndex = SkipWhitespaceBackward(bodyText, identifierStart - 1);
+        if (prefixIndex < 0)
+            return false;
+
+        var prefixChar = bodyText[prefixIndex];
+        return prefixChar is '=' or '(' or ',' or ':'
+            || (TryReadPreviousIdentifierToken(bodyText, prefixIndex, out var previousToken)
+                && (string.Equals(previousToken, "return", StringComparison.Ordinal)
+                    || string.Equals(previousToken, "static", StringComparison.Ordinal)
+                    || string.Equals(previousToken, "async", StringComparison.Ordinal)));
+    }
+
+    private static int GetLineStartOffset(string text, int offset)
+    {
+        var lineStart = Math.Min(offset, text.Length);
+        while (lineStart > 0 && text[lineStart - 1] != '\n')
+            lineStart--;
+        return lineStart;
+    }
+
+    private static CSharpLineColumn GetLineColumnFromOffset(string text, int offset, int startLineNumber)
+    {
+        var lineNumber = startLineNumber;
+        var column = 0;
+        var limit = Math.Min(offset, text.Length);
+        for (var i = 0; i < limit; i++)
+        {
+            if (text[i] == '\n')
+            {
+                lineNumber++;
+                column = 0;
+            }
+            else
+            {
+                column++;
+            }
+        }
+
+        return new CSharpLineColumn(lineNumber, column);
+    }
+
+    private static int SkipWhitespaceBackward(string text, int index)
+    {
+        while (index >= 0 && char.IsWhiteSpace(text[index]))
+            index--;
+        return index;
+    }
+
+    private static bool TryFindMatchingOpenParen(string text, int closeParenIndex, out int openParenIndex)
+    {
+        openParenIndex = -1;
+        var depth = 0;
+        for (var i = closeParenIndex; i >= 0; i--)
+        {
+            if (text[i] == ')')
+            {
+                depth++;
+            }
+            else if (text[i] == '(')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    openParenIndex = i;
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryReadPreviousIdentifierToken(string text, int index, out string token)
+    {
+        token = string.Empty;
+        var end = index;
+        while (end >= 0 && !IsCSharpIdentifierPart(text[end]))
+            end--;
+        if (end < 0)
+            return false;
+
+        var start = end;
+        while (start >= 0 && IsCSharpIdentifierPart(text[start]))
+            start--;
+        start++;
+        if (start > end)
+            return false;
+
+        token = text[start..(end + 1)];
+        return token.Length > 0;
+    }
+
+    private static bool IsStaticCSharpSymbol(SymbolRecord? symbol) =>
+        symbol?.Signature != null && CSharpStaticModifierRegex.IsMatch(symbol.Signature);
+
+    private static string GetFirstQualifiedSegment(string qualifiedName)
+    {
+        if (string.IsNullOrWhiteSpace(qualifiedName))
+            return string.Empty;
+
+        var firstDot = qualifiedName.IndexOf('.');
+        return firstDot < 0 ? qualifiedName : qualifiedName[..firstDot];
+    }
+
+    private static bool MatchesQualifiedConstantContainer(
+        string qualifier,
+        IReadOnlyList<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)> targets,
+        bool allowShortNameFallback = true,
+        bool allowSingleSegmentQualifiedMatch = false)
+    {
+        var hasMultipleQualifierSegments = qualifier.Contains('.') || qualifier.Contains("::", StringComparison.Ordinal);
+        foreach (var (containerName, qualifiedContainerName, targetAllowsShortNameFallback) in targets)
+        {
+            if (!string.IsNullOrWhiteSpace(qualifiedContainerName)
+                && ((hasMultipleQualifierSegments && QualifiedNameHasSuffix(qualifiedContainerName!, qualifier))
+                    || (!hasMultipleQualifierSegments
+                        && allowSingleSegmentQualifiedMatch
+                        && string.Equals(qualifiedContainerName, qualifier, StringComparison.Ordinal))))
+            {
+                return true;
+            }
+
+            if (allowShortNameFallback
+                && targetAllowsShortNameFallback
+                && string.Equals(GetLastQualifiedSegment(qualifier), containerName, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool QualifiedNameHasSuffix(string fullName, string suffix)
+    {
+        if (string.IsNullOrWhiteSpace(fullName) || string.IsNullOrWhiteSpace(suffix))
+            return false;
+        if (string.Equals(fullName, suffix, StringComparison.Ordinal))
+            return true;
+        if (suffix.Length >= fullName.Length)
+            return false;
+
+        var start = fullName.Length - suffix.Length;
+        return string.Compare(fullName, start, suffix, 0, suffix.Length, StringComparison.Ordinal) == 0
+            && fullName[start - 1] == '.';
+    }
+
+    private static string GetLastQualifiedSegment(string qualifiedName)
+    {
+        if (string.IsNullOrWhiteSpace(qualifiedName))
+            return string.Empty;
+
+        var lastDot = qualifiedName.LastIndexOf('.');
+        var lastColon = qualifiedName.LastIndexOf("::", StringComparison.Ordinal);
+        var split = Math.Max(lastDot, lastColon);
+        return split < 0 ? qualifiedName : qualifiedName[(split + (split == lastColon ? 2 : 1))..];
+    }
 
     private static void AddTypeReferenceSegment(
         List<ReferenceRecord> references,
@@ -1005,9 +7461,10 @@ public static class ReferenceExtractor
         string context,
         int lineNumber,
         SymbolRecord? container,
-        string language)
+        string language,
+        bool isEscapedCSharpIdentifier = false)
     {
-        if (segment.Length == 0 || IsIgnoredTypeReferenceSegment(language, segment))
+        if (segment.Length == 0 || IsIgnoredTypeReferenceSegment(language, segment, isEscapedCSharpIdentifier))
             return;
 
         int column = startInLine + 1; // 1-based / 1始まり
@@ -1038,6 +7495,133 @@ public static class ReferenceExtractor
 
         return null;
     }
+
+    private static SymbolRecord? FindDocumentedContainer(IReadOnlyList<SymbolRecord> candidates, int lineNumber)
+    {
+        SymbolRecord? best = null;
+        foreach (var candidate in candidates)
+        {
+            if (candidate.StartLine <= lineNumber)
+                continue;
+
+            if (best == null
+                || candidate.StartLine < best.StartLine
+                || (candidate.StartLine == best.StartLine
+                    && ((candidate.BodyEndLine ?? candidate.EndLine) - (candidate.BodyStartLine ?? candidate.StartLine))
+                       < ((best.BodyEndLine ?? best.EndLine) - (best.BodyStartLine ?? best.StartLine))))
+            {
+                best = candidate;
+            }
+        }
+
+        return best ?? FindInnermostContainer(candidates, lineNumber);
+    }
+
+    private static SymbolRecord? FindInnermostSameLineCSharpContainer(
+        IReadOnlyList<SymbolRecord> candidates,
+        string structuralLine,
+        int lineNumber,
+        int column)
+    {
+        SymbolRecord? best = null;
+        var bestStartColumn = -1;
+        var bestSpanLength = int.MaxValue;
+        var bestKindRank = int.MaxValue;
+
+        foreach (var candidate in candidates)
+        {
+            if (candidate.BodyStartLine == null
+                || candidate.BodyEndLine == null
+                || candidate.BodyStartLine.Value > lineNumber
+                || candidate.BodyEndLine.Value < lineNumber
+                || candidate.StartLine != lineNumber
+                || candidate.EndLine != lineNumber
+                || string.IsNullOrEmpty(candidate.Signature))
+            {
+                continue;
+            }
+
+            if (!TryGetSameLineSignatureSpan(candidate, structuralLine, out var startColumn, out var endColumn))
+                continue;
+
+            if (column < startColumn || column >= endColumn)
+                continue;
+
+            var spanLength = endColumn - startColumn;
+            var kindRank = GetSameLineContainerKindRank(candidate.Kind);
+            if (best == null
+                || startColumn > bestStartColumn
+                || (startColumn == bestStartColumn && spanLength < bestSpanLength)
+                || (startColumn == bestStartColumn && spanLength == bestSpanLength && kindRank < bestKindRank))
+            {
+                best = candidate;
+                bestStartColumn = startColumn;
+                bestSpanLength = spanLength;
+                bestKindRank = kindRank;
+            }
+        }
+
+        return best;
+    }
+
+    private static bool TryGetSameLineSignatureSpan(
+        SymbolRecord candidate,
+        string structuralLine,
+        out int startColumn,
+        out int endColumn)
+    {
+        startColumn = candidate.StartColumn ?? -1;
+        if (startColumn < 0 || startColumn > structuralLine.Length)
+        {
+            startColumn = FindSignatureOccurrenceStartColumn(
+                structuralLine,
+                candidate.Signature!,
+                candidate.SameLineSignatureOccurrenceIndex ?? 0);
+            if (startColumn < 0)
+            {
+                endColumn = -1;
+                return false;
+            }
+        }
+
+        endColumn = Math.Min(structuralLine.Length, startColumn + candidate.Signature!.Length);
+        return endColumn > startColumn;
+    }
+
+    private static int FindSignatureOccurrenceStartColumn(string structuralLine, string signature, int occurrenceIndex)
+    {
+        if (occurrenceIndex < 0 || string.IsNullOrEmpty(structuralLine) || string.IsNullOrEmpty(signature))
+            return -1;
+
+        var currentOccurrence = 0;
+        var searchStart = 0;
+        while (searchStart < structuralLine.Length)
+        {
+            var matchIndex = structuralLine.IndexOf(signature, searchStart, StringComparison.Ordinal);
+            if (matchIndex < 0)
+                return -1;
+
+            if (currentOccurrence == occurrenceIndex)
+                return matchIndex;
+
+            currentOccurrence++;
+            searchStart = matchIndex + signature.Length;
+        }
+
+        return -1;
+    }
+
+    private static int GetSameLineContainerKindRank(string? kind) => kind switch
+    {
+        "function" => 0,
+        "property" => 1,
+        "class" => 2,
+        "struct" => 3,
+        "interface" => 4,
+        "enum" => 5,
+        "namespace" => 6,
+        _ => 7,
+    };
 
     private static SymbolRecord? FindInnermostClassLike(IReadOnlyList<SymbolRecord> candidates, int lineNumber)
     {
@@ -2526,57 +9110,279 @@ public static class ReferenceExtractor
         return segment.Length > 0 ? segment : null;
     }
 
-    // SQL-aware line sanitizer used only for the `EXEC` / `EXECUTE` / `CALL` no-parens scan.
-    // Preserves backtick-quoted identifiers (MySQL / MariaDB) so `` CALL `proc-name`; `` can be
-    // matched, while still stripping `'...'` / `"..."` string literals and SQL line / block
-    // comments so text inside comments does not emit a phantom reference. Line-comment tokens
-    // `--` (ANSI / T-SQL / MySQL) and `#` (MySQL / MariaDB) are scanned with awareness of
-    // backtick and bracket identifier quoting, so a legitimate name containing `#` or `-` such
-    // as `` CALL `proc#1`; `` or `EXEC [proc-name]` is not truncated mid-identifier.
-    // `EXEC` / `EXECUTE` / `CALL` の括弧なし抽出向けの SQL 特化サニタイザ。バッククォート引用
-    // （MySQL / MariaDB の識別子引用）は保持したまま、`'...'` / `"..."` と `--` / `#` / `/* ... */`
-    // の SQL コメントを除去する。`--` と `#` の走査は backtick / bracket 引用を尊重するため、
-    // `` CALL `proc#1`; `` や `EXEC [proc-name]` のような識別子が途中で切られない。
-    private static string PrepareSqlLineForIdentifierScan(string line)
+    // SQL-aware line sanitizer used only for the SQL source/target and `EXEC` / `EXECUTE` / `CALL`
+    // scans. Preserves backtick/bracket/double-quoted identifiers, blanks single-quoted strings
+    // (including multiline bodies), multiline `/* ... */` comments, PostgreSQL `$$...$$` /
+    // `$tag$...$tag$` bodies, and line comments so non-code regions cannot leak phantom references
+    // into the graph.
+    // SQL source/target と `EXEC` / `EXECUTE` / `CALL` 抽出向けの SQL 特化サニタイザ。
+    // backtick / bracket / double-quoted identifier は保持しつつ、単引用符文字列
+    // （複数行本体を含む）、複数行 `/* ... */` コメント、PostgreSQL の `$$...$$` /
+    // `$tag$...$tag$` 本体、行コメントを空白化し、非コード領域から phantom reference が
+    // 漏れないようにする。
+    private static string PrepareSqlLineForIdentifierScan(
+        string line,
+        SqlIdentifierScanState state,
+        string? statementPrefix,
+        out bool lineEndedByLineComment,
+        out SqlIdentifierScanState nextState)
     {
-        var result = SqlStringLiteralRegex.Replace(line, "\"\"");
-        result = InlineBlockCommentRegex.Replace(result, " ");
-
-        int commentStart = -1;
-        for (int i = 0; i < result.Length; i++)
+        lineEndedByLineComment = false;
+        if (string.IsNullOrEmpty(line))
         {
-            char c = result[i];
-            if (c == '`')
+            nextState = state;
+            return line;
+        }
+
+        var sanitized = line.ToCharArray();
+        bool inBlockComment = state.InBlockComment;
+        string? dollarQuoteDelimiter = state.DollarQuoteDelimiter;
+        bool inSingleQuotedString = state.InSingleQuotedString;
+
+        void BlankRange(int start, int endExclusive)
+        {
+            start = Math.Max(0, start);
+            endExclusive = Math.Min(sanitized.Length, endExclusive);
+            for (int blankIndex = start; blankIndex < endExclusive; blankIndex++)
+                sanitized[blankIndex] = ' ';
+        }
+
+        for (int i = 0; i < line.Length;)
+        {
+            if (inBlockComment)
             {
-                var closing = result.IndexOf('`', i + 1);
+                int closing = line.IndexOf("*/", i, StringComparison.Ordinal);
+                int end = closing >= 0 ? closing + 2 : line.Length;
+                BlankRange(i, end);
                 if (closing < 0)
                     break;
-                i = closing;
+                i = end;
+                inBlockComment = false;
+                continue;
+            }
+            if (!string.IsNullOrEmpty(dollarQuoteDelimiter))
+            {
+                int closing = line.IndexOf(dollarQuoteDelimiter, i, StringComparison.Ordinal);
+                if (closing < 0)
+                {
+                    BlankRange(i, line.Length);
+                    break;
+                }
+
+                int nextContent = SkipWhitespaceAhead(line, closing + dollarQuoteDelimiter.Length);
+                if (nextContent < line.Length
+                    && line[nextContent] != ';'
+                    && line[nextContent] != ','
+                    && line[nextContent] != ')'
+                    && line[nextContent] != ']')
+                {
+                    int nestedClosing = line.IndexOf(
+                        dollarQuoteDelimiter,
+                        closing + dollarQuoteDelimiter.Length,
+                        StringComparison.Ordinal);
+                    if (nestedClosing >= 0)
+                    {
+                        int end = nestedClosing + dollarQuoteDelimiter.Length;
+                        BlankRange(i, end);
+                        i = end;
+                        continue;
+                    }
+                }
+
+                int closingEnd = closing + dollarQuoteDelimiter.Length;
+                BlankRange(i, closingEnd);
+                i = closingEnd;
+                dollarQuoteDelimiter = null;
+                continue;
+            }
+            if (inSingleQuotedString)
+            {
+                int closing = FindClosingSqlSingleQuote(line, i);
+                int end = closing >= 0 ? closing + 1 : line.Length;
+                BlankRange(i, end);
+                i = end;
+                if (closing >= 0)
+                {
+                    inSingleQuotedString = false;
+                    continue;
+                }
+
+                break;
+            }
+
+            char c = line[i];
+            if (c == '"')
+            {
+                int closing = FindClosingSqlDoubleQuote(line, i + 1);
+                if (closing < 0)
+                    break;
+                i = closing + 1;
+                continue;
+            }
+            if (c == '`')
+            {
+                int closing = line.IndexOf('`', i + 1);
+                if (closing < 0)
+                    break;
+                i = closing + 1;
                 continue;
             }
             if (c == '[')
             {
-                var closing = result.IndexOf(']', i + 1);
+                int closing = line.IndexOf(']', i + 1);
                 if (closing < 0)
                     break;
-                i = closing;
+                i = closing + 1;
                 continue;
             }
-            if (c == '-' && i + 1 < result.Length && result[i + 1] == '-')
+            if (c == '\'')
             {
-                commentStart = i;
+                int closing = FindClosingSqlSingleQuote(line, i + 1);
+                int end = closing >= 0 ? closing + 1 : line.Length;
+                BlankRange(i, end);
+                i = end;
+                if (closing < 0)
+                    inSingleQuotedString = true;
+                continue;
+            }
+            if (c == '/' && i + 1 < line.Length && line[i + 1] == '*')
+            {
+                BlankRange(i, i + 2);
+                i += 2;
+                inBlockComment = true;
+                continue;
+            }
+            if (c == '-' && i + 1 < line.Length && line[i + 1] == '-')
+            {
+                lineEndedByLineComment = true;
+                BlankRange(i, line.Length);
                 break;
             }
             if (c == '#')
             {
-                commentStart = i;
-                break;
+                if (ShouldTreatHashAsSqlComment(line, i, statementPrefix))
+                {
+                    lineEndedByLineComment = true;
+                    BlankRange(i, line.Length);
+                    break;
+                }
+            }
+            if (c == '$' && TryReadSqlDollarQuoteDelimiter(line, i, out var delimiter))
+            {
+                BlankRange(i, i + delimiter.Length);
+                i += delimiter.Length;
+                dollarQuoteDelimiter = delimiter;
+                continue;
+            }
+
+            i++;
+        }
+
+        nextState = new SqlIdentifierScanState(inBlockComment, dollarQuoteDelimiter, inSingleQuotedString);
+        return new string(sanitized);
+    }
+
+    private static bool ShouldTreatHashAsSqlComment(string line, int hashIndex, string? statementPrefix)
+    {
+        if (hashIndex < 0 || hashIndex >= line.Length || line[hashIndex] != '#')
+            return false;
+
+        int probe = hashIndex - 1;
+        while (probe >= 0 && char.IsWhiteSpace(line[probe]))
+            probe--;
+        if (probe < 0 && !string.IsNullOrWhiteSpace(statementPrefix))
+        {
+            var combined = statementPrefix + "\n" + line;
+            return ShouldTreatHashAsSqlCommentCore(combined, statementPrefix.Length + 1 + hashIndex);
+        }
+
+        return ShouldTreatHashAsSqlCommentCore(line, hashIndex);
+    }
+
+    private static bool ShouldTreatHashAsSqlCommentCore(string line, int hashIndex)
+    {
+        if (hashIndex < 0 || hashIndex >= line.Length || line[hashIndex] != '#')
+            return false;
+
+        int next = hashIndex + 1;
+        if (hashIndex > 0
+            && line[hashIndex - 1] == '#'
+            && next < line.Length
+            && (char.IsLetterOrDigit(line[next]) || line[next] == '_'))
+            return false;
+        if (next + 1 < line.Length
+            && line[next] == '#'
+            && (char.IsLetterOrDigit(line[next + 1]) || line[next + 1] == '_'))
+            return false;
+        if (next >= line.Length || !(char.IsLetterOrDigit(line[next]) || line[next] == '_'))
+            return true;
+
+        int probe = hashIndex - 1;
+        while (probe >= 0 && char.IsWhiteSpace(line[probe]))
+            probe--;
+        while (probe >= 0 && line[probe] == ',')
+        {
+            var priorListItem = line[..probe];
+            var listMatch = SqlTrailingOnlyQualifiedIdentifierRegex.Match(priorListItem);
+            if (!listMatch.Success)
+                return true;
+
+            probe = listMatch.Index - 1;
+            while (probe >= 0 && char.IsWhiteSpace(line[probe]))
+                probe--;
+        }
+        if (probe < 0)
+            return true;
+        if (line[probe] == '.')
+            return false;
+        if (line[probe] == ')')
+        {
+            int depth = 1;
+            probe--;
+            while (probe >= 0 && depth > 0)
+            {
+                if (line[probe] == ')')
+                    depth++;
+                else if (line[probe] == '(')
+                    depth--;
+                probe--;
+            }
+            while (probe >= 0 && char.IsWhiteSpace(line[probe]))
+                probe--;
+            if (probe < 0)
+                return true;
+
+            int modifierEnd = probe;
+            while (probe >= 0 && char.IsLetter(line[probe]))
+                probe--;
+            int modifierStart = probe + 1;
+            if (modifierStart <= modifierEnd
+                && string.Equals(line[modifierStart..(modifierEnd + 1)], "TOP", StringComparison.OrdinalIgnoreCase))
+            {
+                while (probe >= 0 && char.IsWhiteSpace(line[probe]))
+                    probe--;
+                if (probe < 0)
+                    return true;
             }
         }
-        if (commentStart >= 0)
-            result = result[..commentStart];
 
-        return result;
+        int tokenEnd = probe;
+        while (probe >= 0 && char.IsLetter(line[probe]))
+            probe--;
+        int tokenStart = probe + 1;
+        if (tokenStart > tokenEnd)
+            return true;
+
+        var token = line[tokenStart..(tokenEnd + 1)];
+        return !string.Equals(token, "FROM", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "JOIN", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "MERGE", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "USING", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "INTO", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "UPDATE", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "TABLE", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "EXEC", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "EXECUTE", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string PrepareLine(string lang, string line)
@@ -2688,6 +9494,258 @@ public static class ReferenceExtractor
             : string.Equals(token, "new", StringComparison.Ordinal);
     }
 
+    private readonly record struct NestedGenericCallCandidate(string Name, int NameIndex);
+
+    private static IEnumerable<NestedGenericCallCandidate> EnumerateNestedGenericCallCandidates(
+        string preparedLine,
+        HashSet<int> matchedCallIndices)
+    {
+        for (var i = 0; i < preparedLine.Length; i++)
+        {
+            if (!IsAtAwareAsciiIdentifierStart(preparedLine, i))
+                continue;
+            if (i > 0 && (IsIdentifierChar(preparedLine[i - 1]) || preparedLine[i - 1] == '$' || preparedLine[i - 1] == '@'))
+                continue;
+
+            var nameStart = i;
+            i = ConsumeAtAwareAsciiIdentifier(preparedLine, i);
+
+            if (matchedCallIndices.Contains(nameStart))
+            {
+                i--;
+                continue;
+            }
+
+            var scan = i;
+            if (scan + 1 < preparedLine.Length
+                && preparedLine[scan] == '?'
+                && preparedLine[scan + 1] == '.')
+            {
+                scan += 2;
+            }
+
+            if (scan >= preparedLine.Length || preparedLine[scan] != '<')
+            {
+                i--;
+                continue;
+            }
+
+            if (!TrySkipBalancedGenericArgs(preparedLine, ref scan, out var sawNestedGeneric) || !sawNestedGeneric)
+            {
+                i--;
+                continue;
+            }
+
+            while (scan < preparedLine.Length && char.IsWhiteSpace(preparedLine[scan]))
+                scan++;
+
+            if (scan < preparedLine.Length && preparedLine[scan] == '(')
+                yield return new NestedGenericCallCandidate(preparedLine[nameStart..i], nameStart);
+
+            i--;
+        }
+    }
+
+    private static IEnumerable<NestedGenericCallCandidate> EnumerateNestedGenericInitializerCandidates(
+        string preparedLine,
+        HashSet<int> matchedInitializerIndices,
+        bool requireOpeningBrace)
+    {
+        for (var i = 0; i < preparedLine.Length; i++)
+        {
+            if (!IsStandaloneNewKeyword(preparedLine, i))
+                continue;
+
+            var scan = i + 3;
+            if (!TryReadQualifiedTypeName(preparedLine, ref scan, out var name, out var nameIndex))
+            {
+                i += 2;
+                continue;
+            }
+
+            if (matchedInitializerIndices.Contains(nameIndex))
+            {
+                i = scan - 1;
+                continue;
+            }
+
+            if (!TrySkipBalancedGenericArgs(preparedLine, ref scan, out var sawNestedGeneric) || !sawNestedGeneric)
+            {
+                i = scan - 1;
+                continue;
+            }
+
+            if (!TrySkipArraySuffixes(preparedLine, ref scan))
+            {
+                i = scan - 1;
+                continue;
+            }
+
+            while (scan < preparedLine.Length && char.IsWhiteSpace(preparedLine[scan]))
+                scan++;
+
+            if (requireOpeningBrace)
+            {
+                if (scan < preparedLine.Length && preparedLine[scan] == '{')
+                    yield return new NestedGenericCallCandidate(name, nameIndex);
+            }
+            else if (scan == preparedLine.Length)
+            {
+                yield return new NestedGenericCallCandidate(name, nameIndex);
+            }
+
+            i = scan - 1;
+        }
+    }
+
+    private static bool TryReadQualifiedTypeName(
+        string preparedLine,
+        ref int scan,
+        out string name,
+        out int nameIndex)
+    {
+        name = string.Empty;
+        nameIndex = -1;
+
+        while (true)
+        {
+            while (scan < preparedLine.Length && char.IsWhiteSpace(preparedLine[scan]))
+                scan++;
+
+            if (scan >= preparedLine.Length || !IsAtAwareAsciiIdentifierStart(preparedLine, scan))
+                return false;
+
+            var segmentStart = scan;
+            scan = ConsumeAtAwareAsciiIdentifier(preparedLine, scan);
+
+            name = preparedLine[segmentStart..scan];
+            nameIndex = segmentStart;
+
+            var separatorScan = scan;
+            while (separatorScan < preparedLine.Length && char.IsWhiteSpace(preparedLine[separatorScan]))
+                separatorScan++;
+
+            if (separatorScan + 1 < preparedLine.Length
+                && preparedLine[separatorScan] == ':'
+                && preparedLine[separatorScan + 1] == ':')
+            {
+                scan = separatorScan + 2;
+                continue;
+            }
+
+            if (separatorScan < preparedLine.Length && preparedLine[separatorScan] == '.')
+            {
+                scan = separatorScan + 1;
+                continue;
+            }
+
+            scan = separatorScan;
+            return true;
+        }
+    }
+
+    private static bool TrySkipArraySuffixes(string preparedLine, ref int scan)
+    {
+        while (true)
+        {
+            while (scan < preparedLine.Length && char.IsWhiteSpace(preparedLine[scan]))
+                scan++;
+
+            if (scan >= preparedLine.Length || preparedLine[scan] != '[')
+                return true;
+
+            scan++;
+            while (scan < preparedLine.Length && preparedLine[scan] != ']')
+                scan++;
+
+            if (scan >= preparedLine.Length || preparedLine[scan] != ']')
+                return false;
+
+            scan++;
+        }
+    }
+
+    private static bool ShouldSkipInitializerName(string language, string name) =>
+        (language == "csharp" && CSharpBuiltInTypeNames.Contains(name))
+        || (language == "java" && JavaPrimitiveTypeNames.Contains(name))
+        || IsIgnoredCallName(language, name);
+
+    private static bool IsStandaloneNewKeyword(string preparedLine, int index)
+    {
+        if (index < 0 || index + 3 > preparedLine.Length)
+            return false;
+        if (preparedLine[index] != 'n'
+            || preparedLine[index + 1] != 'e'
+            || preparedLine[index + 2] != 'w')
+        {
+            return false;
+        }
+
+        if (index > 0 && IsIdentifierChar(preparedLine[index - 1]))
+            return false;
+
+        return index + 3 >= preparedLine.Length || !IsIdentifierChar(preparedLine[index + 3]);
+    }
+
+    private static bool TrySkipBalancedGenericArgs(string preparedLine, ref int scan, out bool sawNestedGeneric)
+    {
+        sawNestedGeneric = false;
+        if (scan >= preparedLine.Length || preparedLine[scan] != '<')
+            return false;
+
+        var depth = 0;
+        while (scan < preparedLine.Length)
+        {
+            var ch = preparedLine[scan++];
+            if (ch == '<')
+            {
+                depth++;
+                if (depth > 1)
+                    sawNestedGeneric = true;
+            }
+            else if (ch == '>')
+            {
+                depth--;
+                if (depth == 0)
+                    return true;
+                if (depth < 0)
+                    return false;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsAsciiIdentifierStartChar(char ch) =>
+        ch == '_' || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
+
+    private static bool IsAtAwareAsciiIdentifierStart(string text, int index)
+    {
+        if (index < 0 || index >= text.Length)
+            return false;
+
+        if (text[index] == '@')
+            return index + 1 < text.Length && IsAsciiIdentifierStartChar(text[index + 1]);
+
+        return IsAsciiIdentifierStartChar(text[index]);
+    }
+
+    private static int ConsumeAtAwareAsciiIdentifier(string text, int startIndex)
+    {
+        var index = startIndex;
+        if (index < text.Length && text[index] == '@')
+            index++;
+
+        if (index >= text.Length || !IsAsciiIdentifierStartChar(text[index]))
+            return startIndex;
+
+        index++;
+        while (index < text.Length && IsIdentifierChar(text[index]))
+            index++;
+
+        return index;
+    }
+
     private static bool IsIdentifierChar(char ch) =>
         char.IsLetterOrDigit(ch) || ch == '_';
 
@@ -2706,6 +9764,14 @@ public static class ReferenceExtractor
     {
         if (language == "csharp")
             return insideCSharpAttributeRange ? "attribute" : null;
+
+        if (nameIndex >= 0
+            && nameIndex < preparedLine.Length
+            && preparedLine[nameIndex] == '@'
+            && AnnotationLanguages.Contains(language))
+        {
+            return "annotation";
+        }
 
         var probe = nameIndex - 1;
         while (probe >= 0 && char.IsWhiteSpace(preparedLine[probe]))
@@ -3053,7 +10119,7 @@ public static class ReferenceExtractor
         return false;
     }
 
-    private static bool IsInsideCSharpAttributeRange(List<(int start, int end)> ranges, int index)
+    private static bool IsInsideCSharpAttributeRange(IReadOnlyList<(int start, int end)> ranges, int index)
     {
         foreach (var (start, end) in ranges)
         {

@@ -1415,6 +1415,64 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetCallers_CSharpTopLevelStatementCallSurfacesSyntheticTopLevelCaller()
+    {
+        InsertIndexedFile("src/Program.cs", "csharp",
+            """
+            using System;
+
+            Console.WriteLine("boot");
+
+            int Add(int a, int b) => a + b;
+            void Run()
+            {
+                Console.WriteLine(Add(1, 2));
+            }
+
+            Run();
+            """);
+
+        var callers = _reader.GetCallers("Run", lang: "csharp", exact: true, pathPatterns: ["Program.cs"]);
+
+        var caller = Assert.Single(callers);
+        Assert.Equal("src/Program.cs", caller.Path);
+        Assert.Equal("function", caller.CallerKind);
+        Assert.Equal("<top-level>", caller.CallerName);
+        Assert.Equal("Run", caller.CalleeName);
+        Assert.Equal(1, caller.ReferenceCount);
+        Assert.Equal(1, _reader.CountCallers("Run", lang: "csharp", exact: true, pathPatterns: ["Program.cs"]));
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCallersTotal("Run", lang: "csharp", exact: true, pathPatterns: ["Program.cs"]));
+    }
+
+    [Fact]
+    public void GetCallers_CSharpTopLevelStatementCallWithExplicitKindSurfacesSyntheticTopLevelCaller()
+    {
+        InsertIndexedFile("src/Program.cs", "csharp",
+            """
+            using System;
+
+            Console.WriteLine("boot");
+
+            void Run()
+            {
+                Console.WriteLine("inside");
+            }
+
+            Run();
+            """);
+
+        var callers = _reader.GetCallers("Run", lang: "csharp", referenceKind: "call", exact: true, pathPatterns: ["Program.cs"]);
+
+        var caller = Assert.Single(callers);
+        Assert.Equal("src/Program.cs", caller.Path);
+        Assert.Equal("function", caller.CallerKind);
+        Assert.Equal("<top-level>", caller.CallerName);
+        Assert.Equal("Run", caller.CalleeName);
+        Assert.Equal("call", caller.ReferenceKind);
+        Assert.Equal(1, caller.ReferenceCount);
+    }
+
+    [Fact]
     public void GetCallees_ReturnsReferencedSymbolsForCaller()
     {
         InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return authenticate(user, password)\n");
@@ -2541,6 +2599,35 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetTransitiveCallers_CSharpTopLevelStatementCallSurfacesSyntheticTopLevelCallerWithoutRecursing()
+    {
+        InsertIndexedFile("src/Program.cs", "csharp",
+            """
+            using System;
+
+            Console.WriteLine("boot");
+
+            void Run()
+            {
+                Console.WriteLine("inside");
+            }
+
+            Run();
+            """);
+
+        var (results, truncated) = _reader.GetTransitiveCallers("Run", maxDepth: 3, limit: 10, lang: "csharp", pathPatterns: ["Program.cs"]);
+
+        Assert.False(truncated);
+        var caller = Assert.Single(results);
+        Assert.Equal("src/Program.cs", caller.Path);
+        Assert.Equal("function", caller.CallerKind);
+        Assert.Equal("<top-level>", caller.CallerName);
+        Assert.Equal("Run", caller.CalleeName);
+        Assert.Equal(1, caller.Depth);
+        Assert.Equal(1, caller.ReferenceCount);
+    }
+
+    [Fact]
     public void GetDefinitions_ExactMatchesNameEquality()
     {
         var extraFileId = _writer.UpsertFile(new FileRecord
@@ -2799,7 +2886,7 @@ public class DbReaderTests : IDisposable
         var dependency = Assert.Single(dependencies);
         Assert.Equal("src/Caller.cs", dependency.SourcePath);
         Assert.Equal("src/Foo.cs", dependency.TargetPath);
-        Assert.Equal(1, dependency.ReferenceCount);
+        Assert.Equal(2, dependency.ReferenceCount);
         Assert.DoesNotContain("foo.py", dependency.TargetPath, StringComparison.Ordinal);
     }
 
@@ -4236,6 +4323,153 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchReferences_ExactCSharpUsingStaticFilter_PaginatesPastSuppressedRows()
+    {
+        InsertIndexedFile("src/Defs.cs", "csharp",
+            """
+            namespace Probe;
+
+            public enum Color
+            {
+                Red,
+                Blue
+            }
+            """);
+        InsertIndexedFile("src/Use.cs", "csharp",
+            """
+            using static Probe.Color;
+
+            namespace Probe;
+
+            class Demo
+            {
+                object? Match(object value)
+                {
+                    return value is Red ? value : null;
+                }
+            }
+            """);
+
+        const int suppressedReferenceCount = 65_537;
+        const int callReferenceLine = suppressedReferenceCount + 10;
+
+        using (var updateFileCmd = _db.Connection.CreateCommand())
+        {
+            updateFileCmd.CommandText = "UPDATE files SET lines = @lines WHERE path = 'src/Use.cs'";
+            updateFileCmd.Parameters.AddWithValue("@lines", callReferenceLine + 5);
+            updateFileCmd.ExecuteNonQuery();
+        }
+
+        long useFileId;
+        using (var fileIdCmd = _db.Connection.CreateCommand())
+        {
+            fileIdCmd.CommandText = "SELECT id FROM files WHERE path = 'src/Use.cs'";
+            useFileId = (long)fileIdCmd.ExecuteScalar()!;
+        }
+
+        int suppressedReferenceColumn;
+        string suppressedReferenceContext;
+        using (var templateCmd = _db.Connection.CreateCommand())
+        {
+            templateCmd.CommandText = """
+                SELECT r.column_number, r.context
+                FROM symbol_references r
+                JOIN files f ON r.file_id = f.id
+                WHERE f.path = 'src/Use.cs'
+                  AND r.symbol_name = 'Red'
+                  AND r.reference_kind = 'type_reference'
+                LIMIT 1
+                """;
+            using var templateReader = templateCmd.ExecuteReader();
+            Assert.True(templateReader.Read());
+            suppressedReferenceColumn = templateReader.GetInt32(0);
+            suppressedReferenceContext = templateReader.GetString(1);
+        }
+
+        var syntheticReferences = new List<ReferenceRecord>(suppressedReferenceCount + 1);
+        for (int line = 10; line < callReferenceLine; line++)
+        {
+            syntheticReferences.Add(new ReferenceRecord
+            {
+                FileId = useFileId,
+                SymbolName = "Red",
+                ReferenceKind = "type_reference",
+                Line = line,
+                Column = suppressedReferenceColumn,
+                Context = suppressedReferenceContext,
+                ContainerKind = "function",
+                ContainerName = "Match",
+            });
+        }
+
+        syntheticReferences.Add(new ReferenceRecord
+        {
+            FileId = useFileId,
+            SymbolName = "Red",
+            ReferenceKind = "call",
+            Line = callReferenceLine,
+            Column = 9,
+            Context = "        Red();",
+            ContainerKind = "function",
+            ContainerName = "Match",
+        });
+        _writer.InsertReferences(syntheticReferences);
+
+        var result = Assert.Single(_reader.SearchReferences("Red", limit: 1, lang: "csharp", exact: true, pathPatterns: ["src/Use.cs"]));
+        Assert.Equal("call", result.ReferenceKind);
+        Assert.Equal(callReferenceLine, result.Line);
+        Assert.Equal(1, _reader.CountSearchReferences("Red", limit: 1, lang: "csharp", exact: true, pathPatterns: ["src/Use.cs"]));
+    }
+
+    [Fact]
+    public void SearchReferences_ExactSameLineResults_AreOrderedByColumn()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/reference_order.py",
+            Lang = "python",
+            Size = 32,
+            Lines = 10,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 10,
+                Content = "def outer():\n    pass\n",
+            }
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Target",
+                ReferenceKind = "call",
+                Line = 5,
+                Column = 20,
+                Context = "target_late() target_early()",
+            },
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Target",
+                ReferenceKind = "call",
+                Line = 5,
+                Column = 5,
+                Context = "target_early() target_late()",
+            },
+        ]);
+
+        var results = _reader.SearchReferences("Target", limit: 2, lang: "python", exact: true, pathPatterns: ["src/reference_order.py"]);
+        Assert.Collection(results,
+            first => Assert.Equal(5, first.Column),
+            second => Assert.Equal(20, second.Column));
+    }
+
+    [Fact]
     public void GraphQueries_DefaultGraphQueriesKeepSubscribeRowsVisible()
     {
         InsertIndexedFile("src/event_publisher.cs", "csharp",
@@ -4999,8 +5233,8 @@ public class DbReaderTests : IDisposable
 
         Assert.Equal("file_dependency_hints", analysis.ImpactMode);
         var edge = Assert.Single(analysis.FileImpacts);
-        Assert.Equal(3, edge.ReferenceCount);
-        Assert.Equal("ExecuteFolderDiffAsync", edge.Symbols);
+        Assert.Equal(4, edge.ReferenceCount);
+        Assert.Equal("ExecuteFolderDiffAsync,FolderDiffService", edge.Symbols);
     }
 
     [Fact]
@@ -6841,6 +7075,123 @@ public class DbReaderTests : IDisposable
         Assert.Empty(unused);
         Assert.Equal(0, count.Count);
         Assert.Equal(0, count.FileCount);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_CSharpEnumMembersAreIncludedWhenUnreferenced()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/unused_enum_members_fixture.cs",
+            Lang = "csharp",
+            Size = 180,
+            Lines = 8,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "Color",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 4,
+                Signature = "public enum Color",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "Red",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "Red,",
+                ContainerKind = "enum",
+                ContainerName = "Color",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "Blue",
+                Line = 4,
+                StartLine = 4,
+                EndLine = 4,
+                Signature = "Blue",
+                ContainerKind = "enum",
+                ContainerName = "Color",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "TrulyUnused",
+                Line = 6,
+                StartLine = 6,
+                EndLine = 8,
+                Signature = "public enum TrulyUnused",
+                Visibility = "public",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "Green",
+                Line = 8,
+                StartLine = 8,
+                EndLine = 8,
+                Signature = "Green",
+                ContainerKind = "enum",
+                ContainerName = "TrulyUnused",
+            },
+        ]);
+        _writer.InsertReferences(
+        [
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Color",
+                ReferenceKind = "type_reference",
+                Line = 10,
+                Column = 12,
+                Context = "public Color Shade => Color.Red;",
+            },
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Red",
+                ReferenceKind = "call",
+                Line = 10,
+                Column = 30,
+                Context = "public Color Shade => Color.Red;",
+            },
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Blue",
+                ReferenceKind = "call",
+                Line = 11,
+                Column = 30,
+                Context = "public Color Next => Color.Blue;",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "enum", lang: "csharp",
+            pathPatterns: ["unused_enum_members_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+        var count = _reader.CountUnusedSymbols(kind: "enum", lang: "csharp",
+            pathPatterns: ["unused_enum_members_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        Assert.Contains(unused, symbol => symbol.Name == "TrulyUnused");
+        Assert.Contains(unused, symbol => symbol.Name == "Green");
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "Color");
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "Red");
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "Blue");
+        Assert.Equal(2, count.Count);
+        Assert.Equal(1, count.FileCount);
     }
 
     [Fact]
