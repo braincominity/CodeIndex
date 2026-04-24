@@ -1688,12 +1688,14 @@ public sealed class InstallScriptTests : IDisposable
         if (OperatingSystem.IsWindows())
             return;
 
+        var toolDir = Path.Combine(_tempRoot, "jq_stub_bin");
+        Directory.CreateDirectory(toolDir);
+        var jqPath = Path.Combine(toolDir, "jq");
+        File.WriteAllText(jqPath, "#!/usr/bin/env bash\nprintf 'v9.9.9\\n'\n");
+        File.SetUnixFileMode(jqPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             """
-            jq() {
-                printf 'v9.9.9\n'
-            }
-
             curl() {
                 local output_path=""
                 while [ $# -gt 0 ]; do
@@ -1717,7 +1719,11 @@ public sealed class InstallScriptTests : IDisposable
             }
 
             resolve_version ""
-            """);
+            """,
+            new Dictionary<string, string?>
+            {
+                ["PATH"] = toolDir + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty),
+            });
 
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, stderr);

@@ -23,7 +23,6 @@ public static class ChunkSplitter
     /// <returns>List of chunk records / チャンクレコードのリスト</returns>
     public static List<ChunkRecord> Split(long fileId, string content)
     {
-        // Empty file produces no chunks / 空ファイルはチャンクなし
         if (string.IsNullOrEmpty(content))
             return [];
 
@@ -32,6 +31,19 @@ public static class ChunkSplitter
         // 防御的CRLF正規化 — BuildRecordで正規化済みだが、直接呼び出し時の安全策。
         if (content.Contains('\r'))
             content = content.Replace("\r\n", "\n").Replace("\r", "\n");
+        // Defensive line-leading UTF-8 BOM strip — BuildRecord already strips the
+        // leading BOM and any BOM that follows `\n`, but this method is public and
+        // may be called directly. Mid-line U+FEFF (e.g. inside a string literal)
+        // is preserved. Closes #183.
+        // 防御的な行頭 UTF-8 BOM 剥離 — BuildRecord で先頭 BOM と `\n` 直後の BOM を
+        // 既に剥がしているが、本メソッドはpublicで直接呼ばれうる。行頭以外の
+        // U+FEFF (文字列リテラル内等) はそのまま残す。Closes #183.
+        content = FileIndexer.StripLineLeadingBom(content);
+        // Re-check for empty after BOM/CRLF strip so BOM-only input yields no chunks,
+        // matching the no-chunks contract for empty files.
+        // BOM/CRLF剥離後に再度空判定し、BOMのみの入力が空ファイルと同じく0チャンクになるようにする。
+        if (content.Length == 0)
+            return [];
         // Remove trailing newline to avoid phantom empty line / 末尾改行による空行を除去
         var lines = content.EndsWith('\n')
             ? content[..^1].Split('\n')

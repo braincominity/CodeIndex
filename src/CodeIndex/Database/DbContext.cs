@@ -1,3 +1,4 @@
+using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Database;
@@ -112,6 +113,7 @@ public class DbContext : IDisposable
             {
                 _connection = new SqliteConnection($"Data Source={dbPath}");
                 _connection.Open();
+                RegisterConnectionFunctions(_connection);
                 _isReadOnly = true;
                 Execute("PRAGMA busy_timeout=5000");
                 return;
@@ -133,6 +135,7 @@ public class DbContext : IDisposable
         {
             _connection = new SqliteConnection(builder.ConnectionString);
             _connection.Open();
+            RegisterConnectionFunctions(_connection);
 
             // Enable WAL mode and verify it was applied / WALモードを有効にし適用を確認
             var journalMode = ExecuteScalar("PRAGMA journal_mode=WAL");
@@ -151,6 +154,7 @@ public class DbContext : IDisposable
             // immutable=1 を付けないと SQLite は -shm/-wal を触ろうとして CANTOPEN で落ちることがある。
             _connection?.Dispose();
             _connection = OpenReadOnly(dbPath);
+            RegisterConnectionFunctions(_connection);
             _isReadOnly = true;
         }
 
@@ -264,6 +268,103 @@ public class DbContext : IDisposable
         }
     }
 
+    internal static void RegisterConnectionFunctions(SqliteConnection connection)
+    {
+        static int? ToNullableInt(long? value)
+            => value is null || value < int.MinValue || value > int.MaxValue ? null : (int)value.Value;
+
+        connection.CreateFunction(
+            "sql_leaf_name",
+            (string? name) => string.IsNullOrWhiteSpace(name) ? null : SqlNameResolver.GetLeafName(name));
+        connection.CreateFunction(
+            "sql_leaf_name_folded",
+            (string? name) =>
+            {
+                if (string.IsNullOrWhiteSpace(name))
+                    return null;
+
+                var leafName = SqlNameResolver.GetLeafName(name);
+                return leafName.Length == 0 ? null : NameFold.Fold(leafName) ?? leafName;
+            });
+        connection.CreateFunction(
+            "sql_normalize_name",
+            (string? name) => string.IsNullOrWhiteSpace(name) ? null : SqlNameResolver.NormalizeQualifiedName(name));
+        connection.CreateFunction(
+            "sql_normalize_name_folded",
+            (string? name) =>
+            {
+                if (string.IsNullOrWhiteSpace(name))
+                    return null;
+
+                var normalizedName = SqlNameResolver.NormalizeQualifiedName(name);
+                return normalizedName.Length == 0 ? null : NameFold.Fold(normalizedName) ?? normalizedName;
+            });
+        connection.CreateFunction(
+            "sql_segment_count",
+            (string? name) => string.IsNullOrWhiteSpace(name) ? (int?)null : SqlNameResolver.GetSegmentCount(name));
+        connection.CreateFunction(
+            "sql_context_has_name",
+            (string? context, string? query) => SqlNameResolver.ContextContainsQualifiedName(context, query) ? 1 : 0);
+        connection.CreateFunction(
+            "sql_context_has_name_folded",
+            (string? context, string? query) => SqlNameResolver.ContextContainsQualifiedNameFolded(context, query) ? 1 : 0);
+        connection.CreateFunction(
+            "sql_context_has_name_at",
+            (string? context, string? query, long? columnNumber) =>
+                SqlNameResolver.ContextContainsQualifiedNameAtColumn(context, query, ToNullableInt(columnNumber)) ? 1 : 0);
+        connection.CreateFunction(
+            "sql_context_has_name_folded_at",
+            (string? context, string? query, long? columnNumber) =>
+                SqlNameResolver.ContextContainsQualifiedNameFoldedAtColumn(context, query, ToNullableInt(columnNumber)) ? 1 : 0);
+        connection.CreateFunction(
+            "sql_context_like_name_at",
+            (string? context, string? query, long? columnNumber) =>
+                SqlNameResolver.ContextContainsQualifiedNameLikeAtColumn(context, query, ToNullableInt(columnNumber)) ? 1 : 0);
+        connection.CreateFunction(
+            "sql_context_like_name_folded_at",
+            (string? context, string? query, long? columnNumber) =>
+                SqlNameResolver.ContextContainsQualifiedNameLikeFoldedAtColumn(context, query, ToNullableInt(columnNumber)) ? 1 : 0);
+        connection.CreateFunction(
+            "sql_resolve_reference_name",
+            (string? symbolName, string? context, string? containerName) =>
+            {
+                var resolved = SqlNameResolver.ResolveReferenceName(symbolName, context, containerName);
+                return resolved.Length == 0 ? null : resolved;
+            });
+        connection.CreateFunction(
+            "sql_resolve_reference_name_folded",
+            (string? symbolName, string? context, string? containerName) =>
+            {
+                var resolved = SqlNameResolver.ResolveReferenceNameFolded(symbolName, context, containerName);
+                return resolved.Length == 0 ? null : resolved;
+            });
+        connection.CreateFunction(
+            "sql_resolve_reference_name_at",
+            (string? symbolName, string? context, string? containerName, long? columnNumber) =>
+            {
+                var resolved = SqlNameResolver.ResolveReferenceNameAtColumn(symbolName, context, containerName, ToNullableInt(columnNumber));
+                return resolved.Length == 0 ? null : resolved;
+            });
+        connection.CreateFunction(
+            "sql_resolve_reference_name_folded_at",
+            (string? symbolName, string? context, string? containerName, long? columnNumber) =>
+            {
+                var resolved = SqlNameResolver.ResolveReferenceNameFoldedAtColumn(symbolName, context, containerName, ToNullableInt(columnNumber));
+                return resolved.Length == 0 ? null : resolved;
+            });
+        connection.CreateFunction(
+            "sql_resolve_reference_segment_count_at",
+            (string? symbolName, string? context, string? containerName, long? columnNumber) => (int?)(
+                SqlNameResolver.ResolveReferenceSegmentCountAtColumn(symbolName, context, containerName, ToNullableInt(columnNumber)) is var segmentCount
+                && segmentCount > 0
+                    ? segmentCount
+                    : null));
+        connection.CreateFunction(
+            "sql_allow_leaf_fallback_at",
+            (string? symbolName, string? context, string? containerName, long? columnNumber) =>
+                SqlNameResolver.AllowLeafFallbackAtColumn(symbolName, context, containerName, ToNullableInt(columnNumber)) ? 1 : 0);
+    }
+
     /// <summary>
     /// Initialize the database schema (tables, indexes, FTS).
     /// データベーススキーマ（テーブル、インデックス、FTS）を初期化する。
@@ -291,8 +392,10 @@ public class DbContext : IDisposable
     public const string HotspotFamilyMarkerFingerprintMetaKey = "hotspot_family_marker_fingerprint";
     public static string GetHotspotFamilyVersionMetaKey(string lang) => $"hotspot_family_version_{lang}";
     public static string GetHotspotFamilyMarkerFingerprintMetaKey(string lang) => $"hotspot_family_marker_fingerprint_{lang}";
-    public const int CSharpSymbolNameContractVersion = 1;
+    public const int CSharpSymbolNameContractVersion = 2;
     public const string CSharpSymbolNameContractVersionMetaKey = "csharp_symbol_name_contract_version";
+    public const int SqlGraphContractVersion = 1;
+    public const string SqlGraphContractVersionMetaKey = "sql_graph_contract_version";
     public const string IndexedProjectRootMetaKey = "indexed_project_root";
     // Authoritative `symbols.is_metadata_target` flag readiness, per language. Stamped at the
     // end of a successful index pass once the writer's metadata-target resolver has classified
