@@ -16219,6 +16219,58 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpCommentSeparatedMultiLineTypePatternsKeepRows()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_comment_separated_multiline_type_patterns");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Probe;
+
+                class Point {}
+
+                class Demo
+                {
+                    bool Match(object value) => value is
+                        // formatting-only comment
+                        Point;
+
+                    void Run(object value)
+                    {
+                        switch (value)
+                        {
+                            case
+                                // formatting-only comment
+                                Point:
+                                break;
+                        }
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Point", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            var rows = ParseJsonLines(stdout)
+                .Select(document => document.RootElement)
+                .ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, rows.Count);
+            Assert.Equal([9, 17], rows.Select(row => row.GetProperty("line").GetInt32()).OrderBy(line => line).ToArray());
+            Assert.Equal(["Match", "Run"], rows.Select(row => row.GetProperty("container_name").GetString()).OrderBy(name => name).ToArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_NonExactJson_CSharpMultiLineCaseUsingStaticConstantPatternKeepsRows()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_multiline_case_constant_pattern_refs");
@@ -16269,6 +16321,66 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(2, rows.Count);
             Assert.Equal([12, 14], rows.Select(row => row.GetProperty("line").GetInt32()).OrderBy(line => line).ToArray());
+            Assert.All(rows, row => Assert.Equal("Run", row.GetProperty("container_name").GetString()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_NonExactJson_CSharpCommentSeparatedMultiLineCaseUsingStaticConstantPatternKeepsRows()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_comment_separated_multiline_case_constant_pattern_refs");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Defs.cs", "csharp",
+                """
+                namespace Probe;
+
+                public enum Color
+                {
+                    Red
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Use.cs", "csharp",
+                """
+                using static Probe.Color;
+
+                namespace Probe;
+
+                class Demo
+                {
+                    void Run(object value)
+                    {
+                        switch (value)
+                        {
+                            case
+                                // formatting-only comment
+                                Red
+                                or
+                                Red:
+                                break;
+                        }
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--path", "src/Use.cs"],
+                _jsonOptions));
+
+            var rows = ParseJsonLines(stdout)
+                .Select(document => document.RootElement)
+                .ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, rows.Count);
+            Assert.Equal([13, 15], rows.Select(row => row.GetProperty("line").GetInt32()).OrderBy(line => line).ToArray());
             Assert.All(rows, row => Assert.Equal("Run", row.GetProperty("container_name").GetString()));
         }
         finally

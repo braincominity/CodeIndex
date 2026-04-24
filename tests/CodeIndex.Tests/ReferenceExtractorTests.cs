@@ -8302,6 +8302,47 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpCommentSeparatedMultiLineTypePatterns_KeepPendingHeads()
+    {
+        // issue #850: comment-only lines are structurally masked to trivia, so the pending
+        // multiline type-pattern state must not flush before the real type head arrives.
+        // issue #850: comment-only 行は構造マスク後に trivia 扱いになるため、複数行
+        // type-pattern の pending state を実際の型 head より先に flush してはならない。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+
+            class Demo
+            {
+                bool Match(object value) => value is
+                    // formatting-only comment
+                    Point;
+
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case
+                            // formatting-only comment
+                            Point:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+
+        Assert.Equal(2, pointRefs.Count);
+        Assert.Equal(["Match", "Run"], pointRefs.Select(reference => reference.ContainerName).OrderBy(name => name).ToArray());
+        Assert.Equal([9, 17], pointRefs.Select(reference => reference.Line).OrderBy(line => line).ToArray());
+    }
+
+    [Fact]
     public void Extract_CsharpUsingStaticMultiLineCaseLogicalConstantPatterns_KeepAmbiguousHeads()
     {
         // issue #843: multi-line `case` labels should keep the same ambiguous using-static
@@ -8338,6 +8379,47 @@ public class ReferenceExtractorTests
         Assert.Equal(2, redRefs.Count);
         Assert.All(redRefs, reference => Assert.Equal("Run", reference.ContainerName));
         Assert.Equal([14, 16], redRefs.Select(reference => reference.Line).OrderBy(line => line).ToArray());
+    }
+
+    [Fact]
+    public void Extract_CsharpCommentSeparatedMultiLineUsingStaticCaseConstantPatterns_KeepAmbiguousHeads()
+    {
+        // issue #850: comment-only lines between `case` and an imported constant head must not
+        // drop the ambiguous row that the read path later suppresses or keeps.
+        // issue #850: `case` と import 済み constant head の間に comment-only 行があっても、
+        // read path が後で抑止/維持する曖昧 row を落としてはならない。
+        const string content = """
+            using static Probe.Color;
+
+            namespace Probe;
+
+            enum Color { Red }
+
+            class Demo
+            {
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case
+                            // formatting-only comment
+                            Red
+                            or
+                            Red:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var redRefs = references.Where(r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference").ToList();
+
+        Assert.Equal(2, redRefs.Count);
+        Assert.All(redRefs, reference => Assert.Equal("Run", reference.ContainerName));
+        Assert.Equal([15, 17], redRefs.Select(reference => reference.Line).OrderBy(line => line).ToArray());
     }
 
     [Fact]

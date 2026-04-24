@@ -790,6 +790,13 @@ public static class ReferenceExtractor
             }
             if (string.IsNullOrWhiteSpace(preparedLine))
             {
+                if (language == "csharp"
+                    && (pendingCSharpMultiLineTypePattern.WaitingForHead
+                        || pendingCSharpMultiLineTypePattern.PendingTypeExpression != null))
+                {
+                    continue;
+                }
+
                 if (language == "csharp")
                     FlushPendingCSharpMultiLineTypePatternReference(
                         ref pendingCSharpMultiLineTypePattern,
