@@ -4420,6 +4420,56 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverKeepsQualifiedAttributeEdgeWithSameNameNonAttributeSibling()
+    {
+        // issue #443: a fully-qualified metadata reference like `[A.Foo]` must still
+        // resolve to the real `A.FooAttribute` even when a sibling namespace contains
+        // a same-named non-Attribute impostor. The ambiguity guard must not let the
+        // impostor suppress the legitimate deps edge.
+        // issue #443: `[A.Foo]` のような fully-qualified metadata 参照は、別 namespace に
+        // 同名の non-Attribute impostor があっても本物の `A.FooAttribute` に解決される必要がある。
+        // impostor を理由に legitimate な deps edge を消してはならない。
+        InsertIndexedFile("src/A/FooAttribute.cs", "csharp",
+            """
+            namespace A;
+
+            public sealed class FooAttribute : System.Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/B/FooAttribute.cs", "csharp",
+            """
+            namespace B;
+
+            public class BaseService
+            {
+            }
+
+            public sealed class FooAttribute : BaseService
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            namespace A;
+
+            [A.Foo]
+            public class Svc
+            {
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        Assert.Contains(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/A/FooAttribute.cs");
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/B/FooAttribute.cs");
+    }
+
+    [Fact]
     public void GetFileDependencies_CSharpMetadataTargetResolverHandlesTransitiveAttributeDerivation()
     {
         // issue #435: derivation can be transitive — `class FooAttribute : BaseAttr`
