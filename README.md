@@ -880,7 +880,7 @@ Once configured, the AI can directly call these tools:
 | `find_in_file` | Find literal substring matches inside known indexed files with line/column context |
 | `excerpt` | Reconstruct a specific line range from indexed chunks |
 | `map` | Summarize languages, modules, hotspots, and likely entrypoints |
-| `analyze_symbol` | Bundle definition, nearby symbols, references, callers, callees, file metadata, workspace trust metadata, and graph support metadata |
+| `analyze_symbol` | Bundle definition, nearby symbols, references, callers, callees, file metadata, workspace trust metadata, and graph support metadata. Bundled `callers` / `callees` rows carry the same `referenceKind` (preferred summary, back-compat) plus `referenceKinds` (sorted distinct) and `hasMixedReferenceKinds` fields as the standalone tools, so mixed `call` + `subscribe` containers stay visible in the bundle. |
 | `outline` | Show all symbols in a single file with line numbers, signatures, and nesting |
 | `status` | Database statistics |
 | `deps` | File-level dependency edges from the reference graph |
@@ -1795,7 +1795,7 @@ OpenAI Codex CLI (`codex.json` または `~/.codex/config.json`):
 | `find_in_file` | 既知のインデックス済みファイル内でリテラル部分文字列一致を行・列付きで検索 |
 | `excerpt` | インデックス済みチャンクから特定行範囲を再構成 |
 | `map` | 言語、モジュール、ホットスポット、推定エントリポイントを要約 |
-| `analyze_symbol` | 定義、近傍シンボル、参照、caller、callee、ファイル情報、ワークスペース信頼メタデータ、graph 対応メタデータをまとめて返す |
+| `analyze_symbol` | 定義、近傍シンボル、参照、caller、callee、ファイル情報、ワークスペース信頼メタデータ、graph 対応メタデータをまとめて返す。バンドルされた `callers` / `callees` 行にも単独の `callers` / `callees` と同じ `referenceKind`（後方互換の優先サマリー種別）、`referenceKinds`（distinct kind の昇順配列）、`hasMixedReferenceKinds` が付くため、`call` + `subscribe` が混在する container も要約 1 ラベルに潰れず見える。 |
 | `outline` | 1ファイルの全シンボルを行番号・シグネチャ・ネスト構造付きで表示 |
 | `status` | データベース統計情報 |
 | `deps` | 参照グラフからファイル間依存エッジを表示 |
