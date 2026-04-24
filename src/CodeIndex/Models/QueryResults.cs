@@ -138,6 +138,8 @@ public class ReferenceResult
     public string ReferenceKind { get; set; } = string.Empty;
     public int Line { get; set; }
     public int Column { get; set; }
+    [JsonIgnore]
+    public string RawContext { get; set; } = string.Empty;
     public string Context { get; set; } = string.Empty;
     public bool ContextTruncated { get; set; }
     public string? ContainerKind { get; set; }

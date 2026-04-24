@@ -11,7 +11,7 @@ namespace CodeIndex.Indexer;
 public static class ReferenceExtractor
 {
     private readonly record struct SqlDefinitionLeafSpan(string LeafName, int StartIndex, int EndIndexExclusive);
-    private const string SqlProcCallIdentifierPattern = @"(?:\[[^\[\]\r\n]+\]|`[^`\r\n]+`|""(?:""""|[^""\r\n])+""|\w+)";
+    private const string SqlProcCallIdentifierPattern = @"(?:\[[^\[\]\r\n]+\]|`[^`\r\n]+`|""(?:""""|[^""\r\n])+""|##?\w+|[_\p{L}][\p{L}\p{Mn}\p{Mc}\p{Nd}\p{Pc}$]*)";
     private const string SqlProcCallQualifierPattern = @"(?:(?:" + SqlProcCallIdentifierPattern + @")?\s*\.\s*)*";
 
     private static readonly HashSet<string> SupportedLanguages =
@@ -148,19 +148,22 @@ public static class ReferenceExtractor
     private static readonly Regex StringLiteralRegex = new(
         "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`",
         RegexOptions.Compiled);
-    // SQL-specific string-literal stripper: preserve identifier quoting (`[name]`, `` `name` ``,
-    // `"name"`) for the `EXEC` / `CALL` no-parens scanner and strip only true string literals
-    // (`'...'`) plus comments. This lets ANSI / PostgreSQL double-quoted identifiers survive to
-    // the SQL identifier parser without regressing comment / string masking.
-    // SQL 専用の文字列リテラル除去: `EXEC` / `CALL` の括弧なし抽出では識別子引用（`[name]`,
-    // `` `name` ``, `"name"`）を保持し、真の文字列リテラル (`'...'`) とコメントだけを除去する。
-    // これにより ANSI / PostgreSQL の二重引用識別子を SQL 識別子パーサーまで通しつつ、
-    // コメント / 文字列のマスキング回帰を防ぐ。
-    private static readonly Regex SqlStringLiteralRegex = new(
-        "'(?:\\\\.|[^'\\\\])*'",
+    // SQL-specific single-quoted string stripper: preserve identifier quoting (`[...]`, `` `...` ``,
+    // and ANSI `"..."`) so the SQL graph path can still see real object names while literal payloads
+    // stay masked.
+    // SQL 専用の単引用符文字列リテラル除去。識別子引用（`[...]` / `` `...` `` / ANSI `"..."`）は
+    // 残しつつ、文字列リテラルだけを隠して SQL graph 抽出が実オブジェクト名を見失わないようにする。
+    private static readonly Regex SqlSingleQuotedStringLiteralRegex = new(
+        "'(?:''|\\\\.|[^'\\\\])*'",
         RegexOptions.Compiled);
     private static readonly Regex InlineBlockCommentRegex = new(@"/\*.*?\*/", RegexOptions.Compiled);
     private const string CSharpIdentifierPattern = @"@?[_\p{L}]\w*";
+    private const string CSharpTypeExpressionPattern =
+        @"(?:global::)?(?:"
+        + CSharpIdentifierPattern
+        + @"\s*(?:(?:\.|::)\s*"
+        + CSharpIdentifierPattern
+        + @")*)(?:\s*<[^)\];{}]+>)?(?:\s*\[[^\]\n]*\])*";
     // The `(?:\?\.)?` segment captures JavaScript / TypeScript optional chaining calls such as
     // `callback?.()` and `callback?.<T>()`. Without it the `?.` stops the regex from reaching the
     // trailing `(`, and the call reference to `callback` is silently dropped. Other supported
@@ -204,9 +207,97 @@ public static class ReferenceExtractor
     // 修飾子の各セグメントを optional にすることで、`EXEC AdventureWorks..sp_GetCustomer;` のように
     // SQL Server が許す省略形（`..`）でも末尾の proc 名まで到達できる。識別子候補にはバッククォート引用も含め、
     // MySQL / MariaDB の `` `proc-name` `` 形にも対応する。
+    private const string SqlDoubleQuotedIdentifierPattern = "\"(?:\"\"|[^\"\\r\\n])+\"";
+    private const string SqlQuotedIdentifierPattern =
+        @"(?:\[[^\[\]\r\n]+\]|`[^`\r\n]+`|" + SqlDoubleQuotedIdentifierPattern + @")";
+    private const string SqlBareIdentifierPattern = @"(?:##?\w+|[_\p{L}][\p{L}\p{Mn}\p{Mc}\p{Nd}\p{Pc}$]*)";
+    private const string SqlTempIdentifierPattern =
+        @"(?:\[(?:##?\w+)\]|`(?:##?\w+)`|" + "\"(?:##?\\w+)\"" + @"|##?\w+)";
+    private const string SqlQualifiedIdentifierNoCapturePattern =
+        @"(?:(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")\s*\.\s*)*(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")";
+    private const string SqlQualifiedIdentifierPattern =
+        @"(?:(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")\s*\.\s*)*(?<name>" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")";
+    private const string SqlTopTargetModifierPattern =
+        @"TOP\s*\([^)\r\n]*\)(?:\s+PERCENT)?(?:\s+WITH\s+TIES)?";
+    private const string SqlMergeTargetHintPattern =
+        @"WITH\s*\((?:[^()]|\([^()]*\))*\)";
     private static readonly Regex SqlProcCallRegex = new(
         @"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?" + SqlProcCallQualifierPattern + @"(?<name>" + SqlProcCallIdentifierPattern + @")",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // SQL named source references that should become `reference` edges rather than `call` edges.
+    // Bare `USING` is intentionally excluded because SQL dialects also reuse it for non-source
+    // syntax such as `CREATE INDEX ... USING btree (...)` and `ALTER TABLE ... USING expr`.
+    // `FROM dbo.fn_TableValued(...)` intentionally stays out because the trailing `(` means the
+    // shared CallRegex already captures it as a function call. issues #284 / #695.
+    // SQL のソース参照で、`call` ではなく `reference` として扱うべき形。
+    // bare な `USING` は `CREATE INDEX ... USING btree (...)` や
+    // `ALTER TABLE ... USING expr` のような非 source 構文にも使われるため意図的に除外する。
+    // `FROM dbo.fn_TableValued(...)` は末尾 `(` により既存 CallRegex が `call` を出すため除外する。
+    private static readonly Regex SqlSourceReferenceRegex = new(
+        $@"(?<![\w$])(?:FROM|JOIN|(?:CROSS|OUTER)\s+APPLY)\b\s+(?:(?:ONLY|LATERAL)\b\s+)*{SqlQualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlMergeUsingSourceRegex = new(
+        $@"(?<![\w$])MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?\s+{SqlQualifiedIdentifierNoCapturePattern}(?:\s+{SqlMergeTargetHintPattern})?(?:\s+(?:AS\s+)?(?!USING\b|WITH\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s+USING\b\s+(?:(?:ONLY|LATERAL)\b\s+)*{SqlQualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlMergeUsingPrefixRegex = new(
+        $@"(?<![\w$])MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?\s+{SqlQualifiedIdentifierNoCapturePattern}(?:\s+{SqlMergeTargetHintPattern})?(?:\s+(?:AS\s+)?(?!USING\b|WITH\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlDeleteUsingSourceRegex = new(
+        $@"(?<![\w$])DELETE\b(?:\s+{SqlTopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?\s+{SqlQualifiedIdentifierNoCapturePattern}(?:\s+(?:AS\s+)?(?!USING\b|WHERE\b|RETURNING\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s+USING\b\s+(?:(?:ONLY|LATERAL)\b\s+)?{SqlQualifiedIdentifierPattern}(?:\s+(?:AS\s+)?(?!WHERE\b|RETURNING\b|ON\b|USING\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?(?:\s*,\s*(?:(?:ONLY|LATERAL)\b\s+)?{SqlQualifiedIdentifierPattern}(?:\s+(?:AS\s+)?(?!WHERE\b|RETURNING\b|ON\b|USING\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?)*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlDeleteUsingPrefixRegex = new(
+        $@"(?<![\w$])DELETE\b(?:\s+{SqlTopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?\s+{SqlQualifiedIdentifierNoCapturePattern}(?:\s+(?:AS\s+)?(?!USING\b|WHERE\b|RETURNING\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlDeleteUsingListContinuationPrefixRegex = new(
+        @"(?<![\w$])DELETE\b[\s\S]*\bUSING\b[\s\S]*,\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlTargetReferencePrefixRegex = new(
+        $@"(?<![\w$])(?:INSERT(?:\s+{SqlTopTargetModifierPattern})?\s+INTO|UPDATE\b(?:\s+(?:{SqlTopTargetModifierPattern}|ONLY\b))*|DELETE\b(?:\s+{SqlTopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?|TRUNCATE\s+TABLE(?:\s+ONLY\b)?|CREATE(?:\s+(?:TEMP|TEMPORARY))?\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?)\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // SQL mutation targets such as `INSERT INTO tbl (...)` / `UPDATE tbl`.
+    // `INSERT INTO tbl (` is a table reference, not a function call; we later suppress the generic
+    // CallRegex match at the same identifier when an opening `(` immediately follows the target.
+    // `INSERT INTO tbl (...)` / `UPDATE tbl` などの更新対象。
+    // `INSERT INTO tbl (` は関数呼び出しではなくテーブル参照なので、直後に `(` がある場合は後段で
+    // 同じ識別子の generic CallRegex を抑止する。
+    private static readonly Regex SqlTargetReferenceRegex = new(
+        $@"(?<![\w$])(?:INSERT(?:\s+{SqlTopTargetModifierPattern})?\s+INTO|UPDATE\b(?:\s+(?:{SqlTopTargetModifierPattern}|ONLY\b))*|MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?|DELETE\b(?:\s+{SqlTopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?)\s+{SqlQualifiedIdentifierPattern}",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlTruncateTargetRegex = new(
+        $@"(?<![\w$])TRUNCATE\s+TABLE\s+(?:(?:ONLY)\b\s+)?{SqlQualifiedIdentifierPattern}(?:\s*,\s*(?:(?:ONLY)\b\s+)?{SqlQualifiedIdentifierPattern})*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlTopCallSuppressionRegex = new(
+        @"(?<![\w$])(?:SELECT|INSERT|UPDATE|MERGE|DELETE)\b\s+(?<name>TOP)\s*\(",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlAccessMethodCallSuppressionRegex = new(
+        $@"(?<![\w$])CREATE\b(?:\s+UNIQUE\b)?\s+INDEX\b[\s\S]*?\bUSING\b\s+(?<name>{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern})(?=\s*\()",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // SQL Server temp-table materialization: `SELECT ... INTO #tmp` / `SELECT ... INTO ##tmp`.
+    // Procedural `SELECT ... INTO variable` remains intentionally excluded. issue #649.
+    // SQL Server の temp table 作成: `SELECT ... INTO #tmp` / `SELECT ... INTO ##tmp`。
+    // 手続き系の `SELECT ... INTO variable` は意図的に除外したままにする。issue #649。
+    private static readonly Regex SqlSelectIntoTempTargetRegex = new(
+        $@"(?<![\w$])SELECT\b.*?\bINTO\s+(?<name>{SqlTempIdentifierPattern})",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlSelectIntoTempTargetStatementRegex = new(
+        $@"(?<![\w$])SELECT\b.*?\bINTO\s+(?<name>{SqlTempIdentifierPattern})",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
+    private static readonly Regex SqlSelectIntoTempPrefixRegex = new(
+        @"(?<![\w$])SELECT\b.*?\bINTO\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlCreateTempTableRegex = new(
+        $@"(?<![\w$])CREATE(?:\s+(?:TEMP|TEMPORARY))?\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+(?<name>{SqlTempIdentifierPattern})",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlTrailingOnlyQualifiedIdentifierRegex = new(
+        $@"(?:(?:ONLY)\b\s+)?{SqlQualifiedIdentifierNoCapturePattern}\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlMergeTargetHintContinuationPrefixRegex = new(
+        $@"(?<![\w$])MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?\s+{SqlQualifiedIdentifierNoCapturePattern}\s+WITH\s*\((?:[^()]|\([^()]*\))*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private readonly record struct SqlIdentifierScanState(
+        bool InBlockComment,
+        string? DollarQuoteDelimiter,
+        bool InSingleQuotedString);
     // C# event subscription/unsubscription: Click += OnClick — both LHS and RHS must be PascalCase identifiers
     // C# イベント購読・解除: Click += OnClick — LHS と RHS の両方が PascalCase 識別子のみ
     private static readonly Regex EventSubscriptionRegex = new(@"(?<name>[A-Z]\w*)\s*[+-]=\s*(?:new\s+)?[A-Z]\w*", RegexOptions.Compiled);
@@ -248,8 +339,14 @@ public static class ReferenceExtractor
     private static readonly Regex CSharpUsingAliasRegex = new(
         @"^\s*(?:global\s+)?using\s+(?!static\b)(?<alias>@?[A-Za-z_]\w*)\s*=\s*(?<target>[^;]+)",
         RegexOptions.Compiled);
+    private static readonly Regex CSharpUsingStaticRegex = new(
+        @"^\s*(?:global\s+)?using\s+static\s+(?<target>[^;]+)",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpUsingNamespaceRegex = new(
+        @"^\s*(?:global\s+)?using\s+(?!static\b)(?<target>[^;=]+)",
+        RegexOptions.Compiled);
     private static readonly Regex CSharpLocalValueNameRegex = new(
-        @"(?:^\s*|[;{}]\s*)(?:(?:(?:await\s+)?using\s+var)|var|(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*))\s+(?<name>@?[A-Za-z_]\w*)\s*(?==|;|,)",
+        @"(?:^\s*|[;{}]\s*)(?:(?:(?:await\s+)?using\s+var)|var|(?:(?:const\s+)?[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*))\s+(?<name>@?[A-Za-z_]\w*)\s*(?==|;|,)",
         RegexOptions.Compiled);
     private static readonly Regex CSharpForeachValueNameRegex = new(
         @"\bforeach\s*\(\s*(?:var|(?:[A-Za-z_]\w*(?:\s*::\s*|\s*\.\s*)*[A-Za-z_]\w*(?:\s*<[^>\n]+>)?(?:\s*\?)?(?:\s*\[\s*\])*))\s+(?<name>@?[A-Za-z_]\w*)\s+in\b",
@@ -338,10 +435,23 @@ public static class ReferenceExtractor
     private static readonly Regex JavaDotClassArgRegex = new(
         @"(?<![\w$.])(?<arg>[A-Za-z_][\w.]*)\s*(?:\[\s*\])*\s*\.class\b",
         RegexOptions.Compiled);
-    // C# type tests / pattern cases (`o is Base`, `o as Base`, `case ILogger x:`).
-    // `is` / `as` / `case` の型位置 (`o is Base`, `o as Base`, `case ILogger x:`)。
-    private static readonly Regex CSharpTypeTestRegex = new(
-        $@"(?<![\w$])(?:is|as|case)\s+(?<type>(?:global::)?(?:{CSharpIdentifierPattern}\s*(?:(?:\.|::)\s*{CSharpIdentifierPattern})*)(?:\s*<[^)\];{{}}]+>)?(?:\s*\[[^\]\n]*\])*)",
+    // C# type tests (`o is Base`, `o is not Base`, `o as Base`).
+    // `is` / `is not` / `as` の型位置 (`o is Base`, `o is not Base`, `o as Base`)。
+    private static readonly Regex CSharpIsAsTypeTestRegex = new(
+        $@"(?<![\w$])(?:is\s+(?:not\s+)?|as\s+)(?<type>{CSharpTypeExpressionPattern})",
+        RegexOptions.Compiled);
+    // C# `case` labels use a small structural follow-token check so declaration / recursive /
+    // positional/logical patterns stay visible while constant member labels like
+    // `case Color.Red:` and `case Color.Red or Color.Blue:` do not leak
+    // `type_reference` edges.
+    // C# の `case` ラベルは後続 token を小さく構文判定し、declaration / recursive /
+    // positional / logical pattern を残しつつ `case Color.Red:` や
+    // `case Color.Red or Color.Blue:` のような定数ラベルは `type_reference` にしない。
+    private static readonly Regex CSharpCaseLabelRegex = new(
+        @"(?<![\w$])case\s+",
+        RegexOptions.Compiled);
+    private static readonly Regex CSharpTypeExpressionAtCursorRegex = new(
+        $@"\G(?<type>{CSharpTypeExpressionPattern})",
         RegexOptions.Compiled);
     // C# XML-doc cross-reference (`<see cref="Base.Do"/>`, `<seealso cref="ILogger.Log"/>`).
     // C# XML doc の `<see cref="Base.Do"/>` / `<seealso cref="ILogger.Log"/>`。
@@ -372,6 +482,16 @@ public static class ReferenceExtractor
         "bool", "byte", "sbyte", "short", "ushort", "int", "uint", "long", "ulong",
         "nint", "nuint", "char", "float", "double", "decimal",
         "string", "object", "void", "dynamic", "var",
+    };
+    // C# pattern-only keywords / literals that can appear after `is` / `case not` but are never
+    // real user-defined types. Filter them before AddTypeExpressionSegments so `is not null`,
+    // `is default`, and similar constant patterns do not surface phantom `type_reference` rows.
+    // `is` / `case not` の後ろに現れうるが、実在型ではない C# のパターン専用キーワード / リテラル。
+    // AddTypeExpressionSegments 前に落とし、`is not null` や `is default` などの定数パターンから
+    // phantom な `type_reference` 行が出ないようにする。
+    private static readonly HashSet<string> CSharpNonTypePatternTokens = new(StringComparer.Ordinal)
+    {
+        "default", "false", "not", "null", "true",
     };
 
     // No-arg C# attribute name (`[Serializable]`, `[assembly: CLSCompliant]`, `[System.Obsolete]`,
@@ -578,8 +698,11 @@ public static class ReferenceExtractor
         // 宣言ヘッダー全体を合成コンテナで上書きする。`{` / `;` 以降の本体行は通常の container に戻す。
         var recordPrimaryCtorRanges = BuildCSharpPrimaryCtorContainers(language, symbols, structuralLines);
         var csharpQualifiedEnumMemberLookup = BuildCSharpQualifiedEnumMemberLookup(language, symbols);
-        var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols);
+        var csharpQualifiedConstantPatternMemberLookup = BuildCSharpQualifiedConstantPatternMemberLookup(language, symbols);
+        var csharpQualifiedTypePatternLookup = BuildCSharpQualifiedTypePatternLookup(language, symbols);
         var csharpKnownTypeNames = BuildCSharpKnownTypeNames(language, symbols);
+        var csharpUsingAliases = BuildCSharpUsingAliases(language, symbols, csharpKnownTypeNames);
+        var csharpUsingStatics = BuildCSharpUsingStatics(language, symbols);
         var csharpValueReceiverNames = BuildCSharpValueReceiverNamesByContainingType(language, symbols);
         var csharpFunctionValueReceiverNames = BuildCSharpValueReceiverNamesByFunctionStartLine(
             language,
@@ -587,9 +710,24 @@ public static class ReferenceExtractor
             structuralLines,
             csharpKnownTypeNames,
             csharpUsingAliases);
+        // Workspace-wide same-name type rescue needs cross-file visibility, so the
+        // extractor leaves ambiguous unqualified using-static pattern heads for the
+        // read path to disambiguate.
+        // ワークスペース全体の同名型 rescue には cross-file 可視性が必要なため、
+        // extractor は曖昧な unqualified using-static pattern head を残し、
+        // read path 側で判定させる。
+        static bool HasActiveSameFileCSharpTypeCandidate(string typeExpression, int lineNumber) => false;
 
         var references = new List<ReferenceRecord>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        HashSet<string>? sqlEstablishedTempObjectNames = null;
+        string? sqlStatementPrefix = null;
+        var sqlIdentifierScanState = default(SqlIdentifierScanState);
+        if (language == "sql")
+        {
+            sqlEstablishedTempObjectNames = new HashSet<string>(StringComparer.Ordinal);
+            sqlStatementPrefix = string.Empty;
+        }
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -778,6 +916,11 @@ public static class ReferenceExtractor
                 EmitCSharpTypePositionReferences(
                     preparedLine,
                     originalLine,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpQualifiedTypePatternLookup,
+                    csharpUsingAliases,
+                    csharpUsingStatics,
+                    HasActiveSameFileCSharpTypeCandidate,
                     references,
                     seen,
                     fileId,
@@ -799,6 +942,8 @@ public static class ReferenceExtractor
                     container);
             }
 
+            var sqlSuppressedCallIndices = language is "sql" ? new HashSet<int>() : null;
+
             // SQL stored-procedure calls without parentheses: `EXEC`, `EXECUTE`, and `CALL` forms that
             // the shared CallRegex cannot see because there is no trailing `(`. Emits the same
             // reference kind ("call") so the edge merges with the rare parenthesized form via dedupe.
@@ -809,58 +954,287 @@ public static class ReferenceExtractor
             {
                 // The shared PrepareLine strips backtick-quoted content because several other
                 // languages use backticks for string literals (shell command substitution,
-                // JavaScript template literals, Go raw strings). In SQL, backticks quote
-                // identifiers (MySQL / MariaDB), so we re-prepare the raw line with
-                // a SQL-aware stripper that only drops `'...'` / `"..."` literals and comments.
+                // JavaScript template literals, Go raw strings). In SQL, backticks and double
+                // quotes can both quote identifiers, so we re-prepare the raw line with a
+                // SQL-aware stripper that only drops single-quoted literals and comments.
                 // 共有 PrepareLine はバッククォート内容を文字列として除去する（他言語のテンプレート
-                // リテラル等に対応するため）。SQL ではバッククォートは識別子引用なので、SQL 向けに
-                // `'...'` / `"..."` とコメントだけを除去する sanitization を別途適用する。
-                var sqlScanLine = PrepareSqlLineForIdentifierScan(structuralLines[i]);
-                if (!string.IsNullOrWhiteSpace(sqlScanLine))
+                // リテラル等に対応するため）。SQL ではバッククォートと二重引用符が識別子引用になり得る
+                // ため、単引用符リテラル、複数行 block comment、PostgreSQL dollar quote、行コメント
+                // だけを除去する stateful sanitization を別途適用する。
+                var sqlLineFragment = PrepareSqlLineForIdentifierScan(
+                    structuralLines[i],
+                    sqlIdentifierScanState,
+                    sqlStatementPrefix,
+                    out var sqlLineEndedByLineComment,
+                    out sqlIdentifierScanState);
+                if (!string.IsNullOrWhiteSpace(sqlLineFragment))
                 {
-                    foreach (Match match in SqlProcCallRegex.Matches(sqlScanLine))
+                    if (ShouldFlushSqlTempObjectPrefixAtLineBoundary(sqlStatementPrefix!, sqlLineFragment))
                     {
-                        var nameGroup = match.Groups["name"];
-                        var rawName = nameGroup.Value;
-                        int nameIndex = nameGroup.Index;
-                        string resolvedName;
-                        bool wasQuoted;
-                        if (rawName.Length >= 2
-                            && ((rawName[0] == '[' && rawName[^1] == ']')
-                                || (rawName[0] == '`' && rawName[^1] == '`')
-                                || (rawName[0] == '"' && rawName[^1] == '"')))
-                        {
-                            // Normalize `[sp_Target]` / `` `sp_Target` `` to `sp_Target` so it matches the
-                            // indexed symbol name, and point the column at the inner identifier instead
-                            // of the opening quote.
-                            // `[sp_Target]` / `` `sp_Target` `` は識別子名と一致させるため引用を除去し、
-                            // 列位置は中身の先頭に寄せる。
-                            resolvedName = rawName.Substring(1, rawName.Length - 2);
-                            nameIndex += 1;
-                            wasQuoted = true;
-                        }
-                        else
-                        {
-                            resolvedName = rawName;
-                            wasQuoted = false;
-                        }
-
-                        // Bracketed / backtick-quoted identifiers are explicitly quoted to allow reserved
-                        // words (`[ORDER]`, `[USER]`, `[AS]`, `[IMMEDIATE]`, `` `order` ``) as real object
-                        // names. Skip the keyword ignore list so a legitimate `EXEC [ORDER]` or
-                        // `` CALL `order` `` is not silently dropped.
-                        // 角括弧 / バッククォート付き識別子は予約語を識別子として使うための引用形。
-                        // `[ORDER]` / `` `order` `` のような正当な名前を落とさないため keyword ignore list をスキップする。
-                        if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
-                            continue;
-                        if (ShouldSuppressDefinitionCall(resolvedName, nameIndex))
-                            continue;
-
-                        var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
-                        AddChainReference(
-                            references, seen, fileId, resolvedName, nameIndex + 1,
-                            "call", context, lineNumber, sqlCallContainer);
+                        CollectSqlTempObjectNamesFromStatement(sqlStatementPrefix!, sqlEstablishedTempObjectNames!);
+                        sqlStatementPrefix = string.Empty;
                     }
+
+                    var sqlCombinedLine = CombineSqlStatementPrefix(sqlStatementPrefix!, sqlLineFragment, out var sqlLineOffset);
+                    int sqlStatementStart = 0;
+
+                    while (true)
+                    {
+                        int terminatorIndex = FindSqlStatementTerminator(sqlCombinedLine, sqlStatementStart);
+                        int statementEnd = terminatorIndex >= 0 ? terminatorIndex + 1 : sqlCombinedLine.Length;
+                        var sqlStatement = sqlCombinedLine[sqlStatementStart..statementEnd];
+                        int sqlStatementLineOffset = Math.Max(0, sqlLineOffset - sqlStatementStart);
+
+                        if (!string.IsNullOrWhiteSpace(sqlStatement))
+                        {
+                            HashSet<int>? sqlUsingSourceIndices = null;
+                            foreach (Match match in SqlMergeUsingSourceRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+
+                                (sqlUsingSourceIndices ??= []).Add(nameGroup.Index);
+                            }
+
+                            foreach (Match match in SqlDeleteUsingSourceRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+
+                                foreach (Capture capture in match.Groups["name"].Captures)
+                                {
+                                    if (capture.Index < sqlStatementLineOffset)
+                                        continue;
+
+                                    (sqlUsingSourceIndices ??= []).Add(capture.Index);
+                                }
+                            }
+
+                            foreach (Match match in SqlTopCallSuppressionRegex.Matches(sqlStatement))
+                            {
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+
+                                sqlSuppressedCallIndices?.Add(nameGroup.Index + sqlStatementStart - sqlLineOffset);
+                            }
+
+                            foreach (Match match in SqlAccessMethodCallSuppressionRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+                                if (sqlUsingSourceIndices != null && sqlUsingSourceIndices.Contains(nameGroup.Index))
+                                    continue;
+
+                                sqlSuppressedCallIndices?.Add(nameGroup.Index + sqlStatementStart - sqlLineOffset);
+                            }
+
+                            foreach (Match match in SqlProcCallRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+                                NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+
+                                // Bracketed / backtick-quoted identifiers are explicitly quoted to allow reserved
+                                // words (`[ORDER]`, `[USER]`, `[AS]`, `[IMMEDIATE]`, `` `order` ``) as real object
+                                // names. Skip the keyword ignore list so a legitimate `EXEC [ORDER]` or
+                                // `` CALL `order` `` is not silently dropped.
+                                // 角括弧 / バッククォート付き識別子は予約語を識別子として使うための引用形。
+                                // `[ORDER]` / `` `order` `` のような正当な名前を落とさないため keyword ignore list をスキップする。
+                                if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                    continue;
+                                if (ShouldSuppressDefinitionCall(resolvedName, nameIndex))
+                                    continue;
+
+                                var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
+                                AddChainReference(
+                                    references, seen, fileId, resolvedName, nameColumn + 1,
+                                    "call", context, lineNumber, sqlCallContainer);
+                            }
+
+                            foreach (Match match in SqlSourceReferenceRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+                                var followedByOpenParen = IsFollowedByOpenParen(sqlStatement, nameGroup.Index + nameGroup.Length);
+                                NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+                                if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                    continue;
+                                if (followedByOpenParen)
+                                {
+                                    var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
+                                    AddChainReference(
+                                        references, seen, fileId, resolvedName, nameColumn + 1,
+                                        "call", context, lineNumber, sqlCallContainer);
+                                    if (!wasQuoted)
+                                    {
+                                        sqlSuppressedCallIndices?.Add(
+                                            GetSqlCallLikeSuppressionIndex(sqlStatement, nameGroup.Index) + sqlStatementStart - sqlLineOffset);
+                                    }
+                                    continue;
+                                }
+                                if (resolvedName.StartsWith("#", StringComparison.Ordinal)
+                                    && (sqlEstablishedTempObjectNames == null || !sqlEstablishedTempObjectNames.Contains(resolvedName)))
+                                    continue;
+
+                                var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
+                                AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                            }
+
+                            foreach (Match match in SqlMergeUsingSourceRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+                                var followedByOpenParen = IsFollowedByOpenParen(sqlStatement, nameGroup.Index + nameGroup.Length);
+                                NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+                                if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                    continue;
+                                if (followedByOpenParen)
+                                {
+                                    var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
+                                    AddChainReference(
+                                        references, seen, fileId, resolvedName, nameColumn + 1,
+                                        "call", context, lineNumber, sqlCallContainer);
+                                    if (!wasQuoted)
+                                    {
+                                        sqlSuppressedCallIndices?.Add(
+                                            GetSqlCallLikeSuppressionIndex(sqlStatement, nameGroup.Index) + sqlStatementStart - sqlLineOffset);
+                                    }
+                                    continue;
+                                }
+                                if (resolvedName.StartsWith("#", StringComparison.Ordinal)
+                                    && (sqlEstablishedTempObjectNames == null || !sqlEstablishedTempObjectNames.Contains(resolvedName)))
+                                    continue;
+
+                                var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
+                                AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                            }
+
+                            foreach (Match match in SqlDeleteUsingSourceRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+
+                                foreach (Capture capture in match.Groups["name"].Captures)
+                                {
+                                    if (capture.Index < sqlStatementLineOffset)
+                                        continue;
+                                    var followedByOpenParen = IsFollowedByOpenParen(sqlStatement, capture.Index + capture.Length);
+                                    NormalizeSqlIdentifier(capture.Value, capture.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                    int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+                                    if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                        continue;
+                                    if (followedByOpenParen)
+                                    {
+                                        var sqlCallContainer = ResolveContainerForCall(capture.Index);
+                                        AddChainReference(
+                                            references, seen, fileId, resolvedName, nameColumn + 1,
+                                            "call", context, lineNumber, sqlCallContainer);
+                                        if (!wasQuoted)
+                                        {
+                                            sqlSuppressedCallIndices?.Add(
+                                                GetSqlCallLikeSuppressionIndex(sqlStatement, capture.Index) + sqlStatementStart - sqlLineOffset);
+                                        }
+                                        continue;
+                                    }
+                                    if (resolvedName.StartsWith("#", StringComparison.Ordinal)
+                                        && (sqlEstablishedTempObjectNames == null || !sqlEstablishedTempObjectNames.Contains(resolvedName)))
+                                        continue;
+
+                                    var sqlReferenceContainer = ResolveContainerForCall(capture.Index);
+                                    AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                                }
+                            }
+
+                            foreach (Match match in SqlSelectIntoTempTargetStatementRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+                                NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+                                if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                    continue;
+
+                                var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
+                                AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                            }
+
+                            foreach (Match match in SqlTargetReferenceRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+                                var nameGroup = match.Groups["name"];
+                                if (nameGroup.Index < sqlStatementLineOffset)
+                                    continue;
+                                NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+                                if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                    continue;
+                                if (!wasQuoted
+                                    && string.Equals(resolvedName, "SET", StringComparison.OrdinalIgnoreCase)
+                                    && match.Value.StartsWith("UPDATE", StringComparison.OrdinalIgnoreCase))
+                                    continue;
+
+                                var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
+                                AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                                if (IsFollowedByOpenParen(sqlStatement, nameGroup.Index + nameGroup.Length))
+                                {
+                                    sqlSuppressedCallIndices?.Add(
+                                        GetSqlCallLikeSuppressionIndex(sqlStatement, nameGroup.Index) + sqlStatementStart - sqlLineOffset);
+                                }
+                            }
+
+                            foreach (Match match in SqlTruncateTargetRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+
+                                foreach (Capture capture in match.Groups["name"].Captures)
+                                {
+                                    if (capture.Index < sqlStatementLineOffset)
+                                        continue;
+                                    NormalizeSqlIdentifier(capture.Value, capture.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                    int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+                                    if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                        continue;
+
+                                    var sqlReferenceContainer = ResolveContainerForCall(capture.Index);
+                                    AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                                }
+                            }
+                        }
+
+                        if (terminatorIndex < 0)
+                            break;
+
+                        CollectSqlTempObjectNamesFromStatement(sqlStatement, sqlEstablishedTempObjectNames!);
+                        sqlStatementStart = terminatorIndex + 1;
+                        while (sqlStatementStart < sqlCombinedLine.Length && char.IsWhiteSpace(sqlCombinedLine[sqlStatementStart]))
+                            sqlStatementStart++;
+                    }
+
+                    sqlStatementPrefix = AdvanceSqlStatementPrefix(sqlCombinedLine, sqlStatementStart, sqlLineEndedByLineComment);
                 }
             }
 
@@ -1023,6 +1397,8 @@ public static class ReferenceExtractor
             {
                 var name = match.Groups["name"].Value;
                 var callIndex = match.Groups["name"].Index;
+                if (sqlSuppressedCallIndices != null && sqlSuppressedCallIndices.Contains(callIndex))
+                    continue;
                 matchedCallIndices.Add(callIndex);
                 AddCallLikeReference(name, callIndex);
             }
@@ -1159,6 +1535,321 @@ public static class ReferenceExtractor
         });
     }
 
+    private static void NormalizeSqlIdentifier(
+        string rawName,
+        int rawIndex,
+        out string resolvedName,
+        out int resolvedIndex,
+        out bool wasQuoted)
+    {
+        if (rawName.Length >= 2
+            && ((rawName[0] == '[' && rawName[^1] == ']')
+                || (rawName[0] == '`' && rawName[^1] == '`')
+                || (rawName[0] == '"' && rawName[^1] == '"')))
+        {
+            // Normalize `[name]` / `` `name` `` / `"name"` to `name` so SQL-specific regexes and the shared
+            // CallRegex converge on the same symbol spelling and dedupe key.
+            // `[name]` / `` `name` `` / `"name"` を `name` に正規化し、SQL 専用 regex と共有 CallRegex の
+            // symbol 名と dedupe key を一致させる。
+            resolvedName = rawName.Substring(1, rawName.Length - 2);
+            if (rawName[0] == '"')
+                resolvedName = resolvedName.Replace("\"\"", "\"", StringComparison.Ordinal);
+            resolvedIndex = rawIndex + 1;
+            wasQuoted = true;
+            return;
+        }
+
+        resolvedName = rawName;
+        resolvedIndex = rawIndex;
+        wasQuoted = false;
+    }
+
+    private static bool IsFollowedByOpenParen(string line, int index)
+    {
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+
+        return index < line.Length && line[index] == '(';
+    }
+
+    private static int GetSqlCallLikeSuppressionIndex(string line, int index)
+    {
+        while (index < line.Length && line[index] == '#')
+            index++;
+
+        return index;
+    }
+
+    private static string CombineSqlStatementPrefix(string prefix, string line, out int lineOffset)
+    {
+        if (string.IsNullOrEmpty(prefix))
+        {
+            lineOffset = 0;
+            return line;
+        }
+
+        lineOffset = prefix.Length + 1;
+        return prefix + "\n" + line;
+    }
+
+    private static string AdvanceSqlStatementPrefix(
+        string combined,
+        int statementStart,
+        bool lineEndedByLineComment)
+    {
+        var remaining = statementStart == 0 ? combined : combined[statementStart..];
+        if (!lineEndedByLineComment)
+            return remaining;
+
+        return CanSqlStatementRequireLineCommentCarry(remaining) ? remaining : string.Empty;
+    }
+
+    private static bool ShouldFlushSqlTempObjectPrefixAtLineBoundary(
+        string prefix,
+        string nextLine)
+    {
+        if (string.IsNullOrWhiteSpace(prefix) || string.IsNullOrWhiteSpace(nextLine))
+            return false;
+        if (!CanSqlStatementEstablishTempObject(prefix))
+            return false;
+
+        return StartsSqlTopLevelStatement(nextLine);
+    }
+
+    private static bool CanSqlStatementEstablishTempObject(string statement)
+    {
+        if (statement.IndexOf('#') < 0)
+            return false;
+
+        return SqlTargetReferenceRegex.IsMatch(statement)
+            || SqlTruncateTargetRegex.IsMatch(statement)
+            || SqlSelectIntoTempTargetStatementRegex.IsMatch(statement)
+            || SqlCreateTempTableRegex.IsMatch(statement);
+    }
+
+    private static bool CanSqlStatementRequireLineCommentCarry(string statement)
+    {
+        if (string.IsNullOrWhiteSpace(statement))
+            return false;
+
+        return CanSqlStatementEstablishTempObject(statement)
+            || SqlTargetReferencePrefixRegex.IsMatch(statement)
+            || SqlSelectIntoTempPrefixRegex.IsMatch(statement)
+            || SqlDeleteUsingPrefixRegex.IsMatch(statement)
+            || SqlDeleteUsingListContinuationPrefixRegex.IsMatch(statement)
+            || SqlMergeUsingPrefixRegex.IsMatch(statement)
+            || SqlMergeTargetHintContinuationPrefixRegex.IsMatch(statement);
+    }
+
+    private static bool StartsSqlTopLevelStatement(string line)
+    {
+        int index = 0;
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+        if (index >= line.Length || !char.IsLetter(line[index]))
+            return false;
+
+        int start = index;
+        while (index < line.Length && char.IsLetter(line[index]))
+            index++;
+
+        var keyword = line[start..index].ToUpperInvariant();
+        if (keyword == "WITH")
+        {
+            while (index < line.Length && char.IsWhiteSpace(line[index]))
+                index++;
+
+            return index >= line.Length || line[index] != '(';
+        }
+
+        return keyword switch
+        {
+            "SELECT" => true,
+            "INSERT" => true,
+            "UPDATE" => true,
+            "DELETE" => true,
+            "MERGE" => true,
+            "CREATE" => true,
+            "ALTER" => true,
+            "DROP" => true,
+            "TRUNCATE" => true,
+            "SET" => true,
+            "DECLARE" => true,
+            "IF" => true,
+            "WHILE" => true,
+            "DO" => true,
+            "BEGIN" => true,
+            "EXEC" => true,
+            "EXECUTE" => true,
+            "CALL" => true,
+            _ => false,
+        };
+    }
+
+    private static int FindSqlStatementTerminator(string text, int startIndex)
+    {
+        for (int i = startIndex; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (c == ';')
+                return i;
+            if (c == '`')
+            {
+                int closing = text.IndexOf('`', i + 1);
+                if (closing < 0)
+                    return -1;
+                i = closing;
+                continue;
+            }
+            if (c == '[')
+            {
+                int closing = text.IndexOf(']', i + 1);
+                if (closing < 0)
+                    return -1;
+                i = closing;
+                continue;
+            }
+            if (c == '"')
+            {
+                int closing = FindClosingSqlDoubleQuote(text, i + 1);
+                if (closing < 0)
+                    return -1;
+                i = closing;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int FindClosingSqlDoubleQuote(string text, int startIndex)
+    {
+        for (int i = startIndex; i < text.Length; i++)
+        {
+            if (text[i] != '"')
+                continue;
+            if (i + 1 < text.Length && text[i + 1] == '"')
+            {
+                i++;
+                continue;
+            }
+
+            return i;
+        }
+
+        return -1;
+    }
+
+    private static int FindClosingSqlSingleQuote(string text, int startIndex)
+    {
+        for (int i = startIndex; i < text.Length; i++)
+        {
+            if (text[i] == '\\' && i + 1 < text.Length)
+            {
+                i++;
+                continue;
+            }
+            if (text[i] != '\'')
+                continue;
+            if (i + 1 < text.Length && text[i + 1] == '\'')
+            {
+                i++;
+                continue;
+            }
+
+            return i;
+        }
+
+        return -1;
+    }
+
+    private static bool IsInsideSqlDoubleQuotedRegion(string text, int index)
+    {
+        if (index <= 0)
+            return false;
+
+        bool inside = false;
+        for (int i = 0; i < index && i < text.Length; i++)
+        {
+            if (text[i] != '"')
+                continue;
+            if (inside && i + 1 < index && text[i + 1] == '"')
+            {
+                i++;
+                continue;
+            }
+
+            inside = !inside;
+        }
+
+        return inside;
+    }
+
+    private static bool TryReadSqlDollarQuoteDelimiter(
+        string line,
+        int index,
+        out string delimiter)
+    {
+        delimiter = string.Empty;
+        if (index < 0 || index >= line.Length || line[index] != '$')
+            return false;
+        if (index > 0 && (char.IsLetterOrDigit(line[index - 1]) || line[index - 1] == '_'))
+            return false;
+        if (index + 1 >= line.Length)
+            return false;
+        if (line[index + 1] == '$')
+        {
+            delimiter = "$$";
+            return true;
+        }
+        if (!(char.IsLetter(line[index + 1]) || line[index + 1] == '_'))
+            return false;
+
+        int probe = index + 2;
+        while (probe < line.Length && (char.IsLetterOrDigit(line[probe]) || line[probe] == '_'))
+            probe++;
+        if (probe >= line.Length || line[probe] != '$')
+            return false;
+
+        delimiter = line[index..(probe + 1)];
+        return true;
+    }
+
+    private static int SkipWhitespaceAhead(string text, int index)
+    {
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+            index++;
+        return index;
+    }
+
+    private static void CollectSqlTempObjectNamesFromStatement(
+        string statement,
+        HashSet<string> names)
+    {
+        CollectSqlTempObjectNamesFromMatches(SqlTargetReferenceRegex.Matches(statement), statement, names);
+        CollectSqlTempObjectNamesFromMatches(SqlTruncateTargetRegex.Matches(statement), statement, names);
+        CollectSqlTempObjectNamesFromMatches(SqlSelectIntoTempTargetStatementRegex.Matches(statement), statement, names);
+        CollectSqlTempObjectNamesFromMatches(SqlCreateTempTableRegex.Matches(statement), statement, names);
+    }
+
+    private static void CollectSqlTempObjectNamesFromMatches(MatchCollection matches, string statement, HashSet<string> names)
+    {
+        foreach (Match match in matches)
+        {
+            if (IsInsideSqlDoubleQuotedRegion(statement, match.Index))
+                continue;
+            var nameGroup = match.Groups["name"];
+            if (nameGroup.Captures.Count == 0)
+                continue;
+
+            foreach (Capture capture in nameGroup.Captures)
+            {
+                NormalizeSqlIdentifier(capture.Value, capture.Index, out var resolvedName, out _, out _);
+                if (resolvedName.StartsWith("#", StringComparison.Ordinal))
+                    names.Add(resolvedName);
+            }
+        }
+    }
+
     /// <summary>
     /// Emit one `type_reference` row per dot-segment of a captured argument. Columns are
     /// computed relative to the original line so tooling can jump to the exact identifier.
@@ -1184,16 +1875,18 @@ public static class ReferenceExtractor
                 continue;
             }
 
-            if (!IsIgnoredTypeReferenceSegment(language, segment))
+            var normalizedSegment = language == "csharp" ? NormalizeCSharpIdentifier(segment) : segment;
+            var isEscapedCSharpIdentifier = language == "csharp" && segment[0] == '@';
+            if (!IsIgnoredTypeReferenceSegment(language, normalizedSegment, isEscapedCSharpIdentifier))
             {
                 int column = argStartInLine + offset + 1; // 1-based / 1始まり
-                var dedupeKey = $"{lineNumber}:{column}:type_reference:{segment}";
+                var dedupeKey = $"{lineNumber}:{column}:type_reference:{normalizedSegment}";
                 if (seen.Add(dedupeKey))
                 {
                     references.Add(new ReferenceRecord
                     {
                         FileId = fileId,
-                        SymbolName = segment,
+                        SymbolName = normalizedSegment,
                         ReferenceKind = "type_reference",
                         Line = lineNumber,
                         Column = column,
@@ -1208,8 +1901,10 @@ public static class ReferenceExtractor
         }
     }
 
-    private static bool IsIgnoredTypeReferenceSegment(string language, string segment)
+    private static bool IsIgnoredTypeReferenceSegment(string language, string segment, bool isEscapedCSharpIdentifier = false)
     {
+        if (isEscapedCSharpIdentifier)
+            return false;
         if (IsIgnoredCallName(language, segment))
             return true;
         if (language == "java" && JavaPrimitiveTypeNames.Contains(segment))
@@ -1294,9 +1989,13 @@ public static class ReferenceExtractor
             if (expectSegment && IsCSharpIdentifierStart(c))
             {
                 int segStart = i;
+                if (line[i] == '@')
+                    i++;
                 while (i < line.Length && IsCSharpIdentifierPart(line[i]))
                     i++;
-                var segment = line.Substring(segStart, i - segStart);
+                var rawSegment = line.Substring(segStart, i - segStart);
+                var segment = NormalizeCSharpIdentifier(rawSegment);
+                var isEscapedCSharpIdentifier = rawSegment.Length > 0 && rawSegment[0] == '@';
                 // `Alias::Member` — the left-hand side is a namespace alias, not an indexed
                 // type. Drop it instead of emitting it, and treat what follows the `::` as a
                 // fresh segment head.
@@ -1309,7 +2008,7 @@ public static class ReferenceExtractor
                     continue;
                 }
 
-                AddTypeReferenceSegment(references, seen, fileId, segment, segStart, context, lineNumber, container, language);
+                AddTypeReferenceSegment(references, seen, fileId, segment, segStart, context, lineNumber, container, language, isEscapedCSharpIdentifier);
                 expectSegment = false;
                 continue;
             }
@@ -1354,6 +2053,11 @@ public static class ReferenceExtractor
     private static void EmitCSharpTypePositionReferences(
         string preparedLine,
         string originalLine,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
@@ -1366,9 +2070,148 @@ public static class ReferenceExtractor
         EmitCSharpWhereConstraintReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitDeclarationTypeReferences("csharp", preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
 
-        foreach (Match match in CSharpTypeTestRegex.Matches(preparedLine))
+        foreach (Match match in CSharpIsAsTypeTestRegex.Matches(preparedLine))
         {
             var typeGroup = match.Groups["type"];
+            int continuationIndex = SkipWhitespace(preparedLine, typeGroup.Index + typeGroup.Length);
+            if (TryEmitCSharpLogicalTypePatternHeads(
+                    preparedLine,
+                    typeGroup.Value,
+                    typeGroup.Index,
+                    continuationIndex,
+                    lineNumber,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpQualifiedTypePatternLookup,
+                    csharpUsingAliases,
+                    csharpUsingStatics,
+                    hasActiveSameFileCSharpTypeCandidate,
+                    (logicalTypeExpression, logicalTypeIndex) => AddTypeExpressionSegments(
+                        references,
+                        seen,
+                        fileId,
+                        logicalTypeExpression,
+                        logicalTypeIndex,
+                        context,
+                        lineNumber,
+                        resolveContainerForColumn(logicalTypeIndex),
+                        "csharp")))
+            {
+                continue;
+            }
+
+            if (IsCSharpNonTypePatternExpression(typeGroup.Value)
+                || IsCSharpConstantPatternMemberHead(
+                    typeGroup.Value,
+                    lineNumber,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpUsingAliases,
+                    csharpUsingStatics,
+                    hasActiveSameFileCSharpTypeCandidate)
+                || IsCSharpLogicalConstantPatternAtCursor(
+                    preparedLine,
+                    typeGroup.Value,
+                    continuationIndex,
+                    lineNumber,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpQualifiedTypePatternLookup,
+                    csharpUsingAliases,
+                    csharpUsingStatics,
+                    hasActiveSameFileCSharpTypeCandidate))
+            {
+                continue;
+            }
+
+            AddTypeExpressionSegments(
+                references,
+                seen,
+                fileId,
+                typeGroup.Value,
+                typeGroup.Index,
+                context,
+                lineNumber,
+                resolveContainerForColumn(typeGroup.Index),
+                "csharp");
+        }
+
+        EmitCSharpCaseTypePatternReferences(
+            preparedLine,
+            csharpQualifiedConstantPatternMemberLookup,
+            csharpQualifiedTypePatternLookup,
+            csharpUsingAliases,
+            csharpUsingStatics,
+            hasActiveSameFileCSharpTypeCandidate,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn);
+    }
+
+    private static void EmitCSharpCaseTypePatternReferences(
+        string preparedLine,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (Match caseMatch in CSharpCaseLabelRegex.Matches(preparedLine))
+        {
+            int cursor = SkipWhitespace(preparedLine, caseMatch.Index + caseMatch.Length);
+            bool hadLeadingNot = TryConsumeCSharpPatternKeyword(preparedLine, ref cursor, "not");
+            if (hadLeadingNot)
+                cursor = SkipWhitespace(preparedLine, cursor);
+
+            var typeMatch = CSharpTypeExpressionAtCursorRegex.Match(preparedLine, cursor);
+            if (!typeMatch.Success)
+                continue;
+
+            var typeGroup = typeMatch.Groups["type"];
+            int continuationIndex = SkipWhitespace(preparedLine, typeGroup.Index + typeGroup.Length);
+            if (TryEmitCSharpLogicalTypePatternHeads(
+                    preparedLine,
+                    typeGroup.Value,
+                    typeGroup.Index,
+                    continuationIndex,
+                    lineNumber,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpQualifiedTypePatternLookup,
+                    csharpUsingAliases,
+                    csharpUsingStatics,
+                    hasActiveSameFileCSharpTypeCandidate,
+                    (logicalTypeExpression, logicalTypeIndex) => AddTypeExpressionSegments(
+                        references,
+                        seen,
+                        fileId,
+                        logicalTypeExpression,
+                        logicalTypeIndex,
+                        context,
+                        lineNumber,
+                        resolveContainerForColumn(logicalTypeIndex),
+                        "csharp")))
+            {
+                continue;
+            }
+
+            if (!IsCSharpCaseTypePatternContinuation(
+                    preparedLine,
+                    typeGroup.Value,
+                    continuationIndex,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpQualifiedTypePatternLookup,
+                    csharpUsingAliases,
+                    csharpUsingStatics,
+                    hasActiveSameFileCSharpTypeCandidate,
+                    lineNumber))
+                continue;
+
             AddTypeExpressionSegments(
                 references,
                 seen,
@@ -1961,12 +2804,16 @@ public static class ReferenceExtractor
                 continue;
 
             int segmentStart = i;
+            if (language == "csharp" && expression[i] == '@')
+                i++;
             while (i < expression.Length && IsTypeExpressionIdentifierPart(language, expression[i]))
                 i++;
 
-            var segment = expression.Substring(segmentStart, i - segmentStart);
+            var rawSegment = expression.Substring(segmentStart, i - segmentStart);
+            var isEscapedCSharpIdentifier = language == "csharp" && rawSegment.Length > 0 && rawSegment[0] == '@';
+            var segment = rawSegment;
             if (language == "csharp")
-                segment = NormalizeCSharpIdentifier(segment);
+                segment = NormalizeCSharpIdentifier(rawSegment);
 
             if (i + 1 < expression.Length && expression[i] == ':' && expression[i + 1] == ':')
             {
@@ -1974,7 +2821,7 @@ public static class ReferenceExtractor
                 continue;
             }
 
-            AddTypeReferenceSegment(references, seen, fileId, segment, expressionStartInLine + segmentStart, context, lineNumber, container, language);
+            AddTypeReferenceSegment(references, seen, fileId, segment, expressionStartInLine + segmentStart, context, lineNumber, container, language, isEscapedCSharpIdentifier);
             i--;
         }
     }
@@ -2417,12 +3264,16 @@ public static class ReferenceExtractor
 
     private readonly record struct CSharpLineColumn(int Line, int Column);
     private readonly record struct CSharpRecursivePatternValueNameRecord(string Name, int Offset, bool IsCasePattern, int ArrowIndex = -1);
-    private sealed record CSharpUsingAliasRecord(string AliasName, string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
+    private sealed record CSharpNamespaceScope(string QualifiedName, int ScopeStartLine, int ScopeEndLine);
+    private sealed record CSharpUsingNamespaceScope(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
+    private sealed record CSharpContainingTypeScope(string QualifiedName, int ScopeStartLine, int ScopeEndLine);
+    private sealed record CSharpUsingAliasRecord(string AliasName, string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine, bool TargetsType);
+    private sealed record CSharpUsingStaticRecord(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpCastTypeShape(IReadOnlyList<string> IdentifierSegments, string? SimpleQualifiedName, bool HasTypeOnlySyntax, bool AllIdentifiersTypeLike);
     private sealed record CSharpContainingTypeValueReceiverNames(HashSet<string> InstanceNames, HashSet<string> StaticNames);
     private sealed record CSharpFunctionValueReceiverNameRecord(string Name, int ScopeStartLine, int ScopeStartColumn, int ScopeEndLine, int ScopeEndColumn);
 
-    private static List<CSharpUsingAliasRecord> BuildCSharpUsingAliases(string language, IReadOnlyList<SymbolRecord> symbols)
+    private static List<CSharpUsingAliasRecord> BuildCSharpUsingAliases(string language, IReadOnlyList<SymbolRecord> symbols, IReadOnlySet<string> csharpKnownTypeNames)
     {
         var aliases = new List<CSharpUsingAliasRecord>();
         if (language != "csharp")
@@ -2467,11 +3318,266 @@ public static class ReferenceExtractor
                 scopeWidth = width;
             }
 
-            aliases.Add(new CSharpUsingAliasRecord(alias, target, symbol.Line, scopeStartLine, scopeEndLine));
+            aliases.Add(new CSharpUsingAliasRecord(
+                alias,
+                target,
+                symbol.Line,
+                scopeStartLine,
+                scopeEndLine,
+                IsCSharpUsingAliasTypeTarget(target, csharpKnownTypeNames)));
         }
 
         aliases.Sort(static (left, right) => left.Line.CompareTo(right.Line));
         return aliases;
+    }
+
+    private static List<CSharpUsingStaticRecord> BuildCSharpUsingStatics(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        var imports = new List<CSharpUsingStaticRecord>();
+        if (language != "csharp")
+            return imports;
+
+        var namespaceScopes = symbols
+            .Where(symbol => symbol.Kind == "namespace")
+            .Select(symbol => (
+                StartLine: symbol.BodyStartLine ?? symbol.StartLine,
+                EndLine: symbol.BodyEndLine ?? symbol.EndLine))
+            .Where(scope => scope.StartLine > 0 && scope.EndLine >= scope.StartLine)
+            .ToList();
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "import" || string.IsNullOrWhiteSpace(symbol.Signature))
+                continue;
+
+            var match = CSharpUsingStaticRegex.Match(symbol.Signature!);
+            if (!match.Success)
+                continue;
+
+            var target = TryNormalizeCSharpQualifiedName(match.Groups["target"].Value);
+            if (string.IsNullOrWhiteSpace(target))
+                continue;
+
+            var scopeStartLine = 1;
+            var scopeEndLine = int.MaxValue;
+            var scopeWidth = int.MaxValue;
+            foreach (var (startLine, endLine) in namespaceScopes)
+            {
+                if (symbol.Line < startLine || symbol.Line > endLine)
+                    continue;
+
+                var width = endLine - startLine;
+                if (width > scopeWidth)
+                    continue;
+
+                scopeStartLine = startLine;
+                scopeEndLine = endLine;
+                scopeWidth = width;
+            }
+
+            imports.Add(new CSharpUsingStaticRecord(target, symbol.Line, scopeStartLine, scopeEndLine));
+        }
+
+        imports.Sort(static (left, right) => left.Line.CompareTo(right.Line));
+        return imports;
+    }
+
+    private static List<CSharpUsingNamespaceScope> BuildCSharpUsingNamespaceScopes(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        var scopes = new List<CSharpUsingNamespaceScope>();
+        if (language != "csharp")
+            return scopes;
+
+        var namespaceScopes = symbols
+            .Where(symbol => symbol.Kind == "namespace")
+            .Select(symbol => (
+                StartLine: symbol.BodyStartLine ?? symbol.StartLine,
+                EndLine: symbol.BodyEndLine ?? symbol.EndLine))
+            .Where(scope => scope.StartLine > 0 && scope.EndLine >= scope.StartLine)
+            .ToList();
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "import" || string.IsNullOrWhiteSpace(symbol.Signature))
+                continue;
+
+            if (!TryParseCSharpUsingNamespaceImport(symbol.Signature!, out var target, out _))
+                continue;
+
+            var scopeStartLine = 1;
+            var scopeEndLine = int.MaxValue;
+            var scopeWidth = int.MaxValue;
+            foreach (var (startLine, endLine) in namespaceScopes)
+            {
+                if (symbol.Line < startLine || symbol.Line > endLine)
+                    continue;
+
+                var width = endLine - startLine;
+                if (width > scopeWidth)
+                    continue;
+
+                scopeStartLine = startLine;
+                scopeEndLine = endLine;
+                scopeWidth = width;
+            }
+
+            scopes.Add(new CSharpUsingNamespaceScope(target!, symbol.Line, scopeStartLine, scopeEndLine));
+        }
+
+        scopes.Sort(static (left, right) => left.Line.CompareTo(right.Line));
+        return scopes;
+    }
+
+    private static List<CSharpNamespaceScope> BuildCSharpNamespaceScopes(string language, IReadOnlyList<SymbolRecord> symbols, int totalLineCount)
+    {
+        var scopes = new List<CSharpNamespaceScope>();
+        if (language != "csharp")
+            return scopes;
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "namespace" || string.IsNullOrWhiteSpace(symbol.Name))
+                continue;
+
+            var startLine = symbol.BodyStartLine ?? symbol.StartLine;
+            var endLine = symbol.BodyEndLine ?? symbol.EndLine;
+            if (!string.IsNullOrWhiteSpace(symbol.Signature)
+                && symbol.Signature.TrimEnd().EndsWith(';'))
+            {
+                endLine = Math.Max(endLine, totalLineCount);
+            }
+
+            if (startLine <= 0 || endLine < startLine)
+                continue;
+
+            var qualifiedName = TryNormalizeCSharpQualifiedName(symbol.Name) ?? string.Empty;
+            scopes.Add(new CSharpNamespaceScope(qualifiedName, startLine, endLine));
+        }
+
+        return scopes;
+    }
+
+    private static bool TryParseCSharpUsingNamespaceImport(string signature, out string? target, out bool isGlobal)
+    {
+        target = null;
+        isGlobal = false;
+        if (string.IsNullOrWhiteSpace(signature) || signature.IndexOf('=') >= 0)
+            return false;
+
+        var match = CSharpUsingNamespaceRegex.Match(signature);
+        if (!match.Success)
+            return false;
+
+        target = TryNormalizeCSharpQualifiedName(match.Groups["target"].Value);
+        if (string.IsNullOrWhiteSpace(target))
+            return false;
+
+        isGlobal = signature.TrimStart().StartsWith("global using ", StringComparison.Ordinal);
+        return true;
+    }
+
+    private static List<CSharpContainingTypeScope> BuildCSharpContainingTypeScopes(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        var scopes = new List<CSharpContainingTypeScope>();
+        if (language != "csharp")
+            return scopes;
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is not ("class" or "struct" or "interface")
+                || string.IsNullOrWhiteSpace(symbol.Name))
+            {
+                continue;
+            }
+
+            var startLine = symbol.BodyStartLine ?? symbol.StartLine;
+            var endLine = symbol.BodyEndLine ?? symbol.EndLine;
+            if (startLine <= 0 || endLine < startLine)
+                continue;
+
+            var qualifiedName = CombineQualifiedName(symbol.ContainerQualifiedName, NormalizeCSharpIdentifier(symbol.Name));
+            if (string.IsNullOrWhiteSpace(qualifiedName))
+                qualifiedName = NormalizeCSharpIdentifier(symbol.Name);
+            if (string.IsNullOrWhiteSpace(qualifiedName))
+                continue;
+
+            scopes.Add(new CSharpContainingTypeScope(qualifiedName!, startLine, endLine));
+        }
+
+        return scopes;
+    }
+
+    private static Dictionary<string, HashSet<string>> BuildCSharpTopLevelTypeNamespacesByName(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        var lookup = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        if (language != "csharp")
+            return lookup;
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is not ("class" or "struct" or "interface" or "enum" or "delegate")
+                || string.IsNullOrWhiteSpace(symbol.Name))
+            {
+                continue;
+            }
+
+            if (symbol.ContainerKind is not (null or "namespace"))
+                continue;
+
+            var name = NormalizeCSharpIdentifier(symbol.Name);
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            if (!lookup.TryGetValue(name, out var namespaces))
+            {
+                namespaces = new HashSet<string>(StringComparer.Ordinal);
+                lookup[name] = namespaces;
+            }
+
+            var qualifiedNamespace = symbol.ContainerQualifiedName;
+            if (string.IsNullOrWhiteSpace(qualifiedNamespace) && symbol.ContainerKind == "namespace")
+                qualifiedNamespace = symbol.ContainerName;
+            namespaces.Add(TryNormalizeCSharpQualifiedName(qualifiedNamespace ?? string.Empty) ?? string.Empty);
+        }
+
+        return lookup;
+    }
+
+    private static Dictionary<string, HashSet<string>> BuildCSharpNestedTypeContainersByName(string language, IReadOnlyList<SymbolRecord> symbols)
+    {
+        var lookup = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        if (language != "csharp")
+            return lookup;
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is not ("class" or "struct" or "interface" or "enum" or "delegate")
+                || string.IsNullOrWhiteSpace(symbol.Name))
+            {
+                continue;
+            }
+
+            if (symbol.ContainerKind is not ("class" or "struct" or "interface"))
+                continue;
+
+            var name = NormalizeCSharpIdentifier(symbol.Name);
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            if (!lookup.TryGetValue(name, out var containingTypes))
+            {
+                containingTypes = new HashSet<string>(StringComparer.Ordinal);
+                lookup[name] = containingTypes;
+            }
+
+            var qualifiedContainer = !string.IsNullOrWhiteSpace(symbol.ContainerQualifiedName)
+                ? symbol.ContainerQualifiedName
+                : NormalizeCSharpIdentifier(symbol.ContainerName ?? string.Empty);
+            if (!string.IsNullOrWhiteSpace(qualifiedContainer))
+                containingTypes.Add(qualifiedContainer!);
+        }
+
+        return lookup;
     }
 
     private static HashSet<string> BuildCSharpKnownTypeNames(string language, IReadOnlyList<SymbolRecord> symbols)
@@ -2499,6 +3605,49 @@ public static class ReferenceExtractor
         }
 
         return names;
+    }
+
+    private static bool IsCSharpUsingAliasTypeTarget(string targetQualifiedName, IReadOnlySet<string> csharpKnownTypeNames)
+    {
+        var normalizedTarget = NormalizeCSharpAliasTargetForTypeLookup(targetQualifiedName);
+        return normalizedTarget.Length > 0 && csharpKnownTypeNames.Contains(normalizedTarget);
+    }
+
+    private static string NormalizeCSharpAliasTargetForTypeLookup(string targetQualifiedName)
+    {
+        if (string.IsNullOrWhiteSpace(targetQualifiedName))
+            return string.Empty;
+
+        var trimmed = targetQualifiedName.Trim();
+        var builder = new System.Text.StringBuilder(trimmed.Length);
+        var genericDepth = 0;
+        for (var i = 0; i < trimmed.Length; i++)
+        {
+            var ch = trimmed[i];
+            if (ch == '<')
+            {
+                genericDepth++;
+                continue;
+            }
+
+            if (ch == '>')
+            {
+                if (genericDepth > 0)
+                    genericDepth--;
+                continue;
+            }
+
+            if (genericDepth == 0)
+                builder.Append(ch);
+        }
+
+        var normalized = builder.ToString().Trim();
+        while (normalized.EndsWith("?", StringComparison.Ordinal))
+            normalized = normalized[..^1].TrimEnd();
+        while (normalized.EndsWith("[]", StringComparison.Ordinal))
+            normalized = normalized[..^2].TrimEnd();
+
+        return normalized;
     }
 
     private static Dictionary<string, CSharpContainingTypeValueReceiverNames> BuildCSharpValueReceiverNamesByContainingType(string language, IReadOnlyList<SymbolRecord> symbols)
@@ -2723,6 +3872,119 @@ public static class ReferenceExtractor
         return lookup;
     }
 
+    private static Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> BuildCSharpQualifiedConstantPatternMemberLookup(
+        string language,
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        var lookup = new Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
+        if (language != "csharp")
+            return lookup;
+
+        var conflictingNonEnumTypeNames = new HashSet<string>(
+            symbols
+                .Where(symbol => symbol.Kind is "class" or "struct" or "interface" or "delegate")
+                .Select(symbol => symbol.Name)
+                .Where(name => !string.IsNullOrWhiteSpace(name))!,
+            StringComparer.Ordinal);
+
+        foreach (var symbol in symbols)
+        {
+            if (string.IsNullOrWhiteSpace(symbol.Name) || string.IsNullOrWhiteSpace(symbol.ContainerName))
+                continue;
+
+            var target = symbol switch
+            {
+                { Kind: "enum", ContainerKind: "enum" } => (
+                    Included: true,
+                    AllowShortNameFallback: !conflictingNonEnumTypeNames.Contains(symbol.ContainerName!)),
+                _ when IsCSharpConstMemberSymbol(symbol) => (
+                    Included: true,
+                    AllowShortNameFallback: true),
+                _ => (Included: false, AllowShortNameFallback: false)
+            };
+
+            if (!target.Included)
+                continue;
+
+            if (!lookup.TryGetValue(symbol.Name, out var targets))
+            {
+                targets = [];
+                lookup[symbol.Name] = targets;
+            }
+
+            bool exists = false;
+            foreach (var existing in targets)
+            {
+                if (string.Equals(existing.ContainerName, symbol.ContainerName, StringComparison.Ordinal)
+                    && string.Equals(existing.QualifiedContainerName, symbol.ContainerQualifiedName, StringComparison.Ordinal))
+                {
+                    exists = true;
+                    break;
+                }
+            }
+
+            if (!exists)
+                targets.Add((
+                    symbol.ContainerName!,
+                    symbol.ContainerQualifiedName,
+                    target.AllowShortNameFallback));
+        }
+
+        return lookup;
+    }
+
+    private static Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> BuildCSharpQualifiedTypePatternLookup(
+        string language,
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        var lookup = new Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
+        if (language != "csharp")
+            return lookup;
+
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is not ("class" or "struct" or "interface" or "enum" or "delegate")
+                || string.IsNullOrWhiteSpace(symbol.Name)
+                || string.IsNullOrWhiteSpace(symbol.ContainerName))
+            {
+                continue;
+            }
+
+            if (!lookup.TryGetValue(symbol.Name, out var targets))
+            {
+                targets = [];
+                lookup[symbol.Name] = targets;
+            }
+
+            bool exists = false;
+            foreach (var existing in targets)
+            {
+                if (string.Equals(existing.ContainerName, symbol.ContainerName, StringComparison.Ordinal)
+                    && string.Equals(existing.QualifiedContainerName, symbol.ContainerQualifiedName, StringComparison.Ordinal))
+                {
+                    exists = true;
+                    break;
+                }
+            }
+
+            if (!exists)
+                targets.Add((symbol.ContainerName!, symbol.ContainerQualifiedName, AllowShortNameFallback: true));
+        }
+
+        return lookup;
+    }
+
+    private static bool IsCSharpConstMemberSymbol(SymbolRecord symbol)
+    {
+        if (symbol.ContainerKind is not ("class" or "struct"))
+            return false;
+        if (string.IsNullOrWhiteSpace(symbol.Signature))
+            return false;
+
+        return symbol.Signature!.Contains(" const ", StringComparison.Ordinal)
+            || symbol.Signature.StartsWith("const ", StringComparison.Ordinal);
+    }
+
     private static void EmitCSharpQualifiedEnumMemberReferences(
         string preparedLine,
         IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> enumMemberLookup,
@@ -2763,7 +4025,7 @@ public static class ReferenceExtractor
             if (!parsed.HasLeadingGlobalQualifier
                 && HasCSharpValueReceiverConflict(qualifier, resolvedQualifier, lineNumber, member.Start, callContainer, valueReceiverNamesByContainingType, valueReceiverNamesByFunctionStartLine))
                 continue;
-            if (!MatchesQualifiedEnumType(
+            if (!MatchesQualifiedConstantContainer(
                     resolvedQualifier,
                     targets,
                     allowShortNameFallback: !parsed.HasLeadingGlobalQualifier,
@@ -2864,6 +4126,387 @@ public static class ReferenceExtractor
         return true;
     }
 
+    private static bool TryConsumeCSharpPatternKeyword(string preparedLine, ref int cursor, string keyword)
+    {
+        if (!preparedLine.AsSpan(cursor).StartsWith(keyword, StringComparison.Ordinal))
+            return false;
+
+        int afterKeyword = cursor + keyword.Length;
+        if (afterKeyword < preparedLine.Length && !char.IsWhiteSpace(preparedLine[afterKeyword]))
+            return false;
+
+        cursor = afterKeyword;
+        return true;
+    }
+
+    private static bool IsCSharpCaseTypePatternContinuation(
+        string preparedLine,
+        string typeExpression,
+        int cursor,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
+        int lineNumber)
+    {
+        if (IsCSharpNonTypePatternExpression(typeExpression))
+            return false;
+
+        if (cursor >= preparedLine.Length)
+            return false;
+
+        return preparedLine[cursor] switch
+        {
+            ':' => !IsCSharpConstantPatternMemberHead(
+                    typeExpression,
+                    lineNumber,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpUsingAliases,
+                    csharpUsingStatics,
+                    hasActiveSameFileCSharpTypeCandidate),
+            '{' or '(' or '[' => true,
+            _ => IsCSharpCaseTypePatternIdentifier(
+                preparedLine,
+                typeExpression,
+                cursor,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpQualifiedTypePatternLookup,
+                csharpUsingAliases,
+                csharpUsingStatics,
+                hasActiveSameFileCSharpTypeCandidate,
+                lineNumber)
+        };
+    }
+
+    private static bool IsCSharpCaseTypePatternIdentifier(
+        string preparedLine,
+        string typeExpression,
+        int cursor,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
+        int lineNumber)
+    {
+        int tokenCursor = cursor;
+        if (!TryConsumeCSharpIdentifier(preparedLine, ref tokenCursor, out var start, out var end))
+            return false;
+
+        var rawToken = preparedLine[start..end];
+        if (rawToken.Length > 0 && rawToken[0] == '@')
+            return true;
+
+        return rawToken switch
+        {
+            "when" => !IsCSharpConstantPatternMemberHead(
+                    typeExpression,
+                    lineNumber,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpUsingAliases,
+                    csharpUsingStatics,
+                    hasActiveSameFileCSharpTypeCandidate),
+            "or" or "and" => !IsCSharpLogicalConstantPatternHead(
+                preparedLine,
+                typeExpression,
+                tokenCursor,
+                lineNumber,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpQualifiedTypePatternLookup,
+                csharpUsingAliases,
+                csharpUsingStatics,
+                hasActiveSameFileCSharpTypeCandidate),
+            _ => true,
+        };
+    }
+
+    private static bool TryEmitCSharpLogicalTypePatternHeads(
+        string preparedLine,
+        string initialTypeExpression,
+        int initialTypeIndex,
+        int continuationIndex,
+        int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
+        Action<string, int> emitTypeExpression)
+    {
+        var currentTypeExpression = initialTypeExpression;
+        var currentTypeIndex = initialTypeIndex;
+        var currentContinuationIndex = continuationIndex;
+        var sawLogicalKeyword = false;
+        var emittedAny = false;
+        while (TryConsumeCSharpLogicalPatternKeyword(preparedLine, currentContinuationIndex, out var nextHeadCursor))
+        {
+            sawLogicalKeyword = true;
+            if (!IsCSharpLogicalConstantPatternHead(
+                    preparedLine,
+                    currentTypeExpression,
+                    nextHeadCursor,
+                    lineNumber,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpQualifiedTypePatternLookup,
+                    csharpUsingAliases,
+                    csharpUsingStatics,
+                    hasActiveSameFileCSharpTypeCandidate))
+            {
+                emitTypeExpression(currentTypeExpression, currentTypeIndex);
+                emittedAny = true;
+            }
+
+            int nextTypeCursor = nextHeadCursor;
+            if (TryConsumeCSharpPatternKeyword(preparedLine, ref nextTypeCursor, "not"))
+                nextTypeCursor = SkipWhitespace(preparedLine, nextTypeCursor);
+
+            var nextMatch = CSharpTypeExpressionAtCursorRegex.Match(preparedLine, nextTypeCursor);
+            if (!nextMatch.Success)
+                return false;
+
+            var nextTypeGroup = nextMatch.Groups["type"];
+            currentTypeExpression = nextTypeGroup.Value;
+            currentTypeIndex = nextTypeGroup.Index;
+            currentContinuationIndex = SkipWhitespace(preparedLine, nextTypeGroup.Index + nextTypeGroup.Length);
+        }
+
+        if (sawLogicalKeyword
+            && !IsCSharpNonTypePatternExpression(currentTypeExpression)
+            && !IsCSharpConstantPatternMemberHead(
+                currentTypeExpression,
+                lineNumber,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpUsingAliases,
+                csharpUsingStatics,
+                hasActiveSameFileCSharpTypeCandidate))
+        {
+            emitTypeExpression(currentTypeExpression, currentTypeIndex);
+            emittedAny = true;
+        }
+
+        return emittedAny;
+    }
+
+    private static bool IsCSharpLogicalConstantPatternAtCursor(
+        string preparedLine,
+        string typeExpression,
+        int cursor,
+        int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
+    {
+        int tokenCursor = cursor;
+        if (!TryConsumeCSharpIdentifier(preparedLine, ref tokenCursor, out var start, out var end))
+            return false;
+
+        var rawToken = preparedLine[start..end];
+        if (rawToken is not ("or" or "and"))
+            return false;
+
+        return IsCSharpLogicalConstantPatternHead(
+            preparedLine,
+            typeExpression,
+            tokenCursor,
+            lineNumber,
+            csharpQualifiedConstantPatternMemberLookup,
+            csharpQualifiedTypePatternLookup,
+            csharpUsingAliases,
+            csharpUsingStatics,
+            hasActiveSameFileCSharpTypeCandidate);
+    }
+
+    private static bool TryConsumeCSharpLogicalPatternKeyword(
+        string preparedLine,
+        int cursor,
+        out int nextHeadCursor)
+    {
+        nextHeadCursor = cursor;
+        int tokenCursor = cursor;
+        if (!TryConsumeCSharpIdentifier(preparedLine, ref tokenCursor, out var start, out var end))
+            return false;
+
+        var rawToken = preparedLine[start..end];
+        if (rawToken is not ("or" or "and"))
+            return false;
+
+        nextHeadCursor = SkipWhitespace(preparedLine, tokenCursor);
+        return true;
+    }
+
+    private static bool IsCSharpLogicalConstantPatternHead(
+        string preparedLine,
+        string typeExpression,
+        int cursor,
+        int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
+    {
+        if (IsCSharpConstantPatternMemberHead(
+                typeExpression,
+                lineNumber,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpUsingAliases,
+                csharpUsingStatics,
+                hasActiveSameFileCSharpTypeCandidate))
+        {
+            return true;
+        }
+
+        if (IsCSharpQualifiedTypePatternHead(
+                typeExpression,
+                lineNumber,
+                csharpQualifiedTypePatternLookup,
+                csharpUsingAliases))
+        {
+            return false;
+        }
+
+        if (!TryReadCSharpQualifiedAccess(typeExpression, 0, out var currentParsed)
+            || !currentParsed.LastSeparatorWasDot
+            || currentParsed.Segments.Count < 2)
+        {
+            return false;
+        }
+
+        var currentQualifier = ResolveCSharpQualifiedConstantPatternQualifier(typeExpression, currentParsed, lineNumber, csharpUsingAliases);
+        if (string.IsNullOrWhiteSpace(currentQualifier))
+            return false;
+
+        int nextCursor = SkipWhitespace(preparedLine, cursor);
+        if (TryConsumeCSharpPatternKeyword(preparedLine, ref nextCursor, "not"))
+            nextCursor = SkipWhitespace(preparedLine, nextCursor);
+
+        var nextMatch = CSharpTypeExpressionAtCursorRegex.Match(preparedLine, nextCursor);
+        if (!nextMatch.Success)
+            return false;
+
+        var nextTypeExpression = nextMatch.Groups["type"].Value;
+        if (IsCSharpQualifiedTypePatternHead(
+                nextTypeExpression,
+                lineNumber,
+                csharpQualifiedTypePatternLookup,
+                csharpUsingAliases))
+        {
+            return false;
+        }
+
+        if (!TryReadCSharpQualifiedAccess(nextTypeExpression, 0, out var nextParsed)
+            || !nextParsed.LastSeparatorWasDot
+            || nextParsed.Segments.Count < 2)
+        {
+            return false;
+        }
+
+        var nextQualifier = ResolveCSharpQualifiedConstantPatternQualifier(nextTypeExpression, nextParsed, lineNumber, csharpUsingAliases);
+        return string.Equals(currentQualifier, nextQualifier, StringComparison.Ordinal);
+    }
+
+    private static bool IsCSharpQualifiedTypePatternHead(
+        string typeExpression,
+        int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
+    {
+        if (!TryReadCSharpQualifiedAccess(typeExpression, 0, out var parsed)
+            || !parsed.LastSeparatorWasDot
+            || parsed.Segments.Count < 2)
+        {
+            return false;
+        }
+
+        var member = parsed.Segments[^1];
+        var memberName = typeExpression.Substring(member.Start, member.End - member.Start);
+        if (!csharpQualifiedTypePatternLookup.TryGetValue(memberName, out var targets))
+            return false;
+
+        var resolvedQualifier = ResolveCSharpQualifiedConstantPatternQualifier(typeExpression, parsed, lineNumber, csharpUsingAliases);
+        bool qualifierHasMultipleSegments = resolvedQualifier.Contains('.') || resolvedQualifier.Contains("::", StringComparison.Ordinal);
+        return MatchesQualifiedConstantContainer(
+            resolvedQualifier,
+            targets,
+            allowShortNameFallback: !parsed.HasLeadingGlobalQualifier && !qualifierHasMultipleSegments,
+            allowSingleSegmentQualifiedMatch: parsed.HasLeadingGlobalQualifier);
+    }
+
+    private static string ResolveCSharpQualifiedConstantPatternQualifier(
+        string typeExpression,
+        (List<(int Start, int End)> Segments, int NextIndex, bool LastSeparatorWasDot, bool HasLeadingGlobalQualifier) parsed,
+        int lineNumber,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
+    {
+        var qualifier = TrimLeadingCSharpGlobalQualifier(NormalizeCSharpQualifiedSegments(typeExpression, parsed.Segments, parsed.Segments.Count - 1));
+        return parsed.HasLeadingGlobalQualifier
+            ? qualifier
+            : ResolveCSharpQualifiedAliasTarget(qualifier, lineNumber, csharpUsingAliases);
+    }
+
+    private static bool IsCSharpQualifiedConstantPatternMemberHead(
+        string typeExpression,
+        int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
+    {
+        if (!TryReadCSharpQualifiedAccess(typeExpression, 0, out var parsed)
+            || !parsed.LastSeparatorWasDot
+            || parsed.Segments.Count < 2)
+        {
+            return false;
+        }
+
+        var member = parsed.Segments[^1];
+        var memberName = typeExpression.Substring(member.Start, member.End - member.Start);
+        if (!csharpQualifiedConstantPatternMemberLookup.TryGetValue(memberName, out var targets))
+            return false;
+
+        var resolvedQualifier = ResolveCSharpQualifiedConstantPatternQualifier(typeExpression, parsed, lineNumber, csharpUsingAliases);
+        bool qualifierHasMultipleSegments = resolvedQualifier.Contains('.') || resolvedQualifier.Contains("::", StringComparison.Ordinal);
+        return MatchesQualifiedConstantContainer(
+            resolvedQualifier,
+            targets,
+            allowShortNameFallback: !parsed.HasLeadingGlobalQualifier && !qualifierHasMultipleSegments,
+            allowSingleSegmentQualifiedMatch: parsed.HasLeadingGlobalQualifier);
+    }
+
+    private static bool IsCSharpConstantPatternMemberHead(
+        string typeExpression,
+        int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
+    {
+        return IsCSharpQualifiedConstantPatternMemberHead(
+            typeExpression,
+            lineNumber,
+            csharpQualifiedConstantPatternMemberLookup,
+            csharpUsingAliases);
+    }
+
+    private static bool IsCSharpNonTypePatternExpression(string typeExpression)
+    {
+        var trimmed = typeExpression.Trim();
+        if (trimmed.Length == 0)
+            return false;
+
+        if (trimmed[0] == '@')
+            return false;
+
+        return trimmed.IndexOf('.') < 0
+            && trimmed.IndexOf(':') < 0
+            && trimmed.IndexOf('<') < 0
+            && trimmed.IndexOf('[') < 0
+            && trimmed.IndexOf('?') < 0
+            && trimmed.IndexOf(' ') < 0
+            && CSharpNonTypePatternTokens.Contains(trimmed);
+    }
+
     private static int SkipWhitespace(string text, int index)
     {
         while (index < text.Length && char.IsWhiteSpace(text[index]))
@@ -2944,6 +4587,38 @@ public static class ReferenceExtractor
         return qualifier.Length == firstSegment.Length
             ? aliasTarget
             : aliasTarget + qualifier[firstSegment.Length..];
+    }
+
+    private static bool IsCSharpXmlDocCommentLine(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+            return false;
+
+        var trimmed = line.TrimStart();
+        return trimmed.StartsWith("///", StringComparison.Ordinal)
+            && (trimmed.Length == 3 || trimmed[3] != '/');
+    }
+
+    private static bool HasActiveCSharpUsingStaticTarget(
+        string targetQualifiedName,
+        int lineNumber,
+        IReadOnlyList<CSharpUsingStaticRecord> usingStatics)
+    {
+        if (string.IsNullOrWhiteSpace(targetQualifiedName))
+            return false;
+
+        for (var i = usingStatics.Count - 1; i >= 0; i--)
+        {
+            var import = usingStatics[i];
+            if (import.Line > lineNumber)
+                continue;
+            if (lineNumber < import.ScopeStartLine || lineNumber > import.ScopeEndLine)
+                continue;
+            if (string.Equals(import.TargetQualifiedName, targetQualifiedName, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
     }
 
     private static bool HasCSharpValueReceiverConflict(
@@ -5753,27 +7428,27 @@ public static class ReferenceExtractor
         return firstDot < 0 ? qualifiedName : qualifiedName[..firstDot];
     }
 
-    private static bool MatchesQualifiedEnumType(
+    private static bool MatchesQualifiedConstantContainer(
         string qualifier,
-        IReadOnlyList<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)> targets,
+        IReadOnlyList<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)> targets,
         bool allowShortNameFallback = true,
         bool allowSingleSegmentQualifiedMatch = false)
     {
         var hasMultipleQualifierSegments = qualifier.Contains('.') || qualifier.Contains("::", StringComparison.Ordinal);
-        foreach (var (enumName, qualifiedEnumName, targetAllowsShortNameFallback) in targets)
+        foreach (var (containerName, qualifiedContainerName, targetAllowsShortNameFallback) in targets)
         {
-            if (!string.IsNullOrWhiteSpace(qualifiedEnumName)
-                && ((hasMultipleQualifierSegments && QualifiedNameHasSuffix(qualifiedEnumName!, qualifier))
+            if (!string.IsNullOrWhiteSpace(qualifiedContainerName)
+                && ((hasMultipleQualifierSegments && QualifiedNameHasSuffix(qualifiedContainerName!, qualifier))
                     || (!hasMultipleQualifierSegments
                         && allowSingleSegmentQualifiedMatch
-                        && string.Equals(qualifiedEnumName, qualifier, StringComparison.Ordinal))))
+                        && string.Equals(qualifiedContainerName, qualifier, StringComparison.Ordinal))))
             {
                 return true;
             }
 
             if (allowShortNameFallback
                 && targetAllowsShortNameFallback
-                && string.Equals(GetLastQualifiedSegment(qualifier), enumName, StringComparison.Ordinal))
+                && string.Equals(GetLastQualifiedSegment(qualifier), containerName, StringComparison.Ordinal))
                 return true;
         }
 
@@ -5814,9 +7489,10 @@ public static class ReferenceExtractor
         string context,
         int lineNumber,
         SymbolRecord? container,
-        string language)
+        string language,
+        bool isEscapedCSharpIdentifier = false)
     {
-        if (segment.Length == 0 || IsIgnoredTypeReferenceSegment(language, segment))
+        if (segment.Length == 0 || IsIgnoredTypeReferenceSegment(language, segment, isEscapedCSharpIdentifier))
             return;
 
         int column = startInLine + 1; // 1-based / 1始まり
@@ -5867,16 +7543,6 @@ public static class ReferenceExtractor
         }
 
         return best ?? FindInnermostContainer(candidates, lineNumber);
-    }
-
-    private static bool IsCSharpXmlDocCommentLine(string line)
-    {
-        if (string.IsNullOrWhiteSpace(line))
-            return false;
-
-        var trimmed = line.TrimStart();
-        return trimmed.StartsWith("///", StringComparison.Ordinal)
-            && (trimmed.Length == 3 || trimmed[3] != '/');
     }
 
     private static SymbolRecord? FindInnermostSameLineCSharpContainer(
@@ -7608,85 +9274,279 @@ public static class ReferenceExtractor
         current.Clear();
     }
 
-    // SQL-aware line sanitizer used only for the `EXEC` / `EXECUTE` / `CALL` no-parens scan.
-    // Preserves identifier quoting (`[name]`, `` `name` ``, `"name"`) so quoted SQL call targets
-    // can be matched, while masking `'...'` string literals and SQL line / block comments with
-    // equal-length spaces so text inside comments does not emit a phantom reference and the
-    // recorded call column stays aligned with the raw source line. Line-comment tokens
-    // `--` (ANSI / T-SQL / MySQL) and `#` (MySQL / MariaDB) are scanned with awareness of
-    // bracket / backtick / double-quote identifier quoting, so a legitimate name containing `#`
-    // or `-` such as `` CALL `proc#1`; `` or `CALL "proc-name"` is not truncated mid-identifier.
-    // `EXEC` / `EXECUTE` / `CALL` の括弧なし抽出向けの SQL 特化サニタイザ。識別子引用
-    // （`[name]`, `` `name` ``, `"name"`）は保持したまま、`'...'` と `--` / `#` / `/* ... */`
-    // の SQL コメントを同じ長さの空白へマスクし、幽霊 reference を防ぎつつ記録列を生ソース行に
-    // 揃え続ける。`--` と `#` の走査は bracket / backtick / double-quote 引用を尊重するため、
-    // `` CALL `proc#1`; `` や `CALL "proc-name"` のような識別子が途中で切られない。
-    private static string PrepareSqlLineForIdentifierScan(string line)
+    // SQL-aware line sanitizer used only for the SQL source/target and `EXEC` / `EXECUTE` / `CALL`
+    // scans. Preserves backtick/bracket/double-quoted identifiers, blanks single-quoted strings
+    // (including multiline bodies), multiline `/* ... */` comments, PostgreSQL `$$...$$` /
+    // `$tag$...$tag$` bodies, and line comments so non-code regions cannot leak phantom references
+    // into the graph.
+    // SQL source/target と `EXEC` / `EXECUTE` / `CALL` 抽出向けの SQL 特化サニタイザ。
+    // backtick / bracket / double-quoted identifier は保持しつつ、単引用符文字列
+    // （複数行本体を含む）、複数行 `/* ... */` コメント、PostgreSQL の `$$...$$` /
+    // `$tag$...$tag$` 本体、行コメントを空白化し、非コード領域から phantom reference が
+    // 漏れないようにする。
+    private static string PrepareSqlLineForIdentifierScan(
+        string line,
+        SqlIdentifierScanState state,
+        string? statementPrefix,
+        out bool lineEndedByLineComment,
+        out SqlIdentifierScanState nextState)
     {
-        var result = ReplaceRegexMatchesWithSpaces(SqlStringLiteralRegex, line);
-        result = ReplaceRegexMatchesWithSpaces(InlineBlockCommentRegex, result);
-
-        int commentStart = -1;
-        for (int i = 0; i < result.Length; i++)
+        lineEndedByLineComment = false;
+        if (string.IsNullOrEmpty(line))
         {
-            char c = result[i];
-            if (c == '`')
+            nextState = state;
+            return line;
+        }
+
+        var sanitized = line.ToCharArray();
+        bool inBlockComment = state.InBlockComment;
+        string? dollarQuoteDelimiter = state.DollarQuoteDelimiter;
+        bool inSingleQuotedString = state.InSingleQuotedString;
+
+        void BlankRange(int start, int endExclusive)
+        {
+            start = Math.Max(0, start);
+            endExclusive = Math.Min(sanitized.Length, endExclusive);
+            for (int blankIndex = start; blankIndex < endExclusive; blankIndex++)
+                sanitized[blankIndex] = ' ';
+        }
+
+        for (int i = 0; i < line.Length;)
+        {
+            if (inBlockComment)
             {
-                var closing = result.IndexOf('`', i + 1);
+                int closing = line.IndexOf("*/", i, StringComparison.Ordinal);
+                int end = closing >= 0 ? closing + 2 : line.Length;
+                BlankRange(i, end);
                 if (closing < 0)
                     break;
-                i = closing;
+                i = end;
+                inBlockComment = false;
+                continue;
+            }
+            if (!string.IsNullOrEmpty(dollarQuoteDelimiter))
+            {
+                int closing = line.IndexOf(dollarQuoteDelimiter, i, StringComparison.Ordinal);
+                if (closing < 0)
+                {
+                    BlankRange(i, line.Length);
+                    break;
+                }
+
+                int nextContent = SkipWhitespaceAhead(line, closing + dollarQuoteDelimiter.Length);
+                if (nextContent < line.Length
+                    && line[nextContent] != ';'
+                    && line[nextContent] != ','
+                    && line[nextContent] != ')'
+                    && line[nextContent] != ']')
+                {
+                    int nestedClosing = line.IndexOf(
+                        dollarQuoteDelimiter,
+                        closing + dollarQuoteDelimiter.Length,
+                        StringComparison.Ordinal);
+                    if (nestedClosing >= 0)
+                    {
+                        int end = nestedClosing + dollarQuoteDelimiter.Length;
+                        BlankRange(i, end);
+                        i = end;
+                        continue;
+                    }
+                }
+
+                int closingEnd = closing + dollarQuoteDelimiter.Length;
+                BlankRange(i, closingEnd);
+                i = closingEnd;
+                dollarQuoteDelimiter = null;
+                continue;
+            }
+            if (inSingleQuotedString)
+            {
+                int closing = FindClosingSqlSingleQuote(line, i);
+                int end = closing >= 0 ? closing + 1 : line.Length;
+                BlankRange(i, end);
+                i = end;
+                if (closing >= 0)
+                {
+                    inSingleQuotedString = false;
+                    continue;
+                }
+
+                break;
+            }
+
+            char c = line[i];
+            if (c == '"')
+            {
+                int closing = FindClosingSqlDoubleQuote(line, i + 1);
+                if (closing < 0)
+                    break;
+                i = closing + 1;
+                continue;
+            }
+            if (c == '`')
+            {
+                int closing = line.IndexOf('`', i + 1);
+                if (closing < 0)
+                    break;
+                i = closing + 1;
                 continue;
             }
             if (c == '[')
             {
-                var closing = result.IndexOf(']', i + 1);
+                int closing = line.IndexOf(']', i + 1);
                 if (closing < 0)
                     break;
-                i = closing;
+                i = closing + 1;
                 continue;
             }
-            if (c == '"')
+            if (c == '\'')
             {
-                var closing = i + 1;
-                while (closing < result.Length)
-                {
-                    if (result[closing] != '"')
-                    {
-                        closing++;
-                        continue;
-                    }
-
-                    if (closing + 1 < result.Length && result[closing + 1] == '"')
-                    {
-                        closing += 2;
-                        continue;
-                    }
-
-                    break;
-                }
-
-                if (closing >= result.Length)
-                    break;
-
-                i = closing;
+                int closing = FindClosingSqlSingleQuote(line, i + 1);
+                int end = closing >= 0 ? closing + 1 : line.Length;
+                BlankRange(i, end);
+                i = end;
+                if (closing < 0)
+                    inSingleQuotedString = true;
                 continue;
             }
-            if (c == '-' && i + 1 < result.Length && result[i + 1] == '-')
+            if (c == '/' && i + 1 < line.Length && line[i + 1] == '*')
             {
-                commentStart = i;
+                BlankRange(i, i + 2);
+                i += 2;
+                inBlockComment = true;
+                continue;
+            }
+            if (c == '-' && i + 1 < line.Length && line[i + 1] == '-')
+            {
+                lineEndedByLineComment = true;
+                BlankRange(i, line.Length);
                 break;
             }
             if (c == '#')
             {
-                commentStart = i;
-                break;
+                if (ShouldTreatHashAsSqlComment(line, i, statementPrefix))
+                {
+                    lineEndedByLineComment = true;
+                    BlankRange(i, line.Length);
+                    break;
+                }
+            }
+            if (c == '$' && TryReadSqlDollarQuoteDelimiter(line, i, out var delimiter))
+            {
+                BlankRange(i, i + delimiter.Length);
+                i += delimiter.Length;
+                dollarQuoteDelimiter = delimiter;
+                continue;
+            }
+
+            i++;
+        }
+
+        nextState = new SqlIdentifierScanState(inBlockComment, dollarQuoteDelimiter, inSingleQuotedString);
+        return new string(sanitized);
+    }
+
+    private static bool ShouldTreatHashAsSqlComment(string line, int hashIndex, string? statementPrefix)
+    {
+        if (hashIndex < 0 || hashIndex >= line.Length || line[hashIndex] != '#')
+            return false;
+
+        int probe = hashIndex - 1;
+        while (probe >= 0 && char.IsWhiteSpace(line[probe]))
+            probe--;
+        if (probe < 0 && !string.IsNullOrWhiteSpace(statementPrefix))
+        {
+            var combined = statementPrefix + "\n" + line;
+            return ShouldTreatHashAsSqlCommentCore(combined, statementPrefix.Length + 1 + hashIndex);
+        }
+
+        return ShouldTreatHashAsSqlCommentCore(line, hashIndex);
+    }
+
+    private static bool ShouldTreatHashAsSqlCommentCore(string line, int hashIndex)
+    {
+        if (hashIndex < 0 || hashIndex >= line.Length || line[hashIndex] != '#')
+            return false;
+
+        int next = hashIndex + 1;
+        if (hashIndex > 0
+            && line[hashIndex - 1] == '#'
+            && next < line.Length
+            && (char.IsLetterOrDigit(line[next]) || line[next] == '_'))
+            return false;
+        if (next + 1 < line.Length
+            && line[next] == '#'
+            && (char.IsLetterOrDigit(line[next + 1]) || line[next + 1] == '_'))
+            return false;
+        if (next >= line.Length || !(char.IsLetterOrDigit(line[next]) || line[next] == '_'))
+            return true;
+
+        int probe = hashIndex - 1;
+        while (probe >= 0 && char.IsWhiteSpace(line[probe]))
+            probe--;
+        while (probe >= 0 && line[probe] == ',')
+        {
+            var priorListItem = line[..probe];
+            var listMatch = SqlTrailingOnlyQualifiedIdentifierRegex.Match(priorListItem);
+            if (!listMatch.Success)
+                return true;
+
+            probe = listMatch.Index - 1;
+            while (probe >= 0 && char.IsWhiteSpace(line[probe]))
+                probe--;
+        }
+        if (probe < 0)
+            return true;
+        if (line[probe] == '.')
+            return false;
+        if (line[probe] == ')')
+        {
+            int depth = 1;
+            probe--;
+            while (probe >= 0 && depth > 0)
+            {
+                if (line[probe] == ')')
+                    depth++;
+                else if (line[probe] == '(')
+                    depth--;
+                probe--;
+            }
+            while (probe >= 0 && char.IsWhiteSpace(line[probe]))
+                probe--;
+            if (probe < 0)
+                return true;
+
+            int modifierEnd = probe;
+            while (probe >= 0 && char.IsLetter(line[probe]))
+                probe--;
+            int modifierStart = probe + 1;
+            if (modifierStart <= modifierEnd
+                && string.Equals(line[modifierStart..(modifierEnd + 1)], "TOP", StringComparison.OrdinalIgnoreCase))
+            {
+                while (probe >= 0 && char.IsWhiteSpace(line[probe]))
+                    probe--;
+                if (probe < 0)
+                    return true;
             }
         }
-        if (commentStart >= 0)
-            result = result[..commentStart];
 
-        return result;
+        int tokenEnd = probe;
+        while (probe >= 0 && char.IsLetter(line[probe]))
+            probe--;
+        int tokenStart = probe + 1;
+        if (tokenStart > tokenEnd)
+            return true;
+
+        var token = line[tokenStart..(tokenEnd + 1)];
+        return !string.Equals(token, "FROM", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "JOIN", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "MERGE", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "USING", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "INTO", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "UPDATE", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "TABLE", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "EXEC", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "EXECUTE", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string ReplaceRegexMatchesWithSpaces(Regex regex, string input)

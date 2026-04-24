@@ -6186,6 +6186,67 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DetectsGenericAttributesOnMethodTypeParameters()
+    {
+        // Issue #347: method type-parameter lists must survive generic attributes whose bodies
+        // contain nested angle brackets; otherwise ordinary methods and explicit-interface
+        // implementations disappear from symbols / definition.
+        // Issue #347: メソッドの型パラメータ列は、入れ子の angle bracket を含む generic 属性が
+        // 付いていても保持されなければならない。そうでないと通常メソッドと explicit-interface
+        // 実装が symbols / definition から無言で消える。
+        var content = """
+            namespace GenericAttr;
+
+            public class GenAttr<T> : System.Attribute { }
+
+            public interface IFoo
+            {
+                void Run<[GenAttr<System.Collections.Generic.List<int>>] T>(T value);
+            }
+
+            public class Tagged : IFoo
+            {
+                public void M<[GenAttr<int>] U>(U u) { }
+                public void N<[GenAttr<int>, GenAttr<string>] U>(U u) { }
+                public void P<[GenAttr<(int, int)>] U>(U u) { }
+                public void Q<[GenAttr<System.Collections.Generic.List<int>>] U>(U u) { }
+                public void R<[GenAttr<System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<int>>>] U>(U u) { }
+                void IFoo.Run<[GenAttr<System.Collections.Generic.List<int>>] T>(T value) { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var methodNames = symbols.Where(s => s.Kind == "function").Select(s => s.Name).ToList();
+        Assert.Contains("M", methodNames);
+        Assert.Contains("N", methodNames);
+        Assert.Contains("P", methodNames);
+        Assert.Contains("Q", methodNames);
+        Assert.Contains("R", methodNames);
+
+        var m = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "M"));
+        Assert.Equal("class", m.ContainerKind);
+        Assert.Equal("Tagged", m.ContainerName);
+        Assert.Equal("public void M<[GenAttr<int>] U>(U u) { }", m.Signature);
+
+        var n = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "N"));
+        Assert.Equal("public void N<[GenAttr<int>, GenAttr<string>] U>(U u) { }", n.Signature);
+
+        var p = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "P"));
+        Assert.Equal("public void P<[GenAttr<(int, int)>] U>(U u) { }", p.Signature);
+
+        var q = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Q"));
+        Assert.Equal("public void Q<[GenAttr<System.Collections.Generic.List<int>>] U>(U u) { }", q.Signature);
+
+        var r = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "R"));
+        Assert.Equal("public void R<[GenAttr<System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<int>>>] U>(U u) { }", r.Signature);
+
+        var runDeclarations = symbols.Where(s => s.Kind == "function" && s.Name == "Run").ToList();
+        Assert.Equal(2, runDeclarations.Count);
+        Assert.Contains(runDeclarations, s => s.ContainerKind == "interface" && s.ContainerName == "IFoo" && s.Signature == "void Run<[GenAttr<System.Collections.Generic.List<int>>] T>(T value);");
+        Assert.Contains(runDeclarations, s => s.ContainerKind == "class" && s.ContainerName == "Tagged" && s.Signature == "void IFoo.Run<[GenAttr<System.Collections.Generic.List<int>>] T>(T value) { }");
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsExplicitInterfacePropertyImpl()
     {
         // Issue #333: explicit-interface property implementations must be indexed just like
@@ -8303,6 +8364,140 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_DetectsSameLineAnnotatedMethodsCompactConstructorsAndEnumConstantOverrides()
+    {
+        var content = """
+            package com.example;
+
+            public class Same {
+                @Override public String toString() { return "x"; }
+                @Deprecated public int legacy() { return 0; }
+
+                @Override
+                public int hashCode() { return 42; }
+            }
+
+            public enum Op {
+                ADD {
+                    @Override public int apply(int a, int b) { return a + b; }
+                },
+                SUB {
+                    @Override public int apply(int a, int b) { return a - b; }
+                };
+                public abstract int apply(int a, int b);
+            }
+
+            public record Range(int low, int high) {
+                public Range {
+                    if (low > high) throw new IllegalArgumentException();
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var toString = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "toString"));
+        Assert.Equal("class", toString.ContainerKind);
+        Assert.Equal("Same", toString.ContainerName);
+
+        var legacy = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "legacy"));
+        Assert.Equal("class", legacy.ContainerKind);
+        Assert.Equal("Same", legacy.ContainerName);
+
+        var addApply = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "apply" && s.ContainerName == "ADD"));
+        Assert.Equal("function", addApply.ContainerKind);
+        Assert.Equal("Op.ADD", addApply.ContainerQualifiedName);
+
+        var subApply = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "apply" && s.ContainerName == "SUB"));
+        Assert.Equal("function", subApply.ContainerKind);
+        Assert.Equal("Op.SUB", subApply.ContainerQualifiedName);
+
+        var abstractApply = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "apply" && s.ContainerName == "Op"));
+        Assert.Equal("enum", abstractApply.ContainerKind);
+
+        var compactCtor = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Range"));
+        Assert.Equal("class", compactCtor.ContainerKind);
+        Assert.Equal("Range", compactCtor.ContainerName);
+        Assert.NotNull(compactCtor.BodyStartLine);
+        Assert.NotNull(compactCtor.BodyEndLine);
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsAllmanStyleCompactConstructors()
+    {
+        var content = """
+            public record Range(int low, int high) {
+                public Range
+                {
+                    if (low > high) throw new IllegalArgumentException();
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var compactCtor = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Range"));
+        Assert.Equal("class", compactCtor.ContainerKind);
+        Assert.Equal("Range", compactCtor.ContainerName);
+        Assert.Equal(2, compactCtor.StartLine);
+        Assert.NotNull(compactCtor.BodyStartLine);
+        Assert.NotNull(compactCtor.BodyEndLine);
+        Assert.True(compactCtor.BodyStartLine >= compactCtor.StartLine);
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsSameLineAnnotatedDeclarationsWhenAnnotationArgumentsContainParen()
+    {
+        var content = """
+            public class Demo {
+                @Label(")") public int broken() { return 1; }
+            }
+
+            @Ann(value = helper(")"))
+            public record Wrapped(int value) {}
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "broken" && s.ContainerKind == "class" && s.ContainerName == "Demo");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Wrapped");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "value" && s.ContainerKind == "class" && s.ContainerName == "Wrapped");
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsSameLineAnnotatedMethodsWhenAnnotationArgumentsContainBraceLiterals()
+    {
+        var content = """
+            public class Demo {
+                @SuppressWarnings({"unchecked"}) public int first() { return 1; } int second() { return 2; }
+            }
+
+            public class Solo {
+                @SuppressWarnings({"rawtypes"}) public int only() { return 3; }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first" && s.ContainerKind == "class" && s.ContainerName == "Demo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second" && s.ContainerKind == "class" && s.ContainerName == "Demo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "only" && s.ContainerKind == "class" && s.ContainerName == "Solo");
+    }
+
+    [Fact]
+    public void Extract_Java_HandlesSameLineSiblingMethodsInsideEnumBody()
+    {
+        var content = """
+            public enum Demo {
+                A;
+                int first() { return 1; } int second() { return 2; }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var first = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "first" && s.ContainerKind == "enum" && s.ContainerName == "Demo"));
+        var second = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "second" && s.ContainerKind == "enum" && s.ContainerName == "Demo"));
+        Assert.Equal("int first() { return 1; }", first.Signature);
+        Assert.Equal("int second() { return 2; }", second.Signature);
+    }
+
+    [Fact]
     public void Extract_Java_DetectsStaticFinalAndEnumMembers()
     {
         var content = "public class Config {\n    public static final String VERSION = \"1.0\";\n    private static final int MAX_RETRIES = 3;\n}\n\npublic enum Status {\n    ACTIVE,\n    INACTIVE,\n    PENDING;\n}";
@@ -8479,8 +8674,29 @@ public class SymbolExtractorTests
         var content = "public enum WithBody {\n    A {\n        void f() {}\n    },\n    B;\n}";
         var symbols = SymbolExtractor.Extract(1, "java", content);
 
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "A" && s.ContainerName == "WithBody" && s.BodyStartLine == null);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "A" && s.ContainerName == "WithBody" && s.BodyStartLine != null);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "f" && s.ContainerKind == "function" && s.ContainerName == "A");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B" && s.ContainerName == "WithBody" && s.BodyStartLine == null);
+    }
+
+    [Fact]
+    public void Extract_Java_HandlesSameLineAnonymousMemberBodyMethods()
+    {
+        var content = """
+            public enum Mix {
+                A { @Override public int f() { return 1; } int g() { return 2; } },
+                B { @Override public int f() { return 3; } int h() { return 4; } };
+                public abstract int f();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "A" && s.ContainerKind == "enum" && s.ContainerName == "Mix" && s.BodyStartLine != null);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B" && s.ContainerKind == "enum" && s.ContainerName == "Mix" && s.BodyStartLine != null);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "f" && s.ContainerKind == "function" && s.ContainerName == "A");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "g" && s.ContainerKind == "function" && s.ContainerName == "A");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "f" && s.ContainerKind == "function" && s.ContainerName == "B");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "h" && s.ContainerKind == "function" && s.ContainerName == "B");
     }
 
     [Fact]
@@ -8831,6 +9047,90 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Name == "inner");
         Assert.DoesNotContain(symbols, s => s.Name == "tmp");
         Assert.DoesNotContain(symbols, s => s.Name == "y");
+    }
+
+    [Fact]
+    public void Extract_CSharp_ConstLocalsAndQualifiedCallArguments_DoNotLeakPhantomFunctions()
+    {
+        var content = """
+            using System;
+
+            namespace Demo;
+
+            public class Repro
+            {
+                public void M(TimeSpan elapsed)
+                {
+                    const string content = "hello";
+                    Assert.True(
+                        elapsed < TimeSpan.FromSeconds(10),
+                        $"x {elapsed.TotalSeconds:F2}");
+                }
+            }
+
+            public static class Assert
+            {
+                public static void True(bool condition, string message) { }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "Demo");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Repro");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Assert");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "True");
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "content");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "FromSeconds");
+    }
+
+    [Fact]
+    public void Extract_CSharp_VerbatimReturnTypeIdentifiers_AreNotRejectedBySuffixGuard()
+    {
+        var content = """
+            namespace Demo;
+
+            public class @new {}
+
+            public class UsesVerbatim
+            {
+                public @new Make() => new @new();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "new");
+
+        var method = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Make"));
+        Assert.Equal("@new", method.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_CSharp_ContextualKeywordReturnTypeIdentifiers_AreNotRejectedBySuffixGuard()
+    {
+        var content = """
+            namespace Demo;
+
+            public class await {}
+            public class yield {}
+
+            public class Uses
+            {
+                public await MakeAwait() => new await();
+                public yield MakeYield() => new yield();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "await");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "yield");
+
+        var awaitMethod = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "MakeAwait"));
+        Assert.Equal("await", awaitMethod.ReturnType);
+
+        var yieldMethod = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "MakeYield"));
+        Assert.Equal("yield", yieldMethod.ReturnType);
     }
 
     [Fact]
@@ -10481,6 +10781,122 @@ public class SymbolExtractorTests
         Assert.Equal("class", outerChild.ContainerKind);
         Assert.Equal("Host", outerChild.ContainerName);
         Assert.Equal("public partial class OuterChild { }", outerChild.Signature);
+    }
+
+    [Fact]
+    public void Extract_CSharp_CarriedVerbatimStringContinuationPreservesSameLinePropertySiblings()
+    {
+        // A carried verbatim-string close line must clamp the first same-line brace-bodied
+        // property at its real `}` so later property siblings on the same physical line
+        // still restart and extract independently. Closes #636.
+        // 継続中の verbatim string の close line では、同一物理行上の最初の brace-body
+        // property を本物の `}` で切り、後続 property sibling が再開して独立抽出される
+        // 必要がある。Closes #636.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public class C",
+            "{",
+            "    private string _s = @\"",
+            "    fake\"; public int P { get; } public int Q { get; }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var propertyP = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("public int P { get; }", propertyP.Signature);
+        Assert.Equal("C", propertyP.ContainerName);
+
+        var propertyQ = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Q"));
+        Assert.Equal("public int Q { get; }", propertyQ.Signature);
+        Assert.Equal("C", propertyQ.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_CarriedRawStringContinuationPreservesSameLinePropertySiblings()
+    {
+        // Raw-string continuation lines share the same brace-end clamp requirement as
+        // verbatim strings: the first same-line property must stop at its own accessor
+        // block so later property siblings remain visible. Closes #636.
+        // raw string の継続行も、verbatim string と同じ brace-end clamp を必要とする。
+        // 先頭 property は自分の accessor block で止まり、後続 property sibling が
+        // 見えるままでなければならない。Closes #636.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public class C",
+            "{",
+            "    private string _s = \"\"\"",
+            "    fake\"\"\"; public int P { get; } public int Q { get; }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var propertyP = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "P"));
+        Assert.Equal("public int P { get; }", propertyP.Signature);
+        Assert.Equal("C", propertyP.ContainerName);
+
+        var propertyQ = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Q"));
+        Assert.Equal("public int Q { get; }", propertyQ.Signature);
+        Assert.Equal("C", propertyQ.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_CarriedVerbatimStringContinuationPreservesSameLineMethodSiblings()
+    {
+        // Carried verbatim-string close lines must also clamp same-line brace-bodied
+        // methods. Otherwise the first method absorbs the rest of the line and later
+        // siblings disappear. Closes #636.
+        // 継続中の verbatim string の close line では、同一行 brace-body method も
+        // 正しく切り出す必要がある。そうしないと先頭 method が残り全体を飲み込み、
+        // 後続 sibling が消える。Closes #636.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public class C",
+            "{",
+            "    private string _s = @\"",
+            "    fake\"; public void M() { } public void N() { }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var methodM = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "M"));
+        Assert.Equal("public void M() { }", methodM.Signature);
+        Assert.Equal("C", methodM.ContainerName);
+
+        var methodN = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "N"));
+        Assert.Equal("public void N() { }", methodN.Signature);
+        Assert.Equal("C", methodN.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_CarriedRawStringContinuationPreservesSameLineMethodSiblings()
+    {
+        // Raw-string continuation lines need the same method-body clamp: both methods on
+        // the close line must survive with their own signatures instead of collapsing into
+        // one oversized match. Closes #636.
+        // raw string の継続行でも method-body clamp は同じく必要であり、close line 上の
+        // 2 つの method は 1 つの過大 signature に潰れず、それぞれ独立して残る
+        // 必要がある。Closes #636.
+        var content = string.Join(
+            "\n",
+            "namespace Demo;",
+            "",
+            "public class C",
+            "{",
+            "    private string _s = \"\"\"",
+            "    fake\"\"\"; public void M() { } public void N() { }",
+            "}");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var methodM = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "M"));
+        Assert.Equal("public void M() { }", methodM.Signature);
+        Assert.Equal("C", methodM.ContainerName);
+
+        var methodN = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "N"));
+        Assert.Equal("public void N() { }", methodN.Signature);
+        Assert.Equal("C", methodN.ContainerName);
     }
 
     [Fact]
@@ -12829,6 +13245,200 @@ public class SymbolExtractorTests
         Assert.True(
             stopwatch.Elapsed < TimeSpan.FromSeconds(10),
             $"InstallScriptTests.cs extraction took {stopwatch.Elapsed.TotalSeconds:F2}s, expected < 10s.");
+    }
+
+    [Fact]
+    public void Extract_Java_SameLineAnnotationsCompactConstructorsAndEnumOverrides_StayIndexed()
+    {
+        const string content = """
+            package com.example;
+
+            public class Same {
+                @Override public String toString() { return "x"; }
+                @Deprecated public int legacy() { return 0; }
+            }
+
+            public enum Op {
+                ADD {
+                    @Override public int apply(int a, int b) { return a + b; }
+                },
+                SUB {
+                    @Override public int apply(int a, int b) { return a - b; }
+                };
+                public abstract int apply(int a, int b);
+            }
+
+            public record Range(int low, int high) {
+                public Range {
+                    if (low > high) throw new IllegalArgumentException();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var toString = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "toString"));
+        Assert.Equal("class", toString.ContainerKind);
+        Assert.Equal("Same", toString.ContainerName);
+
+        var legacy = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "legacy"));
+        Assert.Equal("class", legacy.ContainerKind);
+        Assert.Equal("Same", legacy.ContainerName);
+
+        var addApply = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "apply" && s.ContainerName == "ADD"));
+        Assert.Equal("function", addApply.ContainerKind);
+
+        var subApply = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "apply" && s.ContainerName == "SUB"));
+        Assert.Equal("function", subApply.ContainerKind);
+
+        var abstractApply = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "apply" && s.ContainerName == "Op"));
+        Assert.Equal("enum", abstractApply.ContainerKind);
+
+        var compactCtor = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Range"));
+        Assert.Equal("class", compactCtor.ContainerKind);
+        Assert.Equal("Range", compactCtor.ContainerName);
+        Assert.NotNull(compactCtor.BodyStartLine);
+        Assert.NotNull(compactCtor.BodyEndLine);
+    }
+
+    [Fact]
+    public void Extract_Java_SameLineCompactConstructors_StayIndexedWithoutRecordHeaderLeak()
+    {
+        const string content = """
+            public record R(int x) {
+                @Deprecated public R { if (x < 0) throw new IllegalArgumentException(); }
+            }
+
+            public record Inline(int x) { public Inline { if (x < 0) throw new IllegalArgumentException(); } }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var annotatedCtor = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "R"));
+        Assert.Equal("class", annotatedCtor.ContainerKind);
+        Assert.Equal("R", annotatedCtor.ContainerName);
+        Assert.Equal("public R { if (x < 0) throw new IllegalArgumentException(); }", annotatedCtor.Signature);
+        Assert.True(string.IsNullOrEmpty(annotatedCtor.ReturnType));
+        Assert.NotNull(annotatedCtor.BodyStartLine);
+        Assert.NotNull(annotatedCtor.BodyEndLine);
+
+        var inlineCtor = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Inline"));
+        Assert.Equal("class", inlineCtor.ContainerKind);
+        Assert.Equal("Inline", inlineCtor.ContainerName);
+        Assert.Equal("public Inline { if (x < 0) throw new IllegalArgumentException(); }", inlineCtor.Signature);
+        Assert.True(string.IsNullOrEmpty(inlineCtor.ReturnType));
+        Assert.NotNull(inlineCtor.BodyStartLine);
+        Assert.NotNull(inlineCtor.BodyEndLine);
+    }
+
+    [Fact]
+    public void Extract_Java_AllmanCompactConstructors_StayIndexed()
+    {
+        const string content = """
+            public record Sample(int value)
+            {
+                public Sample
+                {
+                    if (value < 0) throw new IllegalArgumentException();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var compactCtor = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Sample"));
+        Assert.Equal("class", compactCtor.ContainerKind);
+        Assert.Equal("Sample", compactCtor.ContainerName);
+        Assert.Equal("public Sample", compactCtor.Signature);
+        Assert.Null(compactCtor.ReturnType);
+        Assert.NotNull(compactCtor.BodyStartLine);
+        Assert.NotNull(compactCtor.BodyEndLine);
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "value" && s.ContainerName == "Sample");
+    }
+
+    [Fact]
+    public void Extract_Java_EnumAnonymousMemberBodyMethods_StayNestedUnderMemberBodies()
+    {
+        const string content = """
+            public enum Mix {
+                A { @Override public int f() { return 1; } int g() { return 2; } },
+                B { @Override public int f() { return 3; } int h() { return 4; } };
+                public abstract int f();
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "A" && s.ContainerKind == "enum" && s.ContainerName == "Mix" && s.BodyStartLine != null);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B" && s.ContainerKind == "enum" && s.ContainerName == "Mix" && s.BodyStartLine != null);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "f" && s.ContainerKind == "function" && s.ContainerName == "A");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "g" && s.ContainerKind == "function" && s.ContainerName == "A");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "f" && s.ContainerKind == "function" && s.ContainerName == "B");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "h" && s.ContainerKind == "function" && s.ContainerName == "B");
+    }
+
+    [Fact]
+    public void Extract_Java_SameLineAnnotationInterfaceMembers_DoNotLeakIntoNextDeclaration()
+    {
+        const string content = """
+            @interface Tags { String[] value(); }
+            class C {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var valueMember = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "value"));
+        Assert.Equal("class", valueMember.ContainerKind);
+        Assert.Equal("Tags", valueMember.ContainerName);
+        Assert.Equal(1, valueMember.EndLine);
+        Assert.Null(valueMember.BodyStartLine);
+        Assert.Null(valueMember.BodyEndLine);
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "C" && s.StartLine == 2 && s.EndLine == 2);
+    }
+
+    [Fact]
+    public void Extract_Java_SameLineAnnotationInterfaceMembers_KeepLaterMembers()
+    {
+        const string content = """
+            @interface Tags { String[] value(); int age(); } class C {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var valueMember = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "value"));
+        var ageMember = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "age"));
+        Assert.Equal("Tags", valueMember.ContainerName);
+        Assert.Equal("Tags", ageMember.ContainerName);
+        Assert.Equal(1, valueMember.EndLine);
+        Assert.Equal(1, ageMember.EndLine);
+        Assert.Null(valueMember.BodyStartLine);
+        Assert.Null(ageMember.BodyStartLine);
+        Assert.Equal("String[] value();", valueMember.Signature);
+        Assert.Equal("int age();", ageMember.Signature);
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "C" && s.StartLine == 1 && s.EndLine == 1);
+    }
+
+    [Fact]
+    public void Extract_Java_RecordHeaderAnnotationArray_KeepsCompactConstructor()
+    {
+        const string content = """
+            @interface Tags { String[] value(); }
+
+            public record Sample(@Tags({"a", "b"}) int value) {
+                public Sample {
+                    if (value < 0) throw new IllegalArgumentException();
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var compactCtor = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Sample"));
+        Assert.Equal("class", compactCtor.ContainerKind);
+        Assert.Equal("Sample", compactCtor.ContainerName);
+        Assert.NotNull(compactCtor.BodyStartLine);
+        Assert.NotNull(compactCtor.BodyEndLine);
+        Assert.Contains("public Sample {", compactCtor.Signature);
     }
 
     private static string GetRepositoryRoot()
