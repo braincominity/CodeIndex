@@ -9626,6 +9626,59 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DetectsClassFieldArrowWithExpressionBody()
+    {
+        var content = """
+            class Foo {
+                handleExpr = () => 42;
+                compute = (x) => x + 1;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        var handleExpr = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "handleExpr");
+        Assert.NotNull(handleExpr);
+        Assert.Equal("class", handleExpr.ContainerKind);
+        Assert.Equal("Foo", handleExpr.ContainerName);
+
+        var compute = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "compute");
+        Assert.NotNull(compute);
+        Assert.Equal("class", compute.ContainerKind);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsClassFieldArrowWithMultiLineExpressionBody()
+    {
+        // Regression for multi-line expression body causing scanner to skip the next field.
+        // 複数行の式本体が次の field をスキップさせる回帰の回帰テスト。
+        var content = """
+            class Foo {
+                handleExpr = (): number => 42;
+                transform = <T>(x: T): T =>
+                    x;
+                runInline = (a: number, b: number): number => a + b;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var handleExpr = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "handleExpr");
+        Assert.NotNull(handleExpr);
+        Assert.Equal("class", handleExpr.ContainerKind);
+        Assert.Equal("number", handleExpr.ReturnType);
+
+        var transform = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "transform");
+        Assert.NotNull(transform);
+        Assert.Equal("T", transform.ReturnType);
+
+        // runInline must still be captured after transform's multi-line expression body.
+        // transform の複数行式本体の後でも runInline は取りこぼされてはならない。
+        var runInline = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "runInline");
+        Assert.NotNull(runInline);
+        Assert.Equal("class", runInline.ContainerKind);
+        Assert.Equal("number", runInline.ReturnType);
+    }
+
+    [Fact]
     public void Extract_JavaScript_DoesNotMisclassifyPlainClassFieldAsFunction()
     {
         var content = """
@@ -9730,6 +9783,40 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerKind == "object");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "gen" && s.ContainerKind == "object");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DoesNotEmitObjectLiteralMembersInBlockScopeOrNonExportedNamespace()
+    {
+        // Non-exported bindings in block scope or namespace scope should be filtered out,
+        // matching the scope-filter parity already applied to other JS/TS capture paths.
+        // block scope や namespace 内の非 export バインディングは、他の JS/TS 抽出経路と
+        // 同じスコープフィルタに合わせて除外されること。
+        var content = """
+            if (Math.random() > 0.5) {
+              const blockScoped = {
+                run() { return 1; },
+              };
+            }
+
+            namespace N {
+              const hidden = {
+                run() { return 1; },
+              };
+              export const shown = {
+                ok() { return 2; },
+              };
+            }
+
+            export const topLevel = {
+              fn() { return 3; },
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ok" && s.ContainerKind == "object");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fn" && s.ContainerKind == "object");
     }
 
     [Fact]
