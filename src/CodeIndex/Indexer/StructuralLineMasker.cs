@@ -1415,6 +1415,12 @@ internal static class StructuralLineMasker
         // 引用符文字列の active quote。行境界で継続可能なのは次行開始時の最上位 hole
         // だけなので、scanner 全体で 1 スロット持てば十分。
         var activeJsHoleStringQuote = '\0';
+        // Top-level JS/TS single- or double-quoted string that continues across a
+        // physical line boundary. The next line must resume inside the string before
+        // any brace/comment/template logic runs.
+        // 行をまたいで継続する top-level の JS/TS 単/二重引用符文字列。
+        // 次行は brace/comment/template の前に string 内として再開しなければならない。
+        var activeJsTopLevelStringQuote = '\0';
         lexState.Reset();
 
         for (int i = 0; i < lines.Length; i++)
@@ -1637,6 +1643,17 @@ internal static class StructuralLineMasker
                     }
                 }
 
+                if (activeJsTopLevelStringQuote != '\0')
+                {
+                    pos = MaskJsTemplateHoleString(line, pos, masked, activeJsTopLevelStringQuote, startsInsideString: true, out var continuesOnNextLine);
+                    if (continuesOnNextLine)
+                        break;
+
+                    activeJsTopLevelStringQuote = '\0';
+                    lexState.SetKind(JsPrevTokenKind.Literal);
+                    continue;
+                }
+
                 if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '/')
                 {
                     // Blank the `//` comment tail so the multi-line tagged-template
@@ -1686,7 +1703,14 @@ internal static class StructuralLineMasker
 
                 if (line[pos] == '"' || line[pos] == '\'')
                 {
-                    pos = SkipJsSingleLineString(line, pos);
+                    var quote = line[pos];
+                    pos = SkipJsSingleLineStringContinuation(line, pos, out var continuesOnNextLine);
+                    if (continuesOnNextLine)
+                    {
+                        activeJsTopLevelStringQuote = quote;
+                        break;
+                    }
+
                     lexState.SetKind(JsPrevTokenKind.Literal);
                     continue;
                 }
@@ -2415,10 +2439,44 @@ internal static class StructuralLineMasker
             if (line[p] == '\\' && p + 1 < line.Length)
                 p += 2;
             else
-                p++;
+            p++;
         }
         if (p < line.Length)
             p++;
+        return p;
+    }
+
+    private static int SkipJsSingleLineStringContinuation(string line, int startIndex, out bool continuesOnNextLine)
+    {
+        var quote = line[startIndex];
+        var p = startIndex + 1;
+        while (p < line.Length && line[p] != quote)
+        {
+            if (line[p] == '\\')
+            {
+                if (p + 1 == line.Length)
+                {
+                    continuesOnNextLine = true;
+                    return p + 1;
+                }
+
+                if (p + 2 == line.Length && line[p + 1] == '\r')
+                {
+                    continuesOnNextLine = true;
+                    return line.Length;
+                }
+
+                p += 2;
+                continue;
+            }
+
+            p++;
+        }
+
+        if (p < line.Length)
+            p++;
+
+        continuesOnNextLine = false;
         return p;
     }
 
