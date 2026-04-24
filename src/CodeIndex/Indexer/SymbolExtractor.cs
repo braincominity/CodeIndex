@@ -62,31 +62,42 @@ public static class SymbolExtractor
     // to three levels of nested angle brackets (`<Record<string, Map<string, Props>>>`)
     // and allows parenthesised segments (`<(props: Props) => JSX.Element>`) inside a
     // generic argument, which covers the function-type / conditional-type shapes real TS
-    // HOC call sites use. The inner alternation treats `=>` as a single two-character
-    // token via `=>?` (greedy `?` so the `>` is consumed when present) instead of
-    // letting the `>` leak out and close the outer `<...>` early, which would otherwise
-    // drop function-type generic arguments. Each alternation branch starts with a
-    // distinct character class — `[^<>()=]` (plain), `=>?` (=-rooted), `\(` (paren),
-    // `<` (nested angle) — so the engine never has overlapping choices at a single input
-    // position, which rules out catastrophic backtracking on long or malformed inputs.
-    // Four or more levels of nesting are vanishingly rare in real HOC signatures and
-    // would require a full bracket walker to stay ReDoS-safe. Closes #240.
+    // HOC call sites use. Each parenthesised segment itself balances one level of nested
+    // parens — `\((?:[^()]|\([^()]*\))*\)` — so callback-prop shapes such as
+    // `<(props: { onClick: (x: number) => void }) => JSX.Element>` still match; the
+    // inner `\([^()]*\)` branch is disjoint from `[^()]` (first char `(` vs not `(`), so
+    // the paren balancer stays ReDoS-safe. The outer alternation treats `=>` as a single
+    // two-character token via `=>?` (greedy `?` so the `>` is consumed when present)
+    // instead of letting the `>` leak out and close the outer `<...>` early, which would
+    // otherwise drop function-type generic arguments. Each alternation branch starts
+    // with a distinct character class — `[^<>()=]` (plain), `=>?` (=-rooted), `\(`
+    // (paren), `<` (nested angle) — so the engine never has overlapping choices at a
+    // single input position, which rules out catastrophic backtracking on long or
+    // malformed inputs. Four or more levels of angle-bracket nesting, or two or more
+    // levels of paren nesting inside a single generic argument, are vanishingly rare in
+    // real HOC signatures and would require a full bracket walker to stay ReDoS-safe.
+    // Closes #240.
     // HOC 呼び出し名と `(` の間に入りうる、TypeScript の generic 型引数トークン（オプション）。
     // TypeScript 行の HOC 束縛だけがこのトークンを受け付け、JavaScript 行は意図的に
     // 受け付けない。JavaScript には generic 構文が無く、`memo < Props > (Component)` は
     // 比較・呼び出しの連鎖式であって、ここから phantom な HOC 束縛を生やしてはいけないため。
     // 式は 3 段までのネストした山括弧（`<Record<string, Map<string, Props>>>`）と、
     // generic 引数内の丸括弧付きセグメント（`<(props: Props) => JSX.Element>`）を許容する
-    // ので、実在する TS HOC 呼び出しで使われる関数型・条件型形状までカバーできる。
-    // 内側 alternation は `=>` を `=>?` の 2 文字トークンとして 1 度に消費する（greedy の
-    // `?` によって後続の `>` があれば必ず消費）。こうしないと `=>` の `>` が外側の
-    // 山括弧閉じとして早期マッチしてしまい、関数型 generic 引数全体が落ちる。各
-    // alternation 分岐は先頭文字クラスが互いに素（`[^<>()=]`（平文字）、`=>?`（=-root）、
-    // `\(`（丸括弧）、`<`（ネスト山括弧））で、同一入力位置で選択が重ならないため、
-    // 長い入力や不正な入力に対しても catastrophic backtracking が発生しない。4 段以上の
-    // ネストは実 HOC シグネチャでは極めて稀で、ReDoS 安全に受理するには完全な bracket
-    // walker が必要になるため、3 段で打ち切る。#240 解消。
-    private const string TypeScriptOptionalHocTypeArgsPattern = @"(?:<(?:[^<>()=]|=>?|\([^()]*\)|<(?:[^<>()=]|=>?|\([^()]*\)|<(?:[^<>()=]|=>?|\([^()]*\))*>)*>)*>\s*)?";
+    // ので、実在する TS HOC 呼び出しで使われる関数型・条件型形状までカバーできる。各
+    // 丸括弧セグメント自身も 1 段のネスト丸括弧を許容する（`\((?:[^()]|\([^()]*\))*\)`）
+    // ため、callback-prop 形
+    // （`<(props: { onClick: (x: number) => void }) => JSX.Element>`）もマッチする。
+    // 内側の `\([^()]*\)` 分岐は `[^()]` と先頭文字が互いに素（`(` vs それ以外）なので、
+    // 丸括弧バランサーも ReDoS 安全に保たれる。外側 alternation は `=>` を `=>?` の 2
+    // 文字トークンとして 1 度に消費する（greedy の `?` によって後続の `>` があれば必ず
+    // 消費）。こうしないと `=>` の `>` が外側の山括弧閉じとして早期マッチしてしまい、
+    // 関数型 generic 引数全体が落ちる。各 alternation 分岐は先頭文字クラスが互いに素
+    // （`[^<>()=]`（平文字）、`=>?`（=-root）、`\(`（丸括弧）、`<`（ネスト山括弧））で、
+    // 同一入力位置で選択が重ならないため、長い入力や不正な入力に対しても catastrophic
+    // backtracking が発生しない。4 段以上の山括弧ネストや、単一 generic 引数内での 2 段
+    // 以上の丸括弧ネストは実 HOC シグネチャでは極めて稀で、ReDoS 安全に受理するには完全
+    // な bracket walker が必要になるため、それぞれ 3 段・1 段で打ち切る。#240 解消。
+    private const string TypeScriptOptionalHocTypeArgsPattern = @"(?:<(?:[^<>()=]|=>?|\((?:[^()]|\([^()]*\))*\)|<(?:[^<>()=]|=>?|\((?:[^()]|\([^()]*\))*\)|<(?:[^<>()=]|=>?|\((?:[^()]|\([^()]*\))*\))*>)*>)*>\s*)?";
 
     private enum BodyStyle
     {
@@ -341,7 +352,15 @@ public static class SymbolExtractor
             // restricted to a known set of HOC call shapes — `React.memo(` /
             // `React.forwardRef(` / `React.lazy(`, `styled.`/`styled(`/`styled``,
             // bare `connect(`/`memo(`/`forwardRef(`/`lazy(`/`observer(`, and
-            // `with<PascalCase>(`. Unlike the TypeScript row below, the JavaScript
+            // `with<PascalCase>(`. Styled factory captures (`const F = styled.div;`) and
+            // plain styled calls (`const F = styled(Component);`) are NOT real component
+            // bindings — they produce a factory / a styled-component-of-component but do
+            // not declare a rendered component here — so an additional post-match gate
+            // rejects them unless the source line carries a tagged-template backtick.
+            // The gate checks the raw (unmasked) line because
+            // StructuralLineMasker.MaskJsTsTemplateLiteralContents masks template
+            // delimiters to space, which would otherwise make the same regex accept the
+            // non-template forms too. Unlike the TypeScript row below, the JavaScript
             // row deliberately does NOT accept an optional `<TypeArgs>` token
             // between the HOC call name and its `(` — JavaScript has no generic
             // syntax and `const Result = memo < Props > (Component);` is a chained
@@ -364,7 +383,14 @@ public static class SymbolExtractor
             // 発火しない。RHS を既知の HOC 呼び出し形 — `React.memo(` / `React.forwardRef(`
             // / `React.lazy(`、`styled.` / `styled(` / `styled``、素の `connect(` /
             // `memo(` / `forwardRef(` / `lazy(` / `observer(`、`with<PascalCase>(` — に
-            // 限定する。JavaScript 行は TypeScript 行と異なり、HOC 呼び出し名と `(` の
+            // 限定する。styled の factory 捕捉（`const F = styled.div;`）や素の呼び出し
+            // （`const F = styled(Component);`）は実体のあるコンポーネント束縛ではないため、
+            // マッチ後のゲートでタグ付きテンプレートのバッククォートを原文行に要求し、
+            // これらが phantom な function シンボルを生やさないようにする。ゲートは raw
+            // 行を参照する — `StructuralLineMasker.MaskJsTsTemplateLiteralContents` が
+            // テンプレート区切りを空白にマスクするため、同じ regex を使っても masked
+            // 経由では区別できないのがゲートを raw 行で行う理由。JavaScript 行は TypeScript
+            // 行と異なり、HOC 呼び出し名と `(` の
             // 間に generic 型引数トークン `<...>` を意図的に受け付けない。JavaScript に
             // generic 構文は無く、`const Result = memo < Props > (Component);` は単なる
             // 比較・呼び出し連鎖式であって phantom な HOC 束縛を生やしてはならない。
@@ -1305,6 +1331,33 @@ public static class SymbolExtractor
                     // 擬似シンボルが混入する。Closes #298 の codex レビュー blocker 対応。
                     if (ShouldSkipCssNestedSelectorCandidate(lang, pattern, patternMatchLine, cssQualifiedRuleAncestors, i))
                         break;
+
+                    // JS/TS HOC binding gate: the `styled.` / `styled(` / `styled\`` regex
+                    // branch matches three shapes — factory capture (`const F = styled.div;`),
+                    // plain call (`const F = styled(Component);`), and tagged template
+                    // (`const F = styled.div\`...\``). Only the tagged-template shape
+                    // actually declares a styled-component binding; the other two produce
+                    // a factory / a styled wrapper-of-component without a component body
+                    // on that line and must stay 0-symbol. This gate looks at the raw
+                    // (unmasked) line because StructuralLineMasker.MaskJsTsTemplateLiteralContents
+                    // replaces template-literal delimiters with space, so the masked
+                    // `patternMatchLine` cannot see the backtick. Closes #240 follow-up
+                    // (codex review #5 blocker).
+                    // JS/TS HOC 束縛ゲート: `styled.` / `styled(` / `styled\`` の regex
+                    // 分岐は 3 形状にマッチする — factory 捕捉（`const F = styled.div;`）、
+                    // 素の呼び出し（`const F = styled(Component);`）、タグ付きテンプレート
+                    // （`const F = styled.div\`...\``）。実際に styled-component 束縛を
+                    // 生むのはタグ付きテンプレート形のみで、前者 2 つはその行で component
+                    // 本体を生やさないため 0 シンボルに保つ必要がある。このゲートは raw 行
+                    // （マスク前）を参照する — `StructuralLineMasker.MaskJsTsTemplateLiteralContents`
+                    // がテンプレート区切りを空白にマスクするため、マスク後の
+                    // `patternMatchLine` ではバッククォートが見えないことへの対処。
+                    // Closes #240 follow-up（codex レビュー #5 の blocker 対応）。
+                    if (ShouldSkipJavaScriptTypeScriptStyledFactoryCandidate(lang, pattern, match, line))
+                    {
+                        lineOffset = FindNextJavaScriptTypeScriptStatementStart(patternMatchLine, lineOffset + Math.Max(1, match.Length));
+                        continue;
+                    }
 
                     var absoluteStartColumn = lineOffset + match.Index;
                     // For C#, collapsed-space column (from CollapseCSharpGenericTypeWhitespace)
@@ -10680,6 +10733,58 @@ public static class SymbolExtractor
         && cssQualifiedRuleAncestors[lineIndex]
         && pattern.Kind == "class"
         && !matchLine.TrimStart().StartsWith('@');
+
+    // Reject JS/TS HOC candidate matches whose captured RHS uses the bare `styled.`
+    // or `styled(` forms without a tagged-template backtick on the raw line. The
+    // HOC regex accepts `styled[.(` `]` as the first post-identifier token so the
+    // real tagged-template bindings (`styled.div\`...\``, `styled(Box)\`...\``)
+    // still match, but it also lets through the factory-capture and plain-call
+    // shapes (`const F = styled.div;`, `const F = styled(Box);`) which do not
+    // declare a rendered component and must not be surfaced as function symbols.
+    // The gate reads the raw (unmasked) source line because
+    // StructuralLineMasker.MaskJsTsTemplateLiteralContents replaces template
+    // delimiters with space, so the masked line cannot distinguish the shapes.
+    // Closes #240 follow-up (codex review #5 blocker).
+    // JS/TS 行における HOC 候補のうち、`styled.` / `styled(` を素のまま使い、同じ raw 行に
+    // タグ付きテンプレートのバッククォートを持たない形（`const F = styled.div;`、
+    // `const F = styled(Box);`）を弾く。HOC regex は識別子直後の `styled[.(`、`]`
+    // を受け付けるためタグ付きテンプレート形（`styled.div\`...\``、`styled(Box)\`...\``）
+    // はマッチさせつつ、factory 捕捉 / 素の呼び出し形も通過させてしまう。これらは
+    // コンポーネントを生成しないため function シンボルとして surface してはいけない。
+    // ゲートは raw 行を参照する — `StructuralLineMasker.MaskJsTsTemplateLiteralContents`
+    // がテンプレート区切りを空白にマスクするため、マスク後では形状を区別できないのが理由。
+    // Closes #240 follow-up（codex レビュー #5 の blocker 対応）。
+    private static bool ShouldSkipJavaScriptTypeScriptStyledFactoryCandidate(
+        string? lang,
+        SymbolPattern pattern,
+        Match match,
+        string rawLine)
+    {
+        if (lang is not ("javascript" or "typescript"))
+            return false;
+        if (pattern.Kind != "function" || pattern.BodyStyle != BodyStyle.None)
+            return false;
+
+        var matched = match.Value;
+        var styledIdx = matched.IndexOf("styled", StringComparison.Ordinal);
+        if (styledIdx < 0)
+            return false;
+
+        var afterStyled = styledIdx + "styled".Length;
+        if (afterStyled >= matched.Length)
+            return false;
+
+        var next = matched[afterStyled];
+        if (next != '.' && next != '(' && next != '`')
+            return false;
+
+        // Backtick on the raw line indicates a tagged-template form somewhere on the
+        // same statement; keep those matches. Any non-backtick styled shape is the
+        // factory capture or plain call and must be rejected.
+        // raw 行にバッククォートがあれば同一文にタグ付きテンプレートが存在する → 維持。
+        // バッククォートが無い styled 形は factory 捕捉 / 素の呼び出しなので除外する。
+        return !rawLine.Contains('`');
+    }
 
     private static bool[] FindCssQualifiedRuleAncestors(string[] lines)
     {

@@ -424,6 +424,91 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_HocBindingPatternRequiresTaggedTemplateForStyled()
+    {
+        // The `styled` HOC branch must require a tagged-template backtick on the same
+        // line. `const StyledFactory = styled.div;` (factory capture) and
+        // `const StyledFactoryCall = styled(Component);` (plain function call) are
+        // NOT component bindings — no component is produced on that line — and must
+        // stay 0-symbol. Only the tagged-template forms
+        // (`styled.div\`...\``, `styled(Component)\`...\``) create a real styled
+        // component binding and must still match. Closes #240.
+        // `styled` HOC 分岐はタグ付きテンプレートのバッククォートを同一行で必須にする。
+        // `const StyledFactory = styled.div;`（factory 捕捉）や
+        // `const StyledFactoryCall = styled(Component);`（素の関数呼び出し）はその行で
+        // コンポーネントを生成しないため、0 シンボルのままであるべき。
+        // タグ付きテンプレート形（`styled.div\`...\``、`styled(Component)\`...\``）のみが
+        // 実体のある styled コンポーネント束縛となり、引き続きマッチする。Closes #240.
+        var content = """
+            const StyledFactory = styled.div;
+            const StyledFactoryCall = styled(Component);
+            const RealStyled = styled.div`color: red;`;
+            const WrappedStyled = styled(Component)`color: blue;`;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "StyledFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "StyledFactoryCall");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "RealStyled");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "WrappedStyled");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_HocBindingPatternRequiresTaggedTemplateForStyled()
+    {
+        // Same tagged-template requirement on the TypeScript side — the factory
+        // capture and plain call shapes must not produce phantom bindings even in
+        // TS sources, while real tagged templates (including ones with generic
+        // type arguments on `styled.div<Props>\`...\``) still match. Closes #240.
+        // TypeScript 側でも同じタグ付きテンプレート要件を適用する — factory 捕捉や素の
+        // 関数呼び出し形は TS ソース上でも phantom 束縛を生やさず、タグ付きテンプレート
+        // （generic 型引数を伴う `styled.div<Props>\`...\`` も含む）のみが引き続き
+        // マッチする。Closes #240.
+        var content = """
+            const StyledFactory = styled.div;
+            const StyledFactoryCall = styled(Component);
+            const RealStyled = styled.div`color: red;`;
+            const TypedStyled = styled.div<Props>`color: blue;`;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "StyledFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "StyledFactoryCall");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "RealStyled");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "TypedStyled");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_HocBindingPatternAcceptsCallbackPropInsideFunctionTypeGeneric()
+    {
+        // Inline function-type generic arguments whose parameter object literal
+        // carries a callback-prop with ITS OWN paren group
+        // (`React.memo<(props: { onClick: (x: number) => void }) => JSX.Element>(Box)`)
+        // must still be accepted. The shared TypeScriptOptionalHocTypeArgsPattern
+        // now balances one level of nested parens inside each generic-argument paren
+        // segment so real React callback-prop shapes do not get dropped. Closes #240.
+        // 関数型 generic 引数の中にある引数オブジェクトに、さらに自前の paren を持つ
+        // callback-prop が入る形
+        // （`React.memo<(props: { onClick: (x: number) => void }) => JSX.Element>(Box)`）
+        // もマッチさせる必要がある。共有定数 TypeScriptOptionalHocTypeArgsPattern は、
+        // 各 generic 引数内の paren セグメントで 1 段のネスト paren を balance するように
+        // なったため、実在する React の callback-prop 形を取りこぼさない。Closes #240.
+        var content = """
+            import React from 'react';
+
+            const NestedCallbackPropMemo = React.memo<(props: { onClick: (x: number) => void }) => JSX.Element>(Box);
+            const BareCallbackPropMemo = memo<(props: { onChange: (value: string) => void }) => JSX.Element>(Box);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "NestedCallbackPropMemo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "BareCallbackPropMemo");
+    }
+
+    [Fact]
     public void Extract_JavaScript_StringBraceDoesNotBreakFollowingContainerAssignment()
     {
         var content = """
