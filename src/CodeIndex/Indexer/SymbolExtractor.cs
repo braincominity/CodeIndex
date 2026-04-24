@@ -382,6 +382,10 @@ public static class SymbolExtractor
         @"^\s*export\s+(?:type\s+)?\{\s*(?<specifiers>[^}]+)\s*\}\s+from\s+(?<module>['""][^'""]+['""])\s*;?\s*$",
         RegexOptions.Compiled);
 
+    private static readonly Regex JavaScriptTypeScriptReExportModuleRegex = new(
+        @"\bfrom\s+(?<module>['""][^'""]+['""])",
+        RegexOptions.Compiled);
+
     private static readonly Regex JavaScriptTypeScriptCommonJsNamedExportAssignmentRegex = new(
         $@"^\s*(?:module\.exports|exports)\.(?<name>{JavaScriptTypeScriptIdentifierPattern})(?:\s*:\s*[^=]+?)?\s*=\s*(?<rhs>.+)$",
         RegexOptions.Compiled);
@@ -4873,6 +4877,9 @@ public static class SymbolExtractor
             {
                 var startColumn = Math.Max(0, sanitizedLine.IndexOf("export", StringComparison.Ordinal));
                 var signature = rawLines[i].Trim();
+                if (!TryExtractJavaScriptTypeScriptReExportModuleName(signature, out var moduleName))
+                    continue;
+
                 AddSymbolRecord(
                     symbols,
                     cssSeenSymbols: null,
@@ -4881,7 +4888,7 @@ public static class SymbolExtractor
                     {
                         FileId = fileId,
                         Kind = "import",
-                        Name = TrimJavaScriptTypeScriptQuotedModuleName(starMatch.Groups["module"].Value),
+                        Name = moduleName,
                         Line = i + 1,
                         StartLine = i + 1,
                         StartColumn = startColumn,
@@ -4926,6 +4933,12 @@ public static class SymbolExtractor
                 continue;
             }
 
+            if (!TryExtractJavaScriptTypeScriptReExportModuleName(signatureText, out var namedModuleName))
+            {
+                i = endLineIndex;
+                continue;
+            }
+
             AddSymbolRecord(
                 symbols,
                 cssSeenSymbols: null,
@@ -4934,7 +4947,7 @@ public static class SymbolExtractor
                 {
                     FileId = fileId,
                     Kind = "import",
-                    Name = TrimJavaScriptTypeScriptQuotedModuleName(namedMatch.Groups["module"].Value),
+                    Name = namedModuleName,
                     Line = i + 1,
                     StartLine = i + 1,
                     StartColumn = startColumnText,
@@ -5322,6 +5335,19 @@ public static class SymbolExtractor
         }
 
         return moduleName;
+    }
+
+    private static bool TryExtractJavaScriptTypeScriptReExportModuleName(string signature, out string moduleName)
+    {
+        var match = JavaScriptTypeScriptReExportModuleRegex.Match(signature);
+        if (!match.Success)
+        {
+            moduleName = string.Empty;
+            return false;
+        }
+
+        moduleName = TrimJavaScriptTypeScriptQuotedModuleName(match.Groups["module"].Value);
+        return moduleName.Length > 0;
     }
 
     private static IEnumerable<string> ParseJavaScriptTypeScriptReExportedNames(string specifierList)

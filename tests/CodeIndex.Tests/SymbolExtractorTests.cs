@@ -70,6 +70,10 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./util");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./other");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./helper");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./ns");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Helper");
@@ -92,6 +96,9 @@ public class SymbolExtractorTests
             """;
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./other");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./helper");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./types");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Helper");
