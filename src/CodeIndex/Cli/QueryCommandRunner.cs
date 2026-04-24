@@ -348,7 +348,7 @@ public static class QueryCommandRunner
             WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
             if (results.Count == 0)
             {
-                if (options.Json && (exact || !reader._hasReferencesTable))
+                if (options.Json)
                     WriteGraphZeroJsonResult(reader, "references", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                 else if (!options.Json)
                 {
@@ -462,7 +462,7 @@ public static class QueryCommandRunner
             WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
             if (results.Count == 0)
             {
-                if (options.Json && (exact || !reader._hasReferencesTable))
+                if (options.Json)
                     WriteGraphZeroJsonResult(reader, "callers", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                 else if (!options.Json)
                 {
@@ -572,7 +572,7 @@ public static class QueryCommandRunner
             WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
             if (results.Count == 0)
             {
-                if (options.Json && (exact || !reader._hasReferencesTable))
+                if (options.Json)
                     WriteGraphZeroJsonResult(reader, "callees", jsonOptions, graphAvailable: reader._hasReferencesTable, exact ? exactSignal : (ExactQuerySignal?)null, exactZeroHint, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
                 else if (!options.Json)
                 {

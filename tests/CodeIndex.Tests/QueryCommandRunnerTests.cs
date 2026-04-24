@@ -1370,7 +1370,7 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunReferences_JsonZeroResults_ReturnEmptyStdout()
+    public void RunReferences_JsonZeroResults_EmitEnvelopeAndFreshness()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_zero_json");
         try
@@ -1397,9 +1397,13 @@ public class QueryCommandRunnerTests
                 ["MissingRef", "--db", dbPath, "--json"],
                 _jsonOptions));
 
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
             Assert.Equal(CommandExitCodes.NotFound, exitCode);
-            Assert.Equal(string.Empty, stdout);
             Assert.Equal(string.Empty, stderr);
+            AssertZeroResultPayload(json, "references");
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
         }
         finally
         {
@@ -6713,7 +6717,7 @@ public class QueryCommandRunnerTests
     [InlineData("references")]
     [InlineData("callers")]
     [InlineData("callees")]
-    public void ZeroResultJson_GraphCommands_KeepAuthoritativeZeroStdoutSilent(string command)
+    public void ZeroResultJson_GraphCommands_EmitEnvelopeAndFreshness(string command)
     {
         var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_zero_json_{command}");
         try
@@ -6721,9 +6725,13 @@ public class QueryCommandRunnerTests
             var dbPath = CreateIndexedDbWithSingleFile(projectRoot, markGraphReady: true);
             var (exitCode, stdout, stderr) = CaptureConsole(() => RunZeroResultCommand(command, dbPath));
 
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+
             Assert.Equal(CommandExitCodes.NotFound, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal(string.Empty, stdout);
+            AssertZeroResultPayload(json, command);
+            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
         }
         finally
         {
