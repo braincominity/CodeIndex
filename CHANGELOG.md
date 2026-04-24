@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Fixed
+- **SymbolExtractor exact-duplicate suppression now uses hash-based per-file bookkeeping (#517)** — `AddSymbolRecord` now tracks exact symbol identities and same-line signature occurrences in per-file hash maps instead of rescanning the accumulated list on every append, preserving the same-line restart duplicate guard while avoiding the quadratic hot path. Added a regression that keeps the surviving same-line `Child` row singular in the `#571`-style fixture and a skipped large-fixture smoke test for symbol-volume performance. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`, `tests/CodeIndex.Tests/PerformanceTests.cs`. Closes #517.
+
 ### [1.15.1] - 2026-04-24
 
 #### Fixed
@@ -900,6 +903,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 修正
+- **SymbolExtractor の完全重複抑止をファイル単位の hash 管理に変更 (#517)** — `AddSymbolRecord` が、毎回の蓄積済みリスト再走査の代わりに、`SymbolRecord` の完全一致キーと same-line signature の出現回数をファイルごとのハッシュマップで追跡するようになり、same-line restart の重複抑止を保ったまま二乗オーダーのホットパスを避けるようになった。`#571` 系 fixture で surviving する `Child` 行が 1 件のままであることを確認する回帰テストと、symbol volume 向けの手動 smoke test を追加した。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`, `tests/CodeIndex.Tests/PerformanceTests.cs`. Closes #517.
 
 ### [1.15.1] - 2026-04-24
 
