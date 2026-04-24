@@ -769,10 +769,28 @@ public static class ReferenceExtractor
                 foreach (var hit in tagHitsOnLine)
                 {
                     var name = hit.Name;
-                    if (IsIgnoredCallName(language, name))
-                        continue;
-                    if (!hit.IsMemberAccess && JsTaggedTemplateOperatorNames.Contains(name))
-                        continue;
+                    // Bare-name suppression (shared ignore list + tagged-template
+                    // operator denylist) is bypassed for member-access tags because
+                    // any reserved / keyword-ish identifier is a legal property name
+                    // in JS/TS — `obj.return\`x\``, `obj.await\`y\``, `obj.yield\`z\``,
+                    // `obj.default\`w\``, `obj.finally\`v\`` all evaluate to real
+                    // tagged-template calls. Only bare-keyword forms such as
+                    // `yield \`x\``, `await \`x\``, `export default \`x\``,
+                    // `try {} finally \`x\`` should remain suppressed.
+                    // bare-name による抑止（共有 ignore list と tagged-template 演算子
+                    // denylist）は member-access のタグでは迂回する。JS/TS ではすべての
+                    // 予約語相当 identifier が property 名になれるため
+                    // `obj.return\`x\``・`obj.await\`y\``・`obj.yield\`z\``・
+                    // `obj.default\`w\``・`obj.finally\`v\`` はすべて正当なタグ呼び出し。
+                    // `yield \`x\``・`await \`x\``・`export default \`x\``・
+                    // `try {} finally \`x\`` のような bare-keyword 形のみ抑止する。
+                    if (!hit.IsMemberAccess)
+                    {
+                        if (IsIgnoredCallName(language, name))
+                            continue;
+                        if (JsTaggedTemplateOperatorNames.Contains(name))
+                            continue;
+                    }
                     if (definitionNames != null && definitionNames.Contains(name))
                         continue;
                     var tagContainer = ResolveContainerForCall(hit.Column - 1);

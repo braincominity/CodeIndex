@@ -6672,6 +6672,75 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScriptMultiLineTaggedTemplateWithLineComment_IsCapturedAsCall()
+    {
+        // issue #268 regression guard: when the multi-line tag line ends with a `//`
+        // comment (`return tag // trailing comment\n\`hello\``), the backward scan
+        // must not pick up `comment` as the tag identifier. The masker must blank the
+        // `//` comment tail so the cross-line scan sees only real code.
+        // issue #268 退行防止: 複数行タグの前行末に `//` コメントがある場合
+        // (`return tag // trailing comment\n\`hello\``)、後方スキャンが
+        // `comment` をタグ識別子と誤認してはならない。masker 側で `//` コメント以降を
+        // 空白化し、行またぎスキャンは実コードのみを見るようにする。
+        const string content = """
+            function run(tag) {
+                return tag // trailing comment
+            `hello`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "tag");
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "comment");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptObjectReturnTaggedTemplate_IsCapturedAsCall()
+    {
+        // issue #268 regression guard: `obj.return\`x\`` is a legal tagged-template call
+        // because `return` is a valid property name in JS/TS. The shared ignore list
+        // (which holds `return` / `throw` / `await` / `typeof` / `yield` for JS/TS to
+        // suppress bare-keyword phantom calls) must NOT suppress member-access tags.
+        // issue #268 退行防止: `obj.return\`x\`` は `return` が property 名として合法
+        // なので正当なタグ呼び出し。bare-keyword の phantom 呼び出しを抑止する共有
+        // ignore list（`return` / `throw` / `await` / `typeof` / `yield`）は
+        // メンバーアクセスのタグを握り潰してはならない。
+        const string content = """
+            function run(obj) {
+                return obj.return`x`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "return");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptObjectAwaitTaggedTemplate_IsCapturedAsCall()
+    {
+        // issue #268 regression guard: `obj.await\`y\`` is a legal tagged-template call;
+        // `await` is a reserved word in async contexts but is still a valid property
+        // name. Member-access tags must bypass the `IsIgnoredCallName` filter.
+        // issue #268 退行防止: `obj.await\`y\`` は await が async 内で予約語でも
+        // property 名としては合法なので正当なタグ呼び出し。メンバーアクセスのタグは
+        // `IsIgnoredCallName` を迂回する必要がある。
+        const string content = """
+            async function run(obj) {
+                return obj.await`y`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "await");
+    }
+
+    [Fact]
     public void Extract_JavaScriptObjectFinallyTaggedTemplate_IsCapturedAsCall()
     {
         // issue #268 regression guard: `obj.finally\`y\`` is a legal tagged-template call;

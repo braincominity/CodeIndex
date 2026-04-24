@@ -1485,7 +1485,16 @@ internal static class StructuralLineMasker
                     if (active is JsTemplateHoleFrame holeFrame)
                     {
                         if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '/')
+                        {
+                            // Blank the `//` comment tail so later passes (including the
+                            // multi-line tagged-template backward scan that reads prior
+                            // `lines[li]`) cannot mistake a comment identifier for code.
+                            // `//` コメント以降を空白化し、後続処理 — とくに前行の
+                            // `lines[li]` を読む複数行タグ走査 — がコメント内の識別子を
+                            // コードと誤認しないようにする。
+                            ReplaceWithSpaces(masked, pos, masked.Length - pos);
                             break;
+                        }
 
                         if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '*')
                         {
@@ -1598,7 +1607,17 @@ internal static class StructuralLineMasker
                 }
 
                 if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '/')
+                {
+                    // Blank the `//` comment tail so the multi-line tagged-template
+                    // backward scan (which reads prior `lines[li]` directly) cannot
+                    // mistake a comment identifier like `comment` in
+                    // `return tag // trailing comment` for the tag itself.
+                    // `//` コメント以降を空白化し、前行の `lines[li]` を直接読む複数行
+                    // タグ走査が `return tag // trailing comment` の `comment` のような
+                    // コメント内識別子をタグと誤認しないようにする。
+                    ReplaceWithSpaces(masked, pos, masked.Length - pos);
                     break;
+                }
 
                 if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '*')
                 {
