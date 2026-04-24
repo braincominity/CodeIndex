@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Fixed
+- **C# exact `references` now preserve type-alias hits even when `using static` makes the same name look like a constant pattern** — `DbReader` now treats any active C# `using Alias = ...` as enough evidence to keep alias-backed exact reference rows, so `references Red --exact-name --lang csharp` no longer drops `using Red = RealTypes.Red;` hits just because a `using static` import makes `Red` resemble a constant-pattern member. Added regression coverage for both the extractor and CLI exact-name path. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`. Closes #715.
+
 ### [1.15.0] - 2026-04-24
 
 #### Changed
@@ -895,6 +898,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 修正
+- **C# の exact `references` で、`using static` によって同名が定数パターンに見えても type alias の参照を残すよう修正** — `DbReader` は、C# の有効な `using Alias = ...` を alias ベースの exact reference 行を保持する十分な根拠として扱うようになり、`using Red = RealTypes.Red;` のようなヒットが `using static` の存在だけで落ちなくなりました。extractor と CLI の exact-name 経路の両方を固定する regression を追加しました。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`。Closes #715。
 
 ### [1.15.0] - 2026-04-24
 

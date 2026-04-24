@@ -1412,6 +1412,59 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_JsonKeepsCsharpTypeAliasPatternReference()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_csharp_type_alias");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Defs.cs",
+                "csharp",
+                """
+                using Red = RealTypes.Red;
+                using static Probe.Color;
+
+                namespace Probe;
+
+                enum Color { Red, Blue }
+                class Demo
+                {
+                    bool Match(object value) => value is Red;
+                    void ProbeType() { _ = typeof(Red); }
+                }
+
+                namespace RealTypes;
+                class Red {}
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+
+            var references = ParseJsonLines(stdout).Select(line => line.RootElement).ToList();
+            Assert.Equal(2, references.Count);
+            Assert.Contains(references, reference =>
+                reference.GetProperty("symbol_name").GetString() == "Red"
+                && reference.GetProperty("reference_kind").GetString() == "type_reference"
+                && reference.GetProperty("container_name").GetString() == "Match");
+            Assert.Contains(references, reference =>
+                reference.GetProperty("symbol_name").GetString() == "Red"
+                && reference.GetProperty("reference_kind").GetString() == "type_reference"
+                && reference.GetProperty("container_name").GetString() == "ProbeType");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_JsonClampsLongSingleLineContext()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_long_line");

@@ -1064,6 +1064,37 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpUsingStaticConstantPattern_WithTypeAliasKeepsTypeReference()
+    {
+        const string content = """
+            using Red = RealTypes.Red;
+            using static Probe.Color;
+
+            namespace Probe;
+
+            enum Color { Red, Blue }
+            class Demo
+            {
+                bool Match(object value) => value is Red;
+                void ProbeType() { _ = typeof(Red); }
+            }
+
+            namespace RealTypes;
+            class Red {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var redRefs = references.Where(reference =>
+            reference.SymbolName == "Red"
+            && reference.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(2, redRefs.Count);
+        Assert.Contains(redRefs, reference => reference.ContainerName == "Match" && reference.Line == 9);
+        Assert.Contains(redRefs, reference => reference.ContainerName == "ProbeType" && reference.Line == 10);
+    }
+
+    [Fact]
     public void Extract_CsharpQualifiedEnumMemberAccess_WithRepeatedAliasNames_UsesNearestAliasScope()
     {
         const string content = """

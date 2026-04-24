@@ -1116,6 +1116,9 @@ public partial class DbReader
             return false;
         }
 
+        if (HasActiveCSharpUsingAlias(path, lineNumber, symbolName))
+            return false;
+
         var patternContext = contextForFilter;
         var patternColumn = columnNumber;
         if (!TryBuildCSharpUsingStaticPatternContextWindow(
@@ -1138,9 +1141,6 @@ public partial class DbReader
 
         var activeTargets = GetActiveCSharpUsingStaticTargets(path, lineNumber);
         if (activeTargets.Count == 0)
-            return false;
-
-        if (HasActiveCSharpUsingAlias(path, lineNumber, symbolName))
             return false;
 
         var matchingContainers = GetCSharpConstantPatternContainersByMemberName(symbolName);
@@ -1179,6 +1179,9 @@ public partial class DbReader
 
     private bool HasScopedCSharpTypeCandidate(string path, int lineNumber, string symbolName)
     {
+        if (HasActiveCSharpUsingAlias(path, lineNumber, symbolName))
+            return true;
+
         var candidateNamespaces = GetCSharpTypeNamespacesByName(symbolName);
         var candidateContainingTypes = GetCSharpTypeContainingTypesByName(symbolName);
         if (candidateNamespaces.Count == 0 && candidateContainingTypes.Count == 0)
@@ -1414,7 +1417,7 @@ public partial class DbReader
 
     private bool HasActiveCSharpUsingAlias(string path, int lineNumber, string symbolName)
     {
-        return TryResolveActiveCSharpUsingAliasScope(path, lineNumber, symbolName, requireTypeAlias: true, out _);
+        return TryResolveActiveCSharpUsingAliasScope(path, lineNumber, symbolName, requireTypeAlias: false, out _);
     }
 
     private HashSet<string> GetActiveCSharpUsingStaticTargets(string path, int lineNumber)
