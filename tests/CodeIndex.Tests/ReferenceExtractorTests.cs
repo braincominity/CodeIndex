@@ -8632,6 +8632,99 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpSwitchExpressionLaterGenericArmAfterWhenGuard_StillEmitsTypeHead()
+    {
+        // issue #851: a `when` clause on an earlier arm must not hide a later generic arm head.
+        // issue #851: 先行 arm の `when` 句で後続の generic arm head を隠してはならない。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+            class Shape {}
+            class Wrapper<TLeft, TRight> {}
+
+            class Demo
+            {
+                int Match(object value) => value switch
+                {
+                    Point p when p.GetHashCode() > 0 => 1,
+                    Wrapper<Point, Shape> => 2,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Wrapper" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Equal(2, references.Count(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match"));
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+    }
+
+    [Theory]
+    [InlineData("Point { X: < 0 } => 1,")]
+    [InlineData("Point { X: > 0 } => 1,")]
+    public void Extract_CsharpSwitchExpressionLaterArmAfterRelationalPattern_StillEmitsTypeHead(string previousArm)
+    {
+        // issue #852: relational pattern operators in an earlier arm must not poison later comma detection.
+        // issue #852: 先行 arm の relational pattern 演算子で後続 arm 区切りを見失ってはならない。
+        var content = $$"""
+            namespace Probe;
+
+            class Point { public int X { get; init; } }
+            class Shape {}
+
+            class Demo
+            {
+                int Match(object value) => value switch
+                {
+                    {{previousArm}}
+                    Shape => 2,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+    }
+
+    [Fact]
+    public void Extract_CsharpSwitchExpressionLaterGenericArmAfterRelationalPattern_StillEmitsTypeHead()
+    {
+        // issue #852: relational `<` in a previous recursive pattern must not hide a later generic arm.
+        // issue #852: 先行 recursive pattern の relational `<` で後続 generic arm を隠してはならない。
+        const string content = """
+            namespace Probe;
+
+            class Point { public int X { get; init; } }
+            class Shape {}
+            class Wrapper<TLeft, TRight> {}
+
+            class Demo
+            {
+                int Match(object value) => value switch
+                {
+                    Point { X: < 0 } => 1,
+                    Wrapper<Point, Shape> => 2,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Wrapper" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Equal(2, references.Count(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match"));
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+    }
+
+    [Fact]
     public void Extract_CsharpVerbatimPatternTypeNames_DoNotCollapseIntoBarePatternTokens()
     {
         // issue #677: `@not` / `@default` are legal type names, so the non-type pattern
@@ -12374,6 +12467,32 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "sales" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "dbo" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "not_a_proc" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SqlExecDoubleQuotedSingleIdentifierContainingDot_IsCaptured()
+    {
+        // issue #722: `"sales.fn_Target"` is one quoted identifier whose dot is part of the
+        // identifier, not a schema separator. EXEC / EXECUTE must preserve and normalize it
+        // as one call target while ordinary single-quoted SQL strings remain masked.
+        // issue #722: `"sales.fn_Target"` は dot を含む 1 つの quoted identifier であり、
+        // schema 区切りではない。EXEC / EXECUTE は 1 つの呼び出し対象として保持・正規化し、
+        // 通常の単一引用符 SQL 文字列は引き続き無視する。
+        const string content = """
+            EXEC "sales.fn_Target";
+            EXECUTE "sales.fn_Target";
+            EXEC 'sales.fn_Target';
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRefs = references
+            .Where(r => r.SymbolName == "sales.fn_Target" && r.ReferenceKind == "call")
+            .ToList();
+        Assert.Equal(2, targetRefs.Count);
+        Assert.Contains(targetRefs, r => r.Line == 1 && r.Column == 7);
+        Assert.Contains(targetRefs, r => r.Line == 2 && r.Column == 10);
     }
 
     [Fact]
