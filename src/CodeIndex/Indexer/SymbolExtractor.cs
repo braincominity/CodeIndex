@@ -10001,6 +10001,8 @@ public static class SymbolExtractor
         var opened = false;
         int? bodyStartLine = null;
         var mode = JavaScanMode.Normal;
+        var sawOpenParen = false;
+        var annotationDefaultValue = false;
         // Track paren/bracket/angle nesting before the body opens so that `{` / `}` appearing
         // inside `@Ann({A.class, B.class})` type-use annotations or bounded generic arguments
         // don't open/close the outer class body prematurely. Once the body is opened, only
@@ -10030,13 +10032,38 @@ public static class SymbolExtractor
                 var ch = line[column];
                 if (!opened)
                 {
-                    if (ch == '(') { parenDepth++; column++; continue; }
+                    if (sawOpenParen
+                        && !annotationDefaultValue
+                        && parenDepth == 0
+                        && bracketDepth == 0
+                        && angleDepth == 0
+                        && StartsWithKeyword(line, column, "default"))
+                    {
+                        // Annotation members use `default { ... }` for array defaults, but that
+                        // brace pair is part of the default value, not a real member body.
+                        // `default` after a Java parameter list therefore flips the scanner into
+                        // a body-less statement mode until the terminating `;`.
+                        // Java の annotation member は `default { ... }` で配列デフォルト値を
+                        // 持つが、この `{ ... }` は member 本体ではなく default 値の一部。
+                        // Java の parameter list の後に現れた `default` は、終端 `;` まで
+                        // body-less statement として扱う。
+                        annotationDefaultValue = true;
+                        column += "default".Length;
+                        continue;
+                    }
+
+                    if (ch == '(') { parenDepth++; sawOpenParen = true; column++; continue; }
                     if (ch == ')' && parenDepth > 0) { parenDepth--; column++; continue; }
                     if (ch == '[') { bracketDepth++; column++; continue; }
                     if (ch == ']' && bracketDepth > 0) { bracketDepth--; column++; continue; }
                     if (ch == '<') { angleDepth++; column++; continue; }
                     if (ch == '>' && angleDepth > 0) { angleDepth--; column++; continue; }
                     if ((parenDepth > 0 || bracketDepth > 0 || angleDepth > 0))
+                    {
+                        column++;
+                        continue;
+                    }
+                    if (annotationDefaultValue && (ch == '{' || ch == '}'))
                     {
                         column++;
                         continue;
