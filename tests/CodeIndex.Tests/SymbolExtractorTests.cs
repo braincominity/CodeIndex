@@ -8382,20 +8382,26 @@ public class SymbolExtractorTests
     {
         // Issue #362: `new System.Text.StringBuilder().Append(...)` などの式文が、
         // 正規表現が最初の `(` で止まるために returnType=`new` / interface=手前の修飾チェーン
-        // （名前空間 `System.Text` や外側型 `Outer` などドット連鎖そのもの）/
+        // （namespace `System.Text` / 外側型 `Outer` / `MyApp.Outer` のような両者の混在など、
+        // ドット連鎖そのもの。この位置では namespace と外側型を区別しない）/
         // name=構築されている型（`StringBuilder` / `HttpClient` / `Inner`）として
         // 明示的インターフェースメソッド定義に化けないこと。ブレース初期化子形
         // (`new Outer.Inner { A = 1 }.Consume();`) と `_ = new ...` 形も同じフィクスチャで
         // 固定し、brace-initializer 側では `Outer.Inner` / `Inner.Consume` のコンテナ関係
-        // と `Consume` が 1 本だけ（= brace-init から phantom `function Consume` が増えない）
-        // ことまでピン留めする。
+        // と `Consume` が全体 1 本だけ（= brace-init から phantom `function Consume` が
+        // 増えない、別コンテナ配下や container 未設定の phantom も出ない）ことまで
+        // ピン留めする。
         // Issue #362: expression statements like `new System.Text.StringBuilder().Append(...)`
         // must not masquerade as explicit interface method definitions. The phantom name would
         // be the identifier right before the first `(` — the type being constructed
         // (`StringBuilder` / `HttpClient` / `Inner`), because the explicit-interface regex
-        // stops at the first `(` and consumes the preceding dot-chain (which may be a
-        // namespace prefix like `System.Text` or an enclosing-type chain like `Outer`, or a
-        // mix) as the would-be interface qualifier. Brace-initializer forms
+        // stops at the first `(` and consumes the preceding dot-chain as the would-be
+        // interface qualifier. That qualifier may be a namespace prefix (`System.Text` in
+        // `new System.Text.StringBuilder()`), an enclosing-type chain (`Outer` in
+        // `new Outer.Inner()` where `Outer` is an outer class, not a namespace), or a
+        // mix of both (e.g. `new MyApp.Outer.Inner()` where `MyApp` is a namespace and
+        // `Outer` is an enclosing type) — the regex does not distinguish which segments are
+        // namespaces and which are enclosing types at this position. Brace-initializer forms
         // (`new Outer.Inner { A = 1 }.Consume();`) and discard forms (`_ = new ...`) are
         // also pinned here; the brace-initializer case additionally pins the real
         // `Outer` → `Inner` → `Consume` container chain and that exactly one `Consume`
@@ -8410,15 +8416,20 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "DiscardNew");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "UseNew");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "BraceInitNew");
-        // Nested Outer.Inner container chain must be preserved, and exactly one Consume row
-        // must live under Inner — a phantom `function Consume` emitted from the
-        // `new Outer.Inner { A = 1 }.Consume();` site would produce a second Consume row
-        // (or one without a proper container) and fail Assert.Single.
-        // ネストした Outer.Inner のコンテナ関係と、`Consume` が Inner 配下に 1 本だけ出る
-        // ことを固定。brace-init 側から phantom `function Consume` が追加されれば Consume
-        // が 2 本になって Single が落ちる。
+        // Nested Outer.Inner container chain must be preserved, and exactly one Consume symbol
+        // must exist in total — emitted under Inner. Two guards here:
+        //   (a) the total `Consume` count across ALL kinds / containers must be 1, so a
+        //       phantom `function Consume` emitted under `Svc` (or with no container at all)
+        //       from `new Outer.Inner { A = 1 }.Consume();` cannot sneak past by living
+        //       outside `ContainerName == "Inner"`; and
+        //   (b) that single `Consume` must be a `function` under `Inner` under `Outer`, so a
+        //       broken container chain also fails.
+        // ネストした Outer.Inner のコンテナ関係を固定。`Consume` は全体 1 本のみ（別コンテナ
+        // 配下や container 未設定の phantom も弾く）かつ、その 1 本は `Inner` 配下に属する
+        // `function` である、という二段のガードで brace-init phantom を検出する。
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Outer");
         Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Inner" && s.ContainerKind == "class" && s.ContainerName == "Outer"));
+        Assert.Single(symbols.Where(s => s.Name == "Consume"));
         Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Consume" && s.ContainerKind == "class" && s.ContainerName == "Inner"));
         // Explicit interface impl on Consumer class must still be captured (regression guard)
         // Consumer クラスの明示的インターフェース実装は引き続き抽出されること（回帰防止）
