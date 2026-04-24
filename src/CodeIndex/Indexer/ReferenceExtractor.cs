@@ -152,6 +152,40 @@ public static class ReferenceExtractor
         },
     };
 
+    // JavaScript / TypeScript tokens that legally sit immediately before a template literal
+    // without being a tag identifier: unary / binary operators (`void \`...\``,
+    // `delete \`...\``, `foo in \`...\``, `foo instanceof \`...\``), switch-case label
+    // (`case \`...\`:`), and clause / statement keywords (`export default \`...\``,
+    // `try {} finally \`...\``). Without this gate the tagged-template scanner (issue #268)
+    // emits phantom call rows for those keywords. This set is intentionally applied ONLY at
+    // the tagged-template emit site, not to the shared `CallRegex` path, so legitimate
+    // member calls like `api.in()` / `api.instanceof()` / `api.delete()` / `api.case()` /
+    // `api.void()` / `promise.finally()` remain captured. The denylist is also bypassed
+    // when the hit's `IsMemberAccess` flag is set — `obj.default\`x\`` and
+    // `obj.finally\`y\`` are legal tagged-template calls because every reserved word is a
+    // legal property name in JS/TS, and the masker's member-access detection reports those
+    // hits separately from bare-keyword hits. `of` is intentionally NOT listed because it
+    // is an unreserved identifier — `const of = ...; of\`x\`` is a legal tagged-template
+    // call. The narrower `for (...of \`...\`)` header suppression lives in
+    // `StructuralLineMasker.FilterJsForOfHeaderHits`.
+    // JS/TS でタグ無しテンプレート直前に現れてタグではないトークン: 単項/二項演算子
+    // (`void \`...\`` / `delete \`...\`` / `foo in \`...\`` / `foo instanceof \`...\``)、
+    // switch-case ラベル (`case \`...\`:`)、clause/statement キーワード
+    // (`export default \`...\`` / `try {} finally \`...\``)。汎用 CallRegex には適用せず
+    // タグ付きテンプレート発行時だけに限定するため、`api.in()` / `api.instanceof()` /
+    // `api.delete()` / `api.case()` / `api.void()` / `promise.finally()` のような正当な
+    // メンバー呼び出しは引き続き捕捉される。さらに hit の `IsMemberAccess` が立って
+    // いる場合もこの denylist を迂回する — JS/TS ではすべての予約語が property 名に
+    // なれるため `obj.default\`x\`` や `obj.finally\`y\`` は正当なタグ呼び出しで、
+    // masker 側でメンバーアクセス判定が済んでいる。`of` は予約語ではなく
+    // `const of = ...; of\`x\`` が正当なタグ呼び出しになりうるためここには含めない。
+    // `for (...of \`...\`)` ヘッダの抑止は
+    // `StructuralLineMasker.FilterJsForOfHeaderHits` 側で扱う。
+    private static readonly HashSet<string> JsTaggedTemplateOperatorNames = new(StringComparer.Ordinal)
+    {
+        "void", "case", "delete", "in", "instanceof", "default", "finally",
+    };
+
     private static readonly Regex StringLiteralRegex = new(
         "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`",
         RegexOptions.Compiled);
@@ -682,13 +716,35 @@ public static class ReferenceExtractor
             content = content.Replace("\r\n", "\n").Replace("\r", "\n");
         content = FileIndexer.StripLineLeadingBom(content);
         var lines = content.Split('\n');
-        var structuralLines = StructuralLineMasker.MaskLines(language, lines);
+        var structuralLines = StructuralLineMasker.MaskLines(language, lines, out var jsTaggedTemplateHits);
         var csharpLinesInsideMultilineStringContent = language == "csharp"
             ? BuildCSharpMultilineStringContentLines(lines)
             : null;
         var preparedLines = new string[lines.Length];
         for (var pi = 0; pi < lines.Length; pi++)
             preparedLines[pi] = PrepareLine(language, structuralLines[pi]);
+        // Group JS/TS tagged template call sites by line for O(1) lookup in the per-line loop.
+        // Tagged templates like `gql\`...\`` / `styled.div\`...\`` / `sql\`...${x}...\`` have no
+        // trailing `(`, so CallRegex cannot see them. The structural masker already identifies
+        // template openers while walking JS/TS token state, and emits one hit per opener with
+        // the preceding tag identifier.
+        // JS/TS のタグ付きテンプレート呼び出し位置を行番号でグループ化し、ループ中の参照追加で即座に拾えるようにする。
+        // `gql\`...\`` / `styled.div\`...\`` / `sql\`...${x}...\`` は末尾 `(` がなく CallRegex で取れないが、
+        // 構造マスカーがテンプレート opener 検出時に先行する tag 識別子を併せて記録する。
+        Dictionary<int, List<JsTaggedTemplateHit>>? jsTaggedTemplatesByLine = null;
+        if (jsTaggedTemplateHits != null && jsTaggedTemplateHits.Count > 0)
+        {
+            jsTaggedTemplatesByLine = new Dictionary<int, List<JsTaggedTemplateHit>>();
+            foreach (var hit in jsTaggedTemplateHits)
+            {
+                if (!jsTaggedTemplatesByLine.TryGetValue(hit.Line, out var bucket))
+                {
+                    bucket = new List<JsTaggedTemplateHit>();
+                    jsTaggedTemplatesByLine[hit.Line] = bucket;
+                }
+                bucket.Add(hit);
+            }
+        }
         // Pre-pass C# attribute analysis so cross-line `[\n Foo("x")\n]` and parameter
         // attributes `void M([Attr] T x)` are classified consistently with same-line `[Foo]`.
         // 行を跨いだ `[\n Foo("x")\n]` やパラメータ属性 `void M([Attr] T x)` も、同一行の `[Foo]` と
@@ -1639,6 +1695,49 @@ public static class ReferenceExtractor
                     context,
                     lineNumber,
                     ResolveContainerForCall);
+            }
+
+            // issue #268: JS/TS tagged template literal call sites. The structural masker
+            // already located each template opener and captured its preceding tag identifier;
+            // emit one `call` row per hit so `gql\`...\`` / `styled.div\`...\`` / `sql\`...${x}...\``
+            // surface in references / callers / callees / impact just like `fn()` call sites.
+            // issue #268: JS/TS タグ付きテンプレートリテラルの呼び出し位置。構造マスカーが
+            // テンプレート opener を検出済みで先行する tag 識別子を記録しているため、そのまま
+            // `call` として発行し、`gql\`...\``・`styled.div\`...\``・`sql\`...${x}...\`` を
+            // references / callers / callees / impact に反映する。
+            if (jsTaggedTemplatesByLine != null
+                && jsTaggedTemplatesByLine.TryGetValue(lineNumber, out var tagHitsOnLine))
+            {
+                foreach (var hit in tagHitsOnLine)
+                {
+                    var name = hit.Name;
+                    // Bare-name suppression (shared ignore list + tagged-template
+                    // operator denylist) is bypassed for member-access tags because
+                    // any reserved / keyword-ish identifier is a legal property name
+                    // in JS/TS — `obj.return\`x\``, `obj.await\`y\``, `obj.yield\`z\``,
+                    // `obj.default\`w\``, `obj.finally\`v\`` all evaluate to real
+                    // tagged-template calls. Only bare-keyword forms such as
+                    // `yield \`x\``, `await \`x\``, `export default \`x\``,
+                    // `try {} finally \`x\`` should remain suppressed.
+                    // bare-name による抑止（共有 ignore list と tagged-template 演算子
+                    // denylist）は member-access のタグでは迂回する。JS/TS ではすべての
+                    // 予約語相当 identifier が property 名になれるため
+                    // `obj.return\`x\``・`obj.await\`y\``・`obj.yield\`z\``・
+                    // `obj.default\`w\``・`obj.finally\`v\`` はすべて正当なタグ呼び出し。
+                    // `yield \`x\``・`await \`x\``・`export default \`x\``・
+                    // `try {} finally \`x\`` のような bare-keyword 形のみ抑止する。
+                    if (!hit.IsMemberAccess)
+                    {
+                        if (IsIgnoredCallName(language, name))
+                            continue;
+                        if (JsTaggedTemplateOperatorNames.Contains(name))
+                            continue;
+                    }
+                    if (definitionNames != null && definitionNames.Contains(name))
+                        continue;
+                    var tagContainer = ResolveContainerForCall(hit.Column - 1);
+                    AddChainReference(references, seen, fileId, name, hit.Column, "call", context, lineNumber, tagContainer);
+                }
             }
 
             // issue #293: bare no-arg attributes / annotations are invisible to CallRegex because
