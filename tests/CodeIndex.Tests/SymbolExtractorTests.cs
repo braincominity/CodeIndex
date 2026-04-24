@@ -5806,6 +5806,107 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_Interface_ModifierSlotMatrix_LocksInCommonLegalShapes()
+    {
+        // Closes #302: the C# interface row's modifier slot must accept the common
+        // legal declaration shapes in a single fixture so a future modifier-slot
+        // refactor (mirror of the #238 `operator checked`, #244 `static abstract`,
+        // #355 `file`, and #376 `new` families) cannot silently drop one variant.
+        // The fixture is intentionally hand-verified to be legal C# — `partial`
+        // must appear immediately before the `interface` keyword (CS0267 otherwise)
+        // so `partial public interface` is NOT a legal ordering and is intentionally
+        // absent. Non-canonical modifier order is instead demonstrated by
+        // `unsafe public interface` (the `unsafe` type modifier has no required
+        // position relative to accessibility). Covers plain `interface`, `public
+        // interface`, explicit `internal interface`, `file interface` (C# 11
+        // file-scoped, cannot combine with accessibility), bare `partial interface`,
+        // `public partial interface`, non-canonical `unsafe public interface`,
+        // `unsafe interface`, the nested `public new interface` that hides a
+        // same-named base-type member, and the nested `public new partial interface`
+        // that exercises the `new + partial` modifier interaction on nested types.
+        // Each unique name is pinned with `Assert.Single` so a silent duplicate row
+        // or a kind/visibility relabel on a sibling variant cannot make this test
+        // pass via a second matching row. The total interface-symbol count for the
+        // fixture is also asserted so a phantom extra interface emission anywhere
+        // in the file cannot slip past the per-name predicates.
+        // Closes #302: C# interface 行の修飾子スロットが、単一 fixture で代表的な
+        // 合法宣言形を受理することを固定する。修飾子スロットの将来的な再編（#238
+        // の `operator checked`、#244 の `static abstract`、#355 の `file`、#376
+        // の `new` と同じファミリの問題）で、いずれか1形を黙って落とす回帰を防ぐ。
+        // fixture は手で合法性を検証済みで、`partial` は `interface` キーワード
+        // 直前にしか置けず（違反すると CS0267）、`partial public interface` は
+        // 合法な順序ではないので意図的に含めない。非正準順序は `unsafe public
+        // interface`（`unsafe` 型修飾子は可視性に対して順序の制約がない）で代替
+        // する。plain `interface`、`public interface`、明示 `internal interface`、
+        // `file interface`（C# 11 file-scoped、accessibility と併用不可）、素の
+        // `partial interface`、`public partial interface`、非正準順の `unsafe
+        // public interface`、`unsafe interface`、同名ベースメンバを隠蔽する
+        // ネストの `public new interface`、`new + partial` 修飾子相互作用を
+        // 検証するネストの `public new partial interface` を網羅する。各ユニーク
+        // 名は `Assert.Single` で固定し、兄弟変種に silent duplicate や kind /
+        // visibility relabel が入っても別行のヒットで silent pass しないように
+        // する。fixture 全体の interface シンボル総数もアサートして、ファイル内
+        // のどこかで phantom interface が追加された場合でも per-name predicate
+        // をすり抜けないようにする。
+        var content = """
+            namespace ModifierSlotMatrix;
+
+            interface IPlain { void Do(); }
+            public interface IPublic { void Do(); }
+            internal interface IInternal { void Do(); }
+            file interface IFile { void Do(); }
+            partial interface IPartial { void Do(); }
+            public partial interface IPublicPartial { void Do(); }
+            unsafe public interface IUnsafePublic { void Do(); }
+            unsafe interface IUnsafe { void Do(); }
+
+            public class Base
+            {
+                public interface INested { void Do(); }
+            }
+            public class Derived : Base
+            {
+                public new interface INested { void Do(); }
+                public new partial interface IPartialNested { void Do(); }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IPlain" && string.IsNullOrEmpty(s.Visibility));
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IPublic" && s.Visibility == "public");
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IInternal" && s.Visibility == "internal");
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IFile" && string.IsNullOrEmpty(s.Visibility));
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IPartial" && string.IsNullOrEmpty(s.Visibility));
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IPublicPartial" && s.Visibility == "public");
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IUnsafePublic" && s.Visibility == "public");
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IUnsafe" && string.IsNullOrEmpty(s.Visibility));
+
+        // Nested `public new interface INested` must produce a second symbol attributed
+        // to the `Derived` container alongside the base-side `INested` on `Base`.
+        // `public new partial interface IPartialNested` covers the `new + partial`
+        // modifier interaction on nested types.
+        // ネストの `public new interface INested` は、基底側の `Base.INested` に加えて
+        // `Derived` コンテナ下の独立シンボルとして抽出される必要がある。
+        // `public new partial interface IPartialNested` はネスト型の `new + partial`
+        // 修飾子相互作用を検証する。
+        var nested = symbols.Where(s => s.Kind == "interface" && s.Name == "INested").ToList();
+        Assert.Equal(2, nested.Count);
+        Assert.Single(nested, s => s.ContainerName == "Base" && s.Visibility == "public");
+        Assert.Single(nested, s => s.ContainerName == "Derived" && s.Visibility == "public");
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IPartialNested" && s.ContainerName == "Derived" && s.Visibility == "public");
+
+        // Fixture contains exactly 11 legal interface declarations (8 top-level +
+        // 3 nested: Base.INested, Derived.INested, Derived.IPartialNested). Pinning
+        // the aggregate count here prevents a phantom interface emission elsewhere
+        // in the file from slipping past the per-name `Assert.Single` predicates.
+        // fixture 全体の合法 interface 宣言は正確に 11 件（top-level 8 件 + nested 3
+        // 件: Base.INested、Derived.INested、Derived.IPartialNested）。集計数も
+        // アサートすることで、ファイル中のどこかで phantom interface が発生しても
+        // per-name `Assert.Single` をすり抜けないようにする。
+        Assert.Equal(11, symbols.Count(s => s.Kind == "interface"));
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsExpressionBodiedMembers()
     {
         var content = "public class Calc\n{\n    public int X => 42;\n    public string Name => \"calc\";\n    public static double Pi => 3.14;\n}";
