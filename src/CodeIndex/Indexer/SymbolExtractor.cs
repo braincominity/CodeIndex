@@ -7965,6 +7965,26 @@ public static class SymbolExtractor
         bool expressionBody = false;
         int parenDepth = 0;
         int bracketDepth = 0;
+        // `;` early-return safety check. Required so the new top-level `;` clamp
+        // only fires once we have observed a parameter list (`(`), which body-less
+        // function-like declarations (`void M();`, ctor signatures) always carry.
+        // Without this guard, the column-space mismatch where `absoluteStartColumn`
+        // arrives in collapsed-generic / attribute-stripped match-line space and is
+        // sliced into raw `structuralLines` can place an unrelated leading `;` (the
+        // sibling member that came before this declaration, e.g. `event ... E;`
+        // ahead of a same-line `class Wrapped<T>`) at scan position 0 and trick the
+        // clamp into ending the body range before the real declaration even
+        // begins. Function/delegate signatures by definition pass through `(` first.
+        // Closes #515 review follow-up.
+        // `;` 早期 return 用の安全ガード。新たに追加する top-level `;` クランプは
+        // パラメータリスト `(` を一度でも見たあとでのみ発火するようにする。これは
+        // body-less な関数系宣言 (`void M();`、コンストラクタ等) は必ず `(` を通る
+        // ため安全であり、逆に column-space mismatch (collapsed-generic 列や
+        // attribute-strip された match-line 列を raw な `structuralLines` に
+        // スライスするケース) で scan 位置 0 が直前 sibling の `;` (例: same-line
+        // `class Wrapped<T>` 直前の `event ... E;`) に重なってしまった場合に、
+        // 宣言が始まる前にクランプが暴発するのを防ぐ。Closes #515 review follow-up.
+        bool sawOpenParen = false;
         var lexState = new CSharpLexState();
 
         for (int i = startIndex; i < lines.Length; i++)
@@ -7997,7 +8017,7 @@ public static class SymbolExtractor
                     continue;
                 }
 
-                if (c == '(') { parenDepth++; continue; }
+                if (c == '(') { parenDepth++; sawOpenParen = true; continue; }
                 if (c == ')' && parenDepth > 0) { parenDepth--; continue; }
                 if (c == '[') { bracketDepth++; continue; }
                 if (c == ']' && bracketDepth > 0) { bracketDepth--; continue; }
@@ -8028,6 +8048,32 @@ public static class SymbolExtractor
                     }
                     continue;
                 }
+
+                // Top-level `;` after a parameter list and before any block body opened
+                // terminates a body-less function-like declaration (`void M();`,
+                // ctor signatures, etc.). Without this in-loop guard, recovery for
+                // same-line siblings whose own line ends with the enclosing type's `}`
+                // (`{ int P { get; } void M(); }`) falls through the trailing
+                // `EndsWith(';')` fallback because the physical line ends with `}`,
+                // then the scanner bleeds into later lines and attributes their brace
+                // ranges to this body-less symbol. The `sawOpenParen` guard keeps the
+                // clamp inert when `absoluteStartColumn` arrived in collapsed-generic
+                // / attribute-stripped column space and slid the scan onto an earlier
+                // sibling's `;`, since real function-like signatures always pass
+                // through `(` before `;`. Closes #515.
+                // ブロック本体が開く前に、かつパラメータリスト `(` を通過したあとで
+                // 出現した top-level `;` は、本体を持たない関数系宣言
+                // (`void M();`、コンストラクタ等) の終端としてその場で確定する。
+                // これがないと、`{ int P { get; } void M(); }` のように物理行末が
+                // `}` で閉じる same-line sibling 復元では末尾の `EndsWith(';')`
+                // フォールバックが効かず、次行以降の brace を本体と誤認して
+                // body-less symbol に取り込んでしまう。`sawOpenParen` ガードに
+                // よって、`absoluteStartColumn` が collapsed-generic / attribute-strip
+                // 後の列で渡って raw `structuralLines` 上の直前 sibling の `;` に
+                // 落ち込むケースでもクランプが暴発しない (関数系シグネチャは必ず
+                // `(` を通過するため)。Closes #515.
+                if (c == ';' && sawOpenParen && !opened && parenDepth == 0 && bracketDepth == 0)
+                    return (i + 1, null, null);
 
                 // Detect '=>' at top level (outside any (), [], {}) before any block body opened.
                 // This marks an expression-bodied member; body spans the declaration line
