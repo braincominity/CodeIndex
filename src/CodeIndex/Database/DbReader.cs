@@ -59,6 +59,15 @@ public partial class DbReader
     // #86: name_folded 列が全行埋まっているか（fold 経路を使えるか）。
     internal readonly bool _foldReady;
     internal readonly bool _csharpSymbolNameContractCurrent;
+    // #435: True when `symbols.is_metadata_target` has been populated for every C# class-like
+    // row by the writer's resolver and the stamp in `codeindex_meta` matches the current
+    // version. Readers that enforce metadata-target eligibility prefer this column over the
+    // legacy `signature LIKE '%: %'` heuristic when the flag is true; otherwise they continue
+    // to fall back to the heuristic so legacy / partial DBs do not silently miss edges.
+    // #435: C# の authoritative `is_metadata_target` が全行 populate されて stamp 一致したときのみ
+    // true。true なら reader は legacy ヒューリスティックではなく列を使う。false の DB では
+    // 従来どおり `signature LIKE '%: %'` にフォールバックする。
+    internal readonly bool _csharpMetadataTargetReady;
     internal readonly bool _sqlGraphContractCurrent;
     // Tracks which languages have authoritative cross-file hotspot family semantics.
     // Mixed legacy/update states can therefore degrade only the affected language instead of
@@ -213,6 +222,11 @@ public partial class DbReader
             TryGetMetaString(_conn, DbContext.CSharpSymbolNameContractVersionMetaKey),
             DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
             StringComparison.Ordinal);
+        _csharpMetadataTargetReady = _symbolColumns.Contains("is_metadata_target")
+            && string.Equals(
+                TryGetMetaString(_conn, DbContext.GetMetadataTargetVersionMetaKey("csharp")),
+                DbContext.MetadataTargetVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                StringComparison.Ordinal);
         _sqlGraphContractCurrent = string.Equals(
             TryGetMetaString(_conn, DbContext.SqlGraphContractVersionMetaKey),
             DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -1101,10 +1115,7 @@ public partial class DbReader
             return false;
         }
 
-        var patternContext = contextForFilter;
-        var patternColumn = columnNumber;
-        TryBuildCSharpUsingStaticPatternContextWindow(path, lineNumber, contextForFilter, columnNumber, out patternContext, out patternColumn);
-        if (!IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn))
+        if (!TryBuildCSharpUsingStaticPatternContextWindow(path, lineNumber, contextForFilter, columnNumber, symbolName))
             return false;
 
         var activeTargets = GetActiveCSharpUsingStaticTargets(path, lineNumber);
@@ -2283,46 +2294,53 @@ public partial class DbReader
             || TryConsumeTrailingCSharpToken(text, ref cursor, "default");
     }
 
-    private void TryBuildCSharpUsingStaticPatternContextWindow(string path, int lineNumber, string contextForFilter, int columnNumber, out string patternContext, out int patternColumn)
+    private bool TryBuildCSharpUsingStaticPatternContextWindow(string path, int lineNumber, string contextForFilter, int columnNumber, string symbolName)
     {
-        patternContext = contextForFilter;
-        patternColumn = columnNumber;
+        var patternContext = contextForFilter;
+        var patternColumn = columnNumber;
         if (!_hasChunksTable
             || string.IsNullOrWhiteSpace(path)
             || string.IsNullOrWhiteSpace(contextForFilter)
+            || string.IsNullOrWhiteSpace(symbolName)
             || lineNumber <= 1
             || columnNumber <= 0)
         {
-            return;
+            return IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn);
         }
 
-        var startLine = Math.Max(1, lineNumber - 2);
-        if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap, startLine, lineNumber)
-            || !lineMap.TryGetValue(lineNumber, out var currentLine))
+        var maxLookback = lineNumber - 1;
+        var lookback = Math.Min(2, maxLookback);
+        while (true)
         {
-            return;
+            var startLine = Math.Max(1, lineNumber - lookback);
+            if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap, startLine, lineNumber)
+                || !lineMap.TryGetValue(lineNumber, out var currentLine))
+            {
+                return IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn);
+            }
+
+            var lines = new List<string>();
+            var prefixLength = 0;
+            for (var absoluteLine = startLine; absoluteLine <= lineNumber; absoluteLine++)
+            {
+                if (!lineMap.TryGetValue(absoluteLine, out var lineText))
+                    continue;
+
+                if (absoluteLine < lineNumber)
+                    prefixLength += lineText.Length + 1;
+                lines.Add(lineText);
+            }
+
+            patternContext = lines.Count <= 1 ? currentLine : string.Join('\n', lines);
+            patternColumn = lines.Count <= 1 ? columnNumber : prefixLength + columnNumber;
+            if (IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn))
+                return true;
+
+            if (startLine == 1 || lookback >= maxLookback)
+                return false;
+
+            lookback = Math.Min(maxLookback, Math.Max(lookback + 1, lookback * 2));
         }
-
-        var lines = new List<string>();
-        var prefixLength = 0;
-        for (var absoluteLine = startLine; absoluteLine <= lineNumber; absoluteLine++)
-        {
-            if (!lineMap.TryGetValue(absoluteLine, out var lineText))
-                continue;
-
-            if (absoluteLine < lineNumber)
-                prefixLength += lineText.Length + 1;
-            lines.Add(lineText);
-        }
-
-        if (lines.Count <= 1)
-        {
-            patternContext = currentLine;
-            return;
-        }
-
-        patternContext = string.Join('\n', lines);
-        patternColumn = prefixLength + columnNumber;
     }
 
     private static int SkipCSharpTriviaBackward(string text, int cursor)
@@ -4074,7 +4092,18 @@ public partial class DbReader
         cmd.CommandText = sql;
         cmd.Parameters.AddWithValue("@metadataAmbigName", definition.Name);
         var count = Convert.ToInt32(cmd.ExecuteScalar() ?? 0);
-        return count <= 1;
+        // Require exactly one authoritative metadata target named `definition.Name`.
+        // `count == 0` is also unsafe for the bypass — if no class-like symbol with
+        // that name is a valid metadata target, then a `[Foo]` reference cannot
+        // resolve to the passed-in definition either. `count <= 1` would let the
+        // bypass fire with zero candidates and falsely attribute `[Foo]` sites to a
+        // non-attribute definition (e.g. `class FooAttribute : BaseService` post
+        // #435 iter 4 scope-aware resolver). Issue #435 codex review iter 4.
+        // 1 件厳密一致のみ unambiguous とみなす。count=0 はメタデータターゲットが
+        // 一つも無い状態であり、`[Foo]` が passed-in 定義へ解決する根拠も無いため
+        // bypass は発動させない。`<= 1` だと #435 iter 4 のスコープ対応で非属性
+        // 派生になったクラスに `[Foo]` 参照を誤帰属させる。
+        return count == 1;
     }
 
     private bool SourceFileHasStructuredTypeEvidence(long fileId, string typeName)
@@ -4501,6 +4530,15 @@ public partial class DbReader
         var freshness = GetWorkspaceFreshness();
         var hasCSharpFiles = ScopeMayIncludeCSharpFiles("csharp", pathPatterns: null, excludePathPatterns: null, excludeTests: false, since: null);
         var csharpSymbolNameReady = !hasCSharpFiles || _csharpSymbolNameContractCurrent;
+        // #435 codex review iter 3: mirror `csharp_symbol_name_ready` — the readiness flag
+        // only applies when the workspace actually contains C# files, and the column +
+        // stamp must match the current contract for the resolver edges to be trusted.
+        // This surfaces the same flag we already emit from the CLI `index` JSON so that
+        // `status --json` and MCP `status` expose a consistent trust signal (README /
+        // CLAUDE.md contract).
+        // #435 codex review iter 3: `csharp_symbol_name_ready` と同じ条件で expose する。
+        // C# ファイルが 0 なら ready=true、そうでなければ列 + stamp の一致を要求する。
+        var csharpMetadataTargetReady = !hasCSharpFiles || _csharpMetadataTargetReady;
         var sqlGraphContractSignal = GetSqlGraphContractSignal(lang: null);
         var hotspotFamilySignal = GetHotspotFamilySignal(lang: null);
         var foldReadyReason = ResolveFoldReadyReason();
@@ -4527,6 +4565,7 @@ public partial class DbReader
             HotspotFamilyReady = hotspotFamilySignal.Ready,
             HotspotFamilyDegradedReason = hotspotFamilySignal.DegradedReason,
             CSharpSymbolNameReady = csharpSymbolNameReady,
+            CSharpMetadataTargetReady = csharpMetadataTargetReady,
             SqlGraphContractReady = sqlGraphContractSignal.Ready,
             SqlGraphContractDegradedReason = sqlGraphContractSignal.DegradedReason,
             FoldReady = _foldReady,
@@ -4697,9 +4736,32 @@ public partial class DbReader
         // NULL signature は C# 命名規約 `name LIKE '%Attribute'` に縮退 — 従来の
         // 無条件許容より厳密で、legacy-migration DB で任意の NULL-signature class が
         // metadata target 扱いされるのを防ぐ。signature 列欠落 DB も同じ命名規約を使う。
-        var csharpClause = _symbolColumns.Contains("signature")
-            ? $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND ((s.signature IS NOT NULL AND s.signature LIKE '%: %') OR (s.signature IS NULL AND s.name LIKE '%Attribute')))"
-            : $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND s.name LIKE '%Attribute')";
+        // Authoritative column takes precedence once the writer's resolver has stamped the
+        // current `metadata_target_version_csharp` version. Drops the `: %` heuristic for C#
+        // so non-attribute classes like `class MyAuditAttribute : BaseService` no longer fake
+        // ambiguity against a sibling real `class MyAuditAttribute : Attribute`. Issue #435.
+        // writer の resolver が current version を stamp 済みの DB では authoritative 列を優先し、
+        // `class MyAuditAttribute : BaseService` のような非 Attribute 派生を ambiguity から除外する。
+        // Three-way branch keyed off the `is_metadata_target` column presence, not
+        // `signature`. Branch (2) (legacy heuristic) must only fire when both the new
+        // column and the old signature column are present — a DB missing
+        // `is_metadata_target` entirely is truly ancient and must degrade to branch (3).
+        // Issue #435 codex review.
+        // 3 way 分岐は `is_metadata_target` 列の有無で切り替え、`signature` の有無では判定しない。
+        // `is_metadata_target` 列すらない DB は真に古い legacy なので命名規約 fallback (branch 3) に落とす。
+        string csharpClause;
+        if (_csharpMetadataTargetReady)
+        {
+            csharpClause = $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND s.is_metadata_target = 1)";
+        }
+        else if (_symbolColumns.Contains("is_metadata_target") && _symbolColumns.Contains("signature"))
+        {
+            csharpClause = $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND ((s.signature IS NOT NULL AND s.signature LIKE '%: %') OR (s.signature IS NULL AND s.name LIKE '%Attribute')))";
+        }
+        else
+        {
+            csharpClause = $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND s.name LIKE '%Attribute')";
+        }
         // JS / TS clause — decorators target runtime entities (classes and factory
         // functions). TS `interface` is a type-only construct that cannot be a
         // decorator target, so excluding it avoids false ambiguity against a

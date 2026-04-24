@@ -1514,6 +1514,7 @@ public partial class McpServer
         var priorFoldVersion = db.GetMetaString("fold_key_version");
         var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
         var priorCSharpSymbolNameContractVersion = db.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey);
+        var priorMetadataTargetCsharp = db.GetMetaString(DbContext.GetMetadataTargetVersionMetaKey("csharp"));
         var priorSqlGraphContractVersion = db.GetMetaString(DbContext.SqlGraphContractVersionMetaKey);
         var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
         var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
@@ -1528,7 +1529,9 @@ public partial class McpServer
         if (rebuild)
         {
             db.ClearReadyFlags();
-            new DbWriter(db.Connection).ClearHotspotFamilyReady();
+            var rebuildWriter = new DbWriter(db.Connection);
+            rebuildWriter.ClearHotspotFamilyReady();
+            rebuildWriter.ClearMetadataTargetReady();
             db.DropAll();
         }
 
@@ -1575,6 +1578,7 @@ public partial class McpServer
         // 実書き込み直前で readiness をクリア。
         writer.ClearReadyFlags();
         writer.ClearHotspotFamilyReady();
+        writer.ClearMetadataTargetReady();
 
         // Purge stale files / 古いファイルをパージ
         var purged = writer.PurgeStaleFiles(projectPath);
@@ -1640,9 +1644,11 @@ public partial class McpServer
         // throwing, so a partial failure leaves trust degraded and `validate` still surfaces it.
         // MCP index は CLI と同等に file_issues を永続化するため、成功時は graph / issues の両方を stamp する。
         var csharpSymbolNameReadyAfter = !writer.HasAnyFilesWithLanguage("csharp");
+        var csharpMetadataTargetReadyAfter = !writer.HasAnyFilesWithLanguage("csharp");
         var sqlGraphContractReadyAfter = !writer.HasAnyFilesWithLanguage("sql");
         var foldReadyAfter = false;
         string? foldReadyReason = null;
+        _ = priorMetadataTargetCsharp;
         if (errors == 0)
         {
             writer.MarkGraphReady();
@@ -1650,6 +1656,16 @@ public partial class McpServer
             writer.MarkSqlGraphContractReady();
             writer.MarkCSharpSymbolNameContractReady();
             csharpSymbolNameReadyAfter = true;
+            if (writer.HasAnyFilesWithLanguage("csharp"))
+            {
+                writer.ResolveCSharpMetadataTargets();
+                writer.MarkMetadataTargetReady("csharp");
+                csharpMetadataTargetReadyAfter = true;
+            }
+            else
+            {
+                csharpMetadataTargetReadyAfter = true;
+            }
             sqlGraphContractReadyAfter = true;
             RestampHotspotFamilyTrust(
                 writer,
@@ -1711,6 +1727,7 @@ public partial class McpServer
             ["sql_graph_contract_ready"] = sqlGraphContractReadyAfter,
             ["sqlGraphContractReady"] = sqlGraphContractReadyAfter,
             ["csharp_symbol_name_ready"] = csharpSymbolNameReadyAfter,
+            ["csharp_metadata_target_ready"] = csharpMetadataTargetReadyAfter,
             // #86 codex review: AI clients use this to tell whether --exact will use the
             // Unicode fold path or silently fall back to ASCII NOCASE. If false after a clean
             ["fold_ready"] = foldReadyAfter,
