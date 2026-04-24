@@ -999,6 +999,15 @@ public static class SymbolExtractor
         if (lang == null || !PatternCache.TryGetValue(lang, out var patterns))
             return [];
 
+        // Null / empty fast path — keep the direct-call null-safe contract that
+        // FileIndexer.StripLineLeadingBom's IsNullOrEmpty check used to provide
+        // before the CRLF normalization step was added in front of it. Closes #183.
+        // null / 空入力は早期 return。CRLF 正規化を StripLineLeadingBom の前に
+        // 入れたことで helper 側の IsNullOrEmpty による null 許容が効かなくなる
+        // ため、direct call の null セーフ契約をここで復元する。Closes #183.
+        if (string.IsNullOrEmpty(content))
+            return [];
+
         // Normalize CRLF / CR to LF first so direct callers that bypass FileIndexer
         // still present a `\n`-only content stream, and then strip line-leading
         // UTF-8 BOM (U+FEFF) defensively so `^\s*`-anchored patterns match on

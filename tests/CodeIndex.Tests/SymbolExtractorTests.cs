@@ -9625,4 +9625,42 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "X");
     }
+
+    [Fact]
+    public void Extract_NullContent_ReturnsEmpty()
+    {
+        // Direct callers that pass `null` must not throw. The #183 CRLF-normalization
+        // step added ahead of StripLineLeadingBom would otherwise dereference `null`
+        // before the helper's IsNullOrEmpty guard could run. Closes #183.
+        // direct call で `null` を渡してもスローしない。#183 で StripLineLeadingBom
+        // の前段に CRLF 正規化を入れたため、helper 側 IsNullOrEmpty まで届かず
+        // `null` を逆参照してしまう回帰を防ぐ。Closes #183.
+        Assert.Empty(SymbolExtractor.Extract(1, "csharp", null!));
+    }
+
+    [Fact]
+    public void Extract_EmptyContent_ReturnsEmpty()
+    {
+        // Empty content returns no symbols and does not throw. Closes #183.
+        // 空入力はシンボル 0 個で、例外にならない。Closes #183.
+        Assert.Empty(SymbolExtractor.Extract(1, "csharp", string.Empty));
+    }
+
+    [Fact]
+    public void Extract_Csharp_CrlfLeadingBom_IndexesFirstLineImport()
+    {
+        // Direct-call input with CRLF line endings AND a leading BOM: the CRLF → LF
+        // normalization must run before StripLineLeadingBom so the line-leading BOM
+        // logic still recognizes mid-file BOMs (helper treats `\n` as the sole line
+        // separator). Closes #183.
+        // CRLF 改行 + 先頭 BOM の direct call: StripLineLeadingBom は `\n` を唯一の
+        // 行区切りとして扱うので、CRLF → LF 正規化を helper より先に通さないと
+        // mid-file 行頭 BOM を剥がし損ねる。Closes #183.
+        const string content = "\uFEFFusing System;\r\n\r\n\uFEFFnamespace CrlfBom;\r\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System" && s.Line == 1);
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "CrlfBom" && s.Line == 3);
+    }
 }
