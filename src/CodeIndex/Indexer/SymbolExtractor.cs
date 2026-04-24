@@ -5131,6 +5131,7 @@ public static class SymbolExtractor
             var braceDepth = 0;
             var parenDepth = 0;
             var bracketDepth = 0;
+            var skippingPropertyValue = false;
 
             for (int lineIndex = target.ScanStartIndex; lineIndex < target.ScanEndExclusive; lineIndex++)
             {
@@ -5142,6 +5143,53 @@ public static class SymbolExtractor
                 while (scanColumn < sanitizedLine.Length)
                 {
                     var ch = sanitizedLine[scanColumn];
+                    if (skippingPropertyValue)
+                    {
+                        if (braceDepth == 0 && parenDepth == 0 && bracketDepth == 0)
+                        {
+                            if (ch == ',')
+                            {
+                                skippingPropertyValue = false;
+                                scanColumn++;
+                                continue;
+                            }
+
+                            if (ch == '}')
+                            {
+                                skippingPropertyValue = false;
+                                continue;
+                            }
+                        }
+
+                        switch (ch)
+                        {
+                            case '{':
+                                braceDepth++;
+                                break;
+                            case '}':
+                                if (braceDepth > 0)
+                                    braceDepth--;
+                                break;
+                            case '(':
+                                parenDepth++;
+                                break;
+                            case ')':
+                                if (parenDepth > 0)
+                                    parenDepth--;
+                                break;
+                            case '[':
+                                bracketDepth++;
+                                break;
+                            case ']':
+                                if (bracketDepth > 0)
+                                    bracketDepth--;
+                                break;
+                        }
+
+                        scanColumn++;
+                        continue;
+                    }
+
                     if (braceDepth == 0 && parenDepth == 0 && bracketDepth == 0)
                     {
                         while (scanColumn < sanitizedLine.Length
@@ -5186,6 +5234,7 @@ public static class SymbolExtractor
                             }
 
                             scanColumn += propertyMatch.Length;
+                            skippingPropertyValue = true;
                             continue;
                         }
 
