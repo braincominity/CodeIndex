@@ -1707,6 +1707,15 @@ public class QueryCommandRunnerTests
             Assert.Equal("call", reference.GetProperty("reference_kind").GetString());
             Assert.Equal("Match", reference.GetProperty("container_name").GetString());
             Assert.Contains("value is Color.Red or Color.Blue;", reference.GetProperty("context").GetString());
+
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal(string.Empty, countStderr);
+            var countJson = ParseJsonOutput(countStdout).RootElement;
+            Assert.Equal(1, countJson.GetProperty("count").GetInt32());
         }
         finally
         {
