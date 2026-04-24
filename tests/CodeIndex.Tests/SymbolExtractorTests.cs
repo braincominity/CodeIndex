@@ -62,7 +62,7 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_JavaScript_StringBraceDoesNotBreakFollowingContainerAssignment()
     {
-        var content = """
+        var content = """"
             export class Example {
               foo() {
                 const value = "}";
@@ -73,7 +73,7 @@ public class SymbolExtractorTests
                 return 1;
               }
             }
-            """;
+            """";
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
         var example = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Example"));
@@ -89,7 +89,7 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_JavaScript_TemplateLiteralBraceDoesNotBreakFollowingContainerAssignment()
     {
-        var content = """
+        var content = """"
             export class Example {
               foo() {
                 const value = `}`;
@@ -100,7 +100,7 @@ public class SymbolExtractorTests
                 return 1;
               }
             }
-            """;
+            """";
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
         var example = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Example"));
@@ -116,7 +116,7 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_TypeScript_TemplateInterpolationBracesStillCountTowardMethodRange()
     {
-        var content = """
+        var content = """"
             export class Example {
               foo() {
                 const value = `${format({ answer: 42 })}`;
@@ -127,7 +127,7 @@ public class SymbolExtractorTests
                 return 1;
               }
             }
-            """;
+            """";
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
         var example = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Example"));
@@ -143,11 +143,11 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_JavaScript_DetectsExportDefaultClassMembers()
     {
-        var content = """
+        var content = """""
             export default class DefaultJs {
                 run() {}
             }
-            """;
+            """"";
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "DefaultJs");
@@ -3203,7 +3203,7 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_CSharp_MultilineVerbatimStringBraceDoesNotBreakFollowingRangeDetection()
     {
-        var content = """
+        var content = """"
             namespace Demo;
 
             public class FixtureHost
@@ -3219,7 +3219,7 @@ public class SymbolExtractorTests
                 {
                 }
             }
-            """;
+            """";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
         var host = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "FixtureHost"));
@@ -3230,6 +3230,51 @@ public class SymbolExtractorTests
         Assert.Equal(10, uses.EndLine);
         Assert.Equal("class", after.ContainerKind);
         Assert.Equal("FixtureHost", after.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_InterpolatedStringCallSites_DoNotEmitPhantomDescribeStateDefinitions()
+    {
+        // Regression for issue #790: method-call text inside interpolation holes of an
+        // outer multi-line string must not be stitched into fake `function` declarations.
+        // The real declaration should remain queryable, but call-site fragments from the
+        // log string must not surface as extra `DescribeState` definitions.
+        // issue #790 の回帰: 外側の複数行文字列にある interpolation hole 内のメソッド呼び出し
+        // テキストを、偽の `function` 宣言として継ぎ合わせてはならない。本物の宣言は
+        // 取得できるままにしつつ、ログ文字列由来の call-site 断片は追加の
+        // `DescribeState` 定義として現れてはならない。
+        var content = """""
+            namespace Demo;
+
+            public sealed class ReporterContext
+            {
+                public string ReportsFolderAbsolutePath { get; set; } = string.Empty;
+            }
+
+            public sealed class AuditLogGenerateService
+            {
+                internal static string DescribeState(string label, string? pathOrCommand)
+                    => $"{label}:{pathOrCommand}";
+
+                public void WriteAuditLog(ReporterContext context, string auditLogPath)
+                {
+                    var message = $"""
+                        Failed to write audit log for reports folder {context.ReportsFolderAbsolutePath}
+                        to {auditLogPath}
+                        current state {
+                            DescribeState("ReportsFolder", context.ReportsFolderAbsolutePath)}
+                        """;
+                }
+            }
+            """"";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var describeState = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "DescribeState"));
+        Assert.Equal("AuditLogGenerateService", describeState.ContainerName);
+        Assert.Equal("string", describeState.ReturnType);
+        Assert.Equal(
+            """internal static string DescribeState(string label, string? pathOrCommand) => $"{label}:{pathOrCommand}";""",
+            describeState.Signature);
     }
 
     [Fact]

@@ -569,37 +569,41 @@ public partial class DbReader
         string? lang = null,
         IReadOnlyList<string>? pathPatterns = null,
         IReadOnlyList<string>? excludePathPatterns = null,
-        bool excludeTests = false)
+        bool excludeTests = false,
+        bool includeSqlGraphContractSignal = true)
         => CombineExactSignals(
             BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
                 _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase"),
             GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
-            GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
+            includeSqlGraphContractSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null);
 
     public ExactQuerySignal GetCallersExactQuerySignal(
         string? lang = null,
         IReadOnlyList<string>? pathPatterns = null,
         IReadOnlyList<string>? excludePathPatterns = null,
-        bool excludeTests = false)
+        bool excludeTests = false,
+        bool includeSqlGraphContractSignal = true)
         => CombineExactSignals(
             BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
                 _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase"),
             GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
-            GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
+            includeSqlGraphContractSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null);
 
     public ExactQuerySignal GetCalleesExactQuerySignal(
         string? lang = null,
         IReadOnlyList<string>? pathPatterns = null,
         IReadOnlyList<string>? excludePathPatterns = null,
-        bool excludeTests = false)
+        bool excludeTests = false,
+        bool includeSqlGraphContractSignal = true)
         => CombineExactSignals(
             BuildExactGraphSignal(ContainerNameExactGraphIndexAvailable,
                 _foldReady ? "idx_symbol_refs_container_name_folded" : "idx_symbol_refs_container_nocase"),
             GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
-            GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
+            includeSqlGraphContractSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null);
 
     public ExactQuerySignal GetAnalyzeSymbolExactQuerySignal(
         bool includeGraphSignal = true,
+        bool includeSqlGraphContractSignal = true,
         string? lang = null,
         IReadOnlyList<string>? pathPatterns = null,
         IReadOnlyList<string>? excludePathPatterns = null,
@@ -608,7 +612,7 @@ public partial class DbReader
         return CombineExactSignals(
             GetDefinitionExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
             includeGraphSignal ? BuildAnalyzeGraphExactQuerySignal() : null,
-            includeGraphSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null);
+            includeGraphSignal && includeSqlGraphContractSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null);
     }
 
     internal bool HasGraphApplicableFiles(string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
@@ -654,6 +658,12 @@ public partial class DbReader
         return input.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
     }
 
+    internal static bool IsSqlLanguage(string? lang)
+        => string.Equals(lang, "sql", StringComparison.OrdinalIgnoreCase);
+
+    internal static bool ContainsSqlLanguage(IEnumerable<string?> langs)
+        => langs.Any(IsSqlLanguage);
+
     private static bool AllowSqlLeafFallbackForQuery(string query)
         => !SqlNameResolver.HasQualifier(query);
 
@@ -680,8 +690,41 @@ public partial class DbReader
     {
         using var reader = cmd.ExecuteTrackedReader();
         return reader.TrackedRead()
-            ? new QueryCountResult(reader.GetInt32(0), reader.GetInt32(1))
+            ? new QueryCountResult(
+                reader.GetInt32(0),
+                reader.GetInt32(1),
+                reader.FieldCount > 2 && !reader.IsDBNull(2) && Convert.ToInt32(reader.GetValue(2)) != 0)
             : new QueryCountResult(0, 0);
+    }
+
+    internal bool AnyFilePathHasLanguage(IEnumerable<string> paths, string lang)
+    {
+        var distinctPaths = paths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Distinct(StringComparer.Ordinal)
+            .Take(256)
+            .ToList();
+        if (distinctPaths.Count == 0)
+            return false;
+
+        using var cmd = _conn.CreateCommand();
+        var placeholders = new List<string>(distinctPaths.Count);
+        for (int i = 0; i < distinctPaths.Count; i++)
+        {
+            var parameterName = $"@sqlPath{i}";
+            placeholders.Add(parameterName);
+            cmd.Parameters.AddWithValue(parameterName, distinctPaths[i]);
+        }
+
+        cmd.CommandText = $"""
+            SELECT 1
+            FROM files
+            WHERE lang = @sqlPathLang
+              AND path IN ({string.Join(", ", placeholders)})
+            LIMIT 1
+            """;
+        cmd.Parameters.AddWithValue("@sqlPathLang", lang);
+        return cmd.ExecuteScalar() != null;
     }
 
     /// <summary>
@@ -1042,10 +1085,7 @@ public partial class DbReader
             return false;
         }
 
-        var patternContext = contextForFilter;
-        var patternColumn = columnNumber;
-        TryBuildCSharpUsingStaticPatternContextWindow(path, lineNumber, contextForFilter, columnNumber, out patternContext, out patternColumn);
-        if (!IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn))
+        if (!TryBuildCSharpUsingStaticPatternContextWindow(path, lineNumber, contextForFilter, columnNumber, symbolName))
             return false;
 
         var activeTargets = GetActiveCSharpUsingStaticTargets(path, lineNumber);
@@ -2224,46 +2264,53 @@ public partial class DbReader
             || TryConsumeTrailingCSharpToken(text, ref cursor, "default");
     }
 
-    private void TryBuildCSharpUsingStaticPatternContextWindow(string path, int lineNumber, string contextForFilter, int columnNumber, out string patternContext, out int patternColumn)
+    private bool TryBuildCSharpUsingStaticPatternContextWindow(string path, int lineNumber, string contextForFilter, int columnNumber, string symbolName)
     {
-        patternContext = contextForFilter;
-        patternColumn = columnNumber;
+        var patternContext = contextForFilter;
+        var patternColumn = columnNumber;
         if (!_hasChunksTable
             || string.IsNullOrWhiteSpace(path)
             || string.IsNullOrWhiteSpace(contextForFilter)
+            || string.IsNullOrWhiteSpace(symbolName)
             || lineNumber <= 1
             || columnNumber <= 0)
         {
-            return;
+            return IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn);
         }
 
-        var startLine = Math.Max(1, lineNumber - 2);
-        if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap, startLine, lineNumber)
-            || !lineMap.TryGetValue(lineNumber, out var currentLine))
+        var maxLookback = lineNumber - 1;
+        var lookback = Math.Min(2, maxLookback);
+        while (true)
         {
-            return;
+            var startLine = Math.Max(1, lineNumber - lookback);
+            if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap, startLine, lineNumber)
+                || !lineMap.TryGetValue(lineNumber, out var currentLine))
+            {
+                return IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn);
+            }
+
+            var lines = new List<string>();
+            var prefixLength = 0;
+            for (var absoluteLine = startLine; absoluteLine <= lineNumber; absoluteLine++)
+            {
+                if (!lineMap.TryGetValue(absoluteLine, out var lineText))
+                    continue;
+
+                if (absoluteLine < lineNumber)
+                    prefixLength += lineText.Length + 1;
+                lines.Add(lineText);
+            }
+
+            patternContext = lines.Count <= 1 ? currentLine : string.Join('\n', lines);
+            patternColumn = lines.Count <= 1 ? columnNumber : prefixLength + columnNumber;
+            if (IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn))
+                return true;
+
+            if (startLine == 1 || lookback >= maxLookback)
+                return false;
+
+            lookback = Math.Min(maxLookback, Math.Max(lookback + 1, lookback * 2));
         }
-
-        var lines = new List<string>();
-        var prefixLength = 0;
-        for (var absoluteLine = startLine; absoluteLine <= lineNumber; absoluteLine++)
-        {
-            if (!lineMap.TryGetValue(absoluteLine, out var lineText))
-                continue;
-
-            if (absoluteLine < lineNumber)
-                prefixLength += lineText.Length + 1;
-            lines.Add(lineText);
-        }
-
-        if (lines.Count <= 1)
-        {
-            patternContext = currentLine;
-            return;
-        }
-
-        patternContext = string.Join('\n', lines);
-        patternColumn = prefixLength + columnNumber;
     }
 
     private static int SkipCSharpTriviaBackward(string text, int cursor)
@@ -2568,6 +2615,7 @@ public partial class DbReader
         using var reader = cmd.ExecuteTrackedReader();
 
         int count = 0;
+        bool includesSql = false;
         var paths = new HashSet<string>(StringComparer.Ordinal);
         while (reader.TrackedRead())
         {
@@ -2576,10 +2624,11 @@ public partial class DbReader
                 continue;
 
             count++;
+            includesSql |= IsSqlLanguage(row.Lang);
             paths.Add(row.Path);
         }
 
-        return new QueryCountResult(count, paths.Count);
+        return new QueryCountResult(count, paths.Count, includesSql);
     }
 
     public int CountSearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
@@ -2689,9 +2738,9 @@ public partial class DbReader
         using var cmd = _conn.CreateCommand();
 
         var innerSql = @"
-            SELECT path
+            SELECT path, lang
             FROM (
-                SELECT f.path AS path, r.file_id, r.symbol_name, r.line, r.column_number, " + GetLogicalReferenceKindSql("r.reference_kind") + @" AS logical_reference_kind
+                SELECT f.path AS path, f.lang AS lang, r.file_id, r.symbol_name, r.line, r.column_number, " + GetLogicalReferenceKindSql("r.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
                 WHERE 1=1";
@@ -2745,10 +2794,10 @@ public partial class DbReader
             innerSql += " AND f.lang = @lang";
         AppendPathFilters(ref innerSql, pathPatterns, excludePathPatterns, excludeTests);
         if (referenceKind == null)
-            innerSql += $" GROUP BY f.path, r.file_id, r.symbol_name, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
+            innerSql += $" GROUP BY f.path, f.lang, r.file_id, r.symbol_name, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
         innerSql += ")";
 
-        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path) FROM ({innerSql})";
+        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path), MAX(CASE WHEN lang = 'sql' THEN 1 ELSE 0 END) FROM ({innerSql})";
         if (query != null)
         {
             var value = !exact
@@ -2961,7 +3010,7 @@ public partial class DbReader
 
         using var cmd = _conn.CreateCommand();
         var groupedSql = @"
-            SELECT path
+            SELECT path, lang
             FROM (
                 SELECT f.path AS path, f.lang AS lang, r.container_kind AS container_kind,
                        r.container_name AS container_name, r.symbol_name AS symbol_name
@@ -3001,7 +3050,7 @@ public partial class DbReader
             groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
         groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name";
 
-        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path) FROM ({groupedSql})";
+        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path), MAX(CASE WHEN lang = 'sql' THEN 1 ELSE 0 END) FROM ({groupedSql})";
         var value = !exact
             ? $"%{EscapeLikeQuery(query)}%"
             : _foldReady
@@ -3204,7 +3253,7 @@ public partial class DbReader
 
         using var cmd = _conn.CreateCommand();
         var groupedSql = @"
-            SELECT path
+            SELECT path, lang
             FROM (
                 SELECT f.path AS path, f.lang AS lang, r.container_kind AS container_kind,
                        r.container_name AS container_name, r.symbol_name AS symbol_name,
@@ -3243,7 +3292,7 @@ public partial class DbReader
             groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
         groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind";
 
-        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path) FROM ({groupedSql})";
+        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path), MAX(CASE WHEN lang = 'sql' THEN 1 ELSE 0 END) FROM ({groupedSql})";
         var value = !exact
             ? $"%{EscapeLikeQuery(query)}%"
             : _foldReady

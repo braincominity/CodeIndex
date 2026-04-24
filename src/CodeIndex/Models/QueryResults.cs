@@ -16,7 +16,7 @@ public class SearchResult
     public double Score { get; set; }
 }
 
-public readonly record struct QueryCountResult(int Count, int FileCount);
+public readonly record struct QueryCountResult(int Count, int FileCount, bool IncludesSql = false);
 
 public class SymbolResult
 {
@@ -377,6 +377,15 @@ public class SymbolAnalysisResult
     /// インデックスに参照テーブルが無いと true / false で区別可能。空が本物かどうか見極める。
     /// </summary>
     public bool GraphTableAvailable { get; set; } = true;
+    /// <summary>
+    /// True when bundled SQL graph-backed reads in this analysis reflect the current
+    /// call-column / qualified-name contract.
+    /// bundle 内の SQL graph 読み取りが current 契約に揃っているかどうか。
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? SqlGraphContractReady { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SqlGraphContractDegradedReason { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ExactZeroHintResult? ExactZeroHint { get; set; }
     /// <summary>
