@@ -9974,6 +9974,29 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatDelimitedDocCommentInsideOrdinaryBlockCommentAsDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                /*
+                /** <summary><see cref="Foo"/></summary>
+                */
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpDocCref_DoesNotTreatTripleSlashInsideFieldInitializerLambdaAsDocComment()
     {
         const string content = """
@@ -10136,6 +10159,56 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatTripleSlashInsideMultilineGenericFieldHeaderAsDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                Dictionary<
+                    /// <summary><see cref="Foo"/></summary>
+                    string,
+                    int> map = new();
+
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatDelimitedDocCommentInsideMultilineGenericFieldHeaderAsDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                Dictionary<
+                    /** <summary><see cref="Foo"/></summary> */
+                    string,
+                    int> map = new();
+
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpDocCref_DoesNotTreatTripleSlashBeforeTopLevelStatementAsLaterLocalFunctionDocComment()
     {
         const string content = """
@@ -10151,8 +10224,7 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(
             references,
             r => r.SymbolName == "Foo"
-                && r.ReferenceKind == "type_reference"
-                && r.Line == 2);
+                && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -10171,8 +10243,7 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(
             references,
             r => r.SymbolName == "Foo"
-                && r.ReferenceKind == "type_reference"
-                && r.Line == 2);
+                && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -10191,8 +10262,7 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(
             references,
             r => r.SymbolName == "Foo"
-                && r.ReferenceKind == "type_reference"
-                && r.Line == 2);
+                && r.ReferenceKind == "type_reference");
     }
 
     [Fact]

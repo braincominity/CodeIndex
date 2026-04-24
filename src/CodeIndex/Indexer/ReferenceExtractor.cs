@@ -760,6 +760,9 @@ public static class ReferenceExtractor
         var csharpLinesInsideMultilineStringContent = language == "csharp"
             ? BuildCSharpMultilineStringContentLines(lines)
             : null;
+        var csharpLinesInsideBlockComment = language == "csharp"
+            ? BuildCSharpBlockCommentLines(lines)
+            : null;
         var preparedLines = new string[lines.Length];
         for (var pi = 0; pi < lines.Length; pi++)
             preparedLines[pi] = PrepareLine(language, structuralLines[pi]);
@@ -929,6 +932,7 @@ public static class ReferenceExtractor
                 && TryGetCSharpXmlDocCommentSpan(
                     originalLine,
                     csharpInDelimitedDocComment,
+                    csharpLinesInsideBlockComment?[i] ?? false,
                     out var csharpDocCommentStartIndex,
                     out var csharpDocCommentEndExclusive,
                     out var nextCsharpDelimitedDocComment))
@@ -5955,6 +5959,7 @@ public static class ReferenceExtractor
     private static bool TryGetCSharpXmlDocCommentSpan(
         string line,
         bool inDelimitedDocComment,
+        bool inOrdinaryBlockComment,
         out int commentStartIndex,
         out int commentEndExclusive,
         out bool nextDelimitedDocComment)
@@ -5992,6 +5997,9 @@ public static class ReferenceExtractor
         }
 
         if (!line.AsSpan(firstNonWhitespaceIndex).StartsWith("/**", StringComparison.Ordinal))
+            return false;
+
+        if (inOrdinaryBlockComment)
             return false;
 
         var closeAfterOpenIndex = line.IndexOf("*/", firstNonWhitespaceIndex + 3, StringComparison.Ordinal);
@@ -9224,6 +9232,7 @@ public static class ReferenceExtractor
 
         var sawScopeOpenBrace = false;
         var nestedBraceDepth = 0;
+        var angleDepth = 0;
         var parenDepth = 0;
         var bracketDepth = 0;
         var topLevelExecutableContinuation = false;
@@ -9245,6 +9254,18 @@ public static class ReferenceExtractor
 
                 if (nestedBraceDepth == 0)
                 {
+                    if (ch == '<')
+                    {
+                        angleDepth++;
+                        continue;
+                    }
+
+                    if (ch == '>' && angleDepth > 0)
+                    {
+                        angleDepth--;
+                        continue;
+                    }
+
                     if (IsCSharpTopLevelArrowToken(line, j))
                     {
                         topLevelExecutableContinuation = true;
@@ -9299,10 +9320,146 @@ public static class ReferenceExtractor
 
         return !sawScopeOpenBrace
             || (nestedBraceDepth == 0
+                && angleDepth == 0
                 && parenDepth == 0
                 && bracketDepth == 0
                 && !topLevelExecutableContinuation
                 && !topLevelArrowExpressionContinuation);
+    }
+
+    private static bool[] BuildCSharpBlockCommentLines(string[] lines)
+    {
+        var insideBlockComment = new bool[lines.Length];
+        var inBlockComment = false;
+        var inVerbatimString = false;
+        var rawStringDelimiterLength = 0;
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            insideBlockComment[i] = inBlockComment;
+
+            var index = 0;
+            while (index < line.Length)
+            {
+                if (inBlockComment)
+                {
+                    var closeIndex = line.IndexOf("*/", index, StringComparison.Ordinal);
+                    if (closeIndex < 0)
+                        break;
+
+                    index = closeIndex + 2;
+                    inBlockComment = false;
+                    continue;
+                }
+
+                if (rawStringDelimiterLength > 0)
+                {
+                    var closeLength = CountCharacterRun(line, index, '"');
+                    if (closeLength >= rawStringDelimiterLength)
+                    {
+                        index += closeLength;
+                        rawStringDelimiterLength = 0;
+                        continue;
+                    }
+
+                    break;
+                }
+
+                if (inVerbatimString)
+                {
+                    if (line[index] == '"' && index + 1 < line.Length && line[index + 1] == '"')
+                    {
+                        index += 2;
+                        continue;
+                    }
+
+                    if (line[index] == '"')
+                    {
+                        index++;
+                        inVerbatimString = false;
+                        continue;
+                    }
+
+                    index++;
+                    continue;
+                }
+
+                if (StartsWithOrdinal(line, index, "//"))
+                    break;
+
+                if (StartsWithOrdinal(line, index, "/*"))
+                {
+                    inBlockComment = true;
+                    index += 2;
+                    continue;
+                }
+
+                if (TryStartCSharpRawString(line, index, out var rawOpeningLength, out var rawDelimiterLength))
+                {
+                    rawStringDelimiterLength = rawDelimiterLength;
+                    index += rawOpeningLength;
+                    continue;
+                }
+
+                if (TryStartCSharpVerbatimString(line, index, out var verbatimOpeningLength))
+                {
+                    inVerbatimString = true;
+                    index += verbatimOpeningLength;
+                    continue;
+                }
+
+                if (TryStartCSharpRegularString(line, index, out var regularOpeningLength))
+                {
+                    index += regularOpeningLength;
+                    while (index < line.Length)
+                    {
+                        if (line[index] == '\\')
+                        {
+                            index += Math.Min(2, line.Length - index);
+                            continue;
+                        }
+
+                        if (line[index] == '"')
+                        {
+                            index++;
+                            break;
+                        }
+
+                        index++;
+                    }
+
+                    continue;
+                }
+
+                if (line[index] == '\'')
+                {
+                    index++;
+                    while (index < line.Length)
+                    {
+                        if (line[index] == '\\')
+                        {
+                            index += Math.Min(2, line.Length - index);
+                            continue;
+                        }
+
+                        if (line[index] == '\'')
+                        {
+                            index++;
+                            break;
+                        }
+
+                        index++;
+                    }
+
+                    continue;
+                }
+
+                index++;
+            }
+        }
+
+        return insideBlockComment;
     }
 
     private static bool IsCSharpTopLevelAssignmentOperator(string line, int index)
