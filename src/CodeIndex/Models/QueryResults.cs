@@ -260,6 +260,19 @@ public class StatusResult
     [JsonPropertyName("csharp_symbol_name_ready")]
     public bool CSharpSymbolNameReady { get; set; } = true;
     /// <summary>
+    /// True when every indexed C# class row carries an authoritative `is_metadata_target`
+    /// value stamped under the current `metadata_target_version_csharp` contract. False
+    /// means the `deps` / `impact` metadata-attribute edges fall back to the legacy
+    /// `signature LIKE '%: %'` heuristic (or the `name LIKE '%Attribute'` suffix heuristic
+    /// on truly-legacy DBs missing the `is_metadata_target` column), which silently drops
+    /// impostor classes like `class FooAttribute : BaseService`. Run `cdidx index .` once
+    /// to let the authoritative resolver rewrite the stamp (#435).
+    /// true のとき deps / impact の metadata-attribute edge は persisted な
+    /// `is_metadata_target` 列を使い、false のとき legacy heuristic 経路で縮退する。
+    /// </summary>
+    [JsonPropertyName("csharp_metadata_target_ready")]
+    public bool CSharpMetadataTargetReady { get; set; } = true;
+    /// <summary>
     /// True when every indexed SQL graph row was written under the current stored call-column /
     /// qualified-name contract. False means SQL graph/dependency readers may still return false
     /// negatives until `cdidx index .` rewrites unchanged SQL rows.
@@ -279,6 +292,18 @@ public class StatusResult
     /// true のとき --exact は Unicode fold 経路、false のとき ASCII NOCASE fallback。
     /// </summary>
     public bool FoldReady { get; set; }
+    [JsonPropertyName("fold_ready_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? FoldReadyReason { get; set; }
+    [JsonPropertyName("degraded_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DegradedReason { get; set; }
+    [JsonPropertyName("recommended_action")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RecommendedAction { get; set; }
+    [JsonPropertyName("alternative_action")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? AlternativeAction { get; set; }
 }
 
 public class RepoMapResult
@@ -437,6 +462,7 @@ internal sealed class RepoFileStat
 {
     public string Path { get; set; } = string.Empty;
     public string? Lang { get; set; }
+    public string? ModuleName { get; set; }
     public long Size { get; set; }
     public int Lines { get; set; }
     public int SymbolCount { get; set; }

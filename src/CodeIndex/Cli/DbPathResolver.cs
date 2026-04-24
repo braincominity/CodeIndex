@@ -65,13 +65,48 @@ public static class DbPathResolver
             // Strip query params (?immutable=1 etc.) before URI parsing so LocalPath is clean.
             var qIdx = dbPath.IndexOf('?');
             var trimmed = qIdx >= 0 ? dbPath[..qIdx] : dbPath;
+            if (!trimmed.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
+            {
+                var relativePath = Uri.UnescapeDataString(trimmed["file:".Length..]);
+                return string.IsNullOrWhiteSpace(relativePath)
+                    ? dbPath
+                    : Path.GetFullPath(relativePath);
+            }
+
             var uri = new Uri(trimmed);
-            return uri.IsFile ? uri.LocalPath : dbPath;
+            if (!uri.IsFile)
+                return dbPath;
+
+            var localPath = uri.LocalPath;
+            return string.IsNullOrWhiteSpace(localPath)
+                ? dbPath
+                : Path.IsPathRooted(localPath)
+                    ? localPath
+                    : Path.GetFullPath(localPath);
         }
         catch
         {
             return dbPath;
         }
+    }
+
+    /// <summary>
+    /// Best-effort: resolve a DB reference used for write commands to a writable filesystem path.
+    /// Plain paths pass through; `file:///...?...` URIs are normalized to their local path when possible.
+    /// Returns false when a writable local path cannot be derived safely.
+    /// 書き込み系コマンド向けに DB 参照をローカルの writable path へ解決する。安全に解決できない場合は false。
+    /// </summary>
+    public static bool TryResolveWritableMutationDbPath(string dbPath, out string writableDbPath)
+    {
+        var normalized = NormalizeDbPath(dbPath);
+        if (normalized.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+        {
+            writableDbPath = string.Empty;
+            return false;
+        }
+
+        writableDbPath = Path.GetFullPath(normalized);
+        return true;
     }
 
     private static string? TryReadIndexedProjectRoot(string dbPath)
@@ -165,8 +200,11 @@ public static class DbPathResolver
         return new SqliteConnection(builder.ConnectionString);
     }
 
-    private static bool UriRequestsReadOnly(string uriText)
+    public static bool UriRequestsReadOnly(string uriText)
     {
+        if (!uriText.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            return false;
+
         var qIdx = uriText.IndexOf('?');
         if (qIdx < 0) return false;
         var query = uriText[(qIdx + 1)..];
