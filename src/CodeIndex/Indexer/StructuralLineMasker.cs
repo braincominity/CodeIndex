@@ -5,7 +5,7 @@ namespace CodeIndex.Indexer;
 /// Line and Column are 1-based; Column points to the tag identifier's starting column.
 /// マスク走査中に検出した JS/TS タグ付きテンプレート呼び出し。Line/Column は 1 始まり。
 /// </summary>
-internal readonly record struct JsTaggedTemplateHit(int Line, int Column, string Name);
+internal readonly record struct JsTaggedTemplateHit(int Line, int Column, string Name, bool IsMemberAccess);
 
 /// <summary>
 /// Masks non-code regions that would otherwise confuse line-based structural regexes.
@@ -1513,7 +1513,7 @@ internal static class StructuralLineMasker
                             // hole 側の lex state を退避し、閉じ backtick 後に paren
                             // などの context を元に戻せるようにする。
                             if (taggedTemplateHits != null)
-                                TryRecordJsTaggedTemplateHit(masked, i, pos, taggedTemplateHits, allowGenericTag);
+                                TryRecordJsTaggedTemplateHit(lines, masked, i, pos, taggedTemplateHits, allowGenericTag);
                             pos++;
                             frames.Push(new JsTemplateLiteralFrame { SavedLexState = lexState });
                             lexState = default;
@@ -1625,7 +1625,7 @@ internal static class StructuralLineMasker
                     // テンプレート直前の lex state を退避し、閉じ backtick で paren
                     // stack や statement-head hint を復元できるようにする。
                     if (taggedTemplateHits != null)
-                        TryRecordJsTaggedTemplateHit(masked, i, pos, taggedTemplateHits, allowGenericTag);
+                        TryRecordJsTaggedTemplateHit(lines, masked, i, pos, taggedTemplateHits, allowGenericTag);
                     masked[pos] = ' ';
                     pos++;
                     frames.Push(new JsTemplateLiteralFrame { SavedLexState = lexState });
@@ -2068,33 +2068,64 @@ internal static class StructuralLineMasker
     // `return` / `throw` / `await` / `typeof` のようなプレーンテンプレートの前に
     // 立ちうるキーワードは呼び出し側の `IsIgnoredCallName` で除外する。
     private static void TryRecordJsTaggedTemplateHit(
-        char[] masked, int lineIndex, int backtickPos, List<JsTaggedTemplateHit> hits, bool allowGenericTag)
+        string[] lines, char[] masked, int lineIndex, int backtickPos, List<JsTaggedTemplateHit> hits, bool allowGenericTag)
     {
+        // Skip inter-token whitespace backward, crossing line boundaries when the tag
+        // identifier lives on a prior line (multi-line forms like `tag\n\`hello\``).
+        // Prior lines are already fully masked by the outer loop, so we can safely read
+        // `lines[i]` for `i < lineIndex`.
+        // トークン間空白を後方に辿る。`tag\n\`hello\`` のようにタグが前行にある形も扱うため、
+        // 行境界を越えて走査する。先行行は外側ループで既にマスク済みなので `lines[i]` を
+        // そのまま参照できる。
+        int curLine = lineIndex;
         int k = backtickPos - 1;
-        while (k >= 0 && IsJsInterTokenWhitespace(masked[k]))
-            k--;
-        if (k < 0)
-            return;
+        while (true)
+        {
+            if (curLine == lineIndex)
+            {
+                while (k >= 0 && IsJsInterTokenWhitespace(masked[k]))
+                    k--;
+                if (k >= 0) break;
+            }
+            else
+            {
+                var l = lines[curLine];
+                while (k >= 0 && IsJsInterTokenWhitespace(l[k]))
+                    k--;
+                if (k >= 0) break;
+            }
+            curLine--;
+            if (curLine < 0) return;
+            k = (curLine == lineIndex ? masked.Length : lines[curLine].Length) - 1;
+        }
+
+        char CharAt(int li, int col)
+            => li == lineIndex ? masked[col] : lines[li][col];
+        int LineLen(int li)
+            => li == lineIndex ? masked.Length : lines[li].Length;
 
         // Skip a balanced `<...>` (TypeScript generics) so `html<T>\`...\`` still sees `html`.
         // The generic-strip is TypeScript-only (`allowGenericTag`) because plain JavaScript has
         // no generics: `foo<bar>\`x\`` is always the chained comparison `(foo<bar)>\`x\``. Even
         // inside TypeScript we still require the `<` to directly abut an identifier so
         // whitespace-bearing comparison expressions like `foo < bar > \`plain\`` are rejected,
-        // and we ignore `>` from `=>` (arrow-function type inside the generic range).
+        // and we ignore `>` from `=>` (arrow-function type inside the generic range). The
+        // generic-strip is same-line only; a generic argument list spanning line breaks is
+        // extremely rare in practice.
         // `html<T>\`...\`` のジェネリクスを読み飛ばすため、同一行内で `<...>` が釣り合っている
         // 場合のみ括弧を剥がす。ジェネリクスは TypeScript 限定（`allowGenericTag`）。JavaScript
         // では `foo<bar>\`x\`` は常に連鎖比較式なので generic とは扱わない。TypeScript 側でも
         // `foo < bar > \`plain\`` のような比較式と区別するため `<` が識別子に隣接していることを
-        // 要求し、`=>` 由来の `>` は関数型なので閉じ記号として数えない。
-        if (masked[k] == '>' && allowGenericTag)
+        // 要求し、`=>` 由来の `>` は関数型なので閉じ記号として数えない。ジェネリクス走査は
+        // 同一行限定。行をまたぐジェネリクス引数リストは実運用で極めて稀。
+        if (CharAt(curLine, k) == '>' && allowGenericTag)
         {
             int probe = k - 1;
             int depth = 1;
             while (probe >= 0 && depth > 0)
             {
-                var ch = masked[probe];
-                if (ch == '>' && probe > 0 && masked[probe - 1] == '=')
+                var ch = CharAt(curLine, probe);
+                if (ch == '>' && probe > 0 && CharAt(curLine, probe - 1) == '=')
                 {
                     probe -= 2;
                     continue;
@@ -2105,24 +2136,60 @@ internal static class StructuralLineMasker
             }
             if (depth != 0)
                 return;
-            if (probe < 0 || !IsJsIdentifierPart(masked[probe]))
+            if (probe < 0 || !IsJsIdentifierPart(CharAt(curLine, probe)))
                 return;
             k = probe;
         }
 
-        if (!IsJsIdentifierPart(masked[k]))
+        if (!IsJsIdentifierPart(CharAt(curLine, k)))
             return;
 
+        // Identifier read stays within the current line — JS identifiers do not cross lines.
+        // 識別子は行をまたがないため同一行内で読み切る。
         int end = k + 1;
-        while (k >= 0 && IsJsIdentifierPart(masked[k]))
+        while (k >= 0 && IsJsIdentifierPart(CharAt(curLine, k)))
             k--;
         int start = k + 1;
 
-        if (!IsJsIdentifierStart(masked[start]))
+        if (!IsJsIdentifierStart(CharAt(curLine, start)))
             return;
 
-        var name = new string(masked, start, end - start);
-        hits.Add(new JsTaggedTemplateHit(lineIndex + 1, start + 1, name));
+        string name = curLine == lineIndex
+            ? new string(masked, start, end - start)
+            : lines[curLine].Substring(start, end - start);
+
+        // Member-access detection: look for a `.` (possibly after inter-token whitespace,
+        // possibly across line breaks like `obj\n.default\`x\``) before the tag identifier.
+        // Member-access tags bypass the keyword denylist downstream because any reserved
+        // word — including `default`, `finally`, `in`, `instanceof`, `delete`, `void`,
+        // `case` — is a legal property name in JavaScript/TypeScript.
+        // メンバーアクセス判定: タグ識別子の前に空白（行境界含む）を挟んで `.` があれば
+        // メンバーアクセス。JS/TS ではすべての予約語が property 名になりうるので、
+        // メンバーアクセス扱いのタグは下流のキーワード除外リスト（`default` / `finally` /
+        // `in` / `instanceof` / `delete` / `void` / `case`）の対象外にする。
+        bool isMemberAccess = false;
+        int mLine = curLine;
+        int mk = start - 1;
+        while (true)
+        {
+            if (mk < 0)
+            {
+                mLine--;
+                if (mLine < 0) break;
+                mk = LineLen(mLine) - 1;
+                continue;
+            }
+            char pc = CharAt(mLine, mk);
+            if (IsJsInterTokenWhitespace(pc))
+            {
+                mk--;
+                continue;
+            }
+            if (pc == '.') isMemberAccess = true;
+            break;
+        }
+
+        hits.Add(new JsTaggedTemplateHit(curLine + 1, start + 1, name, isMemberAccess));
     }
 
     // Decide whether `/` at the current scan position starts a regex literal rather

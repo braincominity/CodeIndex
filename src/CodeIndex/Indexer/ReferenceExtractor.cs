@@ -148,9 +148,13 @@ public static class ReferenceExtractor
     // emits phantom call rows for those keywords. This set is intentionally applied ONLY at
     // the tagged-template emit site, not to the shared `CallRegex` path, so legitimate
     // member calls like `api.in()` / `api.instanceof()` / `api.delete()` / `api.case()` /
-    // `api.void()` / `promise.finally()` remain captured. `of` is intentionally NOT listed
-    // because it is an unreserved identifier — `const of = ...; of\`x\`` is a legal
-    // tagged-template call. The narrower `for (...of \`...\`)` header suppression lives in
+    // `api.void()` / `promise.finally()` remain captured. The denylist is also bypassed
+    // when the hit's `IsMemberAccess` flag is set — `obj.default\`x\`` and
+    // `obj.finally\`y\`` are legal tagged-template calls because every reserved word is a
+    // legal property name in JS/TS, and the masker's member-access detection reports those
+    // hits separately from bare-keyword hits. `of` is intentionally NOT listed because it
+    // is an unreserved identifier — `const of = ...; of\`x\`` is a legal tagged-template
+    // call. The narrower `for (...of \`...\`)` header suppression lives in
     // `StructuralLineMasker.FilterJsForOfHeaderHits`.
     // JS/TS でタグ無しテンプレート直前に現れてタグではないトークン: 単項/二項演算子
     // (`void \`...\`` / `delete \`...\`` / `foo in \`...\`` / `foo instanceof \`...\``)、
@@ -158,7 +162,10 @@ public static class ReferenceExtractor
     // (`export default \`...\`` / `try {} finally \`...\``)。汎用 CallRegex には適用せず
     // タグ付きテンプレート発行時だけに限定するため、`api.in()` / `api.instanceof()` /
     // `api.delete()` / `api.case()` / `api.void()` / `promise.finally()` のような正当な
-    // メンバー呼び出しは引き続き捕捉される。`of` は予約語ではなく
+    // メンバー呼び出しは引き続き捕捉される。さらに hit の `IsMemberAccess` が立って
+    // いる場合もこの denylist を迂回する — JS/TS ではすべての予約語が property 名に
+    // なれるため `obj.default\`x\`` や `obj.finally\`y\`` は正当なタグ呼び出しで、
+    // masker 側でメンバーアクセス判定が済んでいる。`of` は予約語ではなく
     // `const of = ...; of\`x\`` が正当なタグ呼び出しになりうるためここには含めない。
     // `for (...of \`...\`)` ヘッダの抑止は
     // `StructuralLineMasker.FilterJsForOfHeaderHits` 側で扱う。
@@ -764,7 +771,7 @@ public static class ReferenceExtractor
                     var name = hit.Name;
                     if (IsIgnoredCallName(language, name))
                         continue;
-                    if (JsTaggedTemplateOperatorNames.Contains(name))
+                    if (!hit.IsMemberAccess && JsTaggedTemplateOperatorNames.Contains(name))
                         continue;
                     if (definitionNames != null && definitionNames.Contains(name))
                         continue;

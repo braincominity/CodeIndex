@@ -6628,6 +6628,71 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScriptMultiLineTaggedTemplate_IsCapturedAsCall()
+    {
+        // issue #268 regression guard: a tag identifier can sit on a prior line from the
+        // opener backtick (`tag\n\`hello\``). Node 25.2.0 evaluates this as a real
+        // tagged-template call; the backward-scan must cross the line boundary through
+        // inter-token whitespace so `call tag` is emitted.
+        // issue #268 退行防止: タグ識別子は opener の backtick より前の行に置ける
+        // (`tag\n\`hello\``)。Node 25.2.0 は実際のタグ呼び出しとして評価するため、
+        // backward-scan は行境界をまたぐ空白を越えて `call tag` を発行する必要がある。
+        const string content = """
+            function run(tag) {
+                return tag
+            `hello`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "tag");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptObjectDefaultTaggedTemplate_IsCapturedAsCall()
+    {
+        // issue #268 regression guard: `obj.default\`x\`` is a legal tagged-template call
+        // because reserved words are valid property names in JS/TS. The bare-keyword
+        // denylist (`default` / `finally` / ...) must NOT suppress member-access tags.
+        // issue #268 退行防止: `obj.default\`x\`` は JS/TS で予約語も property 名に
+        // なれるため正当なタグ呼び出し。bare-keyword 除外リスト（`default` / `finally` /
+        // ...）はメンバーアクセスのタグを握り潰してはならない。
+        const string content = """
+            function run(obj) {
+                return obj.default`x`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "default");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptObjectFinallyTaggedTemplate_IsCapturedAsCall()
+    {
+        // issue #268 regression guard: `obj.finally\`y\`` is a legal tagged-template call;
+        // `finally` is a reserved word but a valid property name. Member-access tags must
+        // bypass the bare-keyword denylist that handles `try {} finally \`cleanup\``.
+        // issue #268 退行防止: `obj.finally\`y\`` は `finally` が予約語でも property 名と
+        // して合法なので正当なタグ呼び出し。メンバーアクセスのタグは
+        // `try {} finally \`cleanup\`` 用の bare-keyword 除外リストを迂回する必要がある。
+        const string content = """
+            function run(obj) {
+                return obj.finally`y`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "finally");
+    }
+
+    [Fact]
     public void Extract_JavaScriptInstanceofBeforePlainTemplate_IsNotCaptured()
     {
         // Regression guard: `foo instanceof \`plain\`` uses `instanceof` as the type-check
