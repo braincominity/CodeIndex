@@ -1388,6 +1388,15 @@ internal static class StructuralLineMasker
         // 維持する必要がある。行頭で Reset すると継続行の `/` が常に regex 扱いに
         // なり、hole を閉じる `}` やバッククォートを巻き込んでしまう。
         var lexState = default(JsLexState);
+        // Active quote for a JS/TS single- or double-quoted string that started
+        // inside the current top-most template hole and continued past a physical
+        // line boundary via trailing `\`. The continuation can only belong to the
+        // current top frame at the start of the next line, so a single scanner-wide
+        // state slot is enough.
+        // テンプレートホール内で始まり、行末 `\` により次行へ継続した JS/TS 単/二重
+        // 引用符文字列の active quote。行境界で継続可能なのは次行開始時の最上位 hole
+        // だけなので、scanner 全体で 1 スロット持てば十分。
+        var activeJsHoleStringQuote = '\0';
         lexState.Reset();
 
         for (int i = 0; i < lines.Length; i++)
@@ -1470,6 +1479,17 @@ internal static class StructuralLineMasker
 
                     if (active is JsTemplateHoleFrame holeFrame)
                     {
+                        if (activeJsHoleStringQuote != '\0')
+                        {
+                            pos = MaskJsTemplateHoleString(line, pos, masked, activeJsHoleStringQuote, startsInsideString: true, out var continuesOnNextLine);
+                            if (continuesOnNextLine)
+                                break;
+
+                            activeJsHoleStringQuote = '\0';
+                            lexState.SetKind(JsPrevTokenKind.Literal);
+                            continue;
+                        }
+
                         if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '/')
                             break;
 
@@ -1507,7 +1527,14 @@ internal static class StructuralLineMasker
 
                         if (line[pos] == '"' || line[pos] == '\'')
                         {
-                            pos = SkipJsSingleLineString(line, pos);
+                            var quote = line[pos];
+                            pos = MaskJsTemplateHoleString(line, pos, masked, quote, startsInsideString: false, out var continuesOnNextLine);
+                            if (continuesOnNextLine)
+                            {
+                                activeJsHoleStringQuote = quote;
+                                break;
+                            }
+
                             lexState.SetKind(JsPrevTokenKind.Literal);
                             continue;
                         }
@@ -1874,6 +1901,55 @@ internal static class StructuralLineMasker
         }
 
         return line.Length;
+    }
+
+    private static int MaskJsTemplateHoleString(string line, int startIndex, char[] masked, char quote, bool startsInsideString, out bool continuesOnNextLine)
+    {
+        var p = startIndex;
+        if (!startsInsideString)
+        {
+            masked[p] = ' ';
+            p++;
+        }
+
+        while (p < line.Length)
+        {
+            var ch = line[p];
+            masked[p] = ' ';
+
+            if (ch == '\\')
+            {
+                if (p + 1 == line.Length)
+                {
+                    continuesOnNextLine = true;
+                    return p + 1;
+                }
+
+                if (p + 2 == line.Length && line[p + 1] == '\r')
+                {
+                    masked[p + 1] = ' ';
+                    continuesOnNextLine = true;
+                    return line.Length;
+                }
+
+                if (p + 1 < line.Length)
+                {
+                    masked[p + 1] = ' ';
+                    p += 2;
+                    continue;
+                }
+            }
+
+            p++;
+            if (ch == quote)
+            {
+                continuesOnNextLine = false;
+                return p;
+            }
+        }
+
+        continuesOnNextLine = false;
+        return p;
     }
 
     private static int SkipJsSingleLineString(string line, int startIndex)
