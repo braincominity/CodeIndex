@@ -2495,23 +2495,31 @@ public class QueryCommandRunnerTests
     [Theory]
     [InlineData("callers", "attribute")]
     [InlineData("callers", "annotation")]
+    [InlineData("callers", "type_reference")]
     [InlineData("callees", "attribute")]
     [InlineData("callees", "annotation")]
-    public void RunCallersCallees_RejectMetadataKind_WithUsageError(string command, string kind)
+    [InlineData("callees", "type_reference")]
+    public void RunCallersCallees_RejectNonCallGraphKind_WithUsageError(string command, string kind)
     {
-        // issue #293 follow-up: `callers` / `callees` must reject `--kind attribute` and
-        // `--kind annotation` at the CLI boundary. Metadata references are attributed to the
-        // enclosing body-range symbol rather than the annotated target, so `callers Obsolete
-        // --kind attribute` would return `[Obsolete] void M()` under the enclosing class
+        // issue #293 + issue #444: `callers` / `callees` must reject non-call-graph reference
+        // kinds at the CLI boundary. Metadata (`attribute` / `annotation`) rows are attributed
+        // to the enclosing body-range symbol rather than the annotated target, so `callers
+        // Obsolete --kind attribute` would return `[Obsolete] void M()` under the enclosing class
         // instead of `M`, and file-level targets like `[assembly: Foo]` drop entirely because
-        // `container_name` is NULL. The correct path for metadata enumeration is
-        // `references <name> --kind attribute|annotation`.
-        // issue #293 補足: `callers` / `callees` は CLI 境界で `--kind attribute` /
-        // `--kind annotation` を必ず弾かなければならない。metadata 参照は注釈対象ではなく
+        // `container_name` is NULL. `type_reference` rows are compile-time type-position edges
+        // (declaration types, generic constraints, `is`/`as`/`instanceof`, XML-doc `cref`) and
+        // are not runtime calls, so `callers Foo --kind type_reference` would misreport type
+        // mentions as caller edges. The correct path for these kinds is
+        // `references <name> --kind attribute|annotation|type_reference`.
+        // issue #293 + issue #444 補足: `callers` / `callees` は CLI 境界で非 call-graph な
+        // reference kind を必ず弾く。metadata (`attribute` / `annotation`) 行は注釈対象ではなく
         // body-range の外側シンボルに帰属するため、`callers Obsolete --kind attribute` では
         // `[Obsolete] void M()` が `M` ではなく外側クラスに寄り、`[assembly: Foo]` のような
-        // file-level target は `container_name = NULL` で完全に脱落する。metadata 列挙の
-        // 正しい経路は `references <name> --kind attribute|annotation`。
+        // file-level target は `container_name = NULL` で完全に脱落する。`type_reference` は
+        // 宣言型・generic 制約・`is`/`as`/`instanceof`・XML-doc `cref` といった compile-time な
+        // 型言及であり実行時呼び出しではないので、`callers Foo --kind type_reference` は型言及を
+        // caller edge として誤って返す。正しい経路は
+        // `references <name> --kind attribute|annotation|type_reference`。
         var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_{command}_reject_kind_{kind}");
         try
         {
@@ -2528,6 +2536,102 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Contains($"'--kind {kind}' is not supported on '{command}'", stderr);
             Assert.Contains($"references <name> --kind {kind}", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_AcceptsTypeReferenceKind_WithoutUnknownKindWarning()
+    {
+        // issue #444: `references --kind type_reference` is a legitimate query (compile-time
+        // type-position edges from C#/Java base lists, declaration types, generic constraints,
+        // `is`/`as`/`instanceof`, and XML-doc `cref`). It must succeed without the "unknown
+        // reference kind" hint that was previously printed by `WriteGraphReferenceKindHint`.
+        // issue #444: `references --kind type_reference` は compile-time な型位置エッジを
+        // 列挙する正当なクエリ（C#/Java の継承リスト・宣言型・generic 制約・`is`/`as`/`instanceof`・
+        // XML-doc `cref`）。以前は `WriteGraphReferenceKindHint` が "unknown reference kind" と
+        // 警告していたが、その偽警告を出さずに成功しなければならない。
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_type_reference_kind");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "Target.cs"),
+                """
+                public class TargetBase { }
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "Consumer.cs"),
+                """
+                public class Consumer : TargetBase
+                {
+                }
+                """);
+
+            var (indexExitCode, _, _) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["TargetBase", "--db", dbPath, "--kind", "type_reference", "--lang", "csharp", "--exact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.DoesNotContain("not a known reference kind", stderr);
+            Assert.DoesNotContain("WARN:", stderr);
+            Assert.Contains("type_reference", stdout);
+            Assert.Contains("TargetBase", stdout);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_JsonTypeReferenceKind_EmitsNoStderrWarning()
+    {
+        // issue #444 JSON path: the stderr "unknown reference kind" hint is suppressed for
+        // `--json`, but the fix also straightens the validation set so `type_reference` is
+        // accepted everywhere without relying on JSON suppression.
+        // issue #444 JSON 経路: `--json` のときは stderr のヒント自体が抑制されるが、
+        // 今回の修正で検証集合も整理されたため、JSON 抑制に頼らずとも `type_reference` が
+        // 受理されることを確認する。
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_type_reference_kind_json");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "User.cs"),
+                """
+                public class User { }
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "Consumer.cs"),
+                """
+                public class Consumer : User
+                {
+                }
+                """);
+
+            var (indexExitCode, _, _) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["User", "--db", dbPath, "--kind", "type_reference", "--json", "--lang", "csharp", "--exact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains("\"reference_kind\":\"type_reference\"", stdout);
         }
         finally
         {
