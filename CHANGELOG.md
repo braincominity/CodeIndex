@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Fixed
+- **SQL `EXEC` / `EXECUTE` / `CALL` no longer misindex MySQL `# comment` tails as T-SQL temp stored procedures (#656)** — `ReferenceExtractor` now gates bare `#tempProc` / `##tempProc` after `EXEC` / `EXECUTE` / `CALL` on same-file T-SQL establishment (prior `CREATE TABLE #x`, `SELECT ... INTO #x`, `#x` mutation target, or the newly recognized `CREATE PROCEDURE|PROC|FUNCTION #x` with optional `OR REPLACE|ALTER` / `TEMP|TEMPORARY`). Without that evidence the proc-call extractor now drops the would-be call edge so MySQL / MariaDB line comments such as `CALL #commented_out;` / `EXEC #tempProc;` / `EXECUTE #tempExecute;` stop polluting `references` / `callers` / `callees` / `impact` / MCP graph tools, while quoted forms such as `EXEC [#tempProc];` and `` EXEC `#backtickProc`; `` bypass the gate because bracket / backtick quoting is unambiguously an identifier. `ShouldTreatHashAsSqlCommentCore` also allows `PROCEDURE` / `PROC` / `FUNCTION` / `CALL` to keep `#name` as an identifier so the establishment tracker can register temp routines before their later proc-call sites run through the gate, and `CanSqlStatementEstablishTempObject` recognizes `SqlCreateTempRoutineRegex` so semicolon-less `CREATE PROCEDURE|FUNCTION #x` lines still flush the temp name before the next-line `EXEC` / `CALL` runs through the gate. Added focused extractor regressions for the MySQL comment false-positive, the established-temp-routine positive path (including the semicolon-less `CREATE PROCEDURE|FUNCTION` shape), and the quoted-form bypass. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`. Closes #656.
+
 ### [1.14.0] - 2026-04-24
 
 #### Added
@@ -876,6 +879,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 修正
+- **SQL `EXEC` / `EXECUTE` / `CALL` が MySQL の `# comment` 末尾を T-SQL の一時ストアドとして誤索引しないよう修正 (#656)** — `ReferenceExtractor` は、`EXEC` / `EXECUTE` / `CALL` の直後にある bare な `#tempProc` / `##tempProc` の call edge を、同一ファイル内の T-SQL 確立（先行する `CREATE TABLE #x` / `SELECT ... INTO #x` / `#x` を変更対象とする更新、または新たに認識されるようになった `CREATE PROCEDURE|PROC|FUNCTION #x`。いずれも `OR REPLACE|ALTER` / `TEMP|TEMPORARY` の有無は問わない）がある場合だけに絞って出すようになりました。該当エビデンスがない場合は proc call 抽出が call edge を落とし、MySQL / MariaDB の行コメント `CALL #commented_out;` / `EXEC #tempProc;` / `EXECUTE #tempExecute;` が `references` / `callers` / `callees` / `impact` / MCP graph ツールを汚さなくなります。一方で `EXEC [#tempProc];` や `` EXEC `#backtickProc`; `` のような引用形は、角括弧 / バッククォート引用が明確に識別子であるためこのゲートを通さず従来どおり edge を出します。`ShouldTreatHashAsSqlCommentCore` にも `PROCEDURE` / `PROC` / `FUNCTION` / `CALL` を加え、`CREATE PROCEDURE #sp` が先にストリップされて establishment tracker が登録できなくなる事態を防ぎ、後続 proc call がゲートを通る前に temp routine を正しく登録できるようにしました。さらに `CanSqlStatementEstablishTempObject` でも `SqlCreateTempRoutineRegex` を認識するため、`;` で閉じない `CREATE PROCEDURE|FUNCTION #x` 行の次行に来る `EXEC` / `CALL` の前に temp 名を flush できます。MySQL コメント誤判定、establish 済み temp routine の通過（セミコロン無しの `CREATE PROCEDURE|FUNCTION` 形を含む）、引用形バイパスを固定する focused な extractor 回帰テストを追加しました。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`。Closes #656。
 
 ### [1.14.0] - 2026-04-24
 
