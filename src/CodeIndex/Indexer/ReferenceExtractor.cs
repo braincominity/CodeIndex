@@ -329,6 +329,7 @@ public static class ReferenceExtractor
     private static readonly Regex SqlCreateTempTableRegex = new(
         $@"(?<![\w$])CREATE(?:\s+(?:TEMP|TEMPORARY))?\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+(?<name>{SqlTempIdentifierPattern})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlUsingKeywordRegex = new(@"(?<![\w$])USING\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // T-SQL temp stored routines: `CREATE PROCEDURE #sp` / `CREATE PROC ##sp` / `CREATE FUNCTION #f`
     // and `CREATE OR ALTER|REPLACE` / `CREATE TEMPORARY` variants. Tracks the temp name as
     // established evidence so later `EXEC #sp` / `CALL #sp` / `EXECUTE #sp` calls keep their edge
@@ -341,8 +342,8 @@ public static class ReferenceExtractor
     private static readonly Regex SqlCreateTempRoutineRegex = new(
         $@"(?<![\w$])CREATE(?:\s+OR\s+(?:REPLACE|ALTER))?(?:\s+(?:TEMP|TEMPORARY))?\s+(?:PROC(?:EDURE)?|FUNCTION)\b(?:\s+IF\s+NOT\s+EXISTS)?\s+(?<name>{SqlTempIdentifierPattern})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
-    private static readonly Regex SqlTrailingOnlyQualifiedIdentifierRegex = new(
-        $@"(?:(?:ONLY)\b\s+)?{SqlQualifiedIdentifierNoCapturePattern}\s*$",
+    private static readonly Regex SqlTrailingTempIdentifierRegex = new(
+        $@"^(?:(?:ONLY)\b\s+)?(?<item>(?:{SqlTempIdentifierPattern}|{SqlQualifiedIdentifierNoCapturePattern}))(?:\s+(?:AS\s+)?(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SqlMergeTargetHintContinuationPrefixRegex = new(
         $@"(?<![\w$])MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?\s+{SqlQualifiedIdentifierNoCapturePattern}\s+WITH\s*\((?:[^()]|\([^()]*\))*$",
@@ -11411,11 +11412,29 @@ public static class ReferenceExtractor
         while (probe >= 0 && line[probe] == ',')
         {
             var priorListItem = line[..probe];
-            var listMatch = SqlTrailingOnlyQualifiedIdentifierRegex.Match(priorListItem);
+            int sourceStart = FindLastSqlCommaOutsideQuotedIdentifiers(priorListItem);
+            if (sourceStart >= 0)
+                sourceStart++;
+            else
+            {
+                var usingMatches = SqlUsingKeywordRegex.Matches(priorListItem);
+                if (usingMatches.Count > 0)
+                    sourceStart = usingMatches[^1].Index + usingMatches[^1].Length;
+                else
+                {
+                    sourceStart = priorListItem.LastIndexOf('#');
+                    if (sourceStart < 0)
+                        return true;
+                }
+            }
+            while (sourceStart < priorListItem.Length && char.IsWhiteSpace(priorListItem[sourceStart]))
+                sourceStart++;
+
+            var listMatch = SqlTrailingTempIdentifierRegex.Match(priorListItem[sourceStart..]);
             if (!listMatch.Success)
                 return true;
 
-            probe = listMatch.Index - 1;
+            probe = sourceStart - 1;
             while (probe >= 0 && char.IsWhiteSpace(line[probe]))
                 probe--;
         }
@@ -11490,6 +11509,43 @@ public static class ReferenceExtractor
             && !string.Equals(token, "PROCEDURE", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(token, "PROC", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(token, "FUNCTION", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int FindLastSqlCommaOutsideQuotedIdentifiers(string text)
+    {
+        int lastComma = -1;
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (c == '"')
+            {
+                int closing = FindClosingSqlDoubleQuote(text, i + 1);
+                if (closing < 0)
+                    break;
+                i = closing;
+                continue;
+            }
+            if (c == '`')
+            {
+                int closing = text.IndexOf('`', i + 1);
+                if (closing < 0)
+                    break;
+                i = closing;
+                continue;
+            }
+            if (c == '[')
+            {
+                int closing = text.IndexOf(']', i + 1);
+                if (closing < 0)
+                    break;
+                i = closing;
+                continue;
+            }
+            if (c == ',')
+                lastComma = i;
+        }
+
+        return lastComma;
     }
 
     private static string ReplaceRegexMatchesWithSpaces(Regex regex, string input)
