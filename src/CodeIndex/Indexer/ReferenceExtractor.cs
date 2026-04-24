@@ -141,26 +141,30 @@ public static class ReferenceExtractor
     };
 
     // JavaScript / TypeScript tokens that legally sit immediately before a template literal
-    // as an operator or keyword rather than a call target: `void \`...\``, `case \`...\`:`,
-    // `delete \`...\``, `foo in \`...\``, `foo instanceof \`...\``. Without this gate the
-    // tagged-template scanner (issue #268) emits phantom call rows for those keywords. This
-    // set is intentionally applied ONLY at the tagged-template emit site, not to the shared
-    // `CallRegex` path, so legitimate member calls like `api.in()` / `api.instanceof()` /
-    // `api.delete()` / `api.case()` / `api.void()` remain captured. `of` is intentionally
-    // NOT listed because it is an unreserved identifier — `const of = ...; of\`x\`` is a
-    // legal tagged-template call. The narrower `for (...of \`...\`)` header suppression
-    // lives in `StructuralLineMasker.FilterJsForOfHeaderHits`.
-    // JS/TS でタグ無しテンプレート直前にオペレータ/キーワードとして現れるトークン。issue #268
-    // のタグ付きテンプレート検出がそれらを誤って `call` として発行しないようここで弾く。
-    // 汎用 CallRegex には適用せずタグ付きテンプレート発行時だけに限定するため、`api.in()` /
-    // `api.instanceof()` / `api.delete()` / `api.case()` / `api.void()` のような正当な
+    // without being a tag identifier: unary / binary operators (`void \`...\``,
+    // `delete \`...\``, `foo in \`...\``, `foo instanceof \`...\``), switch-case label
+    // (`case \`...\`:`), and clause / statement keywords (`export default \`...\``,
+    // `try {} finally \`...\``). Without this gate the tagged-template scanner (issue #268)
+    // emits phantom call rows for those keywords. This set is intentionally applied ONLY at
+    // the tagged-template emit site, not to the shared `CallRegex` path, so legitimate
+    // member calls like `api.in()` / `api.instanceof()` / `api.delete()` / `api.case()` /
+    // `api.void()` / `promise.finally()` remain captured. `of` is intentionally NOT listed
+    // because it is an unreserved identifier — `const of = ...; of\`x\`` is a legal
+    // tagged-template call. The narrower `for (...of \`...\`)` header suppression lives in
+    // `StructuralLineMasker.FilterJsForOfHeaderHits`.
+    // JS/TS でタグ無しテンプレート直前に現れてタグではないトークン: 単項/二項演算子
+    // (`void \`...\`` / `delete \`...\`` / `foo in \`...\`` / `foo instanceof \`...\``)、
+    // switch-case ラベル (`case \`...\`:`)、clause/statement キーワード
+    // (`export default \`...\`` / `try {} finally \`...\``)。汎用 CallRegex には適用せず
+    // タグ付きテンプレート発行時だけに限定するため、`api.in()` / `api.instanceof()` /
+    // `api.delete()` / `api.case()` / `api.void()` / `promise.finally()` のような正当な
     // メンバー呼び出しは引き続き捕捉される。`of` は予約語ではなく
     // `const of = ...; of\`x\`` が正当なタグ呼び出しになりうるためここには含めない。
     // `for (...of \`...\`)` ヘッダの抑止は
     // `StructuralLineMasker.FilterJsForOfHeaderHits` 側で扱う。
     private static readonly HashSet<string> JsTaggedTemplateOperatorNames = new(StringComparer.Ordinal)
     {
-        "void", "case", "delete", "in", "instanceof",
+        "void", "case", "delete", "in", "instanceof", "default", "finally",
     };
 
     private static readonly Regex StringLiteralRegex = new(

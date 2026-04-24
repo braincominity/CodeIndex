@@ -6565,6 +6565,69 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScriptExportDefaultBeforePlainTemplate_IsNotCaptured()
+    {
+        // issue #268 regression: `export default \`plain\`` is a valid default export of a
+        // template-literal expression; `default` is a statement keyword, not a tag identifier.
+        // The backward-scan from the backtick picks up `default`, so the tagged-template emit
+        // site has to drop it.
+        // issue #268 退行防止: `export default \`plain\`` は template リテラル式の default
+        // export として正当で、`default` はタグ識別子ではない。backward-scan が `default`
+        // を拾うため、タグ付きテンプレート発行側で弾く必要がある。
+        const string content = "export default `plain`;\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "default");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptFinallyBeforePlainTemplate_IsNotCaptured()
+    {
+        // issue #268 regression: `finally` is a clause keyword of `try ... finally { ... }`,
+        // never a tag identifier. Even malformed inputs that place `finally` right before a
+        // backtick must not emit a phantom `call finally` row.
+        // issue #268 退行防止: `finally` は try-finally 節のキーワードであり、タグ識別子には
+        // ならない。backtick の直前に `finally` が来る形（不正入力含む）でも phantom
+        // `call finally` を出さない。
+        const string content = """
+            function f() {
+                try {
+                    doWork();
+                } finally `cleanup`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "finally");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptForOfBindingPatternTaggedTemplate_IsCapturedAsCall()
+    {
+        // issue #268 regression guard: in `for (const [x = of\`tag\`] of arr)`, the inner
+        // `of` is a real tagged-template call inside the binding pattern LHS, while the
+        // outer `of` is the for-of iterator keyword. Only the iterator keyword should be
+        // suppressed; the binding-pattern tag must still be captured.
+        // issue #268 退行防止: `for (const [x = of\`tag\`] of arr)` の内側 `of` は binding
+        // pattern LHS 内の正当なタグ付きテンプレート呼び出しで、外側 `of` だけが for-of
+        // iterator keyword。内側のタグ呼び出しは必ず残す。
+        const string content = """
+            function f(arr) {
+                for (const [x = of`tag`] of arr) { use(x); }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
+    }
+
+    [Fact]
     public void Extract_JavaScriptInstanceofBeforePlainTemplate_IsNotCaptured()
     {
         // Regression guard: `foo instanceof \`plain\`` uses `instanceof` as the type-check
