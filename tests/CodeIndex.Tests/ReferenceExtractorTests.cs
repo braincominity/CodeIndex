@@ -8722,6 +8722,64 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatTripleSlashInsideFieldInitializerLambdaAsDocComment()
+    {
+        const string content = """
+            using System;
+
+            class Foo {}
+            class Demo
+            {
+                Action callback = () =>
+                {
+                    /// <see cref="Foo"/>
+                    var x = 1;
+                };
+
+                void Later() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 8);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatDelimitedBlockCommentsInsideFieldInitializerLambdaAsDocComment()
+    {
+        const string content = """
+            using System;
+
+            class Foo {}
+            class Demo
+            {
+                Action callback = () =>
+                {
+                    /** <see cref="Foo"/> */
+                    var x = 1;
+                };
+
+                void Later() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 8);
+    }
+
+    [Fact]
     public void Extract_CsharpDocCref_DoesNotTreatCodeAfterDelimitedDocCloseAsDocComment()
     {
         const string content = """

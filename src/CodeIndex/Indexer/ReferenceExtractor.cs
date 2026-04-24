@@ -706,6 +706,13 @@ public static class ReferenceExtractor
                               || symbol.Kind == "namespace" || symbol.Kind == "property"))
             .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
             .ToList();
+        var csharpXmlDocAttachmentScopeCandidates = language == "csharp"
+            ? symbols
+                .Where(symbol => symbol.BodyStartLine != null && symbol.BodyEndLine != null
+                                 && symbol.Kind is "class" or "struct" or "interface" or "enum" or "namespace")
+                .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
+                .ToList()
+            : null;
         // Enclosing-type candidates for constructor-chain rewrites (class/struct/record; namespace excluded).
         // Ordered innermost-first via ascending body range. Java enums can declare constructors and
         // chain via `this(...)` so `enum` is included; C# enums cannot declare constructors, and
@@ -787,7 +794,11 @@ public static class ReferenceExtractor
                             nextCsharpDelimitedDocComment));
                     if (docContainer != null
                         && (docContainer.StartLine == lineNumber
-                            || CanAttachCSharpXmlDocCommentToNextDeclaration(innermostContainer)))
+                            || CanAttachCSharpXmlDocCommentToNextDeclaration(
+                                innermostContainer,
+                                csharpXmlDocAttachmentScopeCandidates,
+                                structuralLines,
+                                lineNumber)))
                     {
                         EmitCSharpDocCrefReferences(
                             csharpDocCommentText,
@@ -7618,9 +7629,72 @@ public static class ReferenceExtractor
         return null;
     }
 
-    private static bool CanAttachCSharpXmlDocCommentToNextDeclaration(SymbolRecord? innermostContainer) =>
-        innermostContainer == null
-        || innermostContainer.Kind is "class" or "struct" or "interface" or "enum" or "namespace";
+    private static bool CanAttachCSharpXmlDocCommentToNextDeclaration(
+        SymbolRecord? innermostContainer,
+        IReadOnlyList<SymbolRecord>? scopeCandidates,
+        string[] structuralLines,
+        int lineNumber)
+    {
+        if (innermostContainer != null
+            && innermostContainer.Kind is not "class" or "struct" or "interface" or "enum" or "namespace")
+        {
+            return false;
+        }
+
+        var enclosingScope = scopeCandidates == null
+            ? null
+            : FindInnermostContainer(scopeCandidates, lineNumber);
+        if (enclosingScope?.BodyStartLine == null)
+            return true;
+
+        return IsAtCSharpXmlDocAttachmentDepth(enclosingScope, structuralLines, lineNumber);
+    }
+
+    private static bool IsAtCSharpXmlDocAttachmentDepth(
+        SymbolRecord enclosingScope,
+        string[] structuralLines,
+        int lineNumber)
+    {
+        var scopeBodyStartIndex = enclosingScope.BodyStartLine!.Value - 1;
+        var commentLineIndex = lineNumber - 1;
+        if (scopeBodyStartIndex < 0
+            || scopeBodyStartIndex >= structuralLines.Length
+            || scopeBodyStartIndex >= commentLineIndex)
+        {
+            return true;
+        }
+
+        var sawScopeOpenBrace = false;
+        var nestedBraceDepth = 0;
+
+        for (var i = scopeBodyStartIndex; i < commentLineIndex && i < structuralLines.Length; i++)
+        {
+            foreach (var ch in structuralLines[i])
+            {
+                if (!sawScopeOpenBrace)
+                {
+                    if (ch == '{')
+                        sawScopeOpenBrace = true;
+
+                    continue;
+                }
+
+                if (ch == '{')
+                {
+                    nestedBraceDepth++;
+                }
+                else if (ch == '}')
+                {
+                    if (nestedBraceDepth == 0)
+                        return false;
+
+                    nestedBraceDepth--;
+                }
+            }
+        }
+
+        return !sawScopeOpenBrace || nestedBraceDepth == 0;
+    }
 
     private static int GetCSharpSameLineDocumentedDeclarationStartColumn(
         string originalLine,
