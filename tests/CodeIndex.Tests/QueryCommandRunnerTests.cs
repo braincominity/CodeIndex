@@ -815,7 +815,7 @@ public class QueryCommandRunnerTests
                 dbPath,
                 "src/Issue161Target.cs",
                 "csharp",
-                """
+                """"
                 namespace Issue161;
                 public class Issue161Target
                 {
@@ -829,7 +829,7 @@ public class QueryCommandRunnerTests
                         target.Issue161Callee();
                     }
                 }
-                """);
+                """");
             MarkGraphAndFoldReady(dbPath);
 
             // Real file on disk so `excerpt` would actually read and print content
@@ -1173,7 +1173,7 @@ public class QueryCommandRunnerTests
                 dbPath,
                 "src/Issue196Target.cs",
                 "csharp",
-                """
+                """"
                 namespace Issue196;
                 public class Issue196Target
                 {
@@ -1187,7 +1187,7 @@ public class QueryCommandRunnerTests
                         target.Issue196Callee();
                     }
                 }
-                """);
+                """");
             MarkGraphAndFoldReady(dbPath);
 
             var excerptDir = Path.Combine(projectRoot, "src");
@@ -1657,7 +1657,7 @@ public class QueryCommandRunnerTests
                 dbPath,
                 "src/program.cs",
                 "csharp",
-                """
+                """""
                 using System;
                 using System.Linq;
 
@@ -1682,7 +1682,7 @@ public class QueryCommandRunnerTests
 
                 Console.WriteLine("done");
                 Console.WriteLine(values.Length);
-                """);
+                """"");
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
                 ["src/program.cs", "--db", dbPath],
@@ -4905,7 +4905,7 @@ public class QueryCommandRunnerTests
             Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
             File.WriteAllText(
                 Path.Combine(projectRoot, "src", "fixture.cs"),
-                """
+                """"
                 using System.Collections.Generic;
 
                 namespace CsObjInitPhantom;
@@ -4937,7 +4937,7 @@ public class QueryCommandRunnerTests
                         }
                     };
                 }
-                """);
+                """");
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
@@ -5405,7 +5405,7 @@ public class QueryCommandRunnerTests
             Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
             File.WriteAllText(
                 Path.Combine(projectRoot, "src", "fixture.cs"),
-                """
+                """""
                 namespace Demo;
 
                 public class FixtureHost
@@ -5419,7 +5419,7 @@ public class QueryCommandRunnerTests
                     {
                     }
                 }
-                """);
+                """"");
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
@@ -5509,7 +5509,7 @@ public class QueryCommandRunnerTests
             Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
             File.WriteAllText(
                 Path.Combine(projectRoot, "src", "fixture.cs"),
-                """
+                """"
                 namespace Demo;
 
                 public class FixtureHost
@@ -5525,7 +5525,7 @@ public class QueryCommandRunnerTests
                     {
                     }
                 }
-                """);
+                """");
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
@@ -5546,6 +5546,78 @@ public class QueryCommandRunnerTests
             Assert.Equal("AfterVerbatimString", definition.GetProperty("name").GetString());
             Assert.Equal("class", definition.GetProperty("container_kind").GetString());
             Assert.Equal("FixtureHost", definition.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDefinitionAndInspect_CSharpExactInterpolatedStringCallSites_OnlyReturnRealDefinition()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_definition_inspect_csharp_interpolated_callsite_issue790");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.cs"),
+                """""
+                namespace Demo;
+
+                public sealed class ReporterContext
+                {
+                    public string ReportsFolderAbsolutePath { get; set; } = string.Empty;
+                }
+
+                public sealed class AuditLogGenerateService
+                {
+                    internal static string DescribeState(string label, string? pathOrCommand)
+                        => $"{label}:{pathOrCommand}";
+
+                    public void WriteAuditLog(ReporterContext context, string auditLogPath)
+                    {
+                        var message = $"""
+                            Failed to write audit log for reports folder {context.ReportsFolderAbsolutePath}
+                            to {auditLogPath}
+                            current state {
+                                DescribeState("ReportsFolder", context.ReportsFolderAbsolutePath)}
+                            """;
+                    }
+                }
+                """"");
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var (definitionExitCode, definitionStdout, definitionStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["DescribeState", "--db", dbPath, "--json", "--exact", "--lang", "csharp"],
+                _jsonOptions));
+            var (inspectExitCode, inspectStdout, inspectStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["DescribeState", "--db", dbPath, "--json", "--exact", "--lang", "csharp"],
+                _jsonOptions));
+
+            var definitionRows = ParseJsonLines(definitionStdout);
+            using var inspectDocument = ParseJsonOutput(inspectStdout);
+            var inspectDefinitions = inspectDocument.RootElement.GetProperty("definitions").EnumerateArray().ToArray();
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, definitionExitCode);
+            Assert.Equal(string.Empty, definitionStderr);
+            Assert.Equal(CommandExitCodes.Success, inspectExitCode);
+            Assert.Equal(string.Empty, inspectStderr);
+
+            var definition = Assert.Single(definitionRows).RootElement;
+            Assert.Equal("DescribeState", definition.GetProperty("name").GetString());
+            Assert.Equal("AuditLogGenerateService", definition.GetProperty("container_name").GetString());
+            Assert.Equal("string", definition.GetProperty("return_type").GetString());
+
+            var inspectDefinition = Assert.Single(inspectDefinitions);
+            Assert.Equal("DescribeState", inspectDefinition.GetProperty("name").GetString());
+            Assert.Equal("AuditLogGenerateService", inspectDefinition.GetProperty("container_name").GetString());
+            Assert.Equal("string", inspectDefinition.GetProperty("return_type").GetString());
         }
         finally
         {
