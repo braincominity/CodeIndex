@@ -904,12 +904,17 @@ public class DbWriter
         // Simple-name index: head identifier (no namespace) -> ids.
         // 単純名の頭識別子（名前空間なし）-> ids の索引。
         var nameToIds = new Dictionary<string, List<long>>(StringComparer.Ordinal);
-        // Fully-qualified-name index: `Namespace.TypeName` -> id. Used when the base type
+        // Fully-qualified-name index: `Namespace.TypeName` -> ids. Used when the base type
         // in a signature is qualified (`: A.BaseAttr`) so we do not resolve against an
-        // unrelated same-simple-name class in another namespace. Issue #435 codex review.
-        // 完全修飾名 `Namespace.TypeName` -> id の索引。signature の基底が `A.BaseAttr` のように
-        // 修飾名のとき、別名前空間の同名 class に誤解決させないために使う。
-        var qualifiedToId = new Dictionary<string, long>(StringComparer.Ordinal);
+        // unrelated same-simple-name class in another namespace. A LIST is required here
+        // because C# `partial class` can split a single logical type across multiple
+        // rows (one row per declaration site): with a single-id map, whichever row was
+        // inserted first wins and any sibling partial carrying the real `: Attribute`
+        // base list is dropped, making metadata-target resolution file-order dependent.
+        // Issue #435 codex review iter 2.
+        // 完全修飾名 `Namespace.TypeName` -> ids の索引。`partial class` で同一 FQN が複数行に
+        // 分割されても、どのファイルが先に読まれても解決が安定するように List で保持する。
+        var qualifiedToIds = new Dictionary<string, List<long>>(StringComparer.Ordinal);
         var bases = new Dictionary<long, List<string>>();
         foreach (var row in rows)
         {
@@ -920,7 +925,14 @@ public class DbWriter
             }
             bucket.Add(row.Id);
             foreach (var fq in EnumerateQualifiedKeys(row.QualifiedName, row.Name))
-                qualifiedToId.TryAdd(fq, row.Id);
+            {
+                if (!qualifiedToIds.TryGetValue(fq, out var qbucket))
+                {
+                    qbucket = new List<long>();
+                    qualifiedToIds[fq] = qbucket;
+                }
+                qbucket.Add(row.Id);
+            }
             bases[row.Id] = ParseCSharpBaseIdentifiers(row.Signature);
         }
 
@@ -933,7 +945,7 @@ public class DbWriter
             {
                 if (targets.Contains(row.Id))
                     continue;
-                if (IsMetadataTargetByBases(bases[row.Id], targets, nameToIds, qualifiedToId))
+                if (IsMetadataTargetByBases(bases[row.Id], targets, nameToIds, qualifiedToIds))
                 {
                     targets.Add(row.Id);
                     changed = true;
@@ -1035,7 +1047,7 @@ public class DbWriter
         List<string> baseIdentifiers,
         HashSet<long> resolvedTargets,
         Dictionary<string, List<long>> nameToIds,
-        Dictionary<string, long> qualifiedToId)
+        Dictionary<string, List<long>> qualifiedToIds)
     {
         foreach (var baseName in baseIdentifiers)
         {
@@ -1066,15 +1078,29 @@ public class DbWriter
                 var normalized = baseName.StartsWith("global::", StringComparison.Ordinal)
                     ? baseName.Substring("global::".Length)
                     : baseName;
-                if (qualifiedToId.TryGetValue(baseName, out var qid)
-                    || qualifiedToId.TryGetValue(normalized, out qid))
+                if (qualifiedToIds.TryGetValue(baseName, out var qids)
+                    || qualifiedToIds.TryGetValue(normalized, out qids))
                 {
-                    if (resolvedTargets.Contains(qid))
+                    bool anyResolved = false;
+                    foreach (var qid in qids)
+                    {
+                        if (resolvedTargets.Contains(qid))
+                        {
+                            anyResolved = true;
+                            break;
+                        }
+                    }
+                    if (anyResolved)
                         return true;
-                    // Matched a specific qualified in-repo class that is not (yet) a target.
+                    // Matched specific qualified in-repo classes but none (yet) resolved.
                     // Wait for the next iteration instead of falling to the BCL heuristic —
                     // promoting it would contradict the user's explicit qualified reference.
-                    // 修飾名で具体的な class に当たったが未確定。次回反復に委ねる。
+                    // A list is needed here because `partial class` can split a single FQN
+                    // across multiple rows; if only the declaration carrying `: Attribute`
+                    // is the real target, we must still iterate to promote it.
+                    // 修飾名で具体的な class 群に当たったが未確定。次回反復に委ねる。partial
+                    // で同一 FQN が複数行に分かれている場合も、どれか 1 つでも target になれば
+                    // この if で拾えるよう list で保持している。
                     continue;
                 }
                 // Qualified base did not match any in-repo class — treat as external and

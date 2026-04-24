@@ -3428,6 +3428,69 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverHandlesPartialClassBase()
+    {
+        // issue #435 codex review iter 2: legal C# `partial class` can split a single
+        // logical type across multiple declaration sites, each producing its own symbol
+        // row. Only one of the partial declarations carries the real base list
+        // (`: Attribute`). The qualified-base index must accumulate ALL rows sharing the
+        // same FQN so the fixed-point lookup can still find the target-bearing partial,
+        // regardless of which file was indexed first. Before the iter-2 fix, the index
+        // used `Dictionary<string, long>` with `TryAdd`, so whichever partial row was
+        // inserted first won: when the base-less partial was inserted first, the
+        // qualified reference from `FooAttribute : B.BaseAttr` resolved only to that
+        // base-less row, never iterating to the partial that carries `: Attribute`,
+        // and the metadata edge was silently dropped in a file-order dependent way.
+        // issue #435 codex review iter 2: `partial class` は 1 つの論理型が複数行に
+        // 分かれる。修飾名索引が `Dictionary<string, long>` + TryAdd だった旧実装では、
+        // 先に insert された partial 行しか拾われず、`: Attribute` を持つ真の target
+        // partial が別ファイルにあるとファイル順で metadata edge が落ちていた。List で
+        // 候補集合を保持する修正により、fixed-point 反復でどれかが target になれば
+        // qualified 参照も正しく解決される。
+        InsertIndexedFile("src/B/BaseAttr.Core.cs", "csharp",
+            """
+            namespace B
+            {
+                public partial class BaseAttr
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/B/BaseAttr.Marker.cs", "csharp",
+            """
+            using System;
+
+            namespace B
+            {
+                public partial class BaseAttr : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/FooAttribute.cs", "csharp",
+            """
+            public class FooAttribute : B.BaseAttr
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [Foo]
+            public class Svc
+            {
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        Assert.Contains(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/FooAttribute.cs");
+    }
+
+    [Fact]
     public void ResolveCSharpMetadataTargets_DoesNotMistakeGenericConstraintForBaseList()
     {
         // issue #435 codex review iter 1: `class Foo<T> where T : Attribute {}` has no
