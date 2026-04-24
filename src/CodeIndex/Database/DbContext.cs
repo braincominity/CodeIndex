@@ -309,13 +309,26 @@ public class DbContext : IDisposable
     // where `A.BaseAttr : Attribute` is indexed in a sibling file. Bumping the contract
     // forces those DBs to degrade to the legacy `signature LIKE '%: %'` reader path until a
     // reindex republishes `is_metadata_target`.
+    // Version 3 (#435 iter 6) normalizes C# verbatim-identifier `@` prefixes on the writer
+    // side so `using @Foo.@Bar;`, `using @AliasAttr = @Foo.@BaseAttr;`, and `class Foo :
+    // @BaseAttr` resolve identically to their non-verbatim counterparts. Iter-5 DBs stored
+    // the raw `@Foo.@Bar` token in the import map and never matched the qualified index,
+    // leaving `VerbatimImportAttribute : BaseAttr` as `is_metadata_target=0` and dropping
+    // the attribute-consumer edge from `deps` / `impact`. Bumping the contract degrades
+    // iter-5 DBs to the legacy reader path until reindexed.
     // バージョン 2 (#435 iter 5)で resolver が import を考慮するようになった。非修飾な基底は
     // deriving ファイルの `using Namespace;` / `using Alias = FQN;`（および全ファイル集約の
     // `global using`）を通して解決してから BCL の `Attribute` サフィックス規約にフォールバック
     // する。iter 4 の DB は `using A; class FooAttribute : BaseAttr` のような一般的な C# パターンで
     // 正しく解決できないため、契約バージョンを上げて reader を legacy ヒューリスティックに縮退
     // させ、再 index で republish されるまで metadata edge を誤って主張させない。
-    public const int MetadataTargetVersion = 2;
+    // バージョン 3 (#435 iter 6) で書き込み側が C# verbatim 識別子の `@` 先頭を正規化するよう
+    // になった。`using @Foo.@Bar;` / `using @AliasAttr = @Foo.@BaseAttr;` / `class Foo :
+    // @BaseAttr` が非 verbatim 形と同じキーで解決される。iter-5 DB は import map に生の
+    // `@Foo.@Bar` を残していたため qualified 索引に当たらず、`VerbatimImportAttribute :
+    // BaseAttr` が `is_metadata_target=0` となり attribute consumer 側の edge が落ちていた。
+    // 契約バージョンを上げて、再 index 前の iter-5 DB を reader の legacy パスに縮退させる。
+    public const int MetadataTargetVersion = 3;
     public static string GetMetadataTargetVersionMetaKey(string lang) => $"metadata_target_version_{lang}";
 
     public int GetUserVersion()

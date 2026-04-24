@@ -1108,9 +1108,14 @@ public class DbWriter
         string? aliasName = null;
         if (signature != null)
         {
+            // `@?\w+` so verbatim alias names (`using @AliasAttr = A.BaseAttr;`) are captured
+            // just like the SymbolExtractor side; the leading `@` is stripped below before
+            // the alias enters the per-file map.
+            // SymbolExtractor 側と同じく verbatim 識別子も `@?\w+` で受け、下の正規化で
+            // 先頭 `@` を剥がしてから alias map に載せる。
             var m = System.Text.RegularExpressions.Regex.Match(
                 signature,
-                @"^\s*(?:global\s+)?using\s+(?<alias>\w+)\s*=\s*(?<target>[^;]+?)\s*;");
+                @"^\s*(?:global\s+)?using\s+(?<alias>@?\w+)\s*=\s*(?<target>[^;]+?)\s*;");
             if (m.Success)
             {
                 aliasName = m.Groups["alias"].Value.Trim();
@@ -1121,9 +1126,20 @@ public class DbWriter
         {
             // Normalize `global::` prefix off the alias target so the downstream qualified
             // lookup sees the same key shape (`A.BaseAttr`) regardless of source syntax.
+            // Then strip the C# verbatim `@` prefix from each identifier segment in both
+            // the alias name and target — `using @AliasAttr = @Foo.@Bar.BaseAttr;` must
+            // resolve identically to `using AliasAttr = Foo.Bar.BaseAttr;` because the two
+            // forms are semantically equivalent in C#. Issue #435 codex review iter 6.
             // alias の target 先頭の `global::` は剥がして qualified 索引のキー形に合わせる。
+            // さらに alias 名・target の各 dotted segment 先頭の verbatim `@` も剥がし、
+            // `using @AliasAttr = @Foo.@Bar.BaseAttr;` が非 verbatim 形と同じキーで解決されるよう
+            // 整える（C# では両者は同義）。Issue #435 codex review iter 6.
             if (aliasTarget.StartsWith("global::", StringComparison.Ordinal))
                 aliasTarget = aliasTarget.Substring("global::".Length);
+            aliasName = StripCSharpVerbatimPrefixes(aliasName);
+            aliasTarget = StripCSharpVerbatimPrefixes(aliasTarget);
+            if (aliasName.Length == 0 || aliasTarget.Length == 0)
+                return;
             perFile.Aliases[aliasName] = aliasTarget;
             if (isGlobal)
                 global.Aliases[aliasName] = aliasTarget;
@@ -1133,16 +1149,48 @@ public class DbWriter
         // SymbolExtractor regex, so we can use it directly. Trailing `global::` can sneak
         // through in exotic files (`using global::System.Linq;`) — strip it for parity
         // with the alias path so every downstream probe sees one consistent prefix.
+        // Strip the C# verbatim `@` prefix from each dotted segment too so `using @Foo.@Bar;`
+        // resolves identically to `using Foo.Bar;` (semantically equivalent in C#).
+        // Issue #435 codex review iter 6.
         // 通常の `using Foo.Bar;` は name 側に `Foo.Bar` が入っているのでそれを使う。
-        // 稀な `using global::X;` も prefix を剥がして qualified 索引と揃える。
+        // 稀な `using global::X;` も prefix を剥がして qualified 索引と揃える。さらに
+        // `using @Foo.@Bar;` のような verbatim 表記も先頭 `@` を剥がし、非 verbatim 形と
+        // 同じキーで解決されるよう整える。Issue #435 codex review iter 6.
         string ns = name;
         if (ns.StartsWith("global::", StringComparison.Ordinal))
             ns = ns.Substring("global::".Length);
+        ns = StripCSharpVerbatimPrefixes(ns);
         if (ns.Length == 0)
             return;
         perFile.Namespaces.Add(ns);
         if (isGlobal)
             global.Namespaces.Add(ns);
+    }
+
+    // Strip the C# verbatim-identifier `@` prefix from each dotted segment of a qualified
+    // name. `@Foo.@Bar.BaseAttr` → `Foo.Bar.BaseAttr`; `Foo.Bar` → `Foo.Bar` (unchanged).
+    // Runs on the writer side so every qualified-index key and every scope/import entry
+    // shares one canonical form regardless of whether the source used verbatim syntax.
+    // Issue #435 codex review iter 6.
+    // 修飾名の各 dotted segment 先頭の C# verbatim 識別子 `@` を剥がす。`@Foo.@Bar.BaseAttr`
+    // は `Foo.Bar.BaseAttr` に正規化。書き込み側で正規化することで、qualified 索引キーと
+    // scope / import エントリをソース表記に依らない単一の形に統一する。
+    private static string StripCSharpVerbatimPrefixes(string qualified)
+    {
+        if (qualified.Length == 0 || qualified.IndexOf('@') < 0)
+            return qualified;
+        var segments = qualified.Split('.');
+        bool anyChanged = false;
+        for (int i = 0; i < segments.Length; i++)
+        {
+            var seg = segments[i];
+            if (seg.Length > 0 && seg[0] == '@')
+            {
+                segments[i] = seg.Substring(1);
+                anyChanged = true;
+            }
+        }
+        return anyChanged ? string.Join('.', segments) : qualified;
     }
 
     // Yield every qualified-name variant that callers might write against this class:
@@ -1227,8 +1275,18 @@ public class DbWriter
         FileImportSet? fileImports,
         FileImportSet? globalImports)
     {
-        foreach (var baseName in baseIdentifiers)
+        foreach (var rawBaseName in baseIdentifiers)
         {
+            if (rawBaseName.Length == 0)
+                continue;
+            // Normalize verbatim `@` prefixes in the base identifier so `class Foo : @BaseAttr`
+            // and `class Foo : @Bar.@BaseAttr` share the same lookup key with their
+            // non-verbatim counterparts. Import maps are already normalized by
+            // `RegisterCSharpImport`, so we only need to canonicalize the deriving side here.
+            // Issue #435 codex review iter 6.
+            // base 識別子側の verbatim `@` も剥がし、import map と揃える（import 側は
+            // `RegisterCSharpImport` で正規化済み）。Issue #435 codex review iter 6.
+            var baseName = StripCSharpVerbatimPrefixes(rawBaseName);
             if (baseName.Length == 0)
                 continue;
             // Direct System.Attribute / Attribute reference / 直接 Attribute 派生

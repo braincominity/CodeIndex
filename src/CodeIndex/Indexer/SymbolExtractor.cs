@@ -323,9 +323,12 @@ public static class SymbolExtractor
             // extern alias (must precede using directives per C# spec) — captures assembly-alias reconciliation
             // extern alias — C# 仕様上 using より前に置かれるファイル先頭宣言。アセンブリエイリアス用
             new("import",    new Regex(@"^\s*extern\s+alias\s+(?<name>\w+)\s*;", RegexOptions.Compiled), BodyStyle.None),
-            // using alias (using X = Y;) — must come before general using to capture alias name
-            // using エイリアス — 一般 using より前に配置しエイリアス名を取得
-            new("import",    new Regex(@"^\s*(?:global\s+)?using\s+(?<name>\w+)\s*=\s*[^;]+;", RegexOptions.Compiled), BodyStyle.None),
+            // using alias (using X = Y;) — must come before general using to capture alias name.
+            // `@?\w+` so verbatim alias identifiers like `using @AliasAttr = A.BaseAttr;` still
+            // surface as an `import` row; the DbWriter-side normalizer strips the leading `@`.
+            // using エイリアス — 一般 using より前に配置しエイリアス名を取得。verbatim 識別子
+            // (`using @AliasAttr = A.BaseAttr;`) も import 行として拾えるよう `@?\w+` で受ける。
+            new("import",    new Regex(@"^\s*(?:global\s+)?using\s+(?<name>@?\w+)\s*=\s*[^;]+;", RegexOptions.Compiled), BodyStyle.None),
             new("import",    new Regex(@"^\s*(?:global\s+)?using\s+(?:static\s+)?(?<name>[^;=]+);", RegexOptions.Compiled), BodyStyle.None),
             // Const field — must come before class/method patterns to avoid misclassification.
             // Modifier order is free: visibility may appear anywhere in the modifier sequence,

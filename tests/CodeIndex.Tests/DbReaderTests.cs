@@ -3719,6 +3719,127 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverHandlesVerbatimNamespaceImport()
+    {
+        // issue #435 codex review iter 6: C# verbatim identifiers (`@Foo`) are a source-level
+        // escape for keywords; `using @Foo.@Bar;` is semantically identical to
+        // `using Foo.Bar;`. Before iter 6 the resolver stored the raw `@Foo.@Bar` token in the
+        // per-file import map and never matched the qualified index, leaving
+        // `VerbatimImportAttribute : BaseAttr` as `is_metadata_target=0`.
+        // issue #435 codex review iter 6: verbatim 識別子 `@Foo.@Bar` は非 verbatim 形と等価。
+        // 修正前は import map に生の `@Foo.@Bar` が載り、qualified 索引に当たらず
+        // `VerbatimImportAttribute : BaseAttr` が `is_metadata_target=0` のまま残っていた。
+        InsertIndexedFile("src/Foo/Bar/BaseAttr.cs", "csharp",
+            """
+            using System;
+
+            namespace Foo.Bar
+            {
+                public class BaseAttr : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/V/VerbatimImportAttribute.cs", "csharp",
+            """
+            using @Foo.@Bar;
+
+            namespace V
+            {
+                public class VerbatimImportAttribute : BaseAttr
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/V/Consumer.cs", "csharp",
+            """
+            namespace V
+            {
+                [VerbatimImport]
+                public class Consumer
+                {
+                }
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.is_metadata_target
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.path = 'src/V/VerbatimImportAttribute.cs' AND s.kind = 'class' AND s.name = 'VerbatimImportAttribute'";
+        var flag = cmd.ExecuteScalar();
+        Assert.Equal(1L, Convert.ToInt64(flag));
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+        Assert.Contains(dependencies, d => d.SourcePath == "src/V/Consumer.cs" && d.TargetPath == "src/V/VerbatimImportAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverHandlesVerbatimAliasNameAndTarget()
+    {
+        // issue #435 codex review iter 6: verbatim on both sides of an alias import —
+        // `using @AliasAttr = @Foo.@Bar.BaseAttr;` should parse, be captured as an import
+        // row (the SymbolExtractor regex was too strict to accept the leading `@` on alias
+        // names), and resolve identically to the non-verbatim spelling.
+        // issue #435 codex review iter 6: alias 両辺の verbatim — alias 名にも target にも
+        // `@` が付くケース。旧 SymbolExtractor regex は alias 名の `@` を受けず import 行
+        // 自体が生成されなかったため、resolver に届く前に情報が欠落していた。
+        InsertIndexedFile("src/Foo/Bar/BaseAttr.cs", "csharp",
+            """
+            using System;
+
+            namespace Foo.Bar
+            {
+                public class BaseAttr : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/V/VerbatimAliasAttribute.cs", "csharp",
+            """
+            using @AliasAttr = @Foo.@Bar.BaseAttr;
+
+            namespace V
+            {
+                public class VerbatimAliasAttribute : AliasAttr
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/V/AliasConsumer.cs", "csharp",
+            """
+            namespace V
+            {
+                [VerbatimAlias]
+                public class AliasConsumer
+                {
+                }
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.is_metadata_target
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.path = 'src/V/VerbatimAliasAttribute.cs' AND s.kind = 'class' AND s.name = 'VerbatimAliasAttribute'";
+        var flag = cmd.ExecuteScalar();
+        Assert.Equal(1L, Convert.ToInt64(flag));
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+        Assert.Contains(dependencies, d => d.SourcePath == "src/V/AliasConsumer.cs" && d.TargetPath == "src/V/VerbatimAliasAttribute.cs");
+    }
+
+    [Fact]
     public void ResolveCSharpMetadataTargets_DoesNotMistakeGenericConstraintForBaseList()
     {
         // issue #435 codex review iter 1: `class Foo<T> where T : Attribute {}` has no
