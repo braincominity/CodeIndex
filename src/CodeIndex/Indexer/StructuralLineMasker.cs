@@ -1,6 +1,13 @@
 namespace CodeIndex.Indexer;
 
 /// <summary>
+/// JavaScript / TypeScript tagged template literal call site captured while masking.
+/// Line and Column are 1-based; Column points to the tag identifier's starting column.
+/// マスク走査中に検出した JS/TS タグ付きテンプレート呼び出し。Line/Column は 1 始まり。
+/// </summary>
+internal readonly record struct JsTaggedTemplateHit(int Line, int Column, string Name, bool IsMemberAccess);
+
+/// <summary>
 /// Masks non-code regions that would otherwise confuse line-based structural regexes.
 /// 行ベースの構造 regex を誤誘導する非コード領域をマスクする。
 /// </summary>
@@ -64,7 +71,11 @@ internal static class StructuralLineMasker
     }
 
     internal static string[] MaskLines(string? lang, string[] originalLines)
+        => MaskLines(lang, originalLines, out _);
+
+    internal static string[] MaskLines(string? lang, string[] originalLines, out List<JsTaggedTemplateHit>? jsTaggedTemplateHits)
     {
+        jsTaggedTemplateHits = null;
         var maskedLines = (string[])originalLines.Clone();
 
         switch (lang)
@@ -80,7 +91,8 @@ internal static class StructuralLineMasker
                 break;
             case "javascript":
             case "typescript":
-                MaskJsTsTemplateLiteralContents(maskedLines);
+                jsTaggedTemplateHits = new List<JsTaggedTemplateHit>();
+                MaskJsTsTemplateLiteralContents(maskedLines, jsTaggedTemplateHits, lang);
                 break;
         }
 
@@ -1374,8 +1386,14 @@ internal static class StructuralLineMasker
     // ホール内の本物のコードは参照抽出に見せるためマスクしない。
     // regex literal は外側と hole 内の両方でスキップし、regex 中の backtick が template を
     // 誤って開始したり `}` が hole を早く閉じたりするのを避ける。
-    private static void MaskJsTsTemplateLiteralContents(string[] lines)
+    private static void MaskJsTsTemplateLiteralContents(string[] lines, List<JsTaggedTemplateHit>? taggedTemplateHits = null, string? lang = null)
     {
+        // `<...>` before a backtick is a TypeScript-only generic type-argument form. In plain
+        // JavaScript the same character sequence is always a comparison chain (`foo<bar>\`x\``
+        // is `(foo<bar)>\`x\``), so never strip the bracketed range when indexing JS.
+        // `<...>` 付きのタグ付きテンプレートは TypeScript 限定のジェネリクス構文。プレーン
+        // な JavaScript では同じ並びが常に比較式になるため、JS を索引するときは剥がさない。
+        var allowGenericTag = string.Equals(lang, "typescript", StringComparison.Ordinal);
         var frames = new Stack<ScannerFrame>();
         // `lexState` must persist across lines so that multi-line expressions in
         // template-literal holes keep the preceding token context. For example,
@@ -1388,6 +1406,15 @@ internal static class StructuralLineMasker
         // 維持する必要がある。行頭で Reset すると継続行の `/` が常に regex 扱いに
         // なり、hole を閉じる `}` やバッククォートを巻き込んでしまう。
         var lexState = default(JsLexState);
+        // Active quote for a JS/TS single- or double-quoted string that started
+        // inside the current top-most template hole and continued past a physical
+        // line boundary via trailing `\`. The continuation can only belong to the
+        // current top frame at the start of the next line, so a single scanner-wide
+        // state slot is enough.
+        // テンプレートホール内で始まり、行末 `\` により次行へ継続した JS/TS 単/二重
+        // 引用符文字列の active quote。行境界で継続可能なのは次行開始時の最上位 hole
+        // だけなので、scanner 全体で 1 スロット持てば十分。
+        var activeJsHoleStringQuote = '\0';
         lexState.Reset();
 
         for (int i = 0; i < lines.Length; i++)
@@ -1470,8 +1497,28 @@ internal static class StructuralLineMasker
 
                     if (active is JsTemplateHoleFrame holeFrame)
                     {
+                        if (activeJsHoleStringQuote != '\0')
+                        {
+                            pos = MaskJsTemplateHoleString(line, pos, masked, activeJsHoleStringQuote, startsInsideString: true, out var continuesOnNextLine);
+                            if (continuesOnNextLine)
+                                break;
+
+                            activeJsHoleStringQuote = '\0';
+                            lexState.SetKind(JsPrevTokenKind.Literal);
+                            continue;
+                        }
+
                         if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '/')
+                        {
+                            // Blank the `//` comment tail so later passes (including the
+                            // multi-line tagged-template backward scan that reads prior
+                            // `lines[li]`) cannot mistake a comment identifier for code.
+                            // `//` コメント以降を空白化し、後続処理 — とくに前行の
+                            // `lines[li]` を読む複数行タグ走査 — がコメント内の識別子を
+                            // コードと誤認しないようにする。
+                            ReplaceWithSpaces(masked, pos, masked.Length - pos);
                             break;
+                        }
 
                         if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '*')
                         {
@@ -1498,6 +1545,8 @@ internal static class StructuralLineMasker
                             // restore paren/state context for the token that follows.
                             // hole 側の lex state を退避し、閉じ backtick 後に paren
                             // などの context を元に戻せるようにする。
+                            if (taggedTemplateHits != null)
+                                TryRecordJsTaggedTemplateHit(lines, masked, i, pos, taggedTemplateHits, allowGenericTag);
                             pos++;
                             frames.Push(new JsTemplateLiteralFrame { SavedLexState = lexState });
                             lexState = default;
@@ -1507,7 +1556,14 @@ internal static class StructuralLineMasker
 
                         if (line[pos] == '"' || line[pos] == '\'')
                         {
-                            pos = SkipJsSingleLineString(line, pos);
+                            var quote = line[pos];
+                            pos = MaskJsTemplateHoleString(line, pos, masked, quote, startsInsideString: false, out var continuesOnNextLine);
+                            if (continuesOnNextLine)
+                            {
+                                activeJsHoleStringQuote = quote;
+                                break;
+                            }
+
                             lexState.SetKind(JsPrevTokenKind.Literal);
                             continue;
                         }
@@ -1582,7 +1638,17 @@ internal static class StructuralLineMasker
                 }
 
                 if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '/')
+                {
+                    // Blank the `//` comment tail so the multi-line tagged-template
+                    // backward scan (which reads prior `lines[li]` directly) cannot
+                    // mistake a comment identifier like `comment` in
+                    // `return tag // trailing comment` for the tag itself.
+                    // `//` コメント以降を空白化し、前行の `lines[li]` を直接読む複数行
+                    // タグ走査が `return tag // trailing comment` の `comment` のような
+                    // コメント内識別子をタグと誤認しないようにする。
+                    ReplaceWithSpaces(masked, pos, masked.Length - pos);
                     break;
+                }
 
                 if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '*')
                 {
@@ -1608,6 +1674,8 @@ internal static class StructuralLineMasker
                     // the paren stack / statement-head hints that preceded the template.
                     // テンプレート直前の lex state を退避し、閉じ backtick で paren
                     // stack や statement-head hint を復元できるようにする。
+                    if (taggedTemplateHits != null)
+                        TryRecordJsTaggedTemplateHit(lines, masked, i, pos, taggedTemplateHits, allowGenericTag);
                     masked[pos] = ' ';
                     pos++;
                     frames.Push(new JsTemplateLiteralFrame { SavedLexState = lexState });
@@ -1628,6 +1696,283 @@ internal static class StructuralLineMasker
 
             lines[i] = new string(masked);
         }
+
+        // Post-pass: drop `of` hits whose enclosing `for (...)` header is a for-of or
+        // for-await-of loop. `of` is not a reserved word in ECMAScript, so `const of =
+        // ...; of\`x\`` must stay visible — only the loop-header form should be silenced.
+        // The check is done against the fully masked buffer so the template body cannot
+        // inject false tokens, and it walks across line boundaries to cover multi-line
+        // headers like `for (\n  const ch of \`abc\`\n)`.
+        // 後段パス: 囲む `for (...)` ヘッダが for-of / for-await-of の場合のみ `of` ヒット
+        // を除外する。`of` は ECMAScript の予約語ではなく `const of = ...; of\`x\`` は正当
+        // なので、ループヘッダ形だけを静かにする必要がある。マスク後バッファに対して
+        // 検査するため template 本体が誤トークンを混入させることがなく、
+        // `for (\n  const ch of \`abc\`\n)` のような複数行ヘッダも行境界を越えて処理する。
+        if (taggedTemplateHits != null && taggedTemplateHits.Count > 0)
+            FilterJsForOfHeaderHits(lines, taggedTemplateHits);
+    }
+
+    private static void FilterJsForOfHeaderHits(string[] lines, List<JsTaggedTemplateHit> hits)
+    {
+        // Build a scan buffer that additionally blanks string literals, regex literals,
+        // and line comments. The outer masker already blanked template bodies and block
+        // comments, but string / regex / `//` content survives, so a literal `)` inside
+        // `":"` or `/)/` or `// for (a;b;c)` would corrupt paren and `;` counting in the
+        // for-of header probe. Blanking them here keeps the structural walk structural.
+        // paren と `;` のカウントが文字列 / regex / 行コメント内の `)` や `;` に引きずられ
+        // ないよう、外側 masker が空白化していない要素も追加で空白化したスキャンバッファを
+        // 作る。template 本体と block コメントは外側で既に空白化済みのためここでは触らない。
+        var scanBuffer = BuildJsForOfScanBuffer(lines);
+        for (int h = hits.Count - 1; h >= 0; h--)
+        {
+            var hit = hits[h];
+            if (hit.Name != "of")
+                continue;
+            if (IsJsForOfHeaderContext(scanBuffer, hit.Line - 1, hit.Column - 1))
+                hits.RemoveAt(h);
+        }
+    }
+
+    // Returns a copy of the masker output where single/double-quoted string spans,
+    // regex literals, and `//` line-comment tails are blanked out. Template literal
+    // bodies and block comments are already blanked by the outer masker, so we only
+    // need to handle the three remaining kinds. The returned buffer keeps identical
+    // column offsets so hit coordinates (Line, Column) remain valid.
+    // 外側の masker の出力を複製し、文字列リテラル・regex リテラル・`//` 行コメント末尾を
+    // 追加で空白化したバッファを返す。template 本体と block コメントは既に空白化済みなの
+    // で、残る 3 種類だけを処理する。列オフセットは元の buffer と一致するため Hit 座標は
+    // そのまま利用できる。
+    private static string[] BuildJsForOfScanBuffer(string[] lines)
+    {
+        var result = new string[lines.Length];
+        var lexState = default(JsLexState);
+        lexState.Reset();
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (line.Length == 0)
+            {
+                result[i] = line;
+                continue;
+            }
+            var buf = line.ToCharArray();
+            int pos = 0;
+            while (pos < line.Length)
+            {
+                if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '/')
+                {
+                    for (int k = pos; k < line.Length; k++)
+                        buf[k] = ' ';
+                    pos = line.Length;
+                    break;
+                }
+                char ch = line[pos];
+                if (ch == '"' || ch == '\'')
+                {
+                    int end = SkipJsSingleLineString(line, pos);
+                    for (int k = pos; k < end; k++)
+                        buf[k] = ' ';
+                    pos = end;
+                    lexState.SetKind(JsPrevTokenKind.Literal);
+                    continue;
+                }
+                if (ch == '/' && CanStartJsRegexLiteral(lexState))
+                {
+                    int end = SkipJsRegexLiteral(line, pos);
+                    for (int k = pos; k < end; k++)
+                        buf[k] = ' ';
+                    pos = end;
+                    lexState.SetKind(JsPrevTokenKind.Literal);
+                    continue;
+                }
+                pos = AdvanceJsToken(line, pos, ref lexState);
+            }
+            result[i] = new string(buf);
+        }
+        return result;
+    }
+
+    // From (lineIdx, colIdx) pointing at the start of the `of` token, decide whether `of`
+    // is the iterator keyword of a for-of / for-await-of header. Classic `for (init; cond;
+    // step)` keeps `of` visible as a real tagged-template call.
+    // `of` トークン先頭 (lineIdx, colIdx) を起点に、その `of` が for-of / for-await-of の
+    // 反復子キーワードかを判定する。古典形 `for (init; cond; step)` 内の `of` はタグとして
+    // 残す。
+    private static bool IsJsForOfHeaderContext(string[] lines, int lineIdx, int colIdx)
+    {
+        if (lineIdx < 0 || lineIdx >= lines.Length)
+            return false;
+
+        if (!TryFindEnclosingOpenParen(lines, lineIdx, colIdx, out var openLine, out var openCol))
+            return false;
+
+        if (!PrecedingTokenIsForKeyword(lines, openLine, openCol))
+            return false;
+
+        return HasNoTopLevelSemicolonInParenGroup(lines, openLine, openCol);
+    }
+
+    // Walk backward from just before (startLine, startCol) through masked lines to find the
+    // nearest unmatched `(`. Balanced `()` / `[]` / `{}` groups are skipped. Escaping an
+    // unmatched `[` or `{` means `of` is not inside a paren-group at all; return false.
+    // (startLine, startCol) の直前から masked lines を後方に走査し、釣り合っていない最
+    // 近傍の `(` を探す。釣り合いのとれた `()` / `[]` / `{}` は飛ばす。未対応の `[` / `{`
+    // を抜ける場合は paren-group 内にないため false を返す。
+    private static bool TryFindEnclosingOpenParen(string[] lines, int startLine, int startCol, out int openLine, out int openCol)
+    {
+        openLine = -1;
+        openCol = -1;
+        int parenDepth = 0;
+        int bracketDepth = 0;
+        int braceDepth = 0;
+        int curCol = startCol - 1;
+        for (int li = startLine; li >= 0; li--)
+        {
+            var line = lines[li];
+            if (li != startLine)
+                curCol = line.Length - 1;
+            for (int c = curCol; c >= 0; c--)
+            {
+                char ch = line[c];
+                if (ch == ')') { parenDepth++; continue; }
+                if (ch == ']') { bracketDepth++; continue; }
+                if (ch == '}') { braceDepth++; continue; }
+                if (ch == '[')
+                {
+                    if (bracketDepth > 0) { bracketDepth--; continue; }
+                    return false;
+                }
+                if (ch == '{')
+                {
+                    if (braceDepth > 0) { braceDepth--; continue; }
+                    return false;
+                }
+                if (ch == '(')
+                {
+                    if (parenDepth > 0) { parenDepth--; continue; }
+                    openLine = li;
+                    openCol = c;
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // Check whether the token immediately before the `(` at (openLine, openCol) is `for`
+    // (optionally followed by an `await` token between `for` and `(`). Whitespace and
+    // line breaks between the keyword and `(` are tolerated.
+    // (openLine, openCol) の `(` 直前トークンが `for`（`for` と `(` の間に `await` が入る
+    // 形も許容）であるかを判定する。キーワードと `(` の間の空白・改行は許容する。
+    private static bool PrecedingTokenIsForKeyword(string[] lines, int openLine, int openCol)
+    {
+        int li = openLine;
+        int c = openCol - 1;
+        if (!SkipWhitespaceBackward(lines, ref li, ref c))
+            return false;
+        if (!TryReadIdentifierBackward(lines, ref li, ref c, out var token1))
+            return false;
+        if (token1 == "for")
+            return true;
+        if (token1 != "await")
+            return false;
+        if (!SkipWhitespaceBackward(lines, ref li, ref c))
+            return false;
+        if (!TryReadIdentifierBackward(lines, ref li, ref c, out var token2))
+            return false;
+        return token2 == "for";
+    }
+
+    // Starting from `(` at (openLine, openCol), walk forward to the matching `)` and
+    // report whether the paren group contains zero top-level `;`. Zero means for-of /
+    // for-await-of shape; any top-level `;` means classic `for (init; cond; step)`.
+    // (openLine, openCol) の `(` から対応する `)` までを前方走査し、トップレベルの `;` が
+    // 1 つも無ければ for-of / for-await-of 形、1 つ以上あれば古典形 `for (init; cond;
+    // step)` と判断する。
+    private static bool HasNoTopLevelSemicolonInParenGroup(string[] lines, int openLine, int openCol)
+    {
+        int parenDepth = 1;
+        int bracketDepth = 0;
+        int braceDepth = 0;
+        for (int li = openLine; li < lines.Length; li++)
+        {
+            var line = lines[li];
+            int startCol = (li == openLine) ? openCol + 1 : 0;
+            for (int c = startCol; c < line.Length; c++)
+            {
+                char ch = line[c];
+                if (ch == '(') { parenDepth++; continue; }
+                if (ch == ')')
+                {
+                    parenDepth--;
+                    if (parenDepth == 0)
+                        return true;
+                    continue;
+                }
+                if (ch == '[') { bracketDepth++; continue; }
+                if (ch == ']') { if (bracketDepth > 0) bracketDepth--; continue; }
+                if (ch == '{') { braceDepth++; continue; }
+                if (ch == '}') { if (braceDepth > 0) braceDepth--; continue; }
+                if (ch == ';' && parenDepth == 1 && bracketDepth == 0 && braceDepth == 0)
+                    return false;
+            }
+        }
+        return false;
+    }
+
+    private static bool SkipWhitespaceBackward(string[] lines, ref int li, ref int c)
+    {
+        while (true)
+        {
+            while (c < 0)
+            {
+                li--;
+                if (li < 0)
+                    return false;
+                c = lines[li].Length - 1;
+            }
+            char ch = lines[li][c];
+            if (IsJsInterTokenWhitespace(ch))
+            {
+                c--;
+                continue;
+            }
+            return true;
+        }
+    }
+
+    // ECMAScript treats inter-token whitespace as any WhiteSpace (TAB / VT / FF / SP, NBSP
+    // `U+00A0`, BOM `U+FEFF`, every `Zs` category codepoint) or LineTerminator. Our per-line
+    // buffer is already split on `\r` / `\n`, but non-ASCII whitespace such as NBSP and
+    // U+3000 survives inside the line and must still be recognised when backing up between
+    // tokens. `char.IsWhiteSpace` matches `Zs` plus common ASCII controls, but in .NET 8
+    // `char.IsWhiteSpace('\uFEFF')` is `false` (BOM is categorised as `Cf`/Format), so BOM
+    // must be added explicitly. ZWSP `U+200B` is deliberately excluded — ECMAScript does
+    // not treat it as WhiteSpace and `char.IsWhiteSpace` already returns false for it.
+    // ECMAScript のトークン間スペースは WhiteSpace（TAB / VT / FF / SP、NBSP `U+00A0`、BOM
+    // `U+FEFF`、`Zs` 全域）および LineTerminator。行バッファは既に `\r` / `\n` で分割済み
+    // だが、NBSP や U+3000 のような非 ASCII 空白は行内に残るため、トークン間の後方走査でも
+    // 取り扱う必要がある。.NET 8 では `char.IsWhiteSpace('\uFEFF')` は `false`（BOM は
+    // `Cf`/Format 扱い）なので BOM は明示的に足す必要がある。ZWSP `U+200B` は ECMAScript
+    // の WhiteSpace ではなく、`char.IsWhiteSpace` も false を返すため意図通りに除外される。
+    private static bool IsJsInterTokenWhitespace(char c) => c == '\uFEFF' || char.IsWhiteSpace(c);
+
+    private static bool TryReadIdentifierBackward(string[] lines, ref int li, ref int c, out string token)
+    {
+        token = string.Empty;
+        if (li < 0 || li >= lines.Length || c < 0)
+            return false;
+        var line = lines[li];
+        if (c >= line.Length || !IsJsIdentifierPart(line[c]))
+            return false;
+        int end = c + 1;
+        while (c >= 0 && IsJsIdentifierPart(line[c]))
+            c--;
+        int start = c + 1;
+        if (!IsJsIdentifierStart(line[start]))
+            return false;
+        token = line.Substring(start, end - start);
+        return true;
     }
 
     // Advance past one JS/TS token (identifier run, numeric run, single non-string/regex char)
@@ -1761,6 +2106,142 @@ internal static class StructuralLineMasker
     private static bool IsJsIdentifierPart(char c) =>
         c == '_' || c == '$' || char.IsLetterOrDigit(c);
 
+    // Backward-scan the masked buffer at a template-literal opener backtick for a tag
+    // identifier such as `gql`, `styled.div` (last segment), or `html<T>` (generics are
+    // skipped). Whitespace between the identifier and the backtick is tolerated so
+    // `html \`...\`` still matches. `IsIgnoredCallName` downstream filters out keywords
+    // like `return` / `throw` / `await` / `typeof` that can legally precede a plain
+    // template literal.
+    // マスク済みバッファを opener バッククォート位置から後方スキャンし、`gql` や
+    // `styled.div`（最後のセグメント）、`html<T>`（ジェネリクスを読み飛ばす）の
+    // タグ識別子を取り出す。識別子とバッククォートの間の空白は許容し、
+    // `return` / `throw` / `await` / `typeof` のようなプレーンテンプレートの前に
+    // 立ちうるキーワードは呼び出し側の `IsIgnoredCallName` で除外する。
+    private static void TryRecordJsTaggedTemplateHit(
+        string[] lines, char[] masked, int lineIndex, int backtickPos, List<JsTaggedTemplateHit> hits, bool allowGenericTag)
+    {
+        // Skip inter-token whitespace backward, crossing line boundaries when the tag
+        // identifier lives on a prior line (multi-line forms like `tag\n\`hello\``).
+        // Prior lines are already fully masked by the outer loop, so we can safely read
+        // `lines[i]` for `i < lineIndex`.
+        // トークン間空白を後方に辿る。`tag\n\`hello\`` のようにタグが前行にある形も扱うため、
+        // 行境界を越えて走査する。先行行は外側ループで既にマスク済みなので `lines[i]` を
+        // そのまま参照できる。
+        int curLine = lineIndex;
+        int k = backtickPos - 1;
+        while (true)
+        {
+            if (curLine == lineIndex)
+            {
+                while (k >= 0 && IsJsInterTokenWhitespace(masked[k]))
+                    k--;
+                if (k >= 0) break;
+            }
+            else
+            {
+                var l = lines[curLine];
+                while (k >= 0 && IsJsInterTokenWhitespace(l[k]))
+                    k--;
+                if (k >= 0) break;
+            }
+            curLine--;
+            if (curLine < 0) return;
+            k = (curLine == lineIndex ? masked.Length : lines[curLine].Length) - 1;
+        }
+
+        char CharAt(int li, int col)
+            => li == lineIndex ? masked[col] : lines[li][col];
+        int LineLen(int li)
+            => li == lineIndex ? masked.Length : lines[li].Length;
+
+        // Skip a balanced `<...>` (TypeScript generics) so `html<T>\`...\`` still sees `html`.
+        // The generic-strip is TypeScript-only (`allowGenericTag`) because plain JavaScript has
+        // no generics: `foo<bar>\`x\`` is always the chained comparison `(foo<bar)>\`x\``. Even
+        // inside TypeScript we still require the `<` to directly abut an identifier so
+        // whitespace-bearing comparison expressions like `foo < bar > \`plain\`` are rejected,
+        // and we ignore `>` from `=>` (arrow-function type inside the generic range). The
+        // generic-strip is same-line only; a generic argument list spanning line breaks is
+        // extremely rare in practice.
+        // `html<T>\`...\`` のジェネリクスを読み飛ばすため、同一行内で `<...>` が釣り合っている
+        // 場合のみ括弧を剥がす。ジェネリクスは TypeScript 限定（`allowGenericTag`）。JavaScript
+        // では `foo<bar>\`x\`` は常に連鎖比較式なので generic とは扱わない。TypeScript 側でも
+        // `foo < bar > \`plain\`` のような比較式と区別するため `<` が識別子に隣接していることを
+        // 要求し、`=>` 由来の `>` は関数型なので閉じ記号として数えない。ジェネリクス走査は
+        // 同一行限定。行をまたぐジェネリクス引数リストは実運用で極めて稀。
+        if (CharAt(curLine, k) == '>' && allowGenericTag)
+        {
+            int probe = k - 1;
+            int depth = 1;
+            while (probe >= 0 && depth > 0)
+            {
+                var ch = CharAt(curLine, probe);
+                if (ch == '>' && probe > 0 && CharAt(curLine, probe - 1) == '=')
+                {
+                    probe -= 2;
+                    continue;
+                }
+                if (ch == '>') depth++;
+                else if (ch == '<') depth--;
+                probe--;
+            }
+            if (depth != 0)
+                return;
+            if (probe < 0 || !IsJsIdentifierPart(CharAt(curLine, probe)))
+                return;
+            k = probe;
+        }
+
+        if (!IsJsIdentifierPart(CharAt(curLine, k)))
+            return;
+
+        // Identifier read stays within the current line — JS identifiers do not cross lines.
+        // 識別子は行をまたがないため同一行内で読み切る。
+        int end = k + 1;
+        while (k >= 0 && IsJsIdentifierPart(CharAt(curLine, k)))
+            k--;
+        int start = k + 1;
+
+        if (!IsJsIdentifierStart(CharAt(curLine, start)))
+            return;
+
+        string name = curLine == lineIndex
+            ? new string(masked, start, end - start)
+            : lines[curLine].Substring(start, end - start);
+
+        // Member-access detection: look for a `.` (possibly after inter-token whitespace,
+        // possibly across line breaks like `obj\n.default\`x\``) before the tag identifier.
+        // Member-access tags bypass the keyword denylist downstream because any reserved
+        // word — including `default`, `finally`, `in`, `instanceof`, `delete`, `void`,
+        // `case` — is a legal property name in JavaScript/TypeScript.
+        // メンバーアクセス判定: タグ識別子の前に空白（行境界含む）を挟んで `.` があれば
+        // メンバーアクセス。JS/TS ではすべての予約語が property 名になりうるので、
+        // メンバーアクセス扱いのタグは下流のキーワード除外リスト（`default` / `finally` /
+        // `in` / `instanceof` / `delete` / `void` / `case`）の対象外にする。
+        bool isMemberAccess = false;
+        int mLine = curLine;
+        int mk = start - 1;
+        while (true)
+        {
+            if (mk < 0)
+            {
+                mLine--;
+                if (mLine < 0) break;
+                mk = LineLen(mLine) - 1;
+                continue;
+            }
+            char pc = CharAt(mLine, mk);
+            if (IsJsInterTokenWhitespace(pc))
+            {
+                mk--;
+                continue;
+            }
+            if (pc == '.') isMemberAccess = true;
+            break;
+        }
+
+        hits.Add(new JsTaggedTemplateHit(curLine + 1, start + 1, name, isMemberAccess));
+    }
+
     // Decide whether `/` at the current scan position starts a regex literal rather
     // than a division operator. Division follows numeric / string / regex / template literals,
     // `)`, `]`, and non-keyword identifiers. Everything else (operators, `{`, `(`, `[`, `,`,
@@ -1874,6 +2355,55 @@ internal static class StructuralLineMasker
         }
 
         return line.Length;
+    }
+
+    private static int MaskJsTemplateHoleString(string line, int startIndex, char[] masked, char quote, bool startsInsideString, out bool continuesOnNextLine)
+    {
+        var p = startIndex;
+        if (!startsInsideString)
+        {
+            masked[p] = ' ';
+            p++;
+        }
+
+        while (p < line.Length)
+        {
+            var ch = line[p];
+            masked[p] = ' ';
+
+            if (ch == '\\')
+            {
+                if (p + 1 == line.Length)
+                {
+                    continuesOnNextLine = true;
+                    return p + 1;
+                }
+
+                if (p + 2 == line.Length && line[p + 1] == '\r')
+                {
+                    masked[p + 1] = ' ';
+                    continuesOnNextLine = true;
+                    return line.Length;
+                }
+
+                if (p + 1 < line.Length)
+                {
+                    masked[p + 1] = ' ';
+                    p += 2;
+                    continue;
+                }
+            }
+
+            p++;
+            if (ch == quote)
+            {
+                continuesOnNextLine = false;
+                return p;
+            }
+        }
+
+        continuesOnNextLine = false;
+        return p;
     }
 
     private static int SkipJsSingleLineString(string line, int startIndex)

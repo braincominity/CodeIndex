@@ -773,7 +773,9 @@ public partial class DbReader
         if (lang != null)
             sql += " AND f.lang = @lang";
         if (preferNonEnumMember)
-            sql += " AND NOT (f.lang = 'csharp' AND s.kind = 'enum' AND s.container_kind = 'enum')";
+            sql += " AND NOT (f.lang = 'csharp' AND s.kind = 'enum' AND "
+                + GetSymbolColumnSql("container_kind", "''")
+                + " = 'enum')";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += " LIMIT 1";
 

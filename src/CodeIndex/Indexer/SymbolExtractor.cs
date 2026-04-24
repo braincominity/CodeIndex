@@ -440,13 +440,26 @@ public static class SymbolExtractor
         ],
         ["csharp"] =
         [
+            // Verbatim-identifier segments (`@Foo.@Bar`) are accepted per segment via
+            // `CSharpNamespacePattern` / `CSharpIdentifierPattern` (both built from `@?[_\p{L}]\w*`)
+            // and later canonicalized to `Foo.Bar` by `NormalizeCSharpSymbolName`. See the iter-6 /
+            // iter-7 notes around `StripCSharpVerbatimPrefixes` for the shared canonical-form policy.
+            // verbatim 識別子の各セグメント（`@Foo.@Bar`）を `CSharpNamespacePattern` /
+            // `CSharpIdentifierPattern`（どちらも `@?[_\p{L}]\w*`）経由で受け入れ、
+            // `NormalizeCSharpSymbolName` で `Foo.Bar` に canonical 化する。iter-6 / iter-7 の
+            // `StripCSharpVerbatimPrefixes` 周辺コメントを参照。
             new("namespace", new Regex($@"^\s*namespace\s+(?<name>{CSharpNamespacePattern})\s*;", RegexOptions.Compiled), BodyStyle.None),  // file-scoped namespace (C# 10+)
             new("namespace", new Regex($@"^\s*namespace\s+(?<name>{CSharpNamespacePattern})", RegexOptions.Compiled), BodyStyle.Brace),  // block-scoped namespace
             // extern alias (must precede using directives per C# spec) — captures assembly-alias reconciliation
             // extern alias — C# 仕様上 using より前に置かれるファイル先頭宣言。アセンブリエイリアス用
             new("import",    new Regex($@"^\s*extern\s+alias\s+(?<name>{CSharpIdentifierPattern})\s*;", RegexOptions.Compiled), BodyStyle.None),
-            // using alias (using X = Y;) — must come before general using to capture alias name
-            // using エイリアス — 一般 using より前に配置しエイリアス名を取得
+            // using alias (using X = Y;) — must come before general using to capture alias name.
+            // Verbatim alias identifiers like `using @AliasAttr = A.BaseAttr;` still surface as an
+            // `import` row via `CSharpIdentifierPattern`; the DbWriter-side normalizer strips the
+            // leading `@`.
+            // using エイリアス — 一般 using より前に配置しエイリアス名を取得。verbatim 識別子
+            // (`using @AliasAttr = A.BaseAttr;`) も `CSharpIdentifierPattern` 経由で import 行として
+            // 拾える。
             new("import",    new Regex($@"^\s*(?:global\s+)?using\s+(?<name>{CSharpIdentifierPattern})\s*=\s*[^;]+;", RegexOptions.Compiled), BodyStyle.None),
             new("import",    new Regex(@"^\s*(?:global\s+)?using\s+(?:static\s+)?(?<name>[^;=]+);", RegexOptions.Compiled), BodyStyle.None),
             // Const field — must come before class/method patterns to avoid misclassification.
@@ -801,6 +814,8 @@ public static class SymbolExtractor
         ],
         ["java"] =
         [
+            // Module declaration (Java 9+ module-info.java) / モジュール宣言（Java 9+ の module-info.java）
+            new("namespace", new Regex(@"^\s*(?:open\s+)?module\s+(?<name>[\w.]+)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
             // Annotation type (@interface) / アノテーション型
             new("class",    new Regex(@"^\s*(?<visibility>public|private|protected)?\s*@interface\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
             // record (Java 16+) — must come before general class pattern / record は一般クラスパターンの前に配置
@@ -1659,6 +1674,29 @@ public static class SymbolExtractor
                         lineOffset = FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang);
                         continue;
                     }
+                    if (lang == "csharp"
+                        && pattern.BodyStyle == BodyStyle.None
+                        && (pattern.Kind == "property" || IsCSharpFieldLikeFunctionPattern(pattern))
+                        && IsInsidePreviouslyEmittedCSharpMemberBody(lines, symbols, i + 1, csharpGateRawStartColumn))
+                    {
+                        // Brace-based type-body scope tracking correctly rejects locals inside
+                        // block bodies, but multi-line expression-bodied members have no brace
+                        // transition for their continuation lines. Without an additional guard,
+                        // those later lines can still match the plain-field regex and emit
+                        // phantom `property` rows like `Red` from `value is\n Red\n or Red;`.
+                        // Only reject lines after the member's declaration line so same-line
+                        // siblings such as `int M() => 0; int X;` keep working through the
+                        // existing column-aware scope gate. Closes #779.
+                        // brace ベースの型本体スコープ追跡は block body 内の local を弾けるが、
+                        // 複数行の式本体メンバーには continuation 行用の brace 遷移が無い。
+                        // そのため追加ガードが無いと `value is\n Red\n or Red;` の後続行が
+                        // plain-field regex にマッチして `property Red` の phantom を出してしまう。
+                        // `int M() => 0; int X;` のような same-line sibling は既存の列単位
+                        // ゲートで扱えるよう、宣言行そのものではなく後続行だけを拒否する。
+                        // Closes #779.
+                        lineOffset = FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang);
+                        continue;
+                    }
                     var rawReturnType = TryGetGroup(match, pattern.ReturnTypeGroup);
                     if (lang == "csharp"
                         && pattern.ReturnTypeGroup != null
@@ -1885,7 +1923,7 @@ public static class SymbolExtractor
                     }
                     else if (lang == "csharp"
                         && pattern.BodyStyle == BodyStyle.None
-                        && TryFindCSharpFieldSignatureExtent(
+                        && TryFindCSharpSemicolonTerminatedSignatureExtent(
                             lines,
                             i,
                             csharpGateRawStartColumn,
@@ -1899,6 +1937,27 @@ public static class SymbolExtractor
                             csharpGateRawStartColumn,
                             csharpFieldSignatureLastLineIndex,
                             csharpFieldSignatureLastLineExclusiveEndColumn);
+                    }
+                    else if (lang == "csharp"
+                        && pattern.BodyStyle == BodyStyle.Brace
+                        && IsCSharpMultilineExpressionBodiedMember(
+                            lines,
+                            i,
+                            csharpSignatureRawStartColumn)
+                        && TryFindCSharpSemicolonTerminatedSignatureExtent(
+                            lines,
+                            i,
+                            csharpSignatureRawStartColumn,
+                            out var csharpSemicolonSignatureLastLineIndex,
+                            out var csharpSemicolonSignatureLastLineExclusiveEndColumn)
+                        && csharpSemicolonSignatureLastLineIndex > i)
+                    {
+                        signature = BuildCSharpMultilineSignature(
+                            lines,
+                            i,
+                            csharpSignatureRawStartColumn,
+                            csharpSemicolonSignatureLastLineIndex,
+                            csharpSemicolonSignatureLastLineExclusiveEndColumn);
                     }
                     else if (lang == "csharp" && csharpPropertyCandidate.LastConsumedLineIndex > i)
                     {
@@ -2499,6 +2558,7 @@ public static class SymbolExtractor
         {
             ExtractJavaEnumMembers(fileId, lines, symbols);
             ExtractJavaCompactConstructors(fileId, lines, symbols);
+            ExtractJavaModuleDirectiveSymbols(fileId, lines, structuralLines, symbols);
         }
 
         AssignContainers(symbols, lines, csharpLineStartStates);
@@ -2506,6 +2566,255 @@ public static class SymbolExtractor
         PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
     }
+
+    private static void ExtractJavaModuleDirectiveSymbols(long fileId, string[] rawLines, string[] structuralLines, List<SymbolRecord> symbols)
+    {
+        var moduleDeclarations = symbols
+            .Where(symbol => symbol.Kind == "namespace" && symbol.BodyStartLine != null && symbol.BodyEndLine != null)
+            .OrderBy(symbol => symbol.StartLine)
+            .ThenByDescending(symbol => symbol.EndLine)
+            .ToList();
+
+        foreach (var moduleDeclaration in moduleDeclarations)
+        {
+            foreach (var statement in EnumerateJavaModuleDirectiveStatements(rawLines, structuralLines, moduleDeclaration))
+            {
+                if (!TryParseJavaModuleDirectiveName(statement.StructuralText, out var name))
+                    continue;
+
+                AddSymbolRecord(
+                    symbols,
+                    cssSeenSymbols: null,
+                    statement.StartLine,
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "import",
+                        Name = name,
+                        Line = statement.StartLine,
+                        StartLine = statement.StartLine,
+                        StartColumn = statement.StartColumn,
+                        EndLine = statement.EndLine,
+                        Signature = statement.Signature,
+                    },
+                    rawLines[statement.StartLine - 1]);
+            }
+        }
+    }
+
+    private static IEnumerable<JavaModuleDirectiveStatement> EnumerateJavaModuleDirectiveStatements(
+        string[] rawLines,
+        string[] structuralLines,
+        SymbolRecord moduleDeclaration)
+    {
+        var bodyStartLine = moduleDeclaration.BodyStartLine.GetValueOrDefault();
+        var bodyEndLine = moduleDeclaration.BodyEndLine.GetValueOrDefault();
+        if (bodyStartLine <= 0 || bodyEndLine < bodyStartLine)
+            yield break;
+
+        var startLineIndex = bodyStartLine - 1;
+        var endLineIndex = Math.Min(bodyEndLine, rawLines.Length) - 1;
+        if (startLineIndex < 0 || startLineIndex >= rawLines.Length || endLineIndex < startLineIndex)
+            yield break;
+
+        var rawBuilder = new StringBuilder();
+        var statementStartLine = -1;
+        var statementStartColumn = -1;
+
+        for (var lineIndex = startLineIndex; lineIndex <= endLineIndex; lineIndex++)
+        {
+            var rawLine = rawLines[lineIndex];
+            var structuralLine = structuralLines[lineIndex];
+            var sliceStart = 0;
+            var sliceEnd = rawLine.Length;
+
+            if (lineIndex == startLineIndex)
+            {
+                var openingBrace = structuralLine.IndexOf('{');
+                if (openingBrace >= 0)
+                    sliceStart = Math.Min(openingBrace + 1, rawLine.Length);
+            }
+
+            if (lineIndex == endLineIndex && bodyEndLine == moduleDeclaration.EndLine)
+            {
+                var closingBrace = structuralLine.LastIndexOf('}');
+                if (closingBrace >= 0)
+                    sliceEnd = Math.Min(closingBrace, rawLine.Length);
+            }
+
+            if (sliceStart >= sliceEnd)
+                continue;
+
+            var rawSlice = rawLine[sliceStart..sliceEnd];
+            var structuralSlice = structuralLine[sliceStart..sliceEnd];
+            var offset = 0;
+            while (offset < structuralSlice.Length)
+            {
+                if (rawBuilder.Length == 0)
+                {
+                    offset = SkipWhitespace(structuralSlice, offset);
+                    if (offset >= structuralSlice.Length)
+                        break;
+
+                    if (!TryGetJavaModuleDirectiveKeyword(structuralSlice, offset, out _))
+                        break;
+
+                    statementStartLine = lineIndex + 1;
+                    statementStartColumn = sliceStart + offset;
+                }
+
+                var semicolonIndex = structuralSlice.IndexOf(';', offset);
+                var segmentEnd = semicolonIndex >= 0
+                    ? semicolonIndex + 1
+                    : structuralSlice.Length;
+                rawBuilder.Append(rawSlice, offset, segmentEnd - offset);
+
+                if (semicolonIndex >= 0)
+                {
+                    var structuralText = CollapseWhitespaceRuns(MaskJavaModuleDirectiveComments(rawBuilder.ToString()));
+                    yield return new JavaModuleDirectiveStatement(
+                        statementStartLine,
+                        statementStartColumn,
+                        lineIndex + 1,
+                        NormalizeJavaModuleDirectiveSignature(rawBuilder.ToString()),
+                        structuralText);
+                    rawBuilder.Clear();
+                    statementStartLine = -1;
+                    statementStartColumn = -1;
+                    offset = semicolonIndex + 1;
+                    continue;
+                }
+
+                rawBuilder.Append('\n');
+                break;
+            }
+        }
+    }
+
+    private static bool TryParseJavaModuleDirectiveName(string statement, out string name)
+    {
+        name = string.Empty;
+        var match = JavaModuleRequiresDirectiveRegex.Match(statement);
+        if (!match.Success)
+            match = JavaModuleExportsOrOpensDirectiveRegex.Match(statement);
+        if (!match.Success)
+            match = JavaModuleUsesOrProvidesDirectiveRegex.Match(statement);
+        if (!match.Success)
+            return false;
+
+        name = match.Groups["name"].Value.Trim();
+        return name.Length > 0;
+    }
+
+    private static bool TryGetJavaModuleDirectiveKeyword(string line, int offset, out string keyword)
+    {
+        foreach (var candidate in JavaModuleDirectiveKeywords)
+        {
+            if (!line.AsSpan(offset).StartsWith(candidate, StringComparison.Ordinal))
+                continue;
+
+            var boundaryIndex = offset + candidate.Length;
+            if (boundaryIndex < line.Length && (char.IsLetterOrDigit(line[boundaryIndex]) || line[boundaryIndex] == '_'))
+                continue;
+
+            keyword = candidate;
+            return true;
+        }
+
+        keyword = string.Empty;
+        return false;
+    }
+
+    private static string NormalizeJavaModuleDirectiveSignature(string statement)
+    {
+        return CollapseWhitespaceRuns(statement);
+    }
+
+    private static string MaskJavaModuleDirectiveComments(string text)
+    {
+        if (text.Length == 0)
+            return string.Empty;
+
+        var builder = new StringBuilder(text.Length);
+        for (var index = 0; index < text.Length; index++)
+        {
+            if (text[index] == '/' && index + 1 < text.Length)
+            {
+                if (text[index + 1] == '/')
+                {
+                    if (builder.Length > 0 && !char.IsWhiteSpace(builder[^1]))
+                        builder.Append(' ');
+
+                    index += 2;
+                    while (index < text.Length && text[index] != '\n')
+                        index++;
+                    if (index < text.Length && text[index] == '\n')
+                        builder.Append('\n');
+                    continue;
+                }
+
+                if (text[index + 1] == '*')
+                {
+                    if (builder.Length > 0 && !char.IsWhiteSpace(builder[^1]))
+                        builder.Append(' ');
+
+                    index += 2;
+                    while (index < text.Length)
+                    {
+                        if (text[index] == '\n')
+                            builder.Append('\n');
+
+                        if (text[index] == '*' && index + 1 < text.Length && text[index + 1] == '/')
+                        {
+                            index++;
+                            break;
+                        }
+
+                        index++;
+                    }
+                    continue;
+                }
+            }
+
+            builder.Append(text[index]);
+        }
+
+        return builder.ToString();
+    }
+
+    private static string CollapseWhitespaceRuns(string text)
+    {
+        if (text.Length == 0)
+            return string.Empty;
+
+        var builder = new StringBuilder(text.Length);
+        var pendingSpace = false;
+        foreach (var ch in text)
+        {
+            if (char.IsWhiteSpace(ch))
+            {
+                pendingSpace = builder.Length > 0;
+                continue;
+            }
+
+            if (pendingSpace)
+            {
+                builder.Append(' ');
+                pendingSpace = false;
+            }
+
+            builder.Append(ch);
+        }
+
+        return builder.ToString().Trim();
+    }
+
+    private readonly record struct JavaModuleDirectiveStatement(
+        int StartLine,
+        int StartColumn,
+        int EndLine,
+        string Signature,
+        string StructuralText);
 
     private static void ExtractCSharpEnumMembers(long fileId, string[] rawLines, string[] enumScannerLines, string[] csharpMatchLines, List<SymbolRecord> symbols)
     {
@@ -12552,6 +12861,42 @@ public static class SymbolExtractor
         return lastToken is "as" or "is" or "return" or "throw" or "new";
     }
 
+    private static bool IsInsidePreviouslyEmittedCSharpMemberBody(
+        string[] lines,
+        List<SymbolRecord> symbols,
+        int candidateLine,
+        int candidateColumn)
+    {
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is not "function" and not "property" and not "event")
+                continue;
+            if (!symbol.BodyStartLine.HasValue || !symbol.BodyEndLine.HasValue)
+                continue;
+            if (candidateLine <= symbol.StartLine)
+                continue;
+            if (candidateLine < symbol.BodyStartLine.Value || candidateLine > symbol.BodyEndLine.Value)
+                continue;
+            if (candidateLine == symbol.BodyEndLine.Value
+                && TryFindCSharpSemicolonTerminatedSignatureExtent(
+                    lines,
+                    Math.Max(0, symbol.StartLine - 1),
+                    symbol.StartColumn ?? 0,
+                    out var signatureLastLineIndex,
+                    out var signatureLastLineExclusiveEndColumn)
+                && signatureLastLineIndex + 1 == candidateLine
+                && signatureLastLineExclusiveEndColumn.HasValue
+                && candidateColumn >= signatureLastLineExclusiveEndColumn.Value)
+            {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
     private static int FindNextSameLineBraceStatementStart(string matchLine, int startIndex, string? lang)
     {
         return lang is "javascript" or "typescript"
@@ -13875,6 +14220,62 @@ public static class SymbolExtractor
         return false;
     }
 
+    private static bool IsCSharpMultilineExpressionBodiedMember(string[] lines, int startLineIndex, int startColumn)
+    {
+        var lexState = new CSharpLexState();
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+
+        for (int i = startLineIndex; i < lines.Length; i++)
+        {
+            var lexedLine = LexCSharpLine(lines[i], lexState);
+            lexState = lexedLine.EndState;
+            var sanitizedLine = lexedLine.SanitizedLine;
+            var fromColumn = i == startLineIndex
+                ? Math.Min(Math.Max(0, startColumn), sanitizedLine.Length)
+                : 0;
+
+            for (int column = fromColumn; column < sanitizedLine.Length; column++)
+            {
+                var ch = sanitizedLine[column];
+                switch (ch)
+                {
+                    case '(':
+                        parenDepth++;
+                        break;
+                    case ')' when parenDepth > 0:
+                        parenDepth--;
+                        break;
+                    case '[':
+                        bracketDepth++;
+                        break;
+                    case ']' when bracketDepth > 0:
+                        bracketDepth--;
+                        break;
+                    case '{' when parenDepth == 0 && bracketDepth == 0 && braceDepth == 0:
+                        return false;
+                    case '{':
+                        braceDepth++;
+                        break;
+                    case '}' when braceDepth > 0:
+                        braceDepth--;
+                        break;
+                    case ';' when parenDepth == 0 && bracketDepth == 0 && braceDepth == 0:
+                        return false;
+                    case '=' when parenDepth == 0
+                        && bracketDepth == 0
+                        && braceDepth == 0
+                        && column + 1 < sanitizedLine.Length
+                        && sanitizedLine[column + 1] == '>':
+                        return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     private static int FindCSharpExpressionBodyEndLine(string[] lines, int arrowLineIndex, int arrowColumn)
     {
         var lexState = new CSharpLexState();
@@ -13950,7 +14351,7 @@ public static class SymbolExtractor
         return builder.ToString().Trim();
     }
 
-    private static bool TryFindCSharpFieldSignatureExtent(
+    private static bool TryFindCSharpSemicolonTerminatedSignatureExtent(
         string[] lines,
         int startLineIndex,
         int startColumn,
@@ -17561,6 +17962,20 @@ public static class SymbolExtractor
         if (name == "this" && match.Value.Contains("this", StringComparison.Ordinal) && match.Value.Contains('[', StringComparison.Ordinal))
             return "Item";
 
+        // Canonicalize verbatim identifier prefixes (`@` escape) so the persisted
+        // symbol name matches the writer-side import / base-resolution canonical
+        // form in `DbWriter.StripCSharpVerbatimPrefixes`. `@BaseAttr` -> `BaseAttr`,
+        // `@Foo.@Bar` -> `Foo.Bar` (namespaces). Without this, iter 5's import-aware
+        // resolver and iter 6's base normalizer cannot match a class declared as
+        // `public class @BaseAttr : Attribute` since its persisted name would stay
+        // `@BaseAttr` while imports / qualified lookups use `BaseAttr`. Mirrors the
+        // one-way canonicalization policy: the `@` escape is purely syntactic.
+        // verbatim 識別子（`@` エスケープ）を canonical 化し、永続化されたシンボル名と
+        // `DbWriter.StripCSharpVerbatimPrefixes` の正規化側のキーが一致するようにする。
+        // `@BaseAttr` -> `BaseAttr`、`@Foo.@Bar` -> `Foo.Bar`（名前空間）。これをしないと
+        // `public class @BaseAttr : Attribute` の class 行が `@BaseAttr` のまま永続化され、
+        // iter 5 の import-aware resolver と iter 6 の base 正規化では一致しない。
+        // `@` エスケープは純粋に構文上のものであるという一方向 canonical 化の方針に従う。
         return NormalizeCSharpVerbatimIdentifiers(name);
     }
 
@@ -17654,6 +18069,46 @@ public static class SymbolExtractor
         }
 
         return normalized.ToString();
+    }
+
+    // Mirror of DbWriter.StripCSharpVerbatimPrefixes — strip `@` verbatim escapes from
+    // identifier starts with segment boundaries at string start, `.`, and `::`. Kept
+    // local to SymbolExtractor so the extractor has no dependency on the Database layer.
+    // DbWriter.StripCSharpVerbatimPrefixes のミラー。文字列先頭、`.`、`::` を境界として
+    // 各識別子先頭の verbatim `@` を剥がす。Extractor が Database 層に依存しないようローカルに置く。
+    private static string StripCSharpVerbatimPrefixes(string qualified)
+    {
+        if (qualified.Length == 0 || qualified.IndexOf('@') < 0)
+            return qualified;
+        var sb = new System.Text.StringBuilder(qualified.Length);
+        bool atBoundary = true;
+        for (int i = 0; i < qualified.Length; i++)
+        {
+            char c = qualified[i];
+            if (atBoundary && c == '@'
+                && i + 1 < qualified.Length
+                && (qualified[i + 1] == '_' || char.IsLetter(qualified[i + 1])))
+            {
+                atBoundary = false;
+                continue;
+            }
+            sb.Append(c);
+            if (c == '.')
+            {
+                atBoundary = true;
+            }
+            else if (c == ':' && i + 1 < qualified.Length && qualified[i + 1] == ':')
+            {
+                sb.Append(':');
+                i++;
+                atBoundary = true;
+            }
+            else
+            {
+                atBoundary = false;
+            }
+        }
+        return sb.Length == qualified.Length ? qualified : sb.ToString();
     }
 
     private static bool TryReadCSharpConversionOperatorName(Match match, string matchLine, out string name)
@@ -17921,6 +18376,16 @@ public static class SymbolExtractor
     private static readonly Regex CSharpTypeWhitespaceRegex = new(@"\s+", RegexOptions.Compiled);
     private static readonly Regex CSharpTypeDoubleColonWhitespaceRegex = new(@"\s*::\s*", RegexOptions.Compiled);
     private static readonly Regex CSharpTypeDotWhitespaceRegex = new(@"\s*\.\s*", RegexOptions.Compiled);
+    private static readonly Regex JavaModuleRequiresDirectiveRegex = new(
+        @"^\s*requires\s+(?:transitive\s+|static\s+)*(?<name>[\w.]+)\s*;$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex JavaModuleExportsOrOpensDirectiveRegex = new(
+        @"^\s*(?:exports|opens)\s+(?<name>[\w.]+)(?:\s+to\s+[\w.,\s]+)?\s*;$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex JavaModuleUsesOrProvidesDirectiveRegex = new(
+        @"^\s*(?:uses|provides)\s+(?<name>[\w.]+)(?:\s+with\s+[\w.,\s]+)?\s*;$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly string[] JavaModuleDirectiveKeywords = ["requires", "exports", "opens", "uses", "provides"];
 
     /// <summary>
     /// Estimate cyclomatic complexity of a code body using keyword counting.
