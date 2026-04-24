@@ -350,7 +350,25 @@ public class DbContext : IDisposable
     // を `global::Foo.Bar.BaseAttr` まで完全に canonical 化する（iter 6 は `::` 直後の `@` を
     // 残していた）。契約バージョンを上げて iter-6 DB を reader の legacy パスに縮退させ、
     // 再 index で republish されるまで metadata edge を黙って誤るのを防ぐ。
-    public const int MetadataTargetVersion = 4;
+    // Version 5 (#435 iter 8) teaches the resolver to expand alias-qualified bases
+    // such as `using Alias = A; class FooAttribute : Alias.MetaBase` into
+    // `A.MetaBase` before the qualified index lookup. Iter-5 only handled
+    // alias-unqualified bases (`class Foo : Alias` where the whole base name is the
+    // alias), and the qualified branch fell straight through to the BCL
+    // `Attribute`-suffix heuristic — which misses any `MetaBase` real attribute in
+    // the alias target namespace unless the derived class happens to be named
+    // `...Attribute`. Iter-7 DBs that indexed without this expansion therefore
+    // dropped every `[FooAttribute]` edge whose declaration used an alias-qualified
+    // base, so the contract is bumped to force a re-index.
+    // バージョン 5 (#435 iter 8) で resolver が alias 修飾された基底を展開するようになった。
+    // `using Alias = A; class FooAttribute : Alias.MetaBase` の場合、qualified 索引を
+    // `A.MetaBase` で引けるようになり、従来は alias 展開が無いまま BCL の `Attribute`
+    // サフィックス規約までフォールバックしていたため、alias target 名前空間に居る本物の
+    // `MetaBase : Attribute` が同 repo にあっても、派生クラス名が `...Attribute` で終わる
+    // 偶然でしか metadata edge を張れなかった。iter-7 DB はこの展開なしで index された
+    // ため alias-qualified 基底の edge が黙って落ちていた。契約バージョンを上げて再 index
+    // を強制する。
+    public const int MetadataTargetVersion = 5;
     public static string GetMetadataTargetVersionMetaKey(string lang) => $"metadata_target_version_{lang}";
 
     public int GetUserVersion()

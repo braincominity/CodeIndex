@@ -3977,6 +3977,120 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverHandlesAliasQualifiedBase()
+    {
+        // issue #435 codex review iter 8: `using Alias = A;` followed by
+        // `class FooAttribute : Alias.MetaBase` where `A.MetaBase : Attribute`.
+        // Before the fix, the resolver entered the qualified branch (the base
+        // contains `.`), looked up `Alias.MetaBase` in the qualified index —
+        // which stores the real FQN `A.MetaBase` — found nothing, and fell
+        // through to the BCL `Attribute`-suffix heuristic. `head = "MetaBase"`
+        // does not end with `Attribute`, so the resolver returned false and
+        // the metadata edge from `[Foo]` consumers was silently dropped even
+        // though `MetaBase` is a real in-repo attribute.
+        // issue #435 codex review iter 8: `using Alias = A;` の下で
+        // `class FooAttribute : Alias.MetaBase` のパターン。修正前は resolver が
+        // qualified 分岐に入り、qualified 索引を `Alias.MetaBase` で引いて miss し、
+        // BCL サフィックス規約にフォールバックしたが `MetaBase` は `Attribute` で
+        // 終わらないため false を返し、`[Foo]` consumer の metadata edge が黙って
+        // 落ちていた。
+        InsertIndexedFile("src/A/MetaBase.cs", "csharp",
+            """
+            namespace A
+            {
+                public class MetaBase : System.Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/B/FooAttribute.cs", "csharp",
+            """
+            using Alias = A;
+            namespace B
+            {
+                public class FooAttribute : Alias.MetaBase
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/B/Svc.cs", "csharp",
+            """
+            namespace B
+            {
+                [Foo]
+                public class Svc
+                {
+                }
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.is_metadata_target
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.path = 'src/B/FooAttribute.cs' AND s.kind = 'class' AND s.name = 'FooAttribute'";
+        var flag = cmd.ExecuteScalar();
+        Assert.Equal(1L, Convert.ToInt64(flag));
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+        Assert.Contains(dependencies, d => d.SourcePath == "src/B/Svc.cs" && d.TargetPath == "src/B/FooAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverHandlesAliasNamespacePointingAtSystem()
+    {
+        // issue #435 codex review iter 8: `using Sys = System;` followed by
+        // `class Foo : Sys.Attribute`. After alias expansion the base is
+        // `System.Attribute`, which must trigger the direct-attribute rule
+        // rather than fall through to the qualified-index lookup (which
+        // would miss `System.Attribute` since System is external to the repo).
+        // issue #435 codex review iter 8: `using Sys = System;` + `class Foo :
+        // Sys.Attribute` は alias 展開後に `System.Attribute` となり、修飾索引を
+        // 引く前に直接 Attribute 派生ルールで拾わなければならない。
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            using Sys = System;
+            namespace Svc
+            {
+                public class FooAttribute : Sys.Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/Usage.cs", "csharp",
+            """
+            namespace Svc
+            {
+                [Foo]
+                public class Usage
+                {
+                }
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.is_metadata_target
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.path = 'src/Svc.cs' AND s.kind = 'class' AND s.name = 'FooAttribute'";
+        var flag = cmd.ExecuteScalar();
+        Assert.Equal(1L, Convert.ToInt64(flag));
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+        Assert.Contains(dependencies, d => d.SourcePath == "src/Usage.cs" && d.TargetPath == "src/Svc.cs");
+    }
+
+    [Fact]
     public void ResolveCSharpMetadataTargets_DoesNotMistakeGenericConstraintForBaseList()
     {
         // issue #435 codex review iter 1: `class Foo<T> where T : Attribute {}` has no

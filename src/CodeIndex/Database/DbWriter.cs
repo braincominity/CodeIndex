@@ -1354,8 +1354,34 @@ public class DbWriter
                 var normalized = baseName.StartsWith("global::", StringComparison.Ordinal)
                     ? baseName.Substring("global::".Length)
                     : baseName;
+                // Alias expansion for qualified bases: `using Alias = A.B;` followed by
+                // `class Foo : Alias.C` must resolve to `A.B.C` per C# lookup rules. The
+                // earlier unqualified alias path only handles `class Foo : Alias` — it
+                // cannot see `Alias.C` because `Alias.C` was already routed into the
+                // qualified branch by the `.` check. Without this expansion the resolver
+                // silently drops every `class FooAttribute : Alias.MetaBase` pattern
+                // where `MetaBase : Attribute` lives under the alias target namespace.
+                // File-local aliases take precedence over global usings per C# rules.
+                // Alias target strings in the import map are already canonicalized (no
+                // `global::`, no verbatim `@`), so we only need to splice the first
+                // segment of the qualified base with the alias target.
+                // Issue #435 codex review iter 8.
+                // 修飾基底の alias 展開: `using Alias = A.B;` の下で `class Foo : Alias.C` は
+                // `A.B.C` に解決される。非修飾 alias 経路（上方）は `class Foo : Alias` しか
+                // 扱えないため、この展開が無いと `class FooAttribute : Alias.MetaBase` のような
+                // 実運用パターンで `MetaBase : Attribute` が同 repo にあっても edge が落ちる。
+                // alias target は RegisterCSharpImport 時に canonical 化済みなので、qualified
+                // の先頭セグメントを alias target に差し替えるだけで良い。Issue #435 iter 8。
+                string? aliasExpanded = ExpandCSharpAliasQualifiedBase(normalized, fileImports)
+                                      ?? ExpandCSharpAliasQualifiedBase(normalized, globalImports);
+                // If the alias itself points to `System.Attribute` (e.g.
+                // `using Sys = System; class Foo : Sys.Attribute`), honor the direct-attr rule.
+                // alias 展開先が BCL `Attribute` そのものなら直接 attribute とみなす。
+                if (aliasExpanded == "Attribute" || aliasExpanded == "System.Attribute")
+                    return true;
                 if (qualifiedToIds.TryGetValue(baseName, out var qids)
-                    || qualifiedToIds.TryGetValue(normalized, out qids))
+                    || qualifiedToIds.TryGetValue(normalized, out qids)
+                    || (aliasExpanded != null && qualifiedToIds.TryGetValue(aliasExpanded, out qids)))
                 {
                     bool anyResolved = false;
                     foreach (var qid in qids)
@@ -1502,6 +1528,38 @@ public class DbWriter
                 return true;
         }
         return false;
+    }
+
+    // Expand a qualified C# base name against `using Alias = Target;` entries so that
+    // `Alias.C` resolves to `Target.C`. Returns null when the first dotted segment is
+    // not an alias in the given import set. Alias targets are pre-canonicalized by
+    // `RegisterCSharpImport` (no `global::`, no verbatim `@`); a leading `global::`
+    // in the stored target is still stripped defensively for older migrations.
+    // The splice preserves the remaining dotted suffix verbatim so chained member
+    // lookups like `Alias.Outer.Inner` collapse to `Target.Outer.Inner`.
+    // Issue #435 codex review iter 8.
+    // qualified 基底名を alias import で展開。`Alias.C` を `Target.C` に書き換え、
+    // 先頭セグメントが alias でなければ null を返す。alias target は登録時に canonical
+    // 化済み（`global::` なし・`@` なし）だが、旧マイグレーション対応で念のため `global::`
+    // を剥がす。残りのドット付き接尾辞はそのまま繋げるため `Alias.Outer.Inner` のような
+    // 連鎖にも追従する。Issue #435 iter 8。
+    private static string? ExpandCSharpAliasQualifiedBase(string qualified, FileImportSet? imports)
+    {
+        if (imports == null)
+            return null;
+        if (qualified.Length == 0)
+            return null;
+        int firstDot = qualified.IndexOf('.');
+        if (firstDot <= 0)
+            return null;
+        string prefix = qualified.Substring(0, firstDot);
+        if (!imports.Aliases.TryGetValue(prefix, out var target))
+            return null;
+        if (target.StartsWith("global::", StringComparison.Ordinal))
+            target = target.Substring("global::".Length);
+        if (target.Length == 0)
+            return null;
+        return target + qualified.Substring(firstDot);
     }
 
     private static bool TryResolveAliasImport(
