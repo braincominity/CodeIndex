@@ -473,8 +473,12 @@ public static class QueryCommandRunner
             }
             else
             {
+                var kindColumnWidth = ComputeReferenceKindColumnWidth(results, r => FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds));
                 foreach (var r in results)
-                    Console.WriteLine($"{FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds),-12} {r.CallerKind ?? "?",-10} {r.CallerName ?? "<top-level>",-32} {r.Path}:{r.FirstLine}  -> {r.CalleeName} ({r.ReferenceCount} refs)");
+                {
+                    var kindLabel = FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds);
+                    Console.WriteLine($"{kindLabel.PadRight(kindColumnWidth)} {r.CallerKind ?? "?",-10} {r.CallerName ?? "<top-level>",-32} {r.Path}:{r.FirstLine}  -> {r.CalleeName} ({r.ReferenceCount} refs)");
+                }
                 var callerFileCount = results.Select(r => r.Path).Distinct().Count();
                 Console.Error.WriteLine($"({results.Count} callers in {callerFileCount} files)");
             }
@@ -576,8 +580,12 @@ public static class QueryCommandRunner
             }
             else
             {
+                var kindColumnWidth = ComputeReferenceKindColumnWidth(results, r => FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds));
                 foreach (var r in results)
-                    Console.WriteLine($"{FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds),-12} {r.CalleeName,-32} {r.Path}:{r.FirstLine}  <- {r.CallerName ?? "<top-level>"} ({r.ReferenceCount} refs)");
+                {
+                    var kindLabel = FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds);
+                    Console.WriteLine($"{kindLabel.PadRight(kindColumnWidth)} {r.CalleeName,-32} {r.Path}:{r.FirstLine}  <- {r.CallerName ?? "<top-level>"} ({r.ReferenceCount} refs)");
+                }
                 var calleeFileCount = results.Select(r => r.Path).Distinct().Count();
                 Console.Error.WriteLine($"({results.Count} callees in {calleeFileCount} files)");
             }
@@ -2916,6 +2924,27 @@ public static class QueryCommandRunner
         if (!hasMixed || kinds == null || kinds.Count <= 1)
             return primary ?? string.Empty;
         return string.Join("+", kinds);
+    }
+
+    // Pick a column width that fits every label in the current batch so mixed-kind
+    // labels like `call+subscribe` do not overrun the neighbouring column. The
+    // minimum matches the historic single-kind width (`instantiate` = 11) with a
+    // small buffer so short-label batches still align consistently (issue #501).
+    // 現在のバッチ内の全ラベルが収まる列幅を選び、`call+subscribe` のような
+    // mixed ラベルが隣接列を押し出さないようにする。最小幅は従来の単一 kind
+    // （`instantiate` = 11）と整合するよう余裕付きで設定する（issue #501）。
+    private const int ReferenceKindColumnMinWidth = 12;
+
+    private static int ComputeReferenceKindColumnWidth<T>(IEnumerable<T> rows, Func<T, string> labelSelector)
+    {
+        var max = ReferenceKindColumnMinWidth;
+        foreach (var row in rows)
+        {
+            var label = labelSelector(row);
+            if (label != null && label.Length > max)
+                max = label.Length;
+        }
+        return max;
     }
 
     private static void WriteUsageError(string message, string usage, string hint)

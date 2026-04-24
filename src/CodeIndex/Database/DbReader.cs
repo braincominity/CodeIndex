@@ -186,6 +186,17 @@ public partial class DbReader
     {
         if (string.IsNullOrEmpty(aggregate))
             return string.IsNullOrEmpty(primaryKind) ? Array.Empty<string>() : new[] { primaryKind };
+        // Fast path: a single-kind row (the overwhelming common case) has no
+        // comma in the aggregate, so skip the SortedSet / split allocation.
+        // Fast path: 単一 kind の行（大多数）では aggregate にカンマが無いため、
+        // SortedSet / split のアロケーションを省略する。
+        if (aggregate.IndexOf(',') < 0)
+        {
+            var only = aggregate.Trim();
+            if (only.Length > 0)
+                return new[] { only };
+            return string.IsNullOrEmpty(primaryKind) ? Array.Empty<string>() : new[] { primaryKind };
+        }
         var set = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var raw in aggregate.Split(','))
         {
