@@ -8222,6 +8222,42 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpUsingStaticMultiLineLogicalConstantPatterns_KeepTypeReferences()
+    {
+        // issue #779: the multi-line form `value is` + later-line `Red` / `or Red` should keep
+        // the same ambiguous constant-pattern references as the single-line form. Phantom
+        // `property Red` symbols from SymbolExtractor previously suppressed these rows entirely.
+        // issue #779: `value is` の後続行に `Red` / `or Red` が来る複数行形でも、
+        // 単一行版と同じあいまい constant-pattern 参照を保持しなければならない。以前は
+        // SymbolExtractor 側の phantom `property Red` がこの参照行を丸ごと抑止していた。
+        const string content = """
+            using static Probe.Color;
+
+            namespace Probe;
+
+            enum Color { Red, Blue }
+
+            class Demo
+            {
+                bool Match(object value) => value is
+                    Red
+                    or
+                    Red;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Red" && s.ContainerName == "Demo");
+
+        var redRefs = references.Where(r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(2, redRefs.Count);
+        Assert.All(redRefs, reference => Assert.Equal("Match", reference.ContainerName));
+        Assert.Equal([10, 12], redRefs.Select(reference => reference.Line).ToArray());
+    }
+
+    [Fact]
     public void Extract_CsharpUsingStaticTypeAliasPattern_KeepsTypeReference()
     {
         const string content = """

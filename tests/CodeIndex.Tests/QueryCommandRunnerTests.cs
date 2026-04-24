@@ -7752,6 +7752,61 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunInspect_ExactJson_CSharpMultiLineConstantPatternKeepsFileReferenceCountWithoutPhantomProperties()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_multiline_constant_pattern");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/A/Color.cs", "csharp",
+                """
+                namespace A;
+
+                public enum Color
+                {
+                    Red
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/A/UseDeep.cs", "csharp",
+                """
+                using static A.Color;
+
+                namespace A;
+
+                public class DemoDeep
+                {
+                    public bool Match(object value) => value is
+                        Red
+                        or
+                        Red;
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["Match", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--path", "src/A/UseDeep.cs", "--body"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var json = document.RootElement;
+            var file = json.GetProperty("file");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(4, file.GetProperty("symbol_count").GetInt32());
+            Assert.Equal(2, file.GetProperty("reference_count").GetInt32());
+            Assert.DoesNotContain(
+                json.GetProperty("nearby_symbols").EnumerateArray(),
+                symbol => symbol.GetProperty("kind").GetString() == "property"
+                    && symbol.GetProperty("name").GetString() == "Red");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_NonExactJson_TreatsEnumMembersAsGraphSupported()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_enum_member_bundle_non_exact");
@@ -15946,6 +16001,58 @@ public class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(4, rows.Count);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_NonExactJson_CSharpMultiLineUsingStaticConstantPatternKeepsRows()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_multiline_constant_pattern_refs");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Defs.cs", "csharp",
+                """
+                namespace Probe;
+
+                public enum Color
+                {
+                    Red
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Use.cs", "csharp",
+                """
+                using static Probe.Color;
+
+                namespace Probe;
+
+                class Demo
+                {
+                    bool Match(object value) => value is
+                        Red
+                        or
+                        Red;
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--path", "src/Use.cs"],
+                _jsonOptions));
+
+            var rows = ParseJsonLines(stdout)
+                .Select(document => document.RootElement)
+                .ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, rows.Count);
+            Assert.Equal([8, 10], rows.Select(row => row.GetProperty("line").GetInt32()).ToArray());
+            Assert.All(rows, row => Assert.Equal("Match", row.GetProperty("container_name").GetString()));
         }
         finally
         {

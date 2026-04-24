@@ -10024,6 +10024,47 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_MultiLineConstantPatterns_DoNotBecomePhantomProperties()
+    {
+        // issue #779: multi-line expression-bodied constant patterns (`value is` + later-line
+        // `Red` / `or Red`) must stay inside the enclosing method body. Before the fix, the
+        // continuation lines re-entered the plain-field regex, emitted phantom `property Red`
+        // rows, and downstream reference extraction suppressed the real pattern heads.
+        // issue #779: 複数行の式本体 constant pattern（`value is` の次行に `Red` / `or Red`）
+        // は enclosing method body の内部として扱われなければならない。修正前は継続行が
+        // plain-field regex に再突入して phantom `property Red` を出し、後段の reference
+        // 抽出が本物の pattern head を抑止していた。
+        const string content = """
+            using static Demo.Color;
+
+            namespace Demo;
+
+            public enum Color
+            {
+                Red
+            }
+
+            public sealed class Uses
+            {
+                public bool Match(object value) => value is
+                    Red
+                    or
+                    Red;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var match = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Match"));
+        Assert.Equal(12, match.StartLine);
+        Assert.Equal(15, match.EndLine);
+        Assert.Equal(12, match.BodyStartLine);
+        Assert.Equal(15, match.BodyEndLine);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Red" && s.ContainerName == "Uses");
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineAutoPropertyBeforeMethodIsCaptured()
     {
         // Mixed-kind same-line siblings must not lose the earlier brace-body property when a
