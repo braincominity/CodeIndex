@@ -343,6 +343,23 @@ public static class ReferenceExtractor
     private static readonly Regex CSharpJavaInitializerTrailingRegex = new(
         $@"\bnew\s+(?:global::)?(?:{CSharpIdentifierPattern}(?:\s*::\s*|\s*\.\s*))*(?<name>{CSharpIdentifierPattern})(?:\s*<[^>\n]+>)?(?:\s*\[[^\[\]\n]*\])*\s*$",
         RegexOptions.Compiled);
+    // JavaScript / TypeScript allow zero-argument constructor calls without parentheses:
+    // `new Foo;`, `new Date;`, `new Demo.Provider;`, `new Box<number>;`.
+    // Keep this language-gated so Java / C# / other `new` forms still require either `(`
+    // or their own dedicated initializer path. The caller inspects the next significant
+    // token after the match: `(` / `.` / `?.` / `[` still mean "the expression continues",
+    // while ordinary delimiters/operators such as `;`, `:`, `??`, `||`, `&&`, `,`, or `)`
+    // are accepted as real zero-arg constructor sites. A line-end match still peeks at the
+    // next non-blank prepared line so `new Foo` followed by `.bar()` / `[0]` on the next
+    // line does not emit a phantom `instantiate Foo` edge. See issue #295.
+    // JavaScript / TypeScript では引数なしコンストラクタ呼び出しで括弧を省略できる
+    // (`new Foo;`, `new Date;`, `new Demo.Provider;`, `new Box<number>;`)。他言語の
+    // `new` 形と混線しないよう JS/TS 限定にし、同一行では文終端系トークンのみ許可する。
+    // 行末一致時は次の非空 prepared line を覗き、`.bar()` / `[0]` 継続行による
+    // phantom `instantiate Foo` を防ぐ。issue #295 参照。
+    private static readonly Regex JsTsParenlessConstructorRegex = new(
+        $@"\bnew\s+(?:{CSharpIdentifierPattern}\s*\.\s*)*(?<name>{CSharpIdentifierPattern})(?:\s*<[^>\n]+>)?",
+        RegexOptions.Compiled);
     private static readonly Regex CSharpUsingAliasRegex = new(
         @"^\s*(?:global\s+)?using\s+(?!static\b)(?<alias>@?[A-Za-z_]\w*)\s*=\s*(?<target>[^;]+)",
         RegexOptions.Compiled);
@@ -367,7 +384,7 @@ public static class ReferenceExtractor
         @"\bis\s+" + CSharpDeclarationPatternTypeRegex + CSharpRecursivePatternClauseRegex + @"\s+(?<name>@?[A-Za-z_]\w*)\b",
         RegexOptions.Compiled);
     private static readonly Regex CSharpSwitchExpressionDeclarationPatternValueNameRegex = new(
-        @"^\s*" + CSharpDeclarationPatternTypeRegex + @"\s+(?<name>@?[A-Za-z_]\w*)\s*$",
+        @"^\s*(?<type>" + CSharpDeclarationPatternTypeRegex + @")\s+(?<name>@?[A-Za-z_]\w*)\s*$",
         RegexOptions.Compiled);
     private static readonly Regex CSharpCaseDeclarationPatternValueNameRegex = new(
         @"\bcase\s+" + CSharpDeclarationPatternTypeRegex + CSharpRecursivePatternClauseRegex + @"\s+(?<name>@?[A-Za-z_]\w*)\b(?=\s*(?::|\bwhen\b))",
@@ -761,7 +778,16 @@ public static class ReferenceExtractor
         // ワークスペース全体の同名型 rescue には cross-file 可視性が必要なため、
         // extractor は曖昧な unqualified using-static pattern head を残し、
         // read path 側で判定させる。
-        static bool HasActiveSameFileCSharpTypeCandidate(string typeExpression, int lineNumber) => false;
+        bool HasActiveSameFileCSharpTypeCandidate(string typeExpression, int lineNumber)
+        {
+            _ = lineNumber;
+            var normalized = NormalizeCSharpAliasTargetForTypeLookup(typeExpression);
+            if (string.IsNullOrWhiteSpace(normalized))
+                return false;
+
+            normalized = TrimLeadingCSharpGlobalQualifier(normalized);
+            return csharpKnownTypeNames.Contains(normalized);
+        }
 
         var references = new List<ReferenceRecord>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -1449,6 +1475,43 @@ public static class ReferenceExtractor
                 }
             }
 
+            // JavaScript / TypeScript zero-arg constructor calls may omit `()`: `new Foo;`.
+            // Emit `instantiate` directly so graph queries do not treat them as unused code.
+            // JavaScript / TypeScript では `new Foo;` のように `()` を省略できるため、
+            // 専用パスで `instantiate` を発行して graph query から取りこぼさないようにする。
+            if (language is "javascript" or "typescript")
+            {
+                foreach (Match match in JsTsParenlessConstructorRegex.Matches(preparedLine))
+                {
+                    var rawName = match.Groups["name"].Value;
+                    var nameIndex = match.Groups["name"].Index;
+                    var trailingProbe = match.Index + match.Length;
+                    while (trailingProbe < preparedLine.Length && char.IsWhiteSpace(preparedLine[trailingProbe]))
+                        trailingProbe++;
+
+                    if (trailingProbe >= preparedLine.Length)
+                    {
+                        if (NextNonEmptyPreparedLineStartsWithJsContinuation(preparedLines, i))
+                            continue;
+                    }
+                    else
+                    {
+                        if (preparedLine[trailingProbe] is '(' or '.' or '[')
+                            continue;
+
+                        if (preparedLine[trailingProbe] == '?'
+                            && trailingProbe + 1 < preparedLine.Length
+                            && preparedLine[trailingProbe + 1] == '.')
+                        {
+                            continue;
+                        }
+                    }
+
+                    var initContainer = ResolveContainerForCall(nameIndex);
+                    AddReference(references, seen, fileId, rawName, nameIndex, "instantiate", context, lineNumber, initContainer);
+                }
+            }
+
             void AddCallLikeReference(string name, int callIndex)
             {
                 var normalizedName = NormalizeAtPrefixedIdentifier(name);
@@ -1578,6 +1641,19 @@ public static class ReferenceExtractor
 
         if (language == "csharp")
         {
+            EmitCSharpSwitchExpressionTypePatternReferences(
+                lines,
+                preparedLines,
+                containerCandidates,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpQualifiedTypePatternLookup,
+                csharpUsingAliases,
+                csharpUsingStatics,
+                HasActiveSameFileCSharpTypeCandidate,
+                references,
+                seen,
+                fileId);
+
             FlushPendingCSharpMultiLineTypePatternReference(
                 ref pendingCSharpMultiLineTypePattern,
                 csharpQualifiedConstantPatternMemberLookup,
@@ -2700,6 +2776,215 @@ public static class ReferenceExtractor
         return false;
     }
 
+    private static void EmitCSharpSwitchExpressionTypePatternReferences(
+        IReadOnlyList<string> lines,
+        IReadOnlyList<string> preparedLines,
+        IReadOnlyList<SymbolRecord> containerCandidates,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId)
+    {
+        if (preparedLines.Count == 0)
+            return;
+
+        var preparedContent = string.Join("\n", preparedLines);
+        for (var searchIndex = 0; searchIndex < preparedContent.Length;)
+        {
+            var arrowIndex = preparedContent.IndexOf("=>", searchIndex, StringComparison.Ordinal);
+            if (arrowIndex < 0)
+                break;
+
+            searchIndex = arrowIndex + 2;
+            var looksLikeLambda = IsPotentialCSharpLambdaArrow(preparedContent, arrowIndex);
+
+            if (!TryGetCSharpSwitchExpressionArmTypePatternRange(
+                    preparedContent,
+                    arrowIndex,
+                    out var bodyStartOffset,
+                    out var armStartOffset,
+                    out var armPatternEndOffset)
+                || armStartOffset >= armPatternEndOffset)
+            {
+                continue;
+            }
+
+            var armText = preparedContent[armStartOffset..armPatternEndOffset];
+            var cursor = SkipWhitespaceForward(armText, 0);
+            if (TryConsumeCSharpPatternKeyword(armText, ref cursor, "not"))
+                cursor = SkipWhitespace(armText, cursor);
+
+            string currentTypeExpression;
+            int currentTypeIndex;
+            int currentContinuationIndex;
+            var declarationPatternMatch = CSharpSwitchExpressionDeclarationPatternValueNameRegex.Match(armText);
+            if (declarationPatternMatch.Success)
+            {
+                var declarationTypeGroup = declarationPatternMatch.Groups["type"];
+                currentTypeExpression = declarationTypeGroup.Value;
+                currentTypeIndex = declarationTypeGroup.Index;
+                currentContinuationIndex = SkipWhitespace(armText, declarationTypeGroup.Index + declarationTypeGroup.Length);
+            }
+            else
+            {
+                var typeMatch = CSharpTypeExpressionAtCursorRegex.Match(armText, cursor);
+                if (!typeMatch.Success)
+                    continue;
+
+                var typeGroup = typeMatch.Groups["type"];
+                currentTypeExpression = typeGroup.Value;
+                currentTypeIndex = typeGroup.Index;
+                currentContinuationIndex = SkipWhitespace(armText, typeGroup.Index + typeGroup.Length);
+            }
+
+            var currentTypeLineNumber = GetLineNumberFromOffset(preparedContent, armStartOffset + currentTypeIndex, 1);
+            if (looksLikeLambda
+                && !HasStrongCSharpSwitchExpressionTypeSignal(
+                    currentTypeExpression,
+                    currentTypeLineNumber,
+                    csharpQualifiedTypePatternLookup,
+                    csharpUsingAliases,
+                    hasActiveSameFileCSharpTypeCandidate))
+            {
+                continue;
+            }
+
+            while (TryConsumeCSharpLogicalPatternKeyword(armText, currentContinuationIndex, out var nextHeadCursor))
+            {
+                if (!IsCSharpLogicalConstantPatternHead(
+                        armText,
+                        currentTypeExpression,
+                        nextHeadCursor,
+                        currentTypeLineNumber,
+                        csharpQualifiedConstantPatternMemberLookup,
+                        csharpQualifiedTypePatternLookup,
+                        csharpUsingAliases,
+                        csharpUsingStatics,
+                        hasActiveSameFileCSharpTypeCandidate))
+                {
+                    EmitCSharpSwitchExpressionArmTypePatternReference(
+                        lines,
+                        preparedLines,
+                        preparedContent,
+                        containerCandidates,
+                        references,
+                        seen,
+                        fileId,
+                        currentTypeExpression,
+                        bodyStartOffset,
+                        armStartOffset + currentTypeIndex);
+                }
+
+                var nextTypeCursor = nextHeadCursor;
+                if (TryConsumeCSharpPatternKeyword(armText, ref nextTypeCursor, "not"))
+                    nextTypeCursor = SkipWhitespace(armText, nextTypeCursor);
+
+                var nextMatch = CSharpTypeExpressionAtCursorRegex.Match(armText, nextTypeCursor);
+                if (!nextMatch.Success)
+                {
+                    currentTypeExpression = string.Empty;
+                    break;
+                }
+
+                var nextTypeGroup = nextMatch.Groups["type"];
+                currentTypeExpression = nextTypeGroup.Value;
+                currentTypeIndex = nextTypeGroup.Index;
+                currentContinuationIndex = SkipWhitespace(armText, nextTypeGroup.Index + nextTypeGroup.Length);
+                currentTypeLineNumber = GetLineNumberFromOffset(preparedContent, armStartOffset + currentTypeIndex, 1);
+            }
+
+            if (currentTypeExpression.Length == 0)
+                continue;
+
+            if (IsCSharpNonTypePatternExpression(currentTypeExpression)
+                || IsCSharpConstantPatternMemberHead(
+                    currentTypeExpression,
+                    currentTypeLineNumber,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpUsingAliases,
+                    csharpUsingStatics,
+                    hasActiveSameFileCSharpTypeCandidate))
+            {
+                continue;
+            }
+
+            EmitCSharpSwitchExpressionArmTypePatternReference(
+                lines,
+                preparedLines,
+                preparedContent,
+                containerCandidates,
+                references,
+                seen,
+                fileId,
+                currentTypeExpression,
+                bodyStartOffset,
+                armStartOffset + currentTypeIndex);
+        }
+    }
+
+    private static bool HasStrongCSharpSwitchExpressionTypeSignal(
+        string typeExpression,
+        int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
+    {
+        return IsCSharpQualifiedTypePatternHead(
+                   typeExpression,
+                   lineNumber,
+                   csharpQualifiedTypePatternLookup,
+                   csharpUsingAliases)
+               || hasActiveSameFileCSharpTypeCandidate(typeExpression, lineNumber);
+    }
+
+    private static void EmitCSharpSwitchExpressionArmTypePatternReference(
+        IReadOnlyList<string> lines,
+        IReadOnlyList<string> preparedLines,
+        string preparedContent,
+        IReadOnlyList<SymbolRecord> containerCandidates,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string typeExpression,
+        int containerAnchorOffset,
+        int absoluteTypeOffset)
+    {
+        var position = GetLineColumnFromOffset(preparedContent, absoluteTypeOffset, 1);
+        var lineIndex = position.Line - 1;
+        if (lineIndex < 0 || lineIndex >= lines.Count)
+            return;
+
+        var context = lines[lineIndex];
+        if (context.Length == 0)
+            return;
+
+        var containerAnchorPosition = GetLineColumnFromOffset(preparedContent, containerAnchorOffset, 1);
+        var containerAnchorLineIndex = containerAnchorPosition.Line - 1;
+        var container = FindInnermostSameLineCSharpContainer(
+                            containerCandidates,
+                            containerAnchorLineIndex >= 0 && containerAnchorLineIndex < preparedLines.Count
+                                ? preparedLines[containerAnchorLineIndex]
+                                : preparedLines[lineIndex],
+                            containerAnchorPosition.Line,
+                            containerAnchorPosition.Column)
+                        ?? FindInnermostContainer(containerCandidates, containerAnchorPosition.Line);
+
+        AddTypeExpressionSegments(
+            references,
+            seen,
+            fileId,
+            typeExpression,
+            position.Column,
+            context,
+            position.Line,
+            container,
+            "csharp");
+    }
+
     private static void EmitJavaTypePositionReferences(
         string preparedLine,
         List<ReferenceRecord> references,
@@ -3221,6 +3506,15 @@ public static class ReferenceExtractor
         var trimmed = line.TrimStart();
         if (trimmed.Length == 0)
             return true;
+        if (language == "csharp"
+            && TryFindFirstTopLevelCSharpArrow(line, out var arrowIndex))
+        {
+            var commaIndex = FindFirstTopLevelChar(line, ',');
+            var semicolonIndex = FindFirstTopLevelChar(line, ';');
+            if (commaIndex > arrowIndex && (semicolonIndex < 0 || commaIndex < semicolonIndex))
+                return true;
+        }
+
         if (trimmed.StartsWith("using ", StringComparison.Ordinal)
             || trimmed.StartsWith("namespace ", StringComparison.Ordinal)
             || trimmed.StartsWith("package ", StringComparison.Ordinal)
@@ -3253,6 +3547,63 @@ public static class ReferenceExtractor
             || trimmed.StartsWith("interface ", StringComparison.Ordinal)
             || trimmed.StartsWith("record ", StringComparison.Ordinal)
             || (language == "java" && trimmed.StartsWith("enum ", StringComparison.Ordinal));
+    }
+
+    private static bool TryFindFirstTopLevelCSharpArrow(string text, out int arrowIndex)
+    {
+        arrowIndex = -1;
+        var angleDepth = 0;
+        var parenDepth = 0;
+        var squareDepth = 0;
+        var braceDepth = 0;
+        for (var i = 0; i + 1 < text.Length; i++)
+        {
+            switch (text[i])
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0)
+                        squareDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    break;
+                case '=':
+                    if (text[i + 1] == '>'
+                        && angleDepth == 0
+                        && parenDepth == 0
+                        && squareDepth == 0
+                        && braceDepth == 0)
+                    {
+                        arrowIndex = i;
+                        return true;
+                    }
+
+                    break;
+            }
+        }
+
+        return false;
     }
 
     private static void AddTypeExpressionSegments(
@@ -5579,6 +5930,150 @@ public static class ReferenceExtractor
         return false;
     }
 
+    private static bool TryGetCSharpSwitchExpressionArmTypePatternRange(
+        string bodyText,
+        int arrowIndex,
+        out int bodyStartOffset,
+        out int armStartOffset,
+        out int armPatternEndOffset)
+    {
+        bodyStartOffset = 0;
+        armStartOffset = 0;
+        armPatternEndOffset = 0;
+        if (!TryFindCSharpSwitchExpressionBodyStartOffset(bodyText, arrowIndex, out bodyStartOffset))
+            return false;
+
+        var segmentStartOffset = bodyStartOffset + 1;
+        if (segmentStartOffset >= arrowIndex)
+            return false;
+
+        var segmentText = bodyText[segmentStartOffset..arrowIndex];
+        var lastCommaOffset = FindLastTopLevelCSharpComma(segmentText);
+        var relativeArmStart = lastCommaOffset >= 0
+            ? SkipWhitespaceForward(segmentText, lastCommaOffset + 1)
+            : SkipWhitespaceForward(segmentText, 0);
+        if (relativeArmStart >= segmentText.Length)
+            return false;
+
+        var armSegment = segmentText[relativeArmStart..];
+        var whenOffset = FindTopLevelCSharpWhenKeywordOffset(armSegment);
+        var relativePatternEnd = whenOffset >= 0
+            ? relativeArmStart + whenOffset
+            : segmentText.Length;
+        while (relativePatternEnd > relativeArmStart && char.IsWhiteSpace(segmentText[relativePatternEnd - 1]))
+            relativePatternEnd--;
+        if (relativePatternEnd <= relativeArmStart)
+            return false;
+
+        armStartOffset = segmentStartOffset + relativeArmStart;
+        armPatternEndOffset = segmentStartOffset + relativePatternEnd;
+        return armStartOffset < armPatternEndOffset;
+    }
+
+    private static bool TryFindCSharpSwitchExpressionBodyStartOffset(string bodyText, int arrowIndex, out int bodyStartOffset)
+    {
+        bodyStartOffset = -1;
+        if (arrowIndex <= 0 || arrowIndex > bodyText.Length)
+            return false;
+
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        for (var index = arrowIndex - 1; index >= 0; index--)
+        {
+            var current = bodyText[index];
+            switch (current)
+            {
+                case ')':
+                    parenDepth++;
+                    break;
+                case '(':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case ']':
+                    bracketDepth++;
+                    break;
+                case '[':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    break;
+                case '}':
+                    braceDepth++;
+                    break;
+                case '{':
+                    if (braceDepth > 0)
+                    {
+                        braceDepth--;
+                        break;
+                    }
+
+                    if (parenDepth == 0 && bracketDepth == 0)
+                    {
+                        bodyStartOffset = index;
+                        return true;
+                    }
+
+                    break;
+                case ';':
+                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                        return false;
+                    break;
+            }
+        }
+
+        return false;
+    }
+
+    private static int FindLastTopLevelCSharpComma(string text)
+    {
+        var angleDepth = 0;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var lastComma = -1;
+        for (var i = 0; i < text.Length; i++)
+        {
+            switch (text[i])
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    break;
+                case ',':
+                    if (angleDepth == 0 && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                        lastComma = i;
+                    break;
+            }
+        }
+
+        return lastComma;
+    }
+
     private static bool TryParseCSharpSwitchExpressionArmPatternDesignation(
         string bodyText,
         int armStartOffset,
@@ -7184,6 +7679,7 @@ public static class ReferenceExtractor
     {
         var angleDepth = 0;
         var bracketDepth = 0;
+        var parenDepth = 0;
         var currentLineIndex = questionLineIndex;
         var currentColumn = questionColumn - 1;
         while (TryGetPreviousTopLevelToken(
@@ -7200,6 +7696,7 @@ public static class ReferenceExtractor
             {
                 if (angleDepth == 0
                     && bracketDepth == 0
+                    && parenDepth == 0
                     && (string.Equals(identifierToken, "as", StringComparison.Ordinal)
                         || string.Equals(identifierToken, "is", StringComparison.Ordinal)))
                 {
@@ -7219,7 +7716,7 @@ public static class ReferenceExtractor
                     currentColumn = tokenStartColumn - 1;
                     continue;
                 case ',':
-                    if (angleDepth > 0 || bracketDepth > 0)
+                    if (angleDepth > 0 || bracketDepth > 0 || parenDepth > 0)
                     {
                         currentLineIndex = tokenLineIndex;
                         currentColumn = tokenStartColumn - 1;
@@ -7250,6 +7747,19 @@ public static class ReferenceExtractor
                         return false;
 
                     bracketDepth--;
+                    currentLineIndex = tokenLineIndex;
+                    currentColumn = tokenStartColumn - 1;
+                    continue;
+                case ')':
+                    parenDepth++;
+                    currentLineIndex = tokenLineIndex;
+                    currentColumn = tokenStartColumn - 1;
+                    continue;
+                case '(':
+                    if (parenDepth == 0)
+                        return false;
+
+                    parenDepth--;
                     currentLineIndex = tokenLineIndex;
                     currentColumn = tokenStartColumn - 1;
                     continue;
@@ -7936,7 +8446,48 @@ public static class ReferenceExtractor
             return false;
 
         if (bodyText[leftIndex] == ')')
-            return TryFindMatchingOpenParen(bodyText, leftIndex, out _);
+        {
+            if (!TryFindMatchingOpenParen(bodyText, leftIndex, out var openParenIndex))
+                return false;
+
+            var parenPrefixIndex = SkipWhitespaceBackward(bodyText, openParenIndex - 1);
+            if (parenPrefixIndex < 0)
+                return true;
+
+            var parenPrefixChar = bodyText[parenPrefixIndex];
+            if (parenPrefixChar is '.' or ']' or ')')
+                return false;
+
+            if (IsCSharpIdentifierPart(parenPrefixChar))
+            {
+                var parenIdentifierStart = parenPrefixIndex;
+                while (parenIdentifierStart >= 0 && IsCSharpIdentifierPart(bodyText[parenIdentifierStart]))
+                    parenIdentifierStart--;
+                parenIdentifierStart++;
+
+                var identifierPrefixIndex = SkipWhitespaceBackward(bodyText, parenIdentifierStart - 1);
+                if (identifierPrefixIndex < 0)
+                    return true;
+
+                var identifierPrefixChar = bodyText[identifierPrefixIndex];
+                if (identifierPrefixChar == '.')
+                    return false;
+
+                if (IsCSharpIdentifierPart(identifierPrefixChar))
+                {
+                    if (!TryReadPreviousIdentifierToken(bodyText, identifierPrefixIndex, out var identifierPreviousToken))
+                        return false;
+
+                    var normalizedPreviousToken = NormalizeCSharpIdentifier(identifierPreviousToken);
+                    return normalizedPreviousToken is not ("when" or "is" or "as" or "and" or "or" or "not"
+                        or "return" or "throw" or "new" or "case" or "else" or "do");
+                }
+
+                return identifierPrefixChar is '>' or ']' or ')' or '?' or ':' or '=';
+            }
+
+            return parenPrefixChar is '=' or '(' or ',' or ':';
+        }
 
         var identifierEnd = leftIndex + 1;
         var identifierStart = leftIndex;
@@ -10283,6 +10834,23 @@ public static class ReferenceExtractor
         return language == "php"
             ? string.Equals(token, "new", StringComparison.OrdinalIgnoreCase)
             : string.Equals(token, "new", StringComparison.Ordinal);
+    }
+
+    private static bool NextNonEmptyPreparedLineStartsWithJsContinuation(string[] preparedLines, int currentLineIndex)
+    {
+        for (var next = currentLineIndex + 1; next < preparedLines.Length; next++)
+        {
+            var trimmed = preparedLines[next].TrimStart();
+            if (trimmed.Length == 0)
+                continue;
+
+            return trimmed.StartsWith(".", StringComparison.Ordinal)
+                || trimmed.StartsWith("?.", StringComparison.Ordinal)
+                || trimmed.StartsWith("[", StringComparison.Ordinal)
+                || trimmed.StartsWith("(", StringComparison.Ordinal);
+        }
+
+        return false;
     }
 
     private readonly record struct NestedGenericCallCandidate(string Name, int NameIndex);

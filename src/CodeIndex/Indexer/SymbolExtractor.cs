@@ -415,13 +415,26 @@ public static class SymbolExtractor
         ],
         ["csharp"] =
         [
+            // Verbatim-identifier segments (`@Foo.@Bar`) are accepted per segment via
+            // `CSharpNamespacePattern` / `CSharpIdentifierPattern` (both built from `@?[_\p{L}]\w*`)
+            // and later canonicalized to `Foo.Bar` by `NormalizeCSharpSymbolName`. See the iter-6 /
+            // iter-7 notes around `StripCSharpVerbatimPrefixes` for the shared canonical-form policy.
+            // verbatim 識別子の各セグメント（`@Foo.@Bar`）を `CSharpNamespacePattern` /
+            // `CSharpIdentifierPattern`（どちらも `@?[_\p{L}]\w*`）経由で受け入れ、
+            // `NormalizeCSharpSymbolName` で `Foo.Bar` に canonical 化する。iter-6 / iter-7 の
+            // `StripCSharpVerbatimPrefixes` 周辺コメントを参照。
             new("namespace", new Regex($@"^\s*namespace\s+(?<name>{CSharpNamespacePattern})\s*;", RegexOptions.Compiled), BodyStyle.None),  // file-scoped namespace (C# 10+)
             new("namespace", new Regex($@"^\s*namespace\s+(?<name>{CSharpNamespacePattern})", RegexOptions.Compiled), BodyStyle.Brace),  // block-scoped namespace
             // extern alias (must precede using directives per C# spec) — captures assembly-alias reconciliation
             // extern alias — C# 仕様上 using より前に置かれるファイル先頭宣言。アセンブリエイリアス用
             new("import",    new Regex($@"^\s*extern\s+alias\s+(?<name>{CSharpIdentifierPattern})\s*;", RegexOptions.Compiled), BodyStyle.None),
-            // using alias (using X = Y;) — must come before general using to capture alias name
-            // using エイリアス — 一般 using より前に配置しエイリアス名を取得
+            // using alias (using X = Y;) — must come before general using to capture alias name.
+            // Verbatim alias identifiers like `using @AliasAttr = A.BaseAttr;` still surface as an
+            // `import` row via `CSharpIdentifierPattern`; the DbWriter-side normalizer strips the
+            // leading `@`.
+            // using エイリアス — 一般 using より前に配置しエイリアス名を取得。verbatim 識別子
+            // (`using @AliasAttr = A.BaseAttr;`) も `CSharpIdentifierPattern` 経由で import 行として
+            // 拾える。
             new("import",    new Regex($@"^\s*(?:global\s+)?using\s+(?<name>{CSharpIdentifierPattern})\s*=\s*[^;]+;", RegexOptions.Compiled), BodyStyle.None),
             new("import",    new Regex(@"^\s*(?:global\s+)?using\s+(?:static\s+)?(?<name>[^;=]+);", RegexOptions.Compiled), BodyStyle.None),
             // Const field — must come before class/method patterns to avoid misclassification.
@@ -1591,6 +1604,28 @@ public static class SymbolExtractor
                             i,
                             csharpNormalizedStartColumn,
                             line.Length);
+                    }
+
+                    // C# candidates that only become visible after string-literal content is
+                    // blanked (for example, code inside an interpolation hole of an outer
+                    // string) must not be emitted as declarations. A real declaration starts in
+                    // root code, not in nested interpolation code. Gate on the raw-line start
+                    // column so exact definition / inspect lookups do not pick up call-site
+                    // fragments from interpolated log strings. Closes #790.
+                    // C# では、外側文字列本文を空白化した結果として見えるようになった候補
+                    // （例: 補間文字列ホール内のコード）を宣言として emit してはならない。
+                    // 本物の宣言は root code から始まり、入れ子の補間コードからは始まらない。
+                    // raw 行上の開始列でゲートし、補間ログ文字列内の呼び出し断片が
+                    // exact definition / inspect に混入しないようにする。Closes #790.
+                    if (lang == "csharp"
+                        && csharpLineStartStates != null
+                        && !IsCSharpRootCodePosition(line, csharpLineStartStates[i], csharpGateRawStartColumn))
+                    {
+                        lineOffset = FindNextSameLineBraceStatementStart(
+                            matchLine,
+                            absoluteStartColumn + Math.Max(1, match.Length),
+                            lang);
+                        continue;
                     }
 
                     if (lang == "csharp"
@@ -13354,6 +13389,18 @@ public static class SymbolExtractor
         return result;
     }
 
+    private static bool IsCSharpRootCodePosition(string line, CSharpLexState lineStartState, int rawColumn)
+    {
+        var clampedColumn = Math.Clamp(rawColumn, 0, line.Length);
+        var stateAtColumn = clampedColumn == 0
+            ? lineStartState
+            : LexCSharpLine(line[..clampedColumn], lineStartState).EndState;
+
+        return stateAtColumn.Mode == CSharpLexMode.Code
+            && stateAtColumn.InterpolationReturnMode == CSharpLexMode.Code
+            && stateAtColumn.InterpolationBraceDepth == 0;
+    }
+
     // Translate a column in a CollapseCSharpGenericTypeWhitespace-collapsed match line back
     // to the matching column in the raw source line. Used by the plain-field scope gate and
     // signature clamp so `public class C<T1, T2>{int X;}` does not misalign the type-body
@@ -16214,6 +16261,20 @@ public static class SymbolExtractor
         if (name == "this" && match.Value.Contains("this", StringComparison.Ordinal) && match.Value.Contains('[', StringComparison.Ordinal))
             return "Item";
 
+        // Canonicalize verbatim identifier prefixes (`@` escape) so the persisted
+        // symbol name matches the writer-side import / base-resolution canonical
+        // form in `DbWriter.StripCSharpVerbatimPrefixes`. `@BaseAttr` -> `BaseAttr`,
+        // `@Foo.@Bar` -> `Foo.Bar` (namespaces). Without this, iter 5's import-aware
+        // resolver and iter 6's base normalizer cannot match a class declared as
+        // `public class @BaseAttr : Attribute` since its persisted name would stay
+        // `@BaseAttr` while imports / qualified lookups use `BaseAttr`. Mirrors the
+        // one-way canonicalization policy: the `@` escape is purely syntactic.
+        // verbatim 識別子（`@` エスケープ）を canonical 化し、永続化されたシンボル名と
+        // `DbWriter.StripCSharpVerbatimPrefixes` の正規化側のキーが一致するようにする。
+        // `@BaseAttr` -> `BaseAttr`、`@Foo.@Bar` -> `Foo.Bar`（名前空間）。これをしないと
+        // `public class @BaseAttr : Attribute` の class 行が `@BaseAttr` のまま永続化され、
+        // iter 5 の import-aware resolver と iter 6 の base 正規化では一致しない。
+        // `@` エスケープは純粋に構文上のものであるという一方向 canonical 化の方針に従う。
         return NormalizeCSharpVerbatimIdentifiers(name);
     }
 
@@ -16307,6 +16368,46 @@ public static class SymbolExtractor
         }
 
         return normalized.ToString();
+    }
+
+    // Mirror of DbWriter.StripCSharpVerbatimPrefixes — strip `@` verbatim escapes from
+    // identifier starts with segment boundaries at string start, `.`, and `::`. Kept
+    // local to SymbolExtractor so the extractor has no dependency on the Database layer.
+    // DbWriter.StripCSharpVerbatimPrefixes のミラー。文字列先頭、`.`、`::` を境界として
+    // 各識別子先頭の verbatim `@` を剥がす。Extractor が Database 層に依存しないようローカルに置く。
+    private static string StripCSharpVerbatimPrefixes(string qualified)
+    {
+        if (qualified.Length == 0 || qualified.IndexOf('@') < 0)
+            return qualified;
+        var sb = new System.Text.StringBuilder(qualified.Length);
+        bool atBoundary = true;
+        for (int i = 0; i < qualified.Length; i++)
+        {
+            char c = qualified[i];
+            if (atBoundary && c == '@'
+                && i + 1 < qualified.Length
+                && (qualified[i + 1] == '_' || char.IsLetter(qualified[i + 1])))
+            {
+                atBoundary = false;
+                continue;
+            }
+            sb.Append(c);
+            if (c == '.')
+            {
+                atBoundary = true;
+            }
+            else if (c == ':' && i + 1 < qualified.Length && qualified[i + 1] == ':')
+            {
+                sb.Append(':');
+                i++;
+                atBoundary = true;
+            }
+            else
+            {
+                atBoundary = false;
+            }
+        }
+        return sb.Length == qualified.Length ? qualified : sb.ToString();
     }
 
     private static bool TryReadCSharpConversionOperatorName(Match match, string matchLine, out string name)

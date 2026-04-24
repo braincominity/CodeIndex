@@ -59,6 +59,15 @@ public partial class DbReader
     // #86: name_folded 列が全行埋まっているか（fold 経路を使えるか）。
     internal readonly bool _foldReady;
     internal readonly bool _csharpSymbolNameContractCurrent;
+    // #435: True when `symbols.is_metadata_target` has been populated for every C# class-like
+    // row by the writer's resolver and the stamp in `codeindex_meta` matches the current
+    // version. Readers that enforce metadata-target eligibility prefer this column over the
+    // legacy `signature LIKE '%: %'` heuristic when the flag is true; otherwise they continue
+    // to fall back to the heuristic so legacy / partial DBs do not silently miss edges.
+    // #435: C# の authoritative `is_metadata_target` が全行 populate されて stamp 一致したときのみ
+    // true。true なら reader は legacy ヒューリスティックではなく列を使う。false の DB では
+    // 従来どおり `signature LIKE '%: %'` にフォールバックする。
+    internal readonly bool _csharpMetadataTargetReady;
     internal readonly bool _sqlGraphContractCurrent;
     // Tracks which languages have authoritative cross-file hotspot family semantics.
     // Mixed legacy/update states can therefore degrade only the affected language instead of
@@ -213,6 +222,11 @@ public partial class DbReader
             TryGetMetaString(_conn, DbContext.CSharpSymbolNameContractVersionMetaKey),
             DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
             StringComparison.Ordinal);
+        _csharpMetadataTargetReady = _symbolColumns.Contains("is_metadata_target")
+            && string.Equals(
+                TryGetMetaString(_conn, DbContext.GetMetadataTargetVersionMetaKey("csharp")),
+                DbContext.MetadataTargetVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                StringComparison.Ordinal);
         _sqlGraphContractCurrent = string.Equals(
             TryGetMetaString(_conn, DbContext.SqlGraphContractVersionMetaKey),
             DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -569,37 +583,41 @@ public partial class DbReader
         string? lang = null,
         IReadOnlyList<string>? pathPatterns = null,
         IReadOnlyList<string>? excludePathPatterns = null,
-        bool excludeTests = false)
+        bool excludeTests = false,
+        bool includeSqlGraphContractSignal = true)
         => CombineExactSignals(
             BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
                 _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase"),
             GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
-            GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
+            includeSqlGraphContractSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null);
 
     public ExactQuerySignal GetCallersExactQuerySignal(
         string? lang = null,
         IReadOnlyList<string>? pathPatterns = null,
         IReadOnlyList<string>? excludePathPatterns = null,
-        bool excludeTests = false)
+        bool excludeTests = false,
+        bool includeSqlGraphContractSignal = true)
         => CombineExactSignals(
             BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
                 _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase"),
             GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
-            GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
+            includeSqlGraphContractSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null);
 
     public ExactQuerySignal GetCalleesExactQuerySignal(
         string? lang = null,
         IReadOnlyList<string>? pathPatterns = null,
         IReadOnlyList<string>? excludePathPatterns = null,
-        bool excludeTests = false)
+        bool excludeTests = false,
+        bool includeSqlGraphContractSignal = true)
         => CombineExactSignals(
             BuildExactGraphSignal(ContainerNameExactGraphIndexAvailable,
                 _foldReady ? "idx_symbol_refs_container_name_folded" : "idx_symbol_refs_container_nocase"),
             GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
-            GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
+            includeSqlGraphContractSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null);
 
     public ExactQuerySignal GetAnalyzeSymbolExactQuerySignal(
         bool includeGraphSignal = true,
+        bool includeSqlGraphContractSignal = true,
         string? lang = null,
         IReadOnlyList<string>? pathPatterns = null,
         IReadOnlyList<string>? excludePathPatterns = null,
@@ -608,7 +626,7 @@ public partial class DbReader
         return CombineExactSignals(
             GetDefinitionExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
             includeGraphSignal ? BuildAnalyzeGraphExactQuerySignal() : null,
-            includeGraphSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null);
+            includeGraphSignal && includeSqlGraphContractSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null);
     }
 
     internal bool HasGraphApplicableFiles(string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
@@ -654,6 +672,12 @@ public partial class DbReader
         return input.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
     }
 
+    internal static bool IsSqlLanguage(string? lang)
+        => string.Equals(lang, "sql", StringComparison.OrdinalIgnoreCase);
+
+    internal static bool ContainsSqlLanguage(IEnumerable<string?> langs)
+        => langs.Any(IsSqlLanguage);
+
     private static bool AllowSqlLeafFallbackForQuery(string query)
         => !SqlNameResolver.HasQualifier(query);
 
@@ -680,8 +704,41 @@ public partial class DbReader
     {
         using var reader = cmd.ExecuteTrackedReader();
         return reader.TrackedRead()
-            ? new QueryCountResult(reader.GetInt32(0), reader.GetInt32(1))
+            ? new QueryCountResult(
+                reader.GetInt32(0),
+                reader.GetInt32(1),
+                reader.FieldCount > 2 && !reader.IsDBNull(2) && Convert.ToInt32(reader.GetValue(2)) != 0)
             : new QueryCountResult(0, 0);
+    }
+
+    internal bool AnyFilePathHasLanguage(IEnumerable<string> paths, string lang)
+    {
+        var distinctPaths = paths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Distinct(StringComparer.Ordinal)
+            .Take(256)
+            .ToList();
+        if (distinctPaths.Count == 0)
+            return false;
+
+        using var cmd = _conn.CreateCommand();
+        var placeholders = new List<string>(distinctPaths.Count);
+        for (int i = 0; i < distinctPaths.Count; i++)
+        {
+            var parameterName = $"@sqlPath{i}";
+            placeholders.Add(parameterName);
+            cmd.Parameters.AddWithValue(parameterName, distinctPaths[i]);
+        }
+
+        cmd.CommandText = $"""
+            SELECT 1
+            FROM files
+            WHERE lang = @sqlPathLang
+              AND path IN ({string.Join(", ", placeholders)})
+            LIMIT 1
+            """;
+        cmd.Parameters.AddWithValue("@sqlPathLang", lang);
+        return cmd.ExecuteScalar() != null;
     }
 
     /// <summary>
@@ -1045,14 +1102,22 @@ public partial class DbReader
 
         var patternContext = contextForFilter;
         var patternColumn = columnNumber;
-        TryBuildCSharpUsingStaticPatternContextWindow(path, lineNumber, symbolName, contextForFilter, columnNumber, out patternContext, out patternColumn);
+        if (!TryBuildCSharpUsingStaticPatternContextWindow(
+                path,
+                lineNumber,
+                contextForFilter,
+                columnNumber,
+                symbolName,
+                out patternContext,
+                out patternColumn))
+        {
+            return false;
+        }
+
         if (ShouldSuppressCSharpQualifiedConstantPatternReference(path, lineNumber, symbolName, patternContext, patternColumn))
             return true;
 
         if (!string.Equals(referenceKind, "type_reference", StringComparison.Ordinal))
-            return false;
-
-        if (!IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn))
             return false;
 
         var activeTargets = GetActiveCSharpUsingStaticTargets(path, lineNumber);
@@ -2279,7 +2344,14 @@ public partial class DbReader
             || TryConsumeTrailingCSharpToken(text, ref cursor, "default");
     }
 
-    private void TryBuildCSharpUsingStaticPatternContextWindow(string path, int lineNumber, string symbolName, string contextForFilter, int columnNumber, out string patternContext, out int patternColumn)
+    private bool TryBuildCSharpUsingStaticPatternContextWindow(
+        string path,
+        int lineNumber,
+        string contextForFilter,
+        int columnNumber,
+        string symbolName,
+        out string patternContext,
+        out int patternColumn)
     {
         patternContext = contextForFilter;
         patternColumn = columnNumber;
@@ -2290,52 +2362,52 @@ public partial class DbReader
             || lineNumber <= 1
             || columnNumber <= 0)
         {
-            return;
+            return IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn)
+                || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _);
         }
 
         if (IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn)
             || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _))
         {
-            return;
+            return true;
         }
 
-        // Multiline logical patterns can span long `or` chains with blank/comment-only lines.
-        // Walk backward from the current reference until we rediscover the real anchor.
-        // 複数行 logical pattern は長い `or` 連鎖や空行・コメント専用行をまたげるため、
-        // 現在位置から実際の anchor を再発見するまで後方へ戻る。
-        var startLine = 1;
-        if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap, startLine, lineNumber)
-            || !lineMap.TryGetValue(lineNumber, out var currentLine))
+        var maxLookback = lineNumber - 1;
+        var lookback = Math.Min(2, maxLookback);
+        while (true)
         {
-            return;
-        }
-
-        var lines = new List<string> { currentLine };
-        var prefixLength = 0;
-
-        for (var absoluteLine = lineNumber - 1; absoluteLine >= startLine; absoluteLine--)
-        {
-            if (!lineMap.TryGetValue(absoluteLine, out var lineText))
-                break;
-
-            prefixLength += lineText.Length + 1;
-            lines.Insert(0, lineText);
-
-            var candidateContext = string.Join('\n', lines);
-            var candidateColumn = prefixLength + columnNumber;
-            if (IsCSharpUsingStaticConstantPatternContext(candidateContext, symbolName, candidateColumn)
-                || TryExtractQualifiedCSharpPatternQualifier(candidateContext, symbolName, candidateColumn, out _))
+            var startLine = Math.Max(1, lineNumber - lookback);
+            if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap, startLine, lineNumber)
+                || !lineMap.TryGetValue(lineNumber, out var currentLine))
             {
-                patternContext = candidateContext;
-                patternColumn = candidateColumn;
-                return;
+                return IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn)
+                    || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _);
             }
-        }
 
-        if (lines.Count > 1)
-        {
-            patternContext = string.Join('\n', lines);
-            patternColumn = prefixLength + columnNumber;
+            var lines = new List<string>();
+            var prefixLength = 0;
+            for (var absoluteLine = startLine; absoluteLine <= lineNumber; absoluteLine++)
+            {
+                if (!lineMap.TryGetValue(absoluteLine, out var lineText))
+                    continue;
+
+                if (absoluteLine < lineNumber)
+                    prefixLength += lineText.Length + 1;
+                lines.Add(lineText);
+            }
+
+            patternContext = lines.Count <= 1 ? currentLine : string.Join('\n', lines);
+            patternColumn = lines.Count <= 1 ? columnNumber : prefixLength + columnNumber;
+            if (IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn)
+                || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _))
+            {
+                return true;
+            }
+
+            if (startLine == 1 || lookback >= maxLookback)
+                return false;
+
+            lookback = Math.Min(maxLookback, Math.Max(lookback + 1, lookback * 2));
         }
     }
 
@@ -2701,6 +2773,7 @@ public partial class DbReader
         using var reader = cmd.ExecuteTrackedReader();
 
         int count = 0;
+        bool includesSql = false;
         var paths = new HashSet<string>(StringComparer.Ordinal);
         while (reader.TrackedRead())
         {
@@ -2709,10 +2782,11 @@ public partial class DbReader
                 continue;
 
             count++;
+            includesSql |= IsSqlLanguage(row.Lang);
             paths.Add(row.Path);
         }
 
-        return new QueryCountResult(count, paths.Count);
+        return new QueryCountResult(count, paths.Count, includesSql);
     }
 
     public int CountSearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
@@ -2822,9 +2896,9 @@ public partial class DbReader
         using var cmd = _conn.CreateCommand();
 
         var innerSql = @"
-            SELECT path
+            SELECT path, lang
             FROM (
-                SELECT f.path AS path, r.file_id, r.symbol_name, r.line, r.column_number, " + GetLogicalReferenceKindSql("r.reference_kind") + @" AS logical_reference_kind
+                SELECT f.path AS path, f.lang AS lang, r.file_id, r.symbol_name, r.line, r.column_number, " + GetLogicalReferenceKindSql("r.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
                 WHERE 1=1";
@@ -2878,10 +2952,10 @@ public partial class DbReader
             innerSql += " AND f.lang = @lang";
         AppendPathFilters(ref innerSql, pathPatterns, excludePathPatterns, excludeTests);
         if (referenceKind == null)
-            innerSql += $" GROUP BY f.path, r.file_id, r.symbol_name, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
+            innerSql += $" GROUP BY f.path, f.lang, r.file_id, r.symbol_name, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
         innerSql += ")";
 
-        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path) FROM ({innerSql})";
+        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path), MAX(CASE WHEN lang = 'sql' THEN 1 ELSE 0 END) FROM ({innerSql})";
         if (query != null)
         {
             var value = !exact
@@ -3094,7 +3168,7 @@ public partial class DbReader
 
         using var cmd = _conn.CreateCommand();
         var groupedSql = @"
-            SELECT path
+            SELECT path, lang
             FROM (
                 SELECT f.path AS path, f.lang AS lang, r.container_kind AS container_kind,
                        r.container_name AS container_name, r.symbol_name AS symbol_name
@@ -3134,7 +3208,7 @@ public partial class DbReader
             groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
         groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name";
 
-        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path) FROM ({groupedSql})";
+        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path), MAX(CASE WHEN lang = 'sql' THEN 1 ELSE 0 END) FROM ({groupedSql})";
         var value = !exact
             ? $"%{EscapeLikeQuery(query)}%"
             : _foldReady
@@ -3337,7 +3411,7 @@ public partial class DbReader
 
         using var cmd = _conn.CreateCommand();
         var groupedSql = @"
-            SELECT path
+            SELECT path, lang
             FROM (
                 SELECT f.path AS path, f.lang AS lang, r.container_kind AS container_kind,
                        r.container_name AS container_name, r.symbol_name AS symbol_name,
@@ -3376,7 +3450,7 @@ public partial class DbReader
             groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
         groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind";
 
-        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path) FROM ({groupedSql})";
+        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path), MAX(CASE WHEN lang = 'sql' THEN 1 ELSE 0 END) FROM ({groupedSql})";
         var value = !exact
             ? $"%{EscapeLikeQuery(query)}%"
             : _foldReady
@@ -4146,7 +4220,18 @@ public partial class DbReader
         cmd.CommandText = sql;
         cmd.Parameters.AddWithValue("@metadataAmbigName", definition.Name);
         var count = Convert.ToInt32(cmd.ExecuteScalar() ?? 0);
-        return count <= 1;
+        // Require exactly one authoritative metadata target named `definition.Name`.
+        // `count == 0` is also unsafe for the bypass — if no class-like symbol with
+        // that name is a valid metadata target, then a `[Foo]` reference cannot
+        // resolve to the passed-in definition either. `count <= 1` would let the
+        // bypass fire with zero candidates and falsely attribute `[Foo]` sites to a
+        // non-attribute definition (e.g. `class FooAttribute : BaseService` post
+        // #435 iter 4 scope-aware resolver). Issue #435 codex review iter 4.
+        // 1 件厳密一致のみ unambiguous とみなす。count=0 はメタデータターゲットが
+        // 一つも無い状態であり、`[Foo]` が passed-in 定義へ解決する根拠も無いため
+        // bypass は発動させない。`<= 1` だと #435 iter 4 のスコープ対応で非属性
+        // 派生になったクラスに `[Foo]` 参照を誤帰属させる。
+        return count == 1;
     }
 
     private bool SourceFileHasStructuredTypeEvidence(long fileId, string typeName)
@@ -4573,6 +4658,15 @@ public partial class DbReader
         var freshness = GetWorkspaceFreshness();
         var hasCSharpFiles = ScopeMayIncludeCSharpFiles("csharp", pathPatterns: null, excludePathPatterns: null, excludeTests: false, since: null);
         var csharpSymbolNameReady = !hasCSharpFiles || _csharpSymbolNameContractCurrent;
+        // #435 codex review iter 3: mirror `csharp_symbol_name_ready` — the readiness flag
+        // only applies when the workspace actually contains C# files, and the column +
+        // stamp must match the current contract for the resolver edges to be trusted.
+        // This surfaces the same flag we already emit from the CLI `index` JSON so that
+        // `status --json` and MCP `status` expose a consistent trust signal (README /
+        // CLAUDE.md contract).
+        // #435 codex review iter 3: `csharp_symbol_name_ready` と同じ条件で expose する。
+        // C# ファイルが 0 なら ready=true、そうでなければ列 + stamp の一致を要求する。
+        var csharpMetadataTargetReady = !hasCSharpFiles || _csharpMetadataTargetReady;
         var sqlGraphContractSignal = GetSqlGraphContractSignal(lang: null);
         var hotspotFamilySignal = GetHotspotFamilySignal(lang: null);
 
@@ -4598,6 +4692,7 @@ public partial class DbReader
             HotspotFamilyReady = hotspotFamilySignal.Ready,
             HotspotFamilyDegradedReason = hotspotFamilySignal.DegradedReason,
             CSharpSymbolNameReady = csharpSymbolNameReady,
+            CSharpMetadataTargetReady = csharpMetadataTargetReady,
             SqlGraphContractReady = sqlGraphContractSignal.Ready,
             SqlGraphContractDegradedReason = sqlGraphContractSignal.DegradedReason,
             FoldReady = _foldReady,
@@ -4767,9 +4862,32 @@ public partial class DbReader
         // NULL signature は C# 命名規約 `name LIKE '%Attribute'` に縮退 — 従来の
         // 無条件許容より厳密で、legacy-migration DB で任意の NULL-signature class が
         // metadata target 扱いされるのを防ぐ。signature 列欠落 DB も同じ命名規約を使う。
-        var csharpClause = _symbolColumns.Contains("signature")
-            ? $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND ((s.signature IS NOT NULL AND s.signature LIKE '%: %') OR (s.signature IS NULL AND s.name LIKE '%Attribute')))"
-            : $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND s.name LIKE '%Attribute')";
+        // Authoritative column takes precedence once the writer's resolver has stamped the
+        // current `metadata_target_version_csharp` version. Drops the `: %` heuristic for C#
+        // so non-attribute classes like `class MyAuditAttribute : BaseService` no longer fake
+        // ambiguity against a sibling real `class MyAuditAttribute : Attribute`. Issue #435.
+        // writer の resolver が current version を stamp 済みの DB では authoritative 列を優先し、
+        // `class MyAuditAttribute : BaseService` のような非 Attribute 派生を ambiguity から除外する。
+        // Three-way branch keyed off the `is_metadata_target` column presence, not
+        // `signature`. Branch (2) (legacy heuristic) must only fire when both the new
+        // column and the old signature column are present — a DB missing
+        // `is_metadata_target` entirely is truly ancient and must degrade to branch (3).
+        // Issue #435 codex review.
+        // 3 way 分岐は `is_metadata_target` 列の有無で切り替え、`signature` の有無では判定しない。
+        // `is_metadata_target` 列すらない DB は真に古い legacy なので命名規約 fallback (branch 3) に落とす。
+        string csharpClause;
+        if (_csharpMetadataTargetReady)
+        {
+            csharpClause = $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND s.is_metadata_target = 1)";
+        }
+        else if (_symbolColumns.Contains("is_metadata_target") && _symbolColumns.Contains("signature"))
+        {
+            csharpClause = $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND ((s.signature IS NOT NULL AND s.signature LIKE '%: %') OR (s.signature IS NULL AND s.name LIKE '%Attribute')))";
+        }
+        else
+        {
+            csharpClause = $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND s.name LIKE '%Attribute')";
+        }
         // JS / TS clause — decorators target runtime entities (classes and factory
         // functions). TS `interface` is a type-only construct that cannot be a
         // decorator target, so excluding it avoids false ambiguity against a

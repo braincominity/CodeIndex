@@ -646,17 +646,24 @@ public partial class DbReader
             hasUnsupportedEnumMember,
             hasSupportedGraphDefinition);
         var unsupportedSymbolKind = hasUnsupportedEnumMember ? "enum_member" : null;
+        var references = SearchReferences(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact, maxLineWidth);
+        var callers = GetCallers(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
+        var callees = GetCallees(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
+        var sqlGraphRelevant = IsSqlLanguage(lang)
+            || IsSqlLanguage(graphLanguage)
+            || ContainsSqlLanguage(definitions.Select(definition => definition.Lang))
+            || ContainsSqlLanguage(references.Select(reference => reference.Lang))
+            || ContainsSqlLanguage(callers.Select(caller => caller.Lang))
+            || ContainsSqlLanguage(callees.Select(callee => callee.Lang));
         var exactSignal = exact
             ? GetAnalyzeSymbolExactQuerySignal(
                 includeGraphSignal: hasGraphApplicableFiles,
+                includeSqlGraphContractSignal: sqlGraphRelevant,
                 lang: lang,
                 pathPatterns: pathPatterns,
                 excludePathPatterns: excludePathPatterns,
                 excludeTests: excludeTests)
             : (ExactQuerySignal?)null;
-        var references = SearchReferences(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact, maxLineWidth);
-        var callers = GetCallers(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
-        var callees = GetCallees(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
         var relaxedSymbols = exact && definitions.Count == 0 && references.Count == 0 && callers.Count == 0 && callees.Count == 0
             ? SearchSymbols(query, Math.Max(limit, 5), kind: null, lang, pathPatterns, excludePathPatterns, excludeTests, since: null, exact: false)
             : null;
@@ -766,7 +773,9 @@ public partial class DbReader
         if (lang != null)
             sql += " AND f.lang = @lang";
         if (preferNonEnumMember)
-            sql += " AND NOT (f.lang = 'csharp' AND s.kind = 'enum' AND s.container_kind = 'enum')";
+            sql += " AND NOT (f.lang = 'csharp' AND s.kind = 'enum' AND "
+                + GetSymbolColumnSql("container_kind", "''")
+                + " = 'enum')";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
         sql += " LIMIT 1";
 
@@ -1839,17 +1848,17 @@ public partial class DbReader
         return limited;
     }
 
-    public (int Count, int FileCount) CountUnusedSymbols(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    public QueryCountResult CountUnusedSymbols(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
         if (!_hasReferencesTable)
-            return (0, 0);
+            return new QueryCountResult(0, 0);
         if (lang != null && !ReferenceExtractor.SupportsLanguage(lang))
-            return (0, 0);
+            return new QueryCountResult(0, 0);
 
         var graphLangs = ReferenceExtractor.GetSupportedLanguages();
         using var cmd = _conn.CreateCommand();
         var sql = @"
-            SELECT COUNT(*), COUNT(DISTINCT f.path)
+            SELECT COUNT(*), COUNT(DISTINCT f.path), MAX(CASE WHEN f.lang = 'sql' THEN 1 ELSE 0 END)
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE s.kind NOT IN ('import', 'namespace')
@@ -1899,8 +1908,36 @@ public partial class DbReader
 
         using var reader = cmd.ExecuteTrackedReader();
         if (!reader.TrackedRead())
-            return (0, 0);
-        return (reader.GetInt32(0), reader.GetInt32(1));
+            return new QueryCountResult(0, 0);
+        return new QueryCountResult(
+            reader.GetInt32(0),
+            reader.GetInt32(1),
+            reader.FieldCount > 2 && !reader.IsDBNull(2) && Convert.ToInt32(reader.GetValue(2)) != 0);
+    }
+
+    public bool ScopeMayIncludeSqlSymbols(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    {
+        if (lang != null && !IsSqlLanguage(lang))
+            return false;
+
+        using var cmd = _conn.CreateCommand();
+        var sql = """
+            SELECT 1
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.lang = 'sql'
+              AND s.kind NOT IN ('import', 'namespace')
+            """;
+        if (kind != null)
+            sql += " AND s.kind = @kind";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += " LIMIT 1";
+
+        cmd.CommandText = sql;
+        if (kind != null)
+            cmd.Parameters.AddWithValue("@kind", kind);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        return cmd.ExecuteScalar() != null;
     }
 
     private bool HasReflectionAttributeContext(string path, int startLine)

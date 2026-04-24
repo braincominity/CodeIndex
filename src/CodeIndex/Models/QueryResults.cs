@@ -16,7 +16,7 @@ public class SearchResult
     public double Score { get; set; }
 }
 
-public readonly record struct QueryCountResult(int Count, int FileCount);
+public readonly record struct QueryCountResult(int Count, int FileCount, bool IncludesSql = false);
 
 public class SymbolResult
 {
@@ -260,6 +260,19 @@ public class StatusResult
     [JsonPropertyName("csharp_symbol_name_ready")]
     public bool CSharpSymbolNameReady { get; set; } = true;
     /// <summary>
+    /// True when every indexed C# class row carries an authoritative `is_metadata_target`
+    /// value stamped under the current `metadata_target_version_csharp` contract. False
+    /// means the `deps` / `impact` metadata-attribute edges fall back to the legacy
+    /// `signature LIKE '%: %'` heuristic (or the `name LIKE '%Attribute'` suffix heuristic
+    /// on truly-legacy DBs missing the `is_metadata_target` column), which silently drops
+    /// impostor classes like `class FooAttribute : BaseService`. Run `cdidx index .` once
+    /// to let the authoritative resolver rewrite the stamp (#435).
+    /// true のとき deps / impact の metadata-attribute edge は persisted な
+    /// `is_metadata_target` 列を使い、false のとき legacy heuristic 経路で縮退する。
+    /// </summary>
+    [JsonPropertyName("csharp_metadata_target_ready")]
+    public bool CSharpMetadataTargetReady { get; set; } = true;
+    /// <summary>
     /// True when every indexed SQL graph row was written under the current stored call-column /
     /// qualified-name contract. False means SQL graph/dependency readers may still return false
     /// negatives until `cdidx index .` rewrites unchanged SQL rows.
@@ -377,6 +390,15 @@ public class SymbolAnalysisResult
     /// インデックスに参照テーブルが無いと true / false で区別可能。空が本物かどうか見極める。
     /// </summary>
     public bool GraphTableAvailable { get; set; } = true;
+    /// <summary>
+    /// True when bundled SQL graph-backed reads in this analysis reflect the current
+    /// call-column / qualified-name contract.
+    /// bundle 内の SQL graph 読み取りが current 契約に揃っているかどうか。
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? SqlGraphContractReady { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SqlGraphContractDegradedReason { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ExactZeroHintResult? ExactZeroHint { get; set; }
     /// <summary>
