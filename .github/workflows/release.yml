@@ -178,6 +178,15 @@ jobs:
         shell: pwsh
         run: Get-ChildItem publish -Filter *.pdb -Recurse | Remove-Item
 
+      - name: Add license and trademark notices to publish output (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: cp LICENSE COMMERCIAL_LICENSE.md TRADEMARKS.md publish/
+
+      - name: Add license and trademark notices to publish output (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Copy-Item LICENSE,COMMERCIAL_LICENSE.md,TRADEMARKS.md publish
+
       - name: Archive release artifacts (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
