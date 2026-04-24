@@ -6415,6 +6415,69 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScriptTagFollowedByNbspBeforeTemplate_IsCapturedAsCall()
+    {
+        // issue #268 regression: ECMAScript WhiteSpace includes non-ASCII characters such as
+        // U+00A0 (NBSP), so `of\u00A0\`hello\`` is still a tagged-template call. The tag-to-
+        // backtick backward-scan must tolerate any `char.IsWhiteSpace` codepoint, not just
+        // ASCII space and tab.
+        // issue #268 退行防止: ECMAScript の WhiteSpace は U+00A0 (NBSP) のような非 ASCII
+        // も含むため、`of\u00A0\`hello\`` もタグ付きテンプレート呼び出しとして拾う必要があ
+        // る。タグとバッククォート間の後方走査は ASCII スペース/タブだけでなく任意の
+        // `char.IsWhiteSpace` を許容する。
+        const string content = "const of = (strings) => strings.raw[0];\n" +
+            "function run() {\n" +
+            "    return of\u00A0`hello`;\n" +
+            "}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        var hit = Assert.Single(references.Where(r => r.SymbolName == "of" && r.ReferenceKind == "call"));
+        Assert.Equal("run", hit.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_JavaScriptForOfHeaderWithNbspSeparator_IsNotCaptured()
+    {
+        // issue #268 regression: the for-of header probe must also accept non-ASCII
+        // whitespace. `for\u00A0(const ch of \`abc\`)` is a valid for-of loop and must not
+        // emit a phantom `call of`.
+        // issue #268 退行防止: for-of ヘッダ判定も非 ASCII 空白を許容する必要がある。
+        // `for\u00A0(const ch of \`abc\`)` は正当な for-of 形なので phantom `call of` を
+        // 出さない。
+        const string content = "function f() {\n" +
+            "    for\u00A0(const ch of `abc`) {\n" +
+            "        use(ch);\n" +
+            "    }\n" +
+            "}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptForAwaitOfHeaderWithNbspSeparator_IsNotCaptured()
+    {
+        // issue #268 regression: the for-await-of header probe must also tolerate non-ASCII
+        // whitespace between `for`, `await`, and `(`.
+        // issue #268 退行防止: for-await-of ヘッダ判定は `for`・`await`・`(` の間の非 ASCII
+        // 空白も許容する。
+        const string content = "async function f(iter) {\n" +
+            "    for\u00A0await\u00A0(const x of `abc`) {\n" +
+            "        use(x);\n" +
+            "    }\n" +
+            "}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
+    }
+
+    [Fact]
     public void Extract_JavaScriptInstanceofBeforePlainTemplate_IsNotCaptured()
     {
         // Regression guard: `foo instanceof \`plain\`` uses `instanceof` as the type-check

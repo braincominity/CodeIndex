@@ -1814,7 +1814,7 @@ internal static class StructuralLineMasker
                 c = lines[li].Length - 1;
             }
             char ch = lines[li][c];
-            if (ch == ' ' || ch == '\t')
+            if (IsJsInterTokenWhitespace(ch))
             {
                 c--;
                 continue;
@@ -1822,6 +1822,19 @@ internal static class StructuralLineMasker
             return true;
         }
     }
+
+    // ECMAScript treats inter-token whitespace as any WhiteSpace (TAB / VT / FF / SP, NBSP
+    // `U+00A0`, BOM `U+FEFF`, every `Zs` category codepoint) or LineTerminator. Our per-line
+    // buffer is already split on `\r` / `\n`, but non-ASCII whitespace such as NBSP and
+    // U+3000 survives inside the line and must still be recognised when backing up between
+    // tokens. `char.IsWhiteSpace` is the .NET approximation that matches those characters
+    // without pulling in ZWSP (which ECMAScript also excludes).
+    // ECMAScript のトークン間スペースは WhiteSpace（TAB / VT / FF / SP、NBSP `U+00A0`、BOM
+    // `U+FEFF`、`Zs` 全域）および LineTerminator。行バッファは既に `\r` / `\n` で分割済み
+    // だが、NBSP や U+3000 のような非 ASCII 空白は行内に残るため、トークン間の後方走査でも
+    // 取り扱う必要がある。ZWSP は ECMAScript の WhiteSpace ではなく、`char.IsWhiteSpace`
+    // も false を返すため意図通りに除外される。
+    private static bool IsJsInterTokenWhitespace(char c) => char.IsWhiteSpace(c);
 
     private static bool TryReadIdentifierBackward(string[] lines, ref int li, ref int c, out string token)
     {
@@ -1987,7 +2000,7 @@ internal static class StructuralLineMasker
         char[] masked, int lineIndex, int backtickPos, List<JsTaggedTemplateHit> hits, bool allowGenericTag)
     {
         int k = backtickPos - 1;
-        while (k >= 0 && (masked[k] == ' ' || masked[k] == '\t'))
+        while (k >= 0 && IsJsInterTokenWhitespace(masked[k]))
             k--;
         if (k < 0)
             return;
