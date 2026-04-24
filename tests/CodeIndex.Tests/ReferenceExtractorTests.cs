@@ -817,6 +817,63 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScriptLineContinuationString_DoesNotLeakPhantomReferences()
+    {
+        const string crlf = "\r\n";
+        var content = string.Concat(
+            "function caller() {", crlf,
+            "  const s = \"line1\\", crlf,
+            "} externalCall() line2\";", crlf,
+            "  runTask();", crlf,
+            "}", crlf,
+            "function runTask() {}");
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "runTask" && reference.ContainerName == "caller");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "externalCall");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptLineContinuationString_DoesNotLeakPhantomReferences()
+    {
+        const string content = """
+            function caller() {
+              const s = 'line1\
+            } externalCall() line2';
+              runTask();
+            }
+            function runTask() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "runTask" && reference.ContainerName == "caller");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "externalCall");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptContinuedSingleQuotedString_DoesNotPolluteForOfHeaderScan()
+    {
+        const string content = "function f() {\n" +
+            "    const s = 'line1\\\n" +
+            "of externalCall';\n" +
+            "    for (\n" +
+            "        const ch of `abc`\n" +
+            "    ) {\n" +
+            "        use(ch);\n" +
+            "    }\n" +
+            "}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
+    }
+
+    [Fact]
     public void Extract_JavaScriptSyntaxConstructs_AreIgnored()
     {
         const string content = """
