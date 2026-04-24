@@ -7878,6 +7878,51 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetOutline_ComputesDepthForFileScopedNamespace()
+    {
+        InsertIndexedFile(
+            "src/file_scoped.cs",
+            "csharp",
+            """
+            namespace FileScoped;
+
+            public class OuterClass
+            {
+                public class NestedClass
+                {
+                    public void Method() { }
+                }
+            }
+            """);
+
+        var outline = _reader.GetOutline("src/file_scoped.cs");
+
+        Assert.NotNull(outline);
+        Assert.Equal(4, outline!.Symbols.Count);
+        Assert.Collection(outline.Symbols,
+            symbol =>
+            {
+                Assert.Equal("FileScoped", symbol.Name);
+                Assert.Equal(0, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("OuterClass", symbol.Name);
+                Assert.Equal(1, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("NestedClass", symbol.Name);
+                Assert.Equal(2, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("Method", symbol.Name);
+                Assert.Equal(3, symbol.Depth);
+            });
+    }
+
+    [Fact]
     public void GetOutline_FileWithNoSymbols_ReturnsEmptyList()
     {
         var outline = _reader.GetOutline("docs/notes.md");

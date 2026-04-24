@@ -1009,11 +1009,24 @@ public partial class DbReader
                 continue;
             if (candidate.Line > child.Line)
                 continue;
-            if (candidate.StartLine <= child.Line && candidate.EndLine >= child.Line)
+            if (IsOutlineContainerMatch(candidate, child.Line))
                 return i;
         }
 
         return -1;
+    }
+
+    private static bool IsOutlineContainerMatch(OutlineSymbol candidate, int childLine)
+    {
+        if (candidate.StartLine <= childLine && candidate.EndLine >= childLine)
+            return true;
+
+        // file-scoped namespaces have no body range, so they do not enclose children by lines
+        // even though they are the correct logical container.
+        return candidate.Kind == "namespace"
+            && candidate.BodyStartLine == null
+            && candidate.BodyEndLine == null
+            && candidate.Line <= childLine;
     }
 
     /// <summary>
