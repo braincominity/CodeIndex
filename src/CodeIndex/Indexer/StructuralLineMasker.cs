@@ -92,7 +92,7 @@ internal static class StructuralLineMasker
             case "javascript":
             case "typescript":
                 jsTaggedTemplateHits = new List<JsTaggedTemplateHit>();
-                MaskJsTsTemplateLiteralContents(maskedLines, jsTaggedTemplateHits);
+                MaskJsTsTemplateLiteralContents(maskedLines, jsTaggedTemplateHits, lang);
                 break;
         }
 
@@ -1382,8 +1382,14 @@ internal static class StructuralLineMasker
     // ホール内の本物のコードは参照抽出に見せるためマスクしない。
     // regex literal は外側と hole 内の両方でスキップし、regex 中の backtick が template を
     // 誤って開始したり `}` が hole を早く閉じたりするのを避ける。
-    private static void MaskJsTsTemplateLiteralContents(string[] lines, List<JsTaggedTemplateHit>? taggedTemplateHits = null)
+    private static void MaskJsTsTemplateLiteralContents(string[] lines, List<JsTaggedTemplateHit>? taggedTemplateHits = null, string? lang = null)
     {
+        // `<...>` before a backtick is a TypeScript-only generic type-argument form. In plain
+        // JavaScript the same character sequence is always a comparison chain (`foo<bar>\`x\``
+        // is `(foo<bar)>\`x\``), so never strip the bracketed range when indexing JS.
+        // `<...>` 付きのタグ付きテンプレートは TypeScript 限定のジェネリクス構文。プレーン
+        // な JavaScript では同じ並びが常に比較式になるため、JS を索引するときは剥がさない。
+        var allowGenericTag = string.Equals(lang, "typescript", StringComparison.Ordinal);
         var frames = new Stack<ScannerFrame>();
         // `lexState` must persist across lines so that multi-line expressions in
         // template-literal holes keep the preceding token context. For example,
@@ -1507,7 +1513,7 @@ internal static class StructuralLineMasker
                             // hole 側の lex state を退避し、閉じ backtick 後に paren
                             // などの context を元に戻せるようにする。
                             if (taggedTemplateHits != null)
-                                TryRecordJsTaggedTemplateHit(masked, i, pos, taggedTemplateHits);
+                                TryRecordJsTaggedTemplateHit(masked, i, pos, taggedTemplateHits, allowGenericTag);
                             pos++;
                             frames.Push(new JsTemplateLiteralFrame { SavedLexState = lexState });
                             lexState = default;
@@ -1619,7 +1625,7 @@ internal static class StructuralLineMasker
                     // テンプレート直前の lex state を退避し、閉じ backtick で paren
                     // stack や statement-head hint を復元できるようにする。
                     if (taggedTemplateHits != null)
-                        TryRecordJsTaggedTemplateHit(masked, i, pos, taggedTemplateHits);
+                        TryRecordJsTaggedTemplateHit(masked, i, pos, taggedTemplateHits, allowGenericTag);
                     masked[pos] = ' ';
                     pos++;
                     frames.Push(new JsTemplateLiteralFrame { SavedLexState = lexState });
@@ -1785,7 +1791,7 @@ internal static class StructuralLineMasker
     // `return` / `throw` / `await` / `typeof` のようなプレーンテンプレートの前に
     // 立ちうるキーワードは呼び出し側の `IsIgnoredCallName` で除外する。
     private static void TryRecordJsTaggedTemplateHit(
-        char[] masked, int lineIndex, int backtickPos, List<JsTaggedTemplateHit> hits)
+        char[] masked, int lineIndex, int backtickPos, List<JsTaggedTemplateHit> hits, bool allowGenericTag)
     {
         int k = backtickPos - 1;
         while (k >= 0 && (masked[k] == ' ' || masked[k] == '\t'))
@@ -1794,13 +1800,17 @@ internal static class StructuralLineMasker
             return;
 
         // Skip a balanced `<...>` (TypeScript generics) so `html<T>\`...\`` still sees `html`.
-        // `<` that does not directly abut an identifier (e.g. `foo < bar > \`plain\``) is a
-        // comparison operator, not a generic tag, so reject it. `=>` inside the bracketed range
-        // is an arrow-function type and must not count as a closing `>`.
+        // The generic-strip is TypeScript-only (`allowGenericTag`) because plain JavaScript has
+        // no generics: `foo<bar>\`x\`` is always the chained comparison `(foo<bar)>\`x\``. Even
+        // inside TypeScript we still require the `<` to directly abut an identifier so
+        // whitespace-bearing comparison expressions like `foo < bar > \`plain\`` are rejected,
+        // and we ignore `>` from `=>` (arrow-function type inside the generic range).
         // `html<T>\`...\`` のジェネリクスを読み飛ばすため、同一行内で `<...>` が釣り合っている
-        // 場合のみ括弧を剥がす。`foo < bar > \`plain\`` のような比較式は `<` が識別子に隣接して
-        // いないため generic と見なさない。`=>` 由来の `>` は関数型なので閉じ記号として数えない。
-        if (masked[k] == '>')
+        // 場合のみ括弧を剥がす。ジェネリクスは TypeScript 限定（`allowGenericTag`）。JavaScript
+        // では `foo<bar>\`x\`` は常に連鎖比較式なので generic とは扱わない。TypeScript 側でも
+        // `foo < bar > \`plain\`` のような比較式と区別するため `<` が識別子に隣接していることを
+        // 要求し、`=>` 由来の `>` は関数型なので閉じ記号として数えない。
+        if (masked[k] == '>' && allowGenericTag)
         {
             int probe = k - 1;
             int depth = 1;

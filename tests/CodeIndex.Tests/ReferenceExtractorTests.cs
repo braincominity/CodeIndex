@@ -6234,6 +6234,69 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScriptComparisonBeforePlainTemplateWithoutSpaces_IsNotCaptured()
+    {
+        // Regression guard: plain JavaScript has no generics, so `foo<bar>\`plain\`` (no
+        // spaces) is a chained comparison `(foo<bar)>\`plain\``, not a generic-tagged
+        // template. The backtick backward-scan must not strip the `<bar>` range as TS
+        // generics and emit a phantom `call foo`.
+        // 退行防止: JavaScript にはジェネリクスがなく、`foo<bar>\`plain\`` は連鎖比較式
+        // `(foo<bar)>\`plain\`` である。backtick 直前の `<...>` を TypeScript generic と
+        // 誤認して `call foo` を幻発行してはならない。
+        const string content = """
+            function check(foo, bar) {
+                return foo<bar>`plain`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "foo");
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "bar");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptInOperatorBeforePlainTemplate_IsNotCaptured()
+    {
+        // Regression guard: `foo in \`plain\`` uses `in` as the membership operator, not as
+        // a tag identifier. The backtick backward-scan picks up the `in` token, so
+        // IsIgnoredCallName must suppress the phantom `call in` edge.
+        // 退行防止: `foo in \`plain\`` の `in` はメンバーシップ演算子であり、タグ識別子ではない。
+        // backward-scan が拾う `in` は IsIgnoredCallName で握り潰す。
+        const string content = """
+            function check(foo) {
+                return foo in `plain`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "in");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptInstanceofBeforePlainTemplate_IsNotCaptured()
+    {
+        // Regression guard: `foo instanceof \`plain\`` uses `instanceof` as the type-check
+        // operator, not as a tag identifier. The backtick backward-scan picks it up, so
+        // IsIgnoredCallName must suppress the phantom `call instanceof` edge.
+        // 退行防止: `foo instanceof \`plain\`` の `instanceof` は型チェック演算子であり、
+        // タグ識別子ではない。backward-scan が拾う `instanceof` は IsIgnoredCallName で握り潰す。
+        const string content = """
+            function check(foo) {
+                return foo instanceof `plain`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "instanceof");
+    }
+
+    [Fact]
     public void Extract_TypeScriptFunctionTypeGenericTaggedTemplate_IsCaptured()
     {
         // issue #268: a generic type argument containing a function type `(x: T) => U` must
