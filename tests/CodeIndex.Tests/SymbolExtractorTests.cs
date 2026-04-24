@@ -154,6 +154,20 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DetectsTypeOnlyStarReExportSurfaceSymbols()
+    {
+        var content = """
+            export type * from './types';
+            export type * as ns from './types-ns';
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./types");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./types-ns");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "ns");
+    }
+
+    [Fact]
     public void Extract_JavaScript_StringBraceDoesNotBreakFollowingContainerAssignment()
     {
         var content = """"
@@ -939,6 +953,22 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "baz");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "qux");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsGenericArrowCommonJsNamedExportAssignments()
+    {
+        var content = """
+            module.exports.foo = <T>(value: T) => value;
+            module.exports.bar =
+              <T>(value: T) => value;
+            module.exports.baz = (<T>(value: T) => value);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "baz");
     }
 
     [Fact]

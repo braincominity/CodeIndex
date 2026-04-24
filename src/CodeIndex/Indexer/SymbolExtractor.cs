@@ -375,7 +375,7 @@ public static class SymbolExtractor
         RegexOptions.Compiled);
 
     private static readonly Regex JavaScriptTypeScriptStarReExportRegex = new(
-        $@"^\s*export\s*\*(?:\s*as\s+(?<namespace>{JavaScriptTypeScriptIdentifierPattern}))?\s*from\s*(?<module>['""][^'""]+['""])\s*;?\s*$",
+        $@"^\s*export\s*(?:type\s+)?\*(?:\s*as\s+(?<namespace>{JavaScriptTypeScriptIdentifierPattern}))?\s*from\s*(?<module>['""][^'""]+['""])\s*;?\s*$",
         RegexOptions.Compiled);
 
     private static readonly Regex JavaScriptTypeScriptNamedReExportRegex = new(
@@ -5000,7 +5000,8 @@ public static class SymbolExtractor
         }
 
         var exportRemainder = trimmedStartLine["export".Length..].TrimStart();
-        if (exportRemainder.Length > 0 && exportRemainder[0] != '*')
+        var starRemainder = SkipJavaScriptTypeScriptTypeOnlyExportModifier(exportRemainder);
+        if (starRemainder.Length > 0 && starRemainder[0] != '*')
         {
             startColumn = -1;
             return false;
@@ -5034,7 +5035,7 @@ public static class SymbolExtractor
             if (!clause.StartsWith("export", StringComparison.Ordinal))
                 break;
 
-            var clauseRemainder = clause["export".Length..].TrimStart();
+            var clauseRemainder = SkipJavaScriptTypeScriptTypeOnlyExportModifier(clause["export".Length..].TrimStart());
             if (clauseRemainder.Length == 0 || clauseRemainder[0] != '*')
                 break;
 
@@ -5447,6 +5448,7 @@ public static class SymbolExtractor
         {
             if (IsJavaScriptTypeScriptKeywordAt(rhs, 0, "function")
                 || StartsJavaScriptTypeScriptAsyncFunctionAssignmentValue(rhs)
+                || StartsJavaScriptTypeScriptGenericArrowAssignmentValue(rhs)
                 || JavaScriptTypeScriptArrowAssignmentValueRegex.IsMatch(rhs))
             {
                 return true;
@@ -5485,6 +5487,43 @@ public static class SymbolExtractor
 
         var asyncRemainder = rhs["async".Length..].TrimStart();
         return IsJavaScriptTypeScriptKeywordAt(asyncRemainder, 0, "function");
+    }
+
+    private static bool StartsJavaScriptTypeScriptGenericArrowAssignmentValue(string rhs)
+    {
+        rhs = rhs.TrimStart();
+        if (IsJavaScriptTypeScriptKeywordAt(rhs, 0, "async"))
+            rhs = rhs["async".Length..].TrimStart();
+
+        if (rhs.Length == 0 || rhs[0] != '<')
+            return false;
+
+        var genericEnd = FindJavaScriptTypeScriptBalancedGenericListEnd(rhs, 0);
+        if (genericEnd < 0)
+            return false;
+
+        var remainder = rhs[(genericEnd + 1)..].TrimStart();
+        if (remainder.Length == 0)
+            return false;
+
+        if (remainder[0] == '(')
+        {
+            var parameterListEnd = FindJavaScriptTypeScriptBalancedDelimiterEnd(remainder, 0, '(', ')');
+            if (parameterListEnd < 0)
+                return false;
+
+            remainder = remainder[(parameterListEnd + 1)..].TrimStart();
+        }
+        else
+        {
+            var parameterNameLength = ReadJavaScriptTypeScriptIdentifierLength(remainder, 0);
+            if (parameterNameLength <= 0)
+                return false;
+
+            remainder = remainder[parameterNameLength..].TrimStart();
+        }
+
+        return remainder.StartsWith("=>", StringComparison.Ordinal);
     }
 
     private static bool TryCollectJavaScriptTypeScriptAssignedRhs(
@@ -5761,6 +5800,67 @@ public static class SymbolExtractor
         }
 
         return false;
+    }
+
+    private static string SkipJavaScriptTypeScriptTypeOnlyExportModifier(string exportRemainder)
+    {
+        if (IsJavaScriptTypeScriptKeywordAt(exportRemainder, 0, "type"))
+            return exportRemainder["type".Length..].TrimStart();
+
+        return exportRemainder;
+    }
+
+    private static int FindJavaScriptTypeScriptBalancedGenericListEnd(string text, int startIndex)
+        => FindJavaScriptTypeScriptBalancedDelimiterEnd(text, startIndex, '<', '>');
+
+    private static int FindJavaScriptTypeScriptBalancedDelimiterEnd(string text, int startIndex, char openChar, char closeChar)
+    {
+        if (startIndex < 0
+            || startIndex >= text.Length
+            || text[startIndex] != openChar)
+        {
+            return -1;
+        }
+
+        var depth = 0;
+        for (int index = startIndex; index < text.Length; index++)
+        {
+            var ch = text[index];
+            if (ch == openChar)
+            {
+                depth++;
+            }
+            else if (ch == closeChar)
+            {
+                depth--;
+                if (depth == 0)
+                    return index;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int ReadJavaScriptTypeScriptIdentifierLength(string text, int startIndex)
+    {
+        if (startIndex < 0 || startIndex >= text.Length)
+            return 0;
+
+        var first = text[startIndex];
+        if (!(char.IsLetter(first) || first is '_' or '$'))
+            return 0;
+
+        var index = startIndex + 1;
+        while (index < text.Length)
+        {
+            var ch = text[index];
+            if (!(char.IsLetterOrDigit(ch) || ch is '_' or '$'))
+                break;
+
+            index++;
+        }
+
+        return index - startIndex;
     }
 
     private static IEnumerable<string> ParseJavaScriptTypeScriptReExportedNames(string specifierList)
