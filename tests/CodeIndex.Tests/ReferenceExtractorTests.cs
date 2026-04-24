@@ -7452,6 +7452,67 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JsNoParenConstructor_CapturesInstantiateReference()
+    {
+        // issue #295: JavaScript allows zero-arg constructor calls without `()`
+        // (`new Foo;`, `new Date;`, `new Demo.Provider;`, `cond ? new Demo.Helper : other`). The generic CallRegex only
+        // sees names that reach `(`, so these forms previously vanished from the
+        // reference table and downstream graph queries under-counted instantiations.
+        // issue #295: JavaScript では引数なしコンストラクタ呼び出しで `()` を省略できる
+        // (`new Foo;`, `new Date;`, `new Demo.Provider;`, `cond ? new Demo.Helper : other`)。従来の汎用 CallRegex は
+        // `(` まで届く名前しか拾えないため、これらの instantiate が参照テーブルから欠落していた。
+        const string content = """
+            class Foo {}
+
+            function run(Demo) {
+                const a = new Foo;
+                const b = new Date;
+                const c = new Demo.Provider;
+                const d = ready ? new Demo.Helper : c;
+                return [a, b, c, d];
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Foo" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "Date" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "Provider" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "Helper" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+    }
+
+    [Fact]
+    public void Extract_TsNoParenConstructorWithTypeArgs_CapturesInstantiateReference()
+    {
+        // issue #295 follow-up: TypeScript keeps the same no-paren `new` form even when
+        // a single generic argument list is present (`new Box<number>;`). The dedicated
+        // JS/TS path must keep accepting the one-level `<...>` segment already supported
+        // by the shared `CallRegex` / initializer regex family.
+        // issue #295 補足: TypeScript では generic 引数付きでも no-paren `new`
+        // (`new Box<number>;`) が現れる。専用 JS/TS 経路でも既存 regex 群と同じ
+        // 1 段の `<...>` を受け入れて instantiate を落とさないことを確認する。
+        const string content = """
+            class Box<T> {}
+
+            function run() {
+                const value = new Box<number>;
+                return value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Box" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+    }
+
+    [Fact]
     public void Extract_CsharpNameofTypeofDefault_CapturesArgumentAsTypeReference()
     {
         // issue #253: nameof/typeof/sizeof/default arguments are first-class compile-time
