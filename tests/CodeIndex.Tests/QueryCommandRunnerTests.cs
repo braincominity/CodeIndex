@@ -16271,6 +16271,58 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpStandaloneNotLineMultiLineTypePatternsKeepRows()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_standalone_not_line_multiline_type_patterns");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Probe;
+
+                class Point {}
+
+                class Demo
+                {
+                    bool Match(object value) => value is
+                        not
+                        Point;
+
+                    void Run(object value)
+                    {
+                        switch (value)
+                        {
+                            case
+                                not
+                                Point:
+                                break;
+                        }
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Point", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            var rows = ParseJsonLines(stdout)
+                .Select(document => document.RootElement)
+                .ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, rows.Count);
+            Assert.Equal([9, 17], rows.Select(row => row.GetProperty("line").GetInt32()).OrderBy(line => line).ToArray());
+            Assert.Equal(["Match", "Run"], rows.Select(row => row.GetProperty("container_name").GetString()).OrderBy(name => name).ToArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpNonTypeCaseLabelsDoNotEmitPhantomTypeReferences()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_non_type_case_labels");

@@ -8343,6 +8343,47 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpStandaloneNotLineMultiLineTypePatterns_KeepPendingHeads()
+    {
+        // issue #891: a standalone `not` continuation line is still valid C# trivia-separated
+        // formatting, so the pending multiline type-pattern state must survive until the head.
+        // issue #891: 単独行の `not` 継続も有効な C# フォーマットであるため、複数行
+        // type-pattern の pending state は実際の型 head まで維持しなければならない。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+
+            class Demo
+            {
+                bool Match(object value) => value is
+                    not
+                    Point;
+
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case
+                            not
+                            Point:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+
+        Assert.Equal(2, pointRefs.Count);
+        Assert.Equal(["Match", "Run"], pointRefs.Select(reference => reference.ContainerName).OrderBy(name => name).ToArray());
+        Assert.Equal([9, 17], pointRefs.Select(reference => reference.Line).OrderBy(line => line).ToArray());
+    }
+
+    [Fact]
     public void Extract_CsharpNonTypeCaseLabels_DoNotArmMultiLineTypeCarry()
     {
         // issue #857: relational/non-type `case` labels like `case > 0:` must not arm the

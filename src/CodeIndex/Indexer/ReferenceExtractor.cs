@@ -2287,6 +2287,9 @@ public static class ReferenceExtractor
                     ref cursor,
                     ref state))
             {
+                if (IsStandaloneCSharpMultiLinePatternNegation(preparedLine))
+                    return;
+
                 state = default;
                 return;
             }
@@ -2422,6 +2425,15 @@ public static class ReferenceExtractor
         }
 
         state = default;
+    }
+
+    private static bool IsStandaloneCSharpMultiLinePatternNegation(string preparedLine)
+    {
+        var cursor = SkipWhitespace(preparedLine, 0);
+        if (!TryConsumeCSharpPatternKeyword(preparedLine, ref cursor, "not"))
+            return false;
+
+        return SkipWhitespace(preparedLine, cursor) >= preparedLine.Length;
     }
 
     private static void StartWaitingForCSharpMultiLineTypePatternHead(ref CSharpMultiLineTypePatternState state)
