@@ -7807,6 +7807,100 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutline_Json_CSharpMultiLineExpressionBodiedMethod_KeepsFullSignatureAndSiblingField()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_csharp_multiline_expr_body_signature");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Use.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Color
+                {
+                    Red
+                }
+
+                public sealed class Uses
+                {
+                    public bool Match(object value) => value is
+                        Red; public int X;
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/Use.cs", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var symbols = document.RootElement.GetProperty("symbols").EnumerateArray().ToList();
+            var match = Assert.Single(symbols.Where(symbol =>
+                symbol.GetProperty("kind").GetString() == "function"
+                && symbol.GetProperty("name").GetString() == "Match"));
+            var x = Assert.Single(symbols.Where(symbol =>
+                symbol.GetProperty("kind").GetString() == "property"
+                && symbol.GetProperty("name").GetString() == "X"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("public bool Match(object value) => value is Red;", match.GetProperty("signature").GetString());
+            Assert.Equal("public int X;", x.GetProperty("signature").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_ExactJson_CSharpMultiLineExpressionBodiedMethodTerminatorLineKeepsSiblingField()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_multiline_expr_body_sibling");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Use.cs", "csharp",
+                """
+                namespace Demo;
+
+                public enum Color
+                {
+                    Red
+                }
+
+                public sealed class Uses
+                {
+                    public bool Match(object value) => value is
+                        Red; public int X;
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["X", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+
+            var rows = ParseJsonLines(stdout)
+                .Select(document => document.RootElement)
+                .ToList();
+            var x = Assert.Single(rows);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("property", x.GetProperty("kind").GetString());
+            Assert.Equal("X", x.GetProperty("name").GetString());
+            Assert.Equal("Uses", x.GetProperty("container_name").GetString());
+            Assert.Equal("public int X;", x.GetProperty("signature").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_NonExactJson_TreatsEnumMembersAsGraphSupported()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_inspect_enum_member_bundle_non_exact");

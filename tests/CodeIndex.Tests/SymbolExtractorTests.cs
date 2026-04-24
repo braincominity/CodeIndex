@@ -4289,7 +4289,7 @@ public class SymbolExtractorTests
         var count = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Count"));
         Assert.Equal(5, count.StartLine);
         Assert.Equal(10, count.EndLine);
-        Assert.Equal("public partial int Count => DateTime.Now.Day switch", count.Signature);
+        Assert.Equal("public partial int Count => DateTime.Now.Day switch { > 15 => 2, _ => 1 };", count.Signature);
     }
 
     [Fact]
@@ -10062,6 +10062,47 @@ public class SymbolExtractorTests
         Assert.Equal(15, match.BodyEndLine);
 
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Red" && s.ContainerName == "Uses");
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultiLineExpressionBodiedMethod_TerminatorLineKeepsFullSignatureAndSiblingField()
+    {
+        // issue #835 / #836: when a multi-line expression-bodied member ends on the next line,
+        // a real same-line sibling after that terminating `;` must still be extracted, and the
+        // stored signature must include the continuation line through the terminator.
+        // issue #835 / #836: 複数行の式本体メンバーが次行の `;` で終わる場合でも、その
+        // `;` の後ろにある同一行 sibling は抽出されなければならず、保存される signature も
+        // 継続行を含めて終端 `;` までを保持していなければならない。
+        const string content = """
+            namespace Demo;
+
+            public enum Color
+            {
+                Red
+            }
+
+            public sealed class Uses
+            {
+                public bool Match(object value) => value is
+                    Red; public int X;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var match = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Match"));
+        Assert.Equal(10, match.StartLine);
+        Assert.Equal(11, match.EndLine);
+        Assert.Equal(10, match.BodyStartLine);
+        Assert.Equal(11, match.BodyEndLine);
+        Assert.Equal("public bool Match(object value) => value is Red;", match.Signature);
+
+        var x = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "X"));
+        Assert.Equal(11, x.StartLine);
+        Assert.Equal(11, x.EndLine);
+        Assert.Equal("Uses", x.ContainerName);
+        Assert.Equal("class", x.ContainerKind);
+        Assert.Equal("public int X;", x.Signature);
     }
 
     [Fact]
