@@ -797,7 +797,7 @@ public static class ReferenceExtractor
                             || CanAttachCSharpXmlDocCommentToNextDeclaration(
                                 innermostContainer,
                                 csharpXmlDocAttachmentScopeCandidates,
-                                structuralLines,
+                                preparedLines,
                                 lineNumber)))
                     {
                         EmitCSharpDocCrefReferences(
@@ -7632,7 +7632,7 @@ public static class ReferenceExtractor
     private static bool CanAttachCSharpXmlDocCommentToNextDeclaration(
         SymbolRecord? innermostContainer,
         IReadOnlyList<SymbolRecord>? scopeCandidates,
-        string[] structuralLines,
+        string[] preparedLines,
         int lineNumber)
     {
         if (innermostContainer != null
@@ -7647,18 +7647,18 @@ public static class ReferenceExtractor
         if (enclosingScope?.BodyStartLine == null)
             return true;
 
-        return IsAtCSharpXmlDocAttachmentDepth(enclosingScope, structuralLines, lineNumber);
+        return IsAtCSharpXmlDocAttachmentDepth(enclosingScope, preparedLines, lineNumber);
     }
 
     private static bool IsAtCSharpXmlDocAttachmentDepth(
         SymbolRecord enclosingScope,
-        string[] structuralLines,
+        string[] preparedLines,
         int lineNumber)
     {
         var scopeBodyStartIndex = enclosingScope.BodyStartLine!.Value - 1;
         var commentLineIndex = lineNumber - 1;
         if (scopeBodyStartIndex < 0
-            || scopeBodyStartIndex >= structuralLines.Length
+            || scopeBodyStartIndex >= preparedLines.Length
             || scopeBodyStartIndex >= commentLineIndex)
         {
             return true;
@@ -7666,17 +7666,39 @@ public static class ReferenceExtractor
 
         var sawScopeOpenBrace = false;
         var nestedBraceDepth = 0;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var topLevelExecutableContinuation = false;
+        var topLevelArrowExpressionContinuation = false;
 
-        for (var i = scopeBodyStartIndex; i < commentLineIndex && i < structuralLines.Length; i++)
+        for (var i = scopeBodyStartIndex; i < commentLineIndex && i < preparedLines.Length; i++)
         {
-            foreach (var ch in structuralLines[i])
+            var line = preparedLines[i];
+            for (var j = 0; j < line.Length; j++)
             {
+                var ch = line[j];
                 if (!sawScopeOpenBrace)
                 {
                     if (ch == '{')
                         sawScopeOpenBrace = true;
 
                     continue;
+                }
+
+                if (nestedBraceDepth == 0)
+                {
+                    if (IsCSharpTopLevelArrowToken(line, j))
+                    {
+                        topLevelExecutableContinuation = true;
+                        topLevelArrowExpressionContinuation = !IsCSharpArrowBlockStart(line, j + 2);
+                        j++;
+                        continue;
+                    }
+
+                    if (IsCSharpTopLevelAssignmentOperator(line, j))
+                    {
+                        topLevelExecutableContinuation = true;
+                    }
                 }
 
                 if (ch == '{')
@@ -7690,10 +7712,64 @@ public static class ReferenceExtractor
 
                     nestedBraceDepth--;
                 }
+                else if (ch == '(')
+                {
+                    parenDepth++;
+                }
+                else if (ch == ')' && parenDepth > 0)
+                {
+                    parenDepth--;
+                }
+                else if (ch == '[')
+                {
+                    bracketDepth++;
+                }
+                else if (ch == ']' && bracketDepth > 0)
+                {
+                    bracketDepth--;
+                }
+                else if (nestedBraceDepth == 0
+                         && ch == ';'
+                         && parenDepth == 0
+                         && bracketDepth == 0)
+                {
+                    topLevelExecutableContinuation = false;
+                    topLevelArrowExpressionContinuation = false;
+                }
             }
         }
 
-        return !sawScopeOpenBrace || nestedBraceDepth == 0;
+        return !sawScopeOpenBrace
+            || (nestedBraceDepth == 0
+                && parenDepth == 0
+                && bracketDepth == 0
+                && !topLevelExecutableContinuation
+                && !topLevelArrowExpressionContinuation);
+    }
+
+    private static bool IsCSharpTopLevelAssignmentOperator(string line, int index)
+    {
+        if (index < 0 || index >= line.Length || line[index] != '=')
+            return false;
+
+        var previous = index > 0 ? line[index - 1] : '\0';
+        var next = index + 1 < line.Length ? line[index + 1] : '\0';
+        return previous is not ('=' or '!' or '<' or '>')
+            && next is not ('=' or '>');
+    }
+
+    private static bool IsCSharpTopLevelArrowToken(string line, int index) =>
+        index >= 0
+        && index + 1 < line.Length
+        && line[index] == '='
+        && line[index + 1] == '>';
+
+    private static bool IsCSharpArrowBlockStart(string line, int index)
+    {
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+
+        return index < line.Length && line[index] == '{';
     }
 
     private static int GetCSharpSameLineDocumentedDeclarationStartColumn(

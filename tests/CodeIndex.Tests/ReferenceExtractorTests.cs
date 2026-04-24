@@ -8780,6 +8780,110 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatTripleSlashInsideBraceFreeFieldInitializerAsDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                string text = string.Concat(
+                    /// <summary><see cref="Foo"/></summary>
+                    "a",
+                    "b");
+
+                void Later() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 5);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatDelimitedBlockCommentsInsideBraceFreeFieldInitializerAsDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                string text = string.Concat(
+                    /** <summary><see cref="Foo"/></summary> */
+                    "a",
+                    "b");
+
+                void Later() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 5);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatTripleSlashInsideBraceFreeExpressionLambdaAsDocComment()
+    {
+        const string content = """
+            using System;
+            class Foo {}
+            class Demo
+            {
+                Action callback = () =>
+                    /// <summary><see cref="Foo"/></summary>
+                    Console.WriteLine(1);
+
+                void Later() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 6);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatDelimitedBlockCommentsInsideBraceFreeExpressionLambdaAsDocComment()
+    {
+        const string content = """
+            using System;
+            class Foo {}
+            class Demo
+            {
+                Action callback = () =>
+                    /** <summary><see cref="Foo"/></summary> */
+                    Console.WriteLine(1);
+
+                void Later() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 6);
+    }
+
+    [Fact]
     public void Extract_CsharpDocCref_DoesNotTreatCodeAfterDelimitedDocCloseAsDocComment()
     {
         const string content = """
