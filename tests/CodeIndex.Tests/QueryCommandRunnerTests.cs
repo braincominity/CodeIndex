@@ -22377,6 +22377,57 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunMap_WithJson_JavaModuleInfoWithAllmanBraceUsesModuleDeclarationAsModuleKey()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_java_module_allman");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "com", "example", "app"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "module-info.java"),
+                """
+                module com.example.app
+                {
+                    requires java.base;
+                    exports com.example.api;
+                }
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "com", "example", "app", "App.java"),
+                """
+                package com.example.app;
+
+                public class App
+                {
+                    public static void main(String[] args) {}
+                }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json"],
+                _jsonOptions));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+            var modules = document.RootElement.GetProperty("modules").EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var javaModule = Assert.Single(modules.Where(module => module.GetProperty("module").GetString() == "com.example.app"));
+            Assert.Equal(2, javaModule.GetProperty("files").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunMap_WithJson_NonJavaNamespaceDoesNotOverridePathBasedModuleKey()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_map_non_java_namespace");

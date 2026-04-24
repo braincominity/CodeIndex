@@ -8834,6 +8834,24 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_DetectsModuleInfoDeclarationWithAllmanBrace()
+    {
+        const string content = """
+            module com.example.app
+            {
+                requires java.base;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var module = Assert.Single(symbols.Where(s => s.Kind == "namespace" && s.Name == "com.example.app"));
+        Assert.Equal(1, module.Line);
+        Assert.Equal(1, module.StartLine);
+        Assert.Equal(4, module.EndLine);
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "java.base" && s.ContainerName == "com.example.app");
+    }
+
+    [Fact]
     public void Extract_Java_DetectsFlexibleConstantOrder()
     {
         // final static order (reversed) and generic types with spaces

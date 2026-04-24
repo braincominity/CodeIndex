@@ -790,7 +790,7 @@ public static class SymbolExtractor
         ["java"] =
         [
             // Module declaration (Java 9+ module-info.java) / モジュール宣言（Java 9+ の module-info.java）
-            new("namespace", new Regex(@"^\s*(?:open\s+)?module\s+(?<name>[\w.]+)\s*\{", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("namespace", new Regex(@"^\s*(?:open\s+)?module\s+(?<name>[\w.]+)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
             // Annotation type (@interface) / アノテーション型
             new("class",    new Regex(@"^\s*(?<visibility>public|private|protected)?\s*@interface\s+(?<name>\w+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
             // record (Java 16+) — must come before general class pattern / record は一般クラスパターンの前に配置
