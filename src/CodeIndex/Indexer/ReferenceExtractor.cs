@@ -5690,6 +5690,9 @@ public static class ReferenceExtractor
         IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
         Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
     {
+        if (hasActiveSameFileCSharpTypeCandidate(typeExpression, lineNumber))
+            return false;
+
         return IsCSharpQualifiedConstantPatternMemberHead(
             typeExpression,
             lineNumber,

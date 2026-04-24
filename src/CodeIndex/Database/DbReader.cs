@@ -1179,6 +1179,13 @@ public partial class DbReader
 
     private bool HasScopedCSharpTypeCandidate(string path, int lineNumber, string symbolName)
     {
+        var activeAliasReference = ResolveActiveCSharpUsingAliasReference(path, lineNumber, symbolName);
+        if (!string.Equals(activeAliasReference, symbolName, StringComparison.Ordinal)
+            && IsKnownCSharpTypeQualifiedName(activeAliasReference))
+        {
+            return true;
+        }
+
         var candidateNamespaces = GetCSharpTypeNamespacesByName(symbolName);
         var candidateContainingTypes = GetCSharpTypeContainingTypesByName(symbolName);
         if (candidateNamespaces.Count == 0 && candidateContainingTypes.Count == 0)

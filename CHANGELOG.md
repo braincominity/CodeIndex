@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+- **C# の `using static` で同名型参照が alias / nested スコープ判定で落ちないよう修正 (#693)** — `references` / `inspect` / `impact` が、`using static` の constant と同じ短い名前を持つ alias-scoped な実型を保持するようになり、さらに C# の同一ファイル内 constant-pattern 抑止でも、import 済み enum member を shadow する nested の実型を隠さなくなりました。`Probe.Shapes.Red` の alias ケースと `Outer.Red` の nested ケースを固定する直接 regression を追加しました。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`。Closes #693。
+
+- **C# `using static` same-name type references now survive alias and nested scope checks (#693)** — `references` / `inspect` / `impact` now keep alias-scoped real types visible even when a `using static` constant shares the same short name, and C# same-file constant-pattern suppression no longer hides nested real types that shadow imported enum members. Added direct regressions for the alias-scoped `Probe.Shapes.Red` case and the nested `Outer.Red` case. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/DbReaderTests.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`. Closes #693.
+
 ### [1.15.0] - 2026-04-24
 
 #### Changed
