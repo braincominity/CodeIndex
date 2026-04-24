@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Fixed
+- **Long single-line query payloads can now be left untruncated with `--max-line-width 0` (#830)** — `search`, `references`, `find`, `excerpt`, and `inspect` now accept `--max-line-width 0` as an explicit full-line mode, so long Markdown or audit lines can be reviewed without `...(+N)...` elision when the caller needs the entire physical line. `LineWidthFormatter` preserves the full line in that mode, and the CLI help/docs now describe the no-truncation escape hatch. Affected: `src/CodeIndex/Database/LineWidthFormatter.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `tests/CodeIndex.Tests/SearchSnippetFormatterTests.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CHANGELOG.md`. Closes #830.
+
 ### [1.15.0] - 2026-04-24
 
 #### Changed
