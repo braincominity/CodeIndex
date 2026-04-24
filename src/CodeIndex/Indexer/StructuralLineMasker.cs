@@ -108,11 +108,13 @@ internal static class StructuralLineMasker
                     {
                         if (StartsWith(line, searchStart, "*/"))
                         {
+                            ReplaceWithSpaces(masked, searchStart, 2);
                             searchStart += 2;
                             frames.Pop();
                             continue;
                         }
 
+                        masked[searchStart] = ' ';
                         searchStart++;
                         continue;
                     }
@@ -212,6 +214,7 @@ internal static class StructuralLineMasker
 
                         if (StartsWith(line, searchStart, "/*"))
                         {
+                            ReplaceWithSpaces(masked, searchStart, 2);
                             frames.Push(new BlockCommentFrame());
                             searchStart += 2;
                             continue;
@@ -265,6 +268,7 @@ internal static class StructuralLineMasker
 
                 if (StartsWith(line, searchStart, "/*"))
                 {
+                    ReplaceWithSpaces(masked, searchStart, 2);
                     frames.Push(new BlockCommentFrame());
                     searchStart += 2;
                     continue;
