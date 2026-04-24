@@ -1182,6 +1182,13 @@ public partial class DbReader
         if (HasActiveCSharpUsingTypeAlias(path, lineNumber, symbolName))
             return true;
 
+        var activeAliasReference = ResolveActiveCSharpUsingAliasReference(path, lineNumber, symbolName);
+        if (!string.Equals(activeAliasReference, symbolName, StringComparison.Ordinal)
+            && IsKnownCSharpTypeQualifiedName(activeAliasReference))
+        {
+            return true;
+        }
+
         var candidateNamespaces = GetCSharpTypeNamespacesByName(symbolName);
         var candidateContainingTypes = GetCSharpTypeContainingTypesByName(symbolName);
         if (candidateNamespaces.Count == 0 && candidateContainingTypes.Count == 0)

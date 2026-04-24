@@ -11,6 +11,7 @@ namespace CodeIndex.Indexer;
 public static class ReferenceExtractor
 {
     private readonly record struct SqlDefinitionLeafSpan(string LeafName, int StartIndex, int EndIndexExclusive);
+    private readonly record struct InterpolatedExpressionSpan(int StartIndex, int Length);
     private readonly record struct CSharpMultiLineTypePatternState(
         bool WaitingForHead,
         string? PendingTypeExpression,
@@ -2528,8 +2529,10 @@ public static class ReferenceExtractor
             }
 
             if (IsCSharpNonTypePatternExpression(typeGroup.Value)
-                || IsCSharpConstantPatternMemberHead(
+                || IsCSharpConstantPatternMemberHeadOrSameFileCSharpTypeCandidate(
+                    preparedLine,
                     typeGroup.Value,
+                    continuationIndex,
                     lineNumber,
                     csharpQualifiedConstantPatternMemberLookup,
                     csharpUsingAliases,
@@ -2892,6 +2895,7 @@ public static class ReferenceExtractor
                     preparedLine,
                     currentTypeExpression,
                     currentContinuationIndex,
+                    hadLeadingNot,
                     csharpQualifiedConstantPatternMemberLookup,
                     csharpQualifiedTypePatternLookup,
                     csharpUsingAliases,
@@ -3087,8 +3091,11 @@ public static class ReferenceExtractor
             var currentTypeLineNumber = GetLineNumberFromOffset(preparedContent, armStartOffset + currentTypeIndex, 1);
             if (looksLikeLambda
                 && !HasStrongCSharpSwitchExpressionTypeSignal(
+                    armText,
                     currentTypeExpression,
+                    currentContinuationIndex,
                     currentTypeLineNumber,
+                    csharpQualifiedConstantPatternMemberLookup,
                     csharpQualifiedTypePatternLookup,
                     csharpUsingAliases,
                     hasActiveSameFileCSharpTypeCandidate))
@@ -3144,8 +3151,10 @@ public static class ReferenceExtractor
                 continue;
 
             if (IsCSharpNonTypePatternExpression(currentTypeExpression)
-                || IsCSharpConstantPatternMemberHead(
+                || IsCSharpConstantPatternMemberHeadOrSameFileCSharpTypeCandidate(
+                    armText,
                     currentTypeExpression,
+                    currentContinuationIndex,
                     currentTypeLineNumber,
                     csharpQualifiedConstantPatternMemberLookup,
                     csharpUsingAliases,
@@ -3170,18 +3179,39 @@ public static class ReferenceExtractor
     }
 
     private static bool HasStrongCSharpSwitchExpressionTypeSignal(
+        string preparedLine,
         string typeExpression,
+        int continuationIndex,
         int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
         Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
     {
+        if (HasCSharpDottedConstantPatternMemberTail(
+                preparedLine,
+                typeExpression,
+                continuationIndex,
+                lineNumber,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpUsingAliases))
+        {
+            return false;
+        }
+
         return IsCSharpQualifiedTypePatternHead(
                    typeExpression,
                    lineNumber,
                    csharpQualifiedTypePatternLookup,
                    csharpUsingAliases)
-               || hasActiveSameFileCSharpTypeCandidate(typeExpression, lineNumber);
+               || HasActiveSameFileCSharpTypeCandidateWithoutMemberTail(
+                   preparedLine,
+                   continuationIndex,
+                   typeExpression,
+                   lineNumber,
+                   csharpQualifiedConstantPatternMemberLookup,
+                   csharpUsingAliases,
+                   hasActiveSameFileCSharpTypeCandidate);
     }
 
     private static void EmitCSharpSwitchExpressionArmTypePatternReference(
@@ -5360,6 +5390,7 @@ public static class ReferenceExtractor
         string preparedLine,
         string typeExpression,
         int cursor,
+        bool hadLeadingNot,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
         IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
         IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
@@ -5375,13 +5406,22 @@ public static class ReferenceExtractor
 
         return preparedLine[cursor] switch
         {
-            ':' => !IsCSharpConstantPatternMemberHead(
+            ':' => !IsCSharpConstantPatternMemberHeadOrSameFileCSharpTypeCandidate(
+                    preparedLine,
                     typeExpression,
+                    cursor,
                     lineNumber,
                     csharpQualifiedConstantPatternMemberLookup,
                     csharpUsingAliases,
                     csharpUsingStatics,
                     hasActiveSameFileCSharpTypeCandidate),
+            '.' => !HasCSharpDottedConstantPatternMemberTail(
+                    preparedLine,
+                    typeExpression,
+                    cursor,
+                    lineNumber,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpUsingAliases),
             '{' or '(' or '[' => true,
             _ => IsCSharpCaseTypePatternIdentifier(
                 preparedLine,
@@ -5417,8 +5457,10 @@ public static class ReferenceExtractor
 
         return rawToken switch
         {
-            "when" => !IsCSharpConstantPatternMemberHead(
+            "when" => !IsCSharpConstantPatternMemberHeadOrSameFileCSharpTypeCandidate(
+                    preparedLine,
                     typeExpression,
+                    tokenCursor,
                     lineNumber,
                     csharpQualifiedConstantPatternMemberLookup,
                     csharpUsingAliases,
@@ -5490,8 +5532,10 @@ public static class ReferenceExtractor
 
         if (sawLogicalKeyword
             && !IsCSharpNonTypePatternExpression(currentTypeExpression)
-            && !IsCSharpConstantPatternMemberHead(
+            && !IsCSharpConstantPatternMemberHeadOrSameFileCSharpTypeCandidate(
+                preparedLine,
                 currentTypeExpression,
+                currentContinuationIndex,
                 lineNumber,
                 csharpQualifiedConstantPatternMemberLookup,
                 csharpUsingAliases,
@@ -5565,8 +5609,10 @@ public static class ReferenceExtractor
         IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
         Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
     {
-        if (IsCSharpConstantPatternMemberHead(
+        if (IsCSharpConstantPatternMemberHeadOrSameFileCSharpTypeCandidate(
+                preparedLine,
                 typeExpression,
+                cursor,
                 lineNumber,
                 csharpQualifiedConstantPatternMemberLookup,
                 csharpUsingAliases,
@@ -5701,6 +5747,97 @@ public static class ReferenceExtractor
     {
         return IsCSharpQualifiedConstantPatternMemberHead(
             typeExpression,
+            lineNumber,
+            csharpQualifiedConstantPatternMemberLookup,
+            csharpUsingAliases);
+    }
+
+    private static bool IsCSharpConstantPatternMemberHeadOrSameFileCSharpTypeCandidate(
+        string preparedLine,
+        string typeExpression,
+        int cursor,
+        int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        IReadOnlyList<CSharpUsingStaticRecord> csharpUsingStatics,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
+    {
+        if (HasActiveSameFileCSharpTypeCandidateWithoutMemberTail(
+                preparedLine,
+                cursor,
+                typeExpression,
+                lineNumber,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpUsingAliases,
+                hasActiveSameFileCSharpTypeCandidate))
+        {
+            return false;
+        }
+
+        if (HasCSharpDottedConstantPatternMemberTail(
+                preparedLine,
+                typeExpression,
+                cursor,
+                lineNumber,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpUsingAliases))
+        {
+            return true;
+        }
+
+        return IsCSharpConstantPatternMemberHead(
+            typeExpression,
+            lineNumber,
+            csharpQualifiedConstantPatternMemberLookup,
+            csharpUsingAliases,
+            csharpUsingStatics,
+            hasActiveSameFileCSharpTypeCandidate);
+    }
+
+    private static bool HasActiveSameFileCSharpTypeCandidateWithoutMemberTail(
+        string preparedLine,
+        int cursor,
+        string typeExpression,
+        int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
+    {
+        if (!hasActiveSameFileCSharpTypeCandidate(typeExpression, lineNumber))
+            return false;
+
+        if (IsCSharpQualifiedConstantPatternMemberHead(
+                typeExpression,
+                lineNumber,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpUsingAliases))
+        {
+            return false;
+        }
+
+        int nextCursor = SkipWhitespace(preparedLine, cursor);
+        return nextCursor >= preparedLine.Length || preparedLine[nextCursor] != '.';
+    }
+
+    private static bool HasCSharpDottedConstantPatternMemberTail(
+        string preparedLine,
+        string typeExpression,
+        int cursor,
+        int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases)
+    {
+        int nextCursor = SkipWhitespace(preparedLine, cursor);
+        if (nextCursor >= preparedLine.Length || preparedLine[nextCursor] != '.')
+            return false;
+
+        nextCursor = SkipWhitespace(preparedLine, nextCursor + 1);
+        var nextMatch = CSharpTypeExpressionAtCursorRegex.Match(preparedLine, nextCursor);
+        if (!nextMatch.Success)
+            return false;
+
+        return IsCSharpQualifiedConstantPatternMemberHead(
+            typeExpression + "." + nextMatch.Groups["type"].Value,
             lineNumber,
             csharpQualifiedConstantPatternMemberLookup,
             csharpUsingAliases);
@@ -11619,21 +11756,22 @@ public static class ReferenceExtractor
 
     private static string PrepareLine(string lang, string line)
     {
-        var result = StringLiteralRegex.Replace(line, "\"\"");
-        result = InlineBlockCommentRegex.Replace(result, " ");
+        var result = ReplaceRegexMatchesWithSpaces(StringLiteralRegex, line);
+        result = RestoreInterpolatedExpressionSpans(lang, line, result);
+        result = ReplaceRegexMatchesWithSpaces(InlineBlockCommentRegex, result);
 
         if (UsesHashComments(lang))
         {
             var hashIndex = result.IndexOf('#');
             if (hashIndex >= 0)
-                result = result[..hashIndex];
+                result = ReplaceRangeWithSpaces(result, hashIndex);
         }
 
         if (UsesSlashComments(lang))
         {
             var slashIndex = result.IndexOf("//", StringComparison.Ordinal);
             if (slashIndex >= 0)
-                result = result[..slashIndex];
+                result = ReplaceRangeWithSpaces(result, slashIndex);
         }
 
         // Lua, SQL, Haskell use -- for line comments / Lua、SQL、Haskell は -- を行コメントに使う
@@ -11641,7 +11779,7 @@ public static class ReferenceExtractor
         {
             var dashCommentIndex = result.IndexOf("--", StringComparison.Ordinal);
             if (dashCommentIndex >= 0)
-                result = result[..dashCommentIndex];
+                result = ReplaceRangeWithSpaces(result, dashCommentIndex);
         }
 
         // VB.NET uses ' for line comments / VB.NET は ' を行コメントに使う
@@ -11649,10 +11787,555 @@ public static class ReferenceExtractor
         {
             var vbCommentIndex = result.IndexOf('\'');
             if (vbCommentIndex >= 0)
-                result = result[..vbCommentIndex];
+                result = ReplaceRangeWithSpaces(result, vbCommentIndex);
         }
 
         return result;
+    }
+
+    private static string RestoreInterpolatedExpressionSpans(string lang, string originalLine, string maskedLine)
+    {
+        if (!UsesInterpolatedExpressionRestoration(lang))
+            return maskedLine;
+
+        var spans = CollectInterpolatedExpressionSpans(lang, originalLine);
+        if (spans.Count == 0)
+            return maskedLine;
+
+        var chars = maskedLine.ToCharArray();
+        foreach (var span in spans)
+        {
+            if (span.StartIndex < 0 || span.StartIndex >= originalLine.Length || span.Length <= 0)
+                continue;
+
+            var length = Math.Min(span.Length, originalLine.Length - span.StartIndex);
+            if (span.StartIndex >= chars.Length)
+                continue;
+
+            length = Math.Min(length, chars.Length - span.StartIndex);
+            if (length <= 0)
+                continue;
+
+            var fragment = originalLine.Substring(span.StartIndex, length);
+            for (var i = 0; i < fragment.Length; i++)
+                chars[span.StartIndex + i] = fragment[i];
+        }
+
+        return new string(chars);
+    }
+
+    private static bool UsesInterpolatedExpressionRestoration(string lang) =>
+        lang is "csharp" or "javascript" or "typescript" or "python";
+
+    private static List<InterpolatedExpressionSpan> CollectInterpolatedExpressionSpans(string lang, string line)
+    {
+        var spans = new List<InterpolatedExpressionSpan>();
+        switch (lang)
+        {
+            case "csharp":
+                CollectCSharpInterpolatedExpressionSpans(line, spans);
+                break;
+            case "javascript":
+            case "typescript":
+                CollectJsTemplateExpressionSpans(line, spans);
+                break;
+            case "python":
+                CollectPythonInterpolatedExpressionSpans(line, spans);
+                break;
+        }
+
+        return spans;
+    }
+
+    private static string ReplaceRangeWithSpaces(string input, int startIndex)
+    {
+        if (startIndex < 0 || startIndex >= input.Length)
+            return input;
+
+        var chars = input.ToCharArray();
+        for (var i = startIndex; i < chars.Length; i++)
+            chars[i] = ' ';
+        return new string(chars);
+    }
+
+    private static void CollectCSharpInterpolatedExpressionSpans(string line, List<InterpolatedExpressionSpan> spans)
+    {
+        for (var i = 0; i < line.Length; i++)
+        {
+            if (!TryReadCSharpStringStart(line, i, out var openerLength, out var isInterpolated, out var isVerbatim))
+                continue;
+
+            i += openerLength;
+            if (!isInterpolated)
+            {
+                SkipCSharpStringLiteral(line, ref i, isVerbatim);
+                continue;
+            }
+
+            ScanCSharpInterpolatedStringBody(line, ref i, isVerbatim, spans);
+        }
+    }
+
+    private static bool TryReadCSharpStringStart(
+        string line,
+        int index,
+        out int openerLength,
+        out bool isInterpolated,
+        out bool isVerbatim)
+    {
+        openerLength = 0;
+        isInterpolated = false;
+        isVerbatim = false;
+
+        if (index < 0 || index >= line.Length)
+            return false;
+
+        if (line[index] == '"' )
+        {
+            openerLength = 1;
+            return true;
+        }
+
+        if (line[index] == '@')
+        {
+            if (index + 2 < line.Length && line[index + 1] == '$' && line[index + 2] == '"')
+            {
+                openerLength = 3;
+                isInterpolated = true;
+                isVerbatim = true;
+                return true;
+            }
+
+            if (index + 1 < line.Length && line[index + 1] == '"')
+            {
+                openerLength = 2;
+                isVerbatim = true;
+                return true;
+            }
+        }
+
+        if (line[index] == '$')
+        {
+            if (index + 2 < line.Length && line[index + 1] == '@' && line[index + 2] == '"')
+            {
+                openerLength = 3;
+                isInterpolated = true;
+                isVerbatim = true;
+                return true;
+            }
+
+            if (index + 1 < line.Length && line[index + 1] == '"')
+            {
+                openerLength = 2;
+                isInterpolated = true;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static void SkipCSharpStringLiteral(string line, ref int index, bool isVerbatim)
+    {
+        while (index < line.Length)
+        {
+            if (isVerbatim)
+            {
+                if (line[index] == '"')
+                {
+                    if (index + 1 < line.Length && line[index + 1] == '"')
+                    {
+                        index += 2;
+                        continue;
+                    }
+
+                    break;
+                }
+
+                index++;
+                continue;
+            }
+
+            if (line[index] == '\\')
+            {
+                index += 2;
+                continue;
+            }
+
+            if (line[index] == '"')
+                break;
+
+            index++;
+        }
+    }
+
+    private static void ScanCSharpInterpolatedStringBody(
+        string line,
+        ref int index,
+        bool isVerbatim,
+        List<InterpolatedExpressionSpan> spans)
+    {
+        while (index < line.Length)
+        {
+            if (isVerbatim)
+            {
+                if (line[index] == '"')
+                {
+                    if (index + 1 < line.Length && line[index + 1] == '"')
+                    {
+                        index += 2;
+                        continue;
+                    }
+
+                    break;
+                }
+
+                if (line[index] == '{')
+                {
+                    if (index + 1 < line.Length && line[index + 1] == '{')
+                    {
+                        index += 2;
+                        continue;
+                    }
+
+                    TryCaptureInterpolatedExpressionSpan(line, ref index, spans, '{', '}');
+                    continue;
+                }
+
+                index++;
+                continue;
+            }
+
+            if (line[index] == '\\')
+            {
+                index += 2;
+                continue;
+            }
+
+            if (line[index] == '"')
+                break;
+
+            if (line[index] == '{')
+            {
+                if (index + 1 < line.Length && line[index + 1] == '{')
+                {
+                    index += 2;
+                    continue;
+                }
+
+                TryCaptureInterpolatedExpressionSpan(line, ref index, spans, '{', '}');
+                continue;
+            }
+
+            index++;
+        }
+    }
+
+    private static void CollectJsTemplateExpressionSpans(string line, List<InterpolatedExpressionSpan> spans)
+    {
+        for (var i = 0; i < line.Length; i++)
+        {
+            if (line[i] != '`')
+                continue;
+
+            i++;
+            while (i < line.Length)
+            {
+                if (line[i] == '\\')
+                {
+                    i += 2;
+                    continue;
+                }
+
+                if (line[i] == '`')
+                    break;
+
+                if (line[i] == '$' && i + 1 < line.Length && line[i + 1] == '{')
+                {
+                    i += 2;
+                    TryCaptureInterpolatedExpressionSpan(line, ref i, spans, '{', '}');
+                    continue;
+                }
+
+                i++;
+            }
+        }
+    }
+
+    private static void CollectPythonInterpolatedExpressionSpans(string line, List<InterpolatedExpressionSpan> spans)
+    {
+        for (var i = 0; i < line.Length; i++)
+        {
+            if (!TryReadPythonStringStart(line, i, out var openerLength, out var isInterpolated, out var quoteLength))
+                continue;
+
+            i += openerLength;
+            if (!isInterpolated)
+            {
+                SkipPythonStringLiteral(line, ref i, quoteLength);
+                continue;
+            }
+
+            ScanPythonInterpolatedStringBody(line, ref i, quoteLength, spans);
+        }
+    }
+
+    private static bool TryReadPythonStringStart(
+        string line,
+        int index,
+        out int openerLength,
+        out bool isInterpolated,
+        out int quoteLength)
+    {
+        openerLength = 0;
+        isInterpolated = false;
+        quoteLength = 0;
+
+        if (index < 0 || index >= line.Length)
+            return false;
+
+        if (line[index] is not ('"' or '\''))
+            return false;
+
+        var prefixStart = index - 1;
+        while (prefixStart >= 0 && char.IsLetter(line[prefixStart]))
+            prefixStart--;
+
+        var prefix = line[(prefixStart + 1)..index];
+        if (prefix.Length > 0 && !prefix.All(ch => char.IsLetter(ch)))
+            return false;
+
+        if (prefix.Any(ch => ch is not ('f' or 'F' or 'r' or 'R' or 'u' or 'U' or 'b' or 'B')))
+            return false;
+
+        quoteLength = index + 2 < line.Length && line[index + 1] == line[index] && line[index + 2] == line[index]
+            ? 3
+            : 1;
+        openerLength = prefix.Length + quoteLength;
+        isInterpolated = prefix.Any(ch => ch is 'f' or 'F');
+        return true;
+    }
+
+    private static void SkipPythonStringLiteral(string line, ref int index, int quoteLength)
+    {
+        while (index < line.Length)
+        {
+            if (quoteLength == 3)
+            {
+                if (index + 2 < line.Length
+                    && line[index] == line[index + 1]
+                    && line[index] == line[index + 2])
+                {
+                    index += 3;
+                    return;
+                }
+
+                if (line[index] == '\\')
+                {
+                    index += 2;
+                    continue;
+                }
+
+                index++;
+                continue;
+            }
+
+            if (line[index] == '\\')
+            {
+                index += 2;
+                continue;
+            }
+
+            if (line[index] == '"' || line[index] == '\'')
+                return;
+
+            index++;
+        }
+    }
+
+    private static void ScanPythonInterpolatedStringBody(
+        string line,
+        ref int index,
+        int quoteLength,
+        List<InterpolatedExpressionSpan> spans)
+    {
+        while (index < line.Length)
+        {
+            if (quoteLength == 3)
+            {
+                if (index + 2 < line.Length
+                    && line[index] == line[index + 1]
+                    && line[index] == line[index + 2])
+                    break;
+            }
+            else if (line[index] is '"' or '\'')
+            {
+                break;
+            }
+
+            if (line[index] == '{')
+            {
+                if (index + 1 < line.Length && line[index + 1] == '{')
+                {
+                    index += 2;
+                    continue;
+                }
+
+                TryCaptureInterpolatedExpressionSpan(line, ref index, spans, '{', '}');
+                continue;
+            }
+
+            if (line[index] == '\\' && quoteLength == 1)
+            {
+                index += 2;
+                continue;
+            }
+
+            index++;
+        }
+    }
+
+    private static void TryCaptureInterpolatedExpressionSpan(
+        string line,
+        ref int index,
+        List<InterpolatedExpressionSpan> spans,
+        char openBrace,
+        char closeBrace)
+    {
+        var start = index + 1;
+        var depth = 1;
+        var i = start;
+        while (i < line.Length)
+        {
+            if (line[i] == '"' || line[i] == '\'')
+            {
+                if (TrySkipQuotedSpan(line, ref i, line[i]))
+                    continue;
+                index = line.Length;
+                return;
+            }
+
+            if (i + 1 < line.Length && line[i] == '/' && line[i + 1] == '/')
+            {
+                index = line.Length;
+                return;
+            }
+            if (i + 1 < line.Length && line[i] == '/' && line[i + 1] == '*')
+            {
+                if (TrySkipBlockComment(line, ref i))
+                    continue;
+                index = line.Length;
+                return;
+            }
+            if (i + 1 < line.Length && line[i] == '`')
+            {
+                if (TrySkipJsTemplateLiteral(line, ref i))
+                    continue;
+                index = line.Length;
+                return;
+            }
+            if (line[i] == openBrace)
+            {
+                depth++;
+                i++;
+                continue;
+            }
+            if (line[i] == closeBrace)
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    spans.Add(new InterpolatedExpressionSpan(start, i - start));
+                    index = i;
+                    return;
+                }
+                i++;
+                continue;
+            }
+
+            if (line[i] == '\\')
+            {
+                i += 2;
+                continue;
+            }
+
+            i++;
+        }
+
+        index = line.Length;
+    }
+
+    private static bool TrySkipQuotedSpan(string line, ref int index, char quote)
+    {
+        if (index >= line.Length || line[index] != quote)
+            return false;
+
+        var i = index + 1;
+        while (i < line.Length)
+        {
+            if (line[i] == '\\')
+            {
+                i += 2;
+                continue;
+            }
+
+            if (line[i] == quote)
+            {
+                index = i + 1;
+                return true;
+            }
+
+            i++;
+        }
+
+        return false;
+    }
+
+    private static bool TrySkipBlockComment(string line, ref int index)
+    {
+        if (index + 1 >= line.Length || line[index] != '/' || line[index + 1] != '*')
+            return false;
+
+        var end = line.IndexOf("*/", index + 2, StringComparison.Ordinal);
+        if (end < 0)
+            return false;
+
+        index = end + 2;
+        return true;
+    }
+
+    private static bool TrySkipJsTemplateLiteral(string line, ref int index)
+    {
+        if (index >= line.Length || line[index] != '`')
+            return false;
+
+        index++;
+        while (index < line.Length)
+        {
+            if (line[index] == '\\')
+            {
+                index += 2;
+                continue;
+            }
+
+            if (line[index] == '`')
+            {
+                index++;
+                return true;
+            }
+
+            if (line[index] == '$' && index + 1 < line.Length && line[index + 1] == '{')
+            {
+                index += 2;
+                var nestedSpans = new List<InterpolatedExpressionSpan>();
+                TryCaptureInterpolatedExpressionSpan(line, ref index, nestedSpans, '{', '}');
+                continue;
+            }
+
+            index++;
+        }
+
+        return false;
     }
 
     private static bool IsIgnoredCallName(string language, string name)

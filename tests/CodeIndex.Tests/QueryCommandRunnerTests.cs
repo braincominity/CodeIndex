@@ -94,6 +94,56 @@ public class QueryCommandRunnerTests
     }
 
     [Theory]
+    [InlineData("tokio::spawn", "column qualifier")]
+    [InlineData("AND OR", "literal-safe search")]
+    [InlineData("foo\"bar", "literal-safe search")]
+    public void RunSearch_RawFtsQuerySyntaxErrorsReturnUsageError(string query, string expectedHint)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_error");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void spawn() { } }");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [query, "--db", dbPath, "--fts"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("Error: FTS5 query syntax:", stderr);
+            Assert.Contains(expectedHint, stderr);
+            Assert.DoesNotContain("Error: database error:", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RawFtsValidQueryStillWorks()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_success");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "public class App { public void spawn() { } }");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["spawn", "--db", dbPath, "--fts", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.NotEqual("0", stdout.Trim());
+            Assert.DoesNotContain("Error:", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
     [InlineData("definition", "--focus-column", "10")]
     [InlineData("definition", "--max-line-width", "10")]
     [InlineData("search", "--focus-column", "10")]
@@ -5918,6 +5968,126 @@ public class QueryCommandRunnerTests
             Assert.Equal("AfterVerbatimString", definition.GetProperty("name").GetString());
             Assert.Equal("class", definition.GetProperty("container_kind").GetString());
             Assert.Equal("FixtureHost", definition.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbolsOutlineAndInspect_CSharpInterfaceAndStructContainerMetadataRoundTrips()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_container_metadata_roundtrip_issue474");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "src", "fixture.cs"),
+                """
+                namespace EventMods
+                {
+                    using System;
+
+                    public interface IBus
+                    {
+                        event EventHandler Regular;
+                        static abstract event EventHandler StaticAbs;
+                        static virtual event EventHandler StaticVirt { add { } remove { } }
+                    }
+                }
+
+                namespace Demo
+                {
+                    public struct S
+                    {
+                        public int P { get; set; }
+                        public event System.EventHandler E;
+                    }
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (interfaceExitCode, interfaceStdout, interfaceStderr) = RunBuiltCli(
+                ["symbols", "StaticVirt", "--db", dbPath, "--json", "--kind", "event", "--exact-name", "--lang", "csharp"]);
+            var (structPropertyExitCode, structPropertyStdout, structPropertyStderr) = RunBuiltCli(
+                ["symbols", "P", "--db", dbPath, "--json", "--kind", "property", "--exact-name", "--lang", "csharp"]);
+            var (structEventExitCode, structEventStdout, structEventStderr) = RunBuiltCli(
+                ["symbols", "E", "--db", dbPath, "--json", "--kind", "event", "--exact-name", "--lang", "csharp"]);
+            var (outlineExitCode, outlineStdout, outlineStderr) = RunBuiltCli(
+                ["outline", "src/fixture.cs", "--db", dbPath, "--json"]);
+            var (inspectExitCode, inspectStdout, inspectStderr) = RunBuiltCli(
+                ["inspect", "StaticVirt", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"]);
+
+            var interfaceRow = Assert.Single(ParseJsonLines(interfaceStdout)).RootElement;
+            var structPropertyRow = Assert.Single(ParseJsonLines(structPropertyStdout)).RootElement;
+            var structEventRow = Assert.Single(ParseJsonLines(structEventStdout)).RootElement;
+            using var outlineDocument = ParseJsonOutput(outlineStdout);
+            using var inspectDocument = ParseJsonOutput(inspectStdout);
+            var outlineJson = outlineDocument.RootElement;
+            var inspectJson = inspectDocument.RootElement;
+            var outlineSymbols = outlineJson.GetProperty("symbols").EnumerateArray().ToArray();
+            var inspectDefinition = Assert.Single(inspectJson.GetProperty("definitions").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+            Assert.Equal(CommandExitCodes.Success, interfaceExitCode);
+            Assert.Equal(string.Empty, interfaceStderr);
+            Assert.Equal(CommandExitCodes.Success, structPropertyExitCode);
+            Assert.Equal(string.Empty, structPropertyStderr);
+            Assert.Equal(CommandExitCodes.Success, structEventExitCode);
+            Assert.Equal(string.Empty, structEventStderr);
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Equal(CommandExitCodes.Success, inspectExitCode);
+            Assert.Equal(string.Empty, inspectStderr);
+
+            Assert.Equal("StaticVirt", interfaceRow.GetProperty("name").GetString());
+            Assert.Equal("event", interfaceRow.GetProperty("kind").GetString());
+            Assert.Equal("interface", interfaceRow.GetProperty("container_kind").GetString());
+            Assert.Equal("IBus", interfaceRow.GetProperty("container_name").GetString());
+
+            Assert.Equal("P", structPropertyRow.GetProperty("name").GetString());
+            Assert.Equal("property", structPropertyRow.GetProperty("kind").GetString());
+            Assert.Equal("struct", structPropertyRow.GetProperty("container_kind").GetString());
+            Assert.Equal("S", structPropertyRow.GetProperty("container_name").GetString());
+
+            Assert.Equal("E", structEventRow.GetProperty("name").GetString());
+            Assert.Equal("event", structEventRow.GetProperty("kind").GetString());
+            Assert.Equal("struct", structEventRow.GetProperty("container_kind").GetString());
+            Assert.Equal("S", structEventRow.GetProperty("container_name").GetString());
+
+            Assert.Contains(
+                outlineSymbols,
+                symbol => symbol.TryGetProperty("name", out var name)
+                    && symbol.TryGetProperty("kind", out var kind)
+                    && symbol.TryGetProperty("container_kind", out var containerKind)
+                    && symbol.TryGetProperty("container_name", out var containerName)
+                    && name.GetString() == "StaticVirt"
+                    && kind.GetString() == "event"
+                    && containerKind.GetString() == "interface"
+                    && containerName.GetString() == "IBus");
+            Assert.Contains(
+                outlineSymbols,
+                symbol => symbol.TryGetProperty("name", out var name)
+                    && symbol.TryGetProperty("kind", out var kind)
+                    && symbol.TryGetProperty("container_kind", out var containerKind)
+                    && symbol.TryGetProperty("container_name", out var containerName)
+                    && name.GetString() == "P"
+                    && kind.GetString() == "property"
+                    && containerKind.GetString() == "struct"
+                    && containerName.GetString() == "S");
+
+            Assert.Equal("StaticVirt", inspectDefinition.GetProperty("name").GetString());
+            Assert.Equal("interface", inspectDefinition.GetProperty("container_kind").GetString());
+            Assert.Equal("IBus", inspectDefinition.GetProperty("container_name").GetString());
+            Assert.Contains(
+                inspectJson.GetProperty("nearby_symbols").EnumerateArray(),
+                symbol => symbol.TryGetProperty("container_kind", out var containerKind)
+                    && symbol.TryGetProperty("container_name", out var containerName)
+                    && containerKind.GetString() == "interface"
+                    && containerName.GetString() == "IBus");
         }
         finally
         {
@@ -19051,6 +19221,57 @@ public class QueryCommandRunnerTests
                 """
                 using static Probe.Color;
                 using Red = Probe.Real.Red;
+
+                namespace Probe;
+
+                class Demo
+                {
+                    bool Match(object value) => value is Red;
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            var row = Assert.Single(ParseJsonLines(stdout)).RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("type_reference", row.GetProperty("reference_kind").GetString());
+            Assert.Contains("value is Red", row.GetProperty("context").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunReferences_ExactJson_CSharpUsingStaticConstantPatternsPreserveTypeAliasPatternAcrossNamespaces()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_using_static_constant_pattern_type_alias_across_namespaces");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Defs.cs", "csharp",
+                """
+                namespace Probe;
+
+                public enum Color
+                {
+                    Red
+                }
+
+                namespace Shapes
+                {
+                    public class Red {}
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Use.cs", "csharp",
+                """
+                using static Probe.Color;
+                using Red = Probe.Shapes.Red;
 
                 namespace Probe;
 
