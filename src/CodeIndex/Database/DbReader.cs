@@ -4794,7 +4794,7 @@ public partial class DbReader
         return columns;
     }
 
-    private string GetSymbolColumnSql(string columnName, string? fallbackSql = null)
+    private string GetSymbolColumnSql(string columnName, string? fallbackSql = null, string symbolAlias = "s")
     {
         if (_symbolColumns.Contains(columnName))
         {
@@ -4803,8 +4803,8 @@ public partial class DbReader
             // 古いバイナリがカラムだけ追加して既存行を NULL のまま残しているケースに備え、
             // fallback と COALESCE してレガシーインデックスでクラッシュしないようにする。
             return fallbackSql != null
-                ? $"COALESCE(s.{columnName}, {fallbackSql})"
-                : $"s.{columnName}";
+                ? $"COALESCE({symbolAlias}.{columnName}, {fallbackSql})"
+                : $"{symbolAlias}.{columnName}";
         }
 
         return fallbackSql ?? "NULL";

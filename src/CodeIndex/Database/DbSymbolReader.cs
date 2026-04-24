@@ -1617,6 +1617,31 @@ public partial class DbReader
     /// 参照テーブルに一致する参照がないシンボルを検索する（潜在的なデッドコード）。
     /// グラフ対応言語でのみ意味がある — 未対応言語はデフォルトで除外。
     /// </summary>
+    private string BuildAmbiguousCSharpEnumMemberExclusionSql(string symbolAlias, string fileAlias)
+    {
+        var symbolContainerKindSql = GetSymbolColumnSql("container_kind", "''", symbolAlias);
+        var symbolContainerNameSql = GetSymbolColumnSql("container_name", "''", symbolAlias);
+        var peerContainerKindSql = GetSymbolColumnSql("container_kind", "''", "s_peer");
+        var peerContainerNameSql = GetSymbolColumnSql("container_name", "''", "s_peer");
+
+        return $@"
+                NOT (
+                    {fileAlias}.lang = 'csharp'
+                    AND {symbolAlias}.kind = 'enum'
+                    AND {symbolContainerKindSql} = 'enum'
+                    AND EXISTS (
+                        SELECT 1
+                        FROM symbols s_peer
+                        JOIN files f_peer ON f_peer.id = s_peer.file_id
+                        WHERE f_peer.lang = 'csharp'
+                          AND s_peer.kind = 'enum'
+                          AND {peerContainerKindSql} = 'enum'
+                          AND s_peer.name = {symbolAlias}.name
+                          AND {peerContainerNameSql} <> {symbolContainerNameSql}
+                    )
+                )";
+    }
+
     public List<UnusedSymbolResult> GetUnusedSymbols(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
         // Without symbol_references (legacy read-only DB), every symbol would appear unused,
@@ -1729,18 +1754,19 @@ public partial class DbReader
                                 (sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_segment_count(s.name)
                                  AND sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_normalize_name(s.name) COLLATE NOCASE)
                          OR (sql_segment_count(sr.symbol_name) = 1
-                             AND sql_allow_leaf_fallback_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = 1
-                             AND sr.symbol_name = sql_leaf_name(s.name) COLLATE NOCASE
-                             AND NOT EXISTS (
+                            AND sql_allow_leaf_fallback_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = 1
+                            AND sr.symbol_name = sql_leaf_name(s.name) COLLATE NOCASE
+                            AND NOT EXISTS (
                                     SELECT 1
                                     FROM symbols s_exact
                                     JOIN files f_exact ON f_exact.id = s_exact.file_id
                                     WHERE f_exact.lang = 'sql'
                                       AND sql_segment_count(s_exact.name) = sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number)
-                                      AND sql_normalize_name(s_exact.name) = sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) COLLATE NOCASE
+                                     AND sql_normalize_name(s_exact.name) = sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) COLLATE NOCASE
                                 ))
                          ))
                   )";
+        sql += $"\n              AND {BuildAmbiguousCSharpEnumMemberExclusionSql("s", "f")}";
 
         if (lang != null)
             sql += " AND f.lang = @lang";
@@ -1871,9 +1897,9 @@ public partial class DbReader
                             (sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_segment_count(s.name)
                              AND sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_normalize_name(s.name) COLLATE NOCASE)
                          OR (sql_segment_count(sr.symbol_name) = 1
-                             AND sql_allow_leaf_fallback_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = 1
-                             AND sr.symbol_name = sql_leaf_name(s.name) COLLATE NOCASE
-                             AND NOT EXISTS (
+                            AND sql_allow_leaf_fallback_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = 1
+                            AND sr.symbol_name = sql_leaf_name(s.name) COLLATE NOCASE
+                            AND NOT EXISTS (
                                     SELECT 1
                                     FROM symbols s_exact
                                     JOIN files f_exact ON f_exact.id = s_exact.file_id
@@ -1883,6 +1909,7 @@ public partial class DbReader
                                 ))
                      ))
               )";
+        sql += $"\n              AND {BuildAmbiguousCSharpEnumMemberExclusionSql("s", "f")}";
 
         if (lang != null)
             sql += " AND f.lang = @lang";
