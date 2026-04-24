@@ -5232,6 +5232,37 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_FileDelegate_Issue303Repro()
+    {
+        // Closes #303: the `file` modifier on a top-level delegate must not be dropped by
+        // the modifier slot, regardless of whether other variants share the same file.
+        // v1.10.0 captured plain / public / unsafe delegates but silently missed
+        // `file delegate`. The #355 fix (free modifier order; accept `file` / `new`) covers
+        // this, so this test locks in the behavior against the exact reproducer from #303.
+        // Closes #303: トップレベル delegate の `file` 修飾子が modifier スロットで落ちないこと。
+        // v1.10.0 では plain / public / unsafe delegate は拾えていたが `file delegate` だけが
+        // 黙って欠落していた。#355 の修正 (修飾子順序を自由化し `file` / `new` を受理) が
+        // 本件も解消するため、#303 の再現 fixture で挙動を固定する。
+        var content = """
+            namespace Demo;
+
+            public delegate void PublicHandler(object sender);
+
+            file delegate void FileOnlyHandler(object sender);
+
+            delegate void PlainHandler(object sender);
+
+            unsafe delegate void UnsafeHandler(object sender);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "PublicHandler" && s.Visibility == "public" && s.ReturnType == "void");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "FileOnlyHandler" && s.ReturnType == "void");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "PlainHandler" && s.ReturnType == "void");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "UnsafeHandler" && s.ReturnType == "void");
+    }
+
+    [Fact]
     public void Extract_CSharp_NewNestedInterface_MemberHiding()
     {
         // Closes #376: a nested `new interface` that hides a base-class nested interface must
