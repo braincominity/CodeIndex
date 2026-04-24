@@ -1664,14 +1664,82 @@ internal static class StructuralLineMasker
 
     private static void FilterJsForOfHeaderHits(string[] lines, List<JsTaggedTemplateHit> hits)
     {
+        // Build a scan buffer that additionally blanks string literals, regex literals,
+        // and line comments. The outer masker already blanked template bodies and block
+        // comments, but string / regex / `//` content survives, so a literal `)` inside
+        // `":"` or `/)/` or `// for (a;b;c)` would corrupt paren and `;` counting in the
+        // for-of header probe. Blanking them here keeps the structural walk structural.
+        // paren と `;` のカウントが文字列 / regex / 行コメント内の `)` や `;` に引きずられ
+        // ないよう、外側 masker が空白化していない要素も追加で空白化したスキャンバッファを
+        // 作る。template 本体と block コメントは外側で既に空白化済みのためここでは触らない。
+        var scanBuffer = BuildJsForOfScanBuffer(lines);
         for (int h = hits.Count - 1; h >= 0; h--)
         {
             var hit = hits[h];
             if (hit.Name != "of")
                 continue;
-            if (IsJsForOfHeaderContext(lines, hit.Line - 1, hit.Column - 1))
+            if (IsJsForOfHeaderContext(scanBuffer, hit.Line - 1, hit.Column - 1))
                 hits.RemoveAt(h);
         }
+    }
+
+    // Returns a copy of the masker output where single/double-quoted string spans,
+    // regex literals, and `//` line-comment tails are blanked out. Template literal
+    // bodies and block comments are already blanked by the outer masker, so we only
+    // need to handle the three remaining kinds. The returned buffer keeps identical
+    // column offsets so hit coordinates (Line, Column) remain valid.
+    // 外側の masker の出力を複製し、文字列リテラル・regex リテラル・`//` 行コメント末尾を
+    // 追加で空白化したバッファを返す。template 本体と block コメントは既に空白化済みなの
+    // で、残る 3 種類だけを処理する。列オフセットは元の buffer と一致するため Hit 座標は
+    // そのまま利用できる。
+    private static string[] BuildJsForOfScanBuffer(string[] lines)
+    {
+        var result = new string[lines.Length];
+        var lexState = default(JsLexState);
+        lexState.Reset();
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (line.Length == 0)
+            {
+                result[i] = line;
+                continue;
+            }
+            var buf = line.ToCharArray();
+            int pos = 0;
+            while (pos < line.Length)
+            {
+                if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '/')
+                {
+                    for (int k = pos; k < line.Length; k++)
+                        buf[k] = ' ';
+                    pos = line.Length;
+                    break;
+                }
+                char ch = line[pos];
+                if (ch == '"' || ch == '\'')
+                {
+                    int end = SkipJsSingleLineString(line, pos);
+                    for (int k = pos; k < end; k++)
+                        buf[k] = ' ';
+                    pos = end;
+                    lexState.SetKind(JsPrevTokenKind.Literal);
+                    continue;
+                }
+                if (ch == '/' && CanStartJsRegexLiteral(lexState))
+                {
+                    int end = SkipJsRegexLiteral(line, pos);
+                    for (int k = pos; k < end; k++)
+                        buf[k] = ' ';
+                    pos = end;
+                    lexState.SetKind(JsPrevTokenKind.Literal);
+                    continue;
+                }
+                pos = AdvanceJsToken(line, pos, ref lexState);
+            }
+            result[i] = new string(buf);
+        }
+        return result;
     }
 
     // From (lineIdx, colIdx) pointing at the start of the `of` token, decide whether `of`
@@ -1827,14 +1895,17 @@ internal static class StructuralLineMasker
     // `U+00A0`, BOM `U+FEFF`, every `Zs` category codepoint) or LineTerminator. Our per-line
     // buffer is already split on `\r` / `\n`, but non-ASCII whitespace such as NBSP and
     // U+3000 survives inside the line and must still be recognised when backing up between
-    // tokens. `char.IsWhiteSpace` is the .NET approximation that matches those characters
-    // without pulling in ZWSP (which ECMAScript also excludes).
+    // tokens. `char.IsWhiteSpace` matches `Zs` plus common ASCII controls, but in .NET 8
+    // `char.IsWhiteSpace('\uFEFF')` is `false` (BOM is categorised as `Cf`/Format), so BOM
+    // must be added explicitly. ZWSP `U+200B` is deliberately excluded — ECMAScript does
+    // not treat it as WhiteSpace and `char.IsWhiteSpace` already returns false for it.
     // ECMAScript のトークン間スペースは WhiteSpace（TAB / VT / FF / SP、NBSP `U+00A0`、BOM
     // `U+FEFF`、`Zs` 全域）および LineTerminator。行バッファは既に `\r` / `\n` で分割済み
     // だが、NBSP や U+3000 のような非 ASCII 空白は行内に残るため、トークン間の後方走査でも
-    // 取り扱う必要がある。ZWSP は ECMAScript の WhiteSpace ではなく、`char.IsWhiteSpace`
-    // も false を返すため意図通りに除外される。
-    private static bool IsJsInterTokenWhitespace(char c) => char.IsWhiteSpace(c);
+    // 取り扱う必要がある。.NET 8 では `char.IsWhiteSpace('\uFEFF')` は `false`（BOM は
+    // `Cf`/Format 扱い）なので BOM は明示的に足す必要がある。ZWSP `U+200B` は ECMAScript
+    // の WhiteSpace ではなく、`char.IsWhiteSpace` も false を返すため意図通りに除外される。
+    private static bool IsJsInterTokenWhitespace(char c) => c == '\uFEFF' || char.IsWhiteSpace(c);
 
     private static bool TryReadIdentifierBackward(string[] lines, ref int li, ref int c, out string token)
     {

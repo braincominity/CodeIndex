@@ -6478,6 +6478,93 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScriptTagFollowedByBomBeforeTemplate_IsCapturedAsCall()
+    {
+        // issue #268 regression: BOM `U+FEFF` between a tag and the backtick must be treated
+        // as inter-token whitespace. .NET's `char.IsWhiteSpace('\uFEFF')` returns false so the
+        // masker has to add BOM explicitly.
+        // issue #268 退行防止: タグと backtick の間の BOM `U+FEFF` もトークン間空白として
+        // 扱う必要がある。.NET の `char.IsWhiteSpace('\uFEFF')` は false なので明示的に足す。
+        const string content = "function f() {\n" +
+            "    return of\uFEFF`hello`;\n" +
+            "}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptForOfHeaderWithBomSeparator_IsNotCaptured()
+    {
+        // issue #268 regression: for-of header probe must tolerate BOM between `for` and `(`.
+        // issue #268 退行防止: for-of ヘッダ判定は `for` と `(` の間の BOM も許容する。
+        const string content = "function f(arr) {\n" +
+            "    for\uFEFF(const ch of `abc`) {\n" +
+            "        use(ch);\n" +
+            "    }\n" +
+            "}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptForOfHeaderWithStringParen_IsNotCaptured()
+    {
+        // issue #268 regression: a string literal `)` inside the for-of header (e.g. type
+        // annotation or plain string expression) must not corrupt the paren counter. The
+        // post-pass scan buffer blanks string content before counting.
+        // issue #268 退行防止: for-of ヘッダ内の文字列リテラル `)` が paren カウンタを壊さ
+        // ないよう、post-pass のスキャンバッファで文字列内容を空白化する。
+        const string content = """
+            function f(arr) {
+                for (const x = ")" /* annotation */ && arr[0] of `abc`) {
+                    use(x);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptMemberCallNamedInOrInstanceof_IsCapturedAsCall()
+    {
+        // issue #268 regression: adding `in`, `instanceof`, `void`, `case`, `delete` to the
+        // shared ignore list would wrongly drop member calls like `api.in(...)` or
+        // `api.instanceof(...)`. The ignore list for those tokens is tagged-template-emit
+        // only, so real member calls must still be captured by CallRegex.
+        // issue #268 退行防止: `in` / `instanceof` / `void` / `case` / `delete` を共通 ignore
+        // に足すと `api.in(...)` のような正当なメンバー呼び出しまで消えてしまう。これらは
+        // tagged-template 発行経路のみで弾き、CallRegex 経路では通常どおり捕捉する。
+        const string content = """
+            function use(api) {
+                api.in("x");
+                api.instanceof("y");
+                api.delete("z");
+                api.case(1);
+                api.void(2);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "in");
+        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "instanceof");
+        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "delete");
+        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "case");
+        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "void");
+    }
+
+    [Fact]
     public void Extract_JavaScriptInstanceofBeforePlainTemplate_IsNotCaptured()
     {
         // Regression guard: `foo instanceof \`plain\`` uses `instanceof` as the type-check

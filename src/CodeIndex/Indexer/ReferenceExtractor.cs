@@ -49,27 +49,13 @@ public static class ReferenceExtractor
             "instanceof", "super", "this", "assert", "throws", "extends", "implements", "synchronized",
         },
         // JavaScript / TypeScript contextual keywords / JavaScript / TypeScript 文脈キーワード
-        // `void`, `case`, `delete`, `in`, and `instanceof` are listed because each legally sits
-        // immediately before a template literal (`void \`...\``, `case \`...\`:`,
-        // `delete \`...\``, `foo in \`...\``, `foo instanceof \`...\``) as an operator / keyword,
-        // not a call target; without these entries the tagged-template scanner (issue #268) would
-        // emit phantom call rows for those keywords. `of` is intentionally NOT listed here
-        // because it is an unreserved identifier in ECMAScript — `const of = ...; of\`x\`` is a
-        // legal tagged-template call. The narrower `for (...of ...)` header suppression lives
-        // in `TryRecordJsTaggedTemplateHit` so only the loop-header `of` is dropped.
-        // `void \`...\`` / `case \`...\`:` / `delete \`...\`` / `foo in \`...\`` /
-        // `foo instanceof \`...\`` はタグ無しテンプレートの正当な前置形で、issue #268 の
-        // タグ付きテンプレート検出がそれらを誤って `call` として発行しないようここに載せる。
-        // `of` は ECMAScript の予約語ではなく `const of = ...; of\`x\`` は正当なタグ呼び出し
-        // であるためここには含めない。`for (...of ...)` ヘッダの `of` は
-        // `TryRecordJsTaggedTemplateHit` 側で局所的に落とす。
         ["javascript"] = new HashSet<string>(StringComparer.Ordinal)
         {
-            "import", "super", "yield", "void", "case", "delete", "in", "instanceof",
+            "import", "super", "yield",
         },
         ["typescript"] = new HashSet<string>(StringComparer.Ordinal)
         {
-            "import", "super", "yield", "void", "case", "delete", "in", "instanceof",
+            "import", "super", "yield",
         },
         // Python contextual keywords / Python の文脈キーワード
         ["python"] = new HashSet<string>(StringComparer.Ordinal)
@@ -152,6 +138,29 @@ public static class ReferenceExtractor
         {
             "all", "clean", "install", "build", "run", "help",
         },
+    };
+
+    // JavaScript / TypeScript tokens that legally sit immediately before a template literal
+    // as an operator or keyword rather than a call target: `void \`...\``, `case \`...\`:`,
+    // `delete \`...\``, `foo in \`...\``, `foo instanceof \`...\``. Without this gate the
+    // tagged-template scanner (issue #268) emits phantom call rows for those keywords. This
+    // set is intentionally applied ONLY at the tagged-template emit site, not to the shared
+    // `CallRegex` path, so legitimate member calls like `api.in()` / `api.instanceof()` /
+    // `api.delete()` / `api.case()` / `api.void()` remain captured. `of` is intentionally
+    // NOT listed because it is an unreserved identifier — `const of = ...; of\`x\`` is a
+    // legal tagged-template call. The narrower `for (...of \`...\`)` header suppression
+    // lives in `StructuralLineMasker.FilterJsForOfHeaderHits`.
+    // JS/TS でタグ無しテンプレート直前にオペレータ/キーワードとして現れるトークン。issue #268
+    // のタグ付きテンプレート検出がそれらを誤って `call` として発行しないようここで弾く。
+    // 汎用 CallRegex には適用せずタグ付きテンプレート発行時だけに限定するため、`api.in()` /
+    // `api.instanceof()` / `api.delete()` / `api.case()` / `api.void()` のような正当な
+    // メンバー呼び出しは引き続き捕捉される。`of` は予約語ではなく
+    // `const of = ...; of\`x\`` が正当なタグ呼び出しになりうるためここには含めない。
+    // `for (...of \`...\`)` ヘッダの抑止は
+    // `StructuralLineMasker.FilterJsForOfHeaderHits` 側で扱う。
+    private static readonly HashSet<string> JsTaggedTemplateOperatorNames = new(StringComparer.Ordinal)
+    {
+        "void", "case", "delete", "in", "instanceof",
     };
 
     private static readonly Regex StringLiteralRegex = new(
@@ -750,6 +759,8 @@ public static class ReferenceExtractor
                 {
                     var name = hit.Name;
                     if (IsIgnoredCallName(language, name))
+                        continue;
+                    if (JsTaggedTemplateOperatorNames.Contains(name))
                         continue;
                     if (definitionNames != null && definitionNames.Contains(name))
                         continue;
