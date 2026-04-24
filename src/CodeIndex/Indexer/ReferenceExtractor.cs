@@ -49,22 +49,27 @@ public static class ReferenceExtractor
             "instanceof", "super", "this", "assert", "throws", "extends", "implements", "synchronized",
         },
         // JavaScript / TypeScript contextual keywords / JavaScript / TypeScript 文脈キーワード
-        // `void`, `case`, `delete`, `in`, `instanceof`, and `of` are listed because each legally
-        // sits immediately before a template literal (`void \`...\``, `case \`...\`:`,
-        // `delete \`...\``, `foo in \`...\``, `foo instanceof \`...\``, `for (const x of \`...\`)`)
-        // as an operator / keyword, not a call target; without these entries the tagged-template
-        // scanner (issue #268) would emit phantom call rows for those keywords.
+        // `void`, `case`, `delete`, `in`, and `instanceof` are listed because each legally sits
+        // immediately before a template literal (`void \`...\``, `case \`...\`:`,
+        // `delete \`...\``, `foo in \`...\``, `foo instanceof \`...\``) as an operator / keyword,
+        // not a call target; without these entries the tagged-template scanner (issue #268) would
+        // emit phantom call rows for those keywords. `of` is intentionally NOT listed here
+        // because it is an unreserved identifier in ECMAScript — `const of = ...; of\`x\`` is a
+        // legal tagged-template call. The narrower `for (...of ...)` header suppression lives
+        // in `TryRecordJsTaggedTemplateHit` so only the loop-header `of` is dropped.
         // `void \`...\`` / `case \`...\`:` / `delete \`...\`` / `foo in \`...\`` /
-        // `foo instanceof \`...\`` / `for (const x of \`...\`)` はタグ無しテンプレートの正当な
-        // 前置形で、issue #268 のタグ付きテンプレート検出がそれらを誤って `call` として発行
-        // しないようここに載せる。
+        // `foo instanceof \`...\`` はタグ無しテンプレートの正当な前置形で、issue #268 の
+        // タグ付きテンプレート検出がそれらを誤って `call` として発行しないようここに載せる。
+        // `of` は ECMAScript の予約語ではなく `const of = ...; of\`x\`` は正当なタグ呼び出し
+        // であるためここには含めない。`for (...of ...)` ヘッダの `of` は
+        // `TryRecordJsTaggedTemplateHit` 側で局所的に落とす。
         ["javascript"] = new HashSet<string>(StringComparer.Ordinal)
         {
-            "import", "super", "yield", "void", "case", "delete", "in", "instanceof", "of",
+            "import", "super", "yield", "void", "case", "delete", "in", "instanceof",
         },
         ["typescript"] = new HashSet<string>(StringComparer.Ordinal)
         {
-            "import", "super", "yield", "void", "case", "delete", "in", "instanceof", "of",
+            "import", "super", "yield", "void", "case", "delete", "in", "instanceof",
         },
         // Python contextual keywords / Python の文脈キーワード
         ["python"] = new HashSet<string>(StringComparer.Ordinal)

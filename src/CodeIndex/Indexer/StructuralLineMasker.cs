@@ -1845,7 +1845,66 @@ internal static class StructuralLineMasker
             return;
 
         var name = new string(masked, start, end - start);
+        if (name == "of" && IsInsideJsForHeader(masked, start))
+            return;
         hits.Add(new JsTaggedTemplateHit(lineIndex + 1, start + 1, name));
+    }
+
+    // `of` is an unreserved identifier in ECMAScript and may legitimately be used as a tag
+    // (`const of = ...; of\`x\``). We only want to suppress the `for (<decl> of \`...\`)` loop-
+    // header form. Walk backward from `fromIndex` to the nearest unmatched `(` and verify the
+    // token immediately before that `(` is the `for` keyword (optionally followed by `await`).
+    // This limits the suppression to the loop-header context and keeps real `of` tags visible
+    // in references / callers / callees / impact. Only the current line is inspected — the
+    // far rarer multi-line `for (\n  const x of \`...\`\n)` form is out of scope.
+    // `of` は ECMAScript の予約語ではなく `const of = ...; of\`x\`` のようにタグとして正当に
+    // 使えるため、`for (<decl> of \`...\`)` のループヘッダ形だけを局所的に落とす。`fromIndex`
+    // から釣り合いの取れていない `(` を後方に探し、その直前トークンが `for`（必要なら後段の
+    // `await` も許容）の場合だけ抑制する。現行実装は同一行内のみを走査するため、極めて稀な
+    // 複数行に跨る `for (\n  const x of \`...\`\n)` 形は対象外。
+    private static bool IsInsideJsForHeader(char[] masked, int fromIndex)
+    {
+        int depth = 0;
+        for (int i = fromIndex - 1; i >= 0; i--)
+        {
+            char c = masked[i];
+            if (c == ')')
+            {
+                depth++;
+                continue;
+            }
+            if (c == '(')
+            {
+                if (depth > 0)
+                {
+                    depth--;
+                    continue;
+                }
+                int j = i - 1;
+                while (j >= 0 && (masked[j] == ' ' || masked[j] == '\t'))
+                    j--;
+                // `for await (<decl> of ...)` — skip an optional `await` token that sits
+                // between `for` and `(`.
+                // `for await (<decl> of ...)` — `for` と `(` の間の `await` を読み飛ばす。
+                if (j >= 4
+                    && masked[j] == 't' && masked[j - 1] == 'i'
+                    && masked[j - 2] == 'a' && masked[j - 3] == 'w' && masked[j - 4] == 'a'
+                    && (j - 5 < 0 || !IsJsIdentifierPart(masked[j - 5])))
+                {
+                    j -= 5;
+                    while (j >= 0 && (masked[j] == ' ' || masked[j] == '\t'))
+                        j--;
+                }
+                if (j >= 2
+                    && masked[j] == 'r' && masked[j - 1] == 'o' && masked[j - 2] == 'f'
+                    && (j - 3 < 0 || !IsJsIdentifierPart(masked[j - 3])))
+                {
+                    return true;
+                }
+                return false;
+            }
+        }
+        return false;
     }
 
     // Decide whether `/` at the current scan position starts a regex literal rather

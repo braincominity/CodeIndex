@@ -6280,10 +6280,10 @@ public class ReferenceExtractorTests
     public void Extract_JavaScriptForOfLoopOverPlainTemplate_IsNotCaptured()
     {
         // Regression guard: `for (const ch of \`abc\`)` uses `of` as the for-of iterator
-        // keyword, not as a tag identifier. The backtick backward-scan picks it up, so
-        // IsIgnoredCallName must suppress the phantom `call of` edge.
+        // keyword, not as a tag identifier. The tag scanner must detect the enclosing
+        // `for (` header and drop the `of` token instead of emitting a phantom `call of`.
         // 退行防止: `for (const ch of \`abc\`)` の `of` は for-of イテレータキーワードで
-        // あり、タグ識別子ではない。backward-scan が拾う `of` は IsIgnoredCallName で握り潰す。
+        // あり、タグ識別子ではない。タグ検出は外側の `for (` ヘッダを認識して `of` を落とす。
         const string content = """
             function f() {
                 for (const ch of `abc`) {
@@ -6296,6 +6296,51 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
 
         Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptForAwaitOfLoopOverPlainTemplate_IsNotCaptured()
+    {
+        // Regression guard: `for await (const x of \`...\`)` is the async iterator form. The
+        // `for` / `(` scanner must tolerate the `await` contextual keyword between them so
+        // the phantom `call of` is still suppressed.
+        // 退行防止: `for await (const x of \`...\`)` は非同期イテレータ形。`for` と `(` の間
+        // の `await` を読み飛ばして `of` の幻 `call` を抑制する。
+        const string content = """
+            async function f(iter) {
+                for await (const x of `abc`) {
+                    use(x);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptOfAsTaggedTemplate_IsCapturedAsCall()
+    {
+        // issue #268: `of` is an unreserved identifier in ECMAScript. `const of = ...;
+        // of\`hello\`` is a legal tagged-template call and must not be silenced by the
+        // for-of loop-header suppression — only the header form should be dropped.
+        // issue #268: `of` は ECMAScript の予約語ではなく、`const of = ...; of\`hello\``
+        // は正当なタグ付きテンプレート呼び出し。for-of ヘッダ抑制が正当なタグ名としての
+        // `of` まで握り潰さないことを保証する。
+        const string content = """
+            const of = (strings) => strings.raw[0];
+            function run() {
+                return of`hello`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        var hit = Assert.Single(references.Where(r => r.SymbolName == "of" && r.ReferenceKind == "call"));
+        Assert.Equal("run", hit.ContainerName);
     }
 
     [Fact]
