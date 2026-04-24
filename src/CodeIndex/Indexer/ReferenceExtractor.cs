@@ -329,6 +329,18 @@ public static class ReferenceExtractor
     private static readonly Regex SqlCreateTempTableRegex = new(
         $@"(?<![\w$])CREATE(?:\s+(?:TEMP|TEMPORARY))?\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+(?<name>{SqlTempIdentifierPattern})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    // T-SQL temp stored routines: `CREATE PROCEDURE #sp` / `CREATE PROC ##sp` / `CREATE FUNCTION #f`
+    // and `CREATE OR ALTER|REPLACE` / `CREATE TEMPORARY` variants. Tracks the temp name as
+    // established evidence so later `EXEC #sp` / `CALL #sp` / `EXECUTE #sp` calls keep their edge
+    // after the proc-call `#`-gate that was added for issue #656 to suppress MySQL `# comment`
+    // false positives when no T-SQL temp object exists.
+    // T-SQL の一時ストアド: `CREATE PROCEDURE #sp` / `CREATE PROC ##sp` / `CREATE FUNCTION #f` と、
+    // `CREATE OR ALTER|REPLACE` / `CREATE TEMPORARY` 変種。issue #656 で proc 呼び出しに追加した
+    // `#` ゲート（MySQL `# comment` 誤検出を抑止するため）が有効でも、ファイル内で当該 temp 名を
+    // 確立したと見なすことで `EXEC #sp` / `CALL #sp` / `EXECUTE #sp` の edge を保持する。
+    private static readonly Regex SqlCreateTempRoutineRegex = new(
+        $@"(?<![\w$])CREATE(?:\s+OR\s+(?:REPLACE|ALTER))?(?:\s+(?:TEMP|TEMPORARY))?\s+(?:PROC(?:EDURE)?|FUNCTION)\b(?:\s+IF\s+NOT\s+EXISTS)?\s+(?<name>{SqlTempIdentifierPattern})",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SqlTrailingOnlyQualifiedIdentifierRegex = new(
         $@"(?:(?:ONLY)\b\s+)?{SqlQualifiedIdentifierNoCapturePattern}\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -1276,6 +1288,27 @@ public static class ReferenceExtractor
                                     continue;
                                 if (ShouldSuppressDefinitionCall(resolvedName, nameIndex))
                                     continue;
+                                // issue #656: bare `#tempProc` / `##tempProc` after `EXEC` / `EXECUTE` / `CALL`
+                                // is ambiguous between a T-SQL temp stored procedure call and a MySQL /
+                                // MariaDB `#` line comment. Require same-file T-SQL evidence (prior
+                                // `CREATE TABLE #x`, `SELECT ... INTO #x`, mutation target of `#x`, or
+                                // `CREATE PROCEDURE|FUNCTION #x`) before emitting a call edge so MySQL
+                                // comments stop being misindexed as temp stored procedures.
+                                // Quoted forms (`EXEC [#tempProc]` / `` EXEC `#tempProc` ``) bypass the
+                                // gate because bracket/backtick quoting is unambiguously an identifier.
+                                // issue #656: `EXEC` / `EXECUTE` / `CALL` の直後に並ぶ bare な
+                                // `#tempProc` / `##tempProc` は T-SQL の一時ストアド呼び出しと MySQL /
+                                // MariaDB の `#` 行コメントのどちらにも見える。同一ファイル内で T-SQL
+                                // 側の確立（先行する `CREATE TABLE #x`、`SELECT ... INTO #x`、`#x` の
+                                // 変更対象、あるいは `CREATE PROCEDURE|FUNCTION #x`）がある場合だけ
+                                // call edge を出すことで、MySQL の `#` コメントを一時ストアドとして
+                                // 誤索引しないようにする。引用形 (`EXEC [#tempProc]` /
+                                // `` EXEC `#tempProc` ``) はブラケット / バッククォート引用が明確に
+                                // 識別子であるため、このゲートを通さず従来どおり edge を出す。
+                                if (!wasQuoted
+                                    && resolvedName.StartsWith("#", StringComparison.Ordinal)
+                                    && (sqlEstablishedTempObjectNames == null || !sqlEstablishedTempObjectNames.Contains(resolvedName)))
+                                    continue;
 
                                 var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
                                 AddChainReference(
@@ -1951,7 +1984,8 @@ public static class ReferenceExtractor
         return SqlTargetReferenceRegex.IsMatch(statement)
             || SqlTruncateTargetRegex.IsMatch(statement)
             || SqlSelectIntoTempTargetStatementRegex.IsMatch(statement)
-            || SqlCreateTempTableRegex.IsMatch(statement);
+            || SqlCreateTempTableRegex.IsMatch(statement)
+            || SqlCreateTempRoutineRegex.IsMatch(statement);
     }
 
     private static bool CanSqlStatementRequireLineCommentCarry(string statement)
@@ -2156,6 +2190,7 @@ public static class ReferenceExtractor
         CollectSqlTempObjectNamesFromMatches(SqlTruncateTargetRegex.Matches(statement), statement, names);
         CollectSqlTempObjectNamesFromMatches(SqlSelectIntoTempTargetStatementRegex.Matches(statement), statement, names);
         CollectSqlTempObjectNamesFromMatches(SqlCreateTempTableRegex.Matches(statement), statement, names);
+        CollectSqlTempObjectNamesFromMatches(SqlCreateTempRoutineRegex.Matches(statement), statement, names);
     }
 
     private static void CollectSqlTempObjectNamesFromMatches(MatchCollection matches, string statement, HashSet<string> names)
@@ -11427,6 +11462,21 @@ public static class ReferenceExtractor
             return true;
 
         var token = line[tokenStart..(tokenEnd + 1)];
+        // issue #656: keep `#name` as a temp-object identifier after keywords that precede an object
+        // name in T-SQL. MySQL `# comment` false positives introduced by treating the call-keyword
+        // positions as identifier prefixes are then caught downstream by the proc-call / source-ref
+        // establishment gate, which requires the same file to first establish `#name` via
+        // `CREATE TABLE #x`, `SELECT ... INTO #x`, a mutation target of `#x`, or
+        // `CREATE PROCEDURE|FUNCTION #x`. `CALL`, `PROCEDURE`, `PROC`, and `FUNCTION` are added so
+        // established temp routines stay callable (`CREATE PROCEDURE #sp ... CALL #sp;`) without
+        // reopening the unestablished MySQL-comment regression.
+        // issue #656: T-SQL でオブジェクト名の直前に来るキーワードの後ろでは `#name` を識別子として
+        // 残し、`EXEC` / `EXECUTE` / `CALL` や FROM/JOIN 側の establishment ゲートに判定を委ねる。
+        // `CREATE TABLE #x` / `SELECT ... INTO #x` / `#x` を変更対象とする更新 / `CREATE PROCEDURE|FUNCTION #x`
+        // のいずれかで同一ファイル内に establish した `#name` だけを後段で有効な edge として残す。
+        // `CALL` / `PROCEDURE` / `PROC` / `FUNCTION` を加えるのは、establish した一時ストアドを
+        // `CREATE PROCEDURE #sp ... CALL #sp;` のように呼び戻せるようにするためで、非 establish の
+        // MySQL コメント誤索引は establishment ゲートで引き続き抑止する。
         return !string.Equals(token, "FROM", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(token, "JOIN", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(token, "MERGE", StringComparison.OrdinalIgnoreCase)
@@ -11435,7 +11485,11 @@ public static class ReferenceExtractor
             && !string.Equals(token, "UPDATE", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(token, "TABLE", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(token, "EXEC", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(token, "EXECUTE", StringComparison.OrdinalIgnoreCase);
+            && !string.Equals(token, "EXECUTE", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "CALL", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "PROCEDURE", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "PROC", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(token, "FUNCTION", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string ReplaceRegexMatchesWithSpaces(Regex regex, string input)

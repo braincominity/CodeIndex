@@ -6257,13 +6257,21 @@ public class ReferenceExtractorTests
     [Fact]
     public void Extract_SQL_HashCommentsDoNotLeakAsTempObjects()
     {
-        // issue #653: after restoring temp-table support, MySQL-style `# comment` tails that begin
-        // with identifier-looking text must not be mistaken for temp tables or procedures.
-        // issue #653: temp-table 対応を戻した後でも、識別子風テキストで始まる MySQL 形式の
-        // `# comment` は temp table / procedure と誤認しない。
+        // issue #653 / #656: after restoring temp-table support, MySQL-style `# comment` tails must
+        // never be mistaken for T-SQL temp tables or stored procedures. Bare `EXEC #foo;` /
+        // `EXECUTE #foo;` / `CALL #foo;` without any same-file T-SQL establishment of `#foo` should
+        // stay comments — only same-file evidence (prior `CREATE TABLE #x`, `SELECT ... INTO #x`, a
+        // mutation target of `#x`, or `CREATE PROCEDURE|FUNCTION #x`) promotes the call back to a
+        // graph edge.
+        // issue #653 / #656: temp-table 対応を戻した後も、MySQL の `# comment` 末尾を T-SQL の
+        // temp table / stored procedure と誤認しない。確立のない bare な `EXEC #foo;` /
+        // `EXECUTE #foo;` / `CALL #foo;` はコメント扱いのままとし、同一ファイル内で
+        // `CREATE TABLE #x` / `SELECT ... INTO #x` / `#x` を変更対象とする更新 /
+        // `CREATE PROCEDURE|FUNCTION #x` のいずれかで確立された `#name` だけを edge に昇格させる。
         const string content = """
             CALL #commented_out;
             EXEC #tempProc;
+            EXECUTE #tempExecute;
             SELECT * FROM #commented_source;
             INSERT INTO #audit_log (action) VALUES ('login');
             SELECT * FROM #audit_log;
@@ -6274,11 +6282,88 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
 
         Assert.DoesNotContain(references, r => r.SymbolName == "#commented_out");
-        Assert.Contains(references, r => r.SymbolName == "#tempProc" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "#tempProc");
+        Assert.DoesNotContain(references, r => r.SymbolName == "#tempExecute");
         Assert.DoesNotContain(references, r => r.SymbolName == "#commented_source");
         Assert.Equal(2, references.Count(r => r.SymbolName == "#audit_log" && r.ReferenceKind == "reference"));
         Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "#trailing_comment");
+    }
+
+    [Fact]
+    public void Extract_SQL_EstablishedTempRoutineCallsStillEmitEdges()
+    {
+        // issue #656: the bare `EXEC #sp` / `CALL #sp` / `EXECUTE #sp` comment guard must still let a
+        // T-SQL temp stored procedure defined in the same file produce call edges. Establishment is
+        // recognized from `CREATE PROCEDURE`, `CREATE PROC`, `CREATE OR ALTER PROCEDURE`, and
+        // `CREATE FUNCTION` (all with optional `TEMP|TEMPORARY` / `IF NOT EXISTS`).
+        // issue #656: bare `EXEC #sp` / `CALL #sp` / `EXECUTE #sp` のコメントガードを入れても、同一
+        // ファイル内で定義した T-SQL temp stored procedure の call edge は引き続き出す。
+        // `CREATE PROCEDURE` / `CREATE PROC` / `CREATE OR ALTER PROCEDURE` / `CREATE FUNCTION`
+        // （`TEMP|TEMPORARY` / `IF NOT EXISTS` の有無は問わない）を establishment として認識する。
+        const string content = """
+            CREATE PROCEDURE #localSp AS SELECT 1;
+            EXEC #localSp;
+            CREATE PROC ##globalSp AS SELECT 1;
+            EXECUTE ##globalSp;
+            CREATE OR ALTER PROCEDURE #altSp AS SELECT 1;
+            CALL #altSp;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "#localSp" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "##globalSp" && r.ReferenceKind == "call" && r.Line == 4);
+        Assert.Contains(references, r => r.SymbolName == "#altSp" && r.ReferenceKind == "call" && r.Line == 6);
+    }
+
+    [Fact]
+    public void Extract_SQL_SemicolonlessTempRoutineEstablishmentStillEmitsCallEdges()
+    {
+        // issue #656 follow-up (codex review #1): a `CREATE PROCEDURE|FUNCTION #x` line that ends
+        // without `;` (the typical T-SQL `GO`-batch shape, where the routine body uses BEGIN/END)
+        // must still establish `#x` before the next-line `EXEC` / `CALL` is processed. Without the
+        // matching `CanSqlStatementEstablishTempObject()` flush, the call edge would silently be
+        // dropped by the new proc-call `#`-gate even though the routine is defined right above.
+        // issue #656 フォローアップ（codex review #1）: `;` で閉じない `CREATE PROCEDURE|FUNCTION #x`
+        // 行（routine 本体に BEGIN/END を使う典型的な T-SQL `GO` バッチ形）でも、次行の `EXEC` /
+        // `CALL` を処理する前に `#x` を確立しなければならない。これに対応する
+        // `CanSqlStatementEstablishTempObject()` の flush を追加しないと、新しい proc 呼び出し
+        // `#` ゲートが上行で定義された routine の call edge を黙って落としてしまう。
+        const string content = """
+            CREATE PROCEDURE #localSp AS SELECT 1
+            EXEC #localSp;
+            CREATE FUNCTION #localFn() RETURNS INT AS BEGIN RETURN 1 END
+            CALL #localFn;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "#localSp" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "#localFn" && r.ReferenceKind == "call" && r.Line == 4);
+    }
+
+    [Fact]
+    public void Extract_SQL_QuotedTempProcCallsBypassHashCommentGate()
+    {
+        // issue #656: quoted forms are unambiguously identifiers (MySQL uses `#` for comments but
+        // not inside `[...]` / `` `...` ``), so `EXEC [#tempProc]` / `` EXEC `#tempProc` `` must
+        // keep emitting call edges without any prior in-file establishment.
+        // issue #656: 引用形は識別子として明確なので（MySQL は `#` をコメントに使うが
+        // `[...]` / `` `...` `` の内側には影響しない）、`EXEC [#tempProc]` /
+        // `` EXEC `#tempProc` `` は同一ファイル内の establish 無しでも call edge を出し続ける。
+        const string content = """
+            EXEC [#tempProc];
+            EXEC `#backtickProc`;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "#tempProc" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "#backtickProc" && r.ReferenceKind == "call" && r.Line == 2);
     }
 
     [Fact]
