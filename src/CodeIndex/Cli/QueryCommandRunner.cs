@@ -474,7 +474,7 @@ public static class QueryCommandRunner
             else
             {
                 foreach (var r in results)
-                    Console.WriteLine($"{r.ReferenceKind,-12} {r.CallerKind ?? "?",-10} {r.CallerName ?? "<top-level>",-32} {r.Path}:{r.FirstLine}  -> {r.CalleeName} ({r.ReferenceCount} refs)");
+                    Console.WriteLine($"{FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds),-12} {r.CallerKind ?? "?",-10} {r.CallerName ?? "<top-level>",-32} {r.Path}:{r.FirstLine}  -> {r.CalleeName} ({r.ReferenceCount} refs)");
                 var callerFileCount = results.Select(r => r.Path).Distinct().Count();
                 Console.Error.WriteLine($"({results.Count} callers in {callerFileCount} files)");
             }
@@ -577,7 +577,7 @@ public static class QueryCommandRunner
             else
             {
                 foreach (var r in results)
-                    Console.WriteLine($"{r.ReferenceKind,-12} {r.CalleeName,-32} {r.Path}:{r.FirstLine}  <- {r.CallerName ?? "<top-level>"} ({r.ReferenceCount} refs)");
+                    Console.WriteLine($"{FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds),-12} {r.CalleeName,-32} {r.Path}:{r.FirstLine}  <- {r.CallerName ?? "<top-level>"} ({r.ReferenceCount} refs)");
                 var calleeFileCount = results.Select(r => r.Path).Distinct().Count();
                 Console.Error.WriteLine($"({results.Count} callees in {calleeFileCount} files)");
             }
@@ -2904,6 +2904,19 @@ public static class QueryCommandRunner
     private static string GetUsageLineOrThrow(string commandName) =>
         ConsoleUi.GetUsageLine(commandName)
         ?? throw new InvalidOperationException($"Missing usage line for command '{commandName}'.");
+
+    // Human-readable reference_kind label for a grouped caller/callee row. When the
+    // group spans multiple kinds (e.g. `call` + `subscribe`), render them joined with
+    // `+` so the operator sees that the grouped row hides mixed semantics (issue #501).
+    // 単一ラベルに畳まれた reference_kind を人間向けに整形する。複数 kind が混在する
+    // 行 (`call` + `subscribe` など) は `+` 区切りで並べ、畳まれて見えなくなる意味の
+    // 違いを運用者が気付けるようにする (issue #501)。
+    private static string FormatReferenceKindLabel(string primary, IReadOnlyList<string> kinds, bool hasMixed)
+    {
+        if (!hasMixed || kinds == null || kinds.Count <= 1)
+            return primary ?? string.Empty;
+        return string.Join("+", kinds);
+    }
 
     private static void WriteUsageError(string message, string usage, string hint)
     {

@@ -471,7 +471,7 @@ For the CLAUDE.md template (ready-to-copy code search rules for AI agents), see 
 
 Query commands (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `excerpt`, `map`, `inspect`) default to **human-readable output**. Use `--json` for JSON lines output (one JSON object per line), designed for easy parsing by AI agents.
 
-`references` already prefixes each human-readable row with `reference_kind`, and `callers` now does the same for its grouped caller rows while keeping JSON output unchanged. This lets terminal users distinguish `call` / `instantiate` / `subscribe` without re-running the command with `--json`.
+`references` already prefixes each human-readable row with `reference_kind`, and `callers` does the same for its grouped caller rows. When one grouped container mixes kinds (for example `call` and `subscribe` on the same event member), the human-readable label joins the distinct kinds with `+` (for example `call+subscribe`) instead of collapsing to a single preferred label. JSON output for `callers` and `callees` adds a sorted `reference_kinds` array plus a `has_mixed_reference_kinds` bool; the scalar `reference_kind` is removed from caller JSON because grouped rows can legitimately span multiple kinds, while callee rows stay split per kind and still emit the scalar. This lets terminal users distinguish `call` / `instantiate` / `subscribe` / mixed without re-running the command with `--json` and lets AI clients answer mixed-kind questions without chasing a second `--exact` query.
 
 MCP tool calls return structured JSON in `structuredContent` plus a short summary in `content`, so clients can consume typed data directly.
 
@@ -1548,7 +1548,7 @@ CLAUDE.mdテンプレート（AI向けコード検索ルールのコピペ用）
 
 クエリコマンド（`search`、`definition`、`references`、`callers`、`callees`、`symbols`、`files`、`excerpt`、`map`、`inspect`）はデフォルトで**人間向け出力**です。`--json`でJSONライン出力（1行1 JSONオブジェクト）に切り替えでき、AIエージェントが容易にパースできるよう設計されています。
 
-`references` は以前から人間向け出力の各行先頭に `reference_kind` を表示しており、`callers` も grouped caller 行に対して同じタグを出すようになった。これにより端末上でも `call` / `instantiate` / `subscribe` を `--json` なしで見分けられる一方、JSON 出力契約は変わらない。
+`references` は以前から人間向け出力の各行先頭に `reference_kind` を表示しており、`callers` も grouped caller 行に対して同じタグを出す。1 つの grouped container で kind が混在する場合（例: 同じ event メンバに対する `call` と `subscribe`）は、単一 preferred label へ潰さずに `call+subscribe` のように distinct kind を `+` で連結して表示する。`callers` / `callees` の JSON 出力には、ソート済みの `reference_kinds` 配列と `has_mixed_reference_kinds` bool を追加した。grouped な callers の scalar な `reference_kind` は複数 kind を含みうるため JSON から外す。callee 側は引き続き kind 単位に行が分かれるため scalar な `reference_kind` も残す。これにより端末上でも `call` / `instantiate` / `subscribe` / mixed を `--json` なしで見分けられ、AI クライアントも `--exact` を改めて投げ直さずに mixed-kind の問いに答えられる。
 
 MCPツール呼び出しは `structuredContent` に構造化JSON、`content` に短い要約を返すため、クライアントは型付きデータを直接利用できます。
 
