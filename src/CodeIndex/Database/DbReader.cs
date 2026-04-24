@@ -690,7 +690,10 @@ public partial class DbReader
     {
         using var reader = cmd.ExecuteTrackedReader();
         return reader.TrackedRead()
-            ? new QueryCountResult(reader.GetInt32(0), reader.GetInt32(1))
+            ? new QueryCountResult(
+                reader.GetInt32(0),
+                reader.GetInt32(1),
+                reader.FieldCount > 2 && !reader.IsDBNull(2) && Convert.ToInt32(reader.GetValue(2)) != 0)
             : new QueryCountResult(0, 0);
     }
 
@@ -2608,6 +2611,7 @@ public partial class DbReader
         using var reader = cmd.ExecuteTrackedReader();
 
         int count = 0;
+        bool includesSql = false;
         var paths = new HashSet<string>(StringComparer.Ordinal);
         while (reader.TrackedRead())
         {
@@ -2616,10 +2620,11 @@ public partial class DbReader
                 continue;
 
             count++;
+            includesSql |= IsSqlLanguage(row.Lang);
             paths.Add(row.Path);
         }
 
-        return new QueryCountResult(count, paths.Count);
+        return new QueryCountResult(count, paths.Count, includesSql);
     }
 
     public int CountSearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
@@ -2729,9 +2734,9 @@ public partial class DbReader
         using var cmd = _conn.CreateCommand();
 
         var innerSql = @"
-            SELECT path
+            SELECT path, lang
             FROM (
-                SELECT f.path AS path, r.file_id, r.symbol_name, r.line, r.column_number, " + GetLogicalReferenceKindSql("r.reference_kind") + @" AS logical_reference_kind
+                SELECT f.path AS path, f.lang AS lang, r.file_id, r.symbol_name, r.line, r.column_number, " + GetLogicalReferenceKindSql("r.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
                 WHERE 1=1";
@@ -2785,10 +2790,10 @@ public partial class DbReader
             innerSql += " AND f.lang = @lang";
         AppendPathFilters(ref innerSql, pathPatterns, excludePathPatterns, excludeTests);
         if (referenceKind == null)
-            innerSql += $" GROUP BY f.path, r.file_id, r.symbol_name, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
+            innerSql += $" GROUP BY f.path, f.lang, r.file_id, r.symbol_name, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
         innerSql += ")";
 
-        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path) FROM ({innerSql})";
+        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path), MAX(CASE WHEN lang = 'sql' THEN 1 ELSE 0 END) FROM ({innerSql})";
         if (query != null)
         {
             var value = !exact
@@ -3001,7 +3006,7 @@ public partial class DbReader
 
         using var cmd = _conn.CreateCommand();
         var groupedSql = @"
-            SELECT path
+            SELECT path, lang
             FROM (
                 SELECT f.path AS path, f.lang AS lang, r.container_kind AS container_kind,
                        r.container_name AS container_name, r.symbol_name AS symbol_name
@@ -3041,7 +3046,7 @@ public partial class DbReader
             groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
         groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name";
 
-        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path) FROM ({groupedSql})";
+        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path), MAX(CASE WHEN lang = 'sql' THEN 1 ELSE 0 END) FROM ({groupedSql})";
         var value = !exact
             ? $"%{EscapeLikeQuery(query)}%"
             : _foldReady
@@ -3244,7 +3249,7 @@ public partial class DbReader
 
         using var cmd = _conn.CreateCommand();
         var groupedSql = @"
-            SELECT path
+            SELECT path, lang
             FROM (
                 SELECT f.path AS path, f.lang AS lang, r.container_kind AS container_kind,
                        r.container_name AS container_name, r.symbol_name AS symbol_name,
@@ -3283,7 +3288,7 @@ public partial class DbReader
             groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
         groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind";
 
-        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path) FROM ({groupedSql})";
+        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path), MAX(CASE WHEN lang = 'sql' THEN 1 ELSE 0 END) FROM ({groupedSql})";
         var value = !exact
             ? $"%{EscapeLikeQuery(query)}%"
             : _foldReady

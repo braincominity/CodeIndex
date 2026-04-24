@@ -313,13 +313,9 @@ public static class QueryCommandRunner
             if (options.CountOnly)
             {
                 var counts = reader.CountSearchReferencesTotal(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
-                var effectiveSqlGraphSignal = counts.Count > 0
-                    ? NarrowSqlGraphContractSignalByLanguages(
-                        baseSqlGraphSignal,
-                        reader.SearchReferences(options.Query, 1, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.MaxLineWidth).Select(result => result.Lang),
-                        options.Lang,
-                        exactGraphLanguage)
-                    : NarrowSqlGraphContractSignal(baseSqlGraphSignal, DbReader.IsSqlLanguage(options.Lang) || DbReader.IsSqlLanguage(exactGraphLanguage));
+                var effectiveSqlGraphSignal = NarrowSqlGraphContractSignal(
+                    baseSqlGraphSignal,
+                    counts.IncludesSql || DbReader.IsSqlLanguage(options.Lang) || DbReader.IsSqlLanguage(exactGraphLanguage));
                 var exactSignalForCount = reader.GetReferencesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: effectiveSqlGraphSignal.Relevant);
                 var exactZeroHintForCount = BuildExactZeroHint(
                     exact && reader._hasReferencesTable,
@@ -431,13 +427,9 @@ public static class QueryCommandRunner
             if (options.CountOnly)
             {
                 var counts = reader.CountCallersTotal(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
-                var effectiveSqlGraphSignal = counts.Count > 0
-                    ? NarrowSqlGraphContractSignalByLanguages(
-                        baseSqlGraphSignal,
-                        reader.GetCallers(options.Query, 1, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact).Select(result => result.Lang),
-                        options.Lang,
-                        exactGraphLanguage)
-                    : NarrowSqlGraphContractSignal(baseSqlGraphSignal, DbReader.IsSqlLanguage(options.Lang) || DbReader.IsSqlLanguage(exactGraphLanguage));
+                var effectiveSqlGraphSignal = NarrowSqlGraphContractSignal(
+                    baseSqlGraphSignal,
+                    counts.IncludesSql || DbReader.IsSqlLanguage(options.Lang) || DbReader.IsSqlLanguage(exactGraphLanguage));
                 var exactSignalForCount = reader.GetCallersExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: effectiveSqlGraphSignal.Relevant);
                 var exactZeroHintForCount = BuildExactZeroHint(
                     exact && reader._hasReferencesTable,
@@ -545,13 +537,9 @@ public static class QueryCommandRunner
             if (options.CountOnly)
             {
                 var counts = reader.CountCalleesTotal(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
-                var effectiveSqlGraphSignal = counts.Count > 0
-                    ? NarrowSqlGraphContractSignalByLanguages(
-                        baseSqlGraphSignal,
-                        reader.GetCallees(options.Query, 1, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact).Select(result => result.Lang),
-                        options.Lang,
-                        exactGraphLanguage)
-                    : NarrowSqlGraphContractSignal(baseSqlGraphSignal, DbReader.IsSqlLanguage(options.Lang) || DbReader.IsSqlLanguage(exactGraphLanguage));
+                var effectiveSqlGraphSignal = NarrowSqlGraphContractSignal(
+                    baseSqlGraphSignal,
+                    counts.IncludesSql || DbReader.IsSqlLanguage(options.Lang) || DbReader.IsSqlLanguage(exactGraphLanguage));
                 var exactSignalForCount = reader.GetCalleesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: effectiveSqlGraphSignal.Relevant);
                 var exactZeroHintForCount = BuildExactZeroHint(
                     exact && reader._hasReferencesTable,
@@ -2185,7 +2173,7 @@ public static class QueryCommandRunner
                 var countSummary = reader.CountUnusedSymbols(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
                 var effectiveSqlGraphSignal = NarrowSqlGraphContractSignal(
                     reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
-                    DbReader.IsSqlLanguage(options.Lang));
+                    countSummary.IncludesSql || DbReader.IsSqlLanguage(options.Lang));
                 if (options.Json)
                 {
                     var payload = new JsonObject

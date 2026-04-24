@@ -1846,17 +1846,17 @@ public partial class DbReader
         return limited;
     }
 
-    public (int Count, int FileCount) CountUnusedSymbols(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    public QueryCountResult CountUnusedSymbols(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
         if (!_hasReferencesTable)
-            return (0, 0);
+            return new QueryCountResult(0, 0);
         if (lang != null && !ReferenceExtractor.SupportsLanguage(lang))
-            return (0, 0);
+            return new QueryCountResult(0, 0);
 
         var graphLangs = ReferenceExtractor.GetSupportedLanguages();
         using var cmd = _conn.CreateCommand();
         var sql = @"
-            SELECT COUNT(*), COUNT(DISTINCT f.path)
+            SELECT COUNT(*), COUNT(DISTINCT f.path), MAX(CASE WHEN f.lang = 'sql' THEN 1 ELSE 0 END)
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE s.kind NOT IN ('import', 'namespace')
@@ -1906,8 +1906,11 @@ public partial class DbReader
 
         using var reader = cmd.ExecuteTrackedReader();
         if (!reader.TrackedRead())
-            return (0, 0);
-        return (reader.GetInt32(0), reader.GetInt32(1));
+            return new QueryCountResult(0, 0);
+        return new QueryCountResult(
+            reader.GetInt32(0),
+            reader.GetInt32(1),
+            reader.FieldCount > 2 && !reader.IsDBNull(2) && Convert.ToInt32(reader.GetValue(2)) != 0);
     }
 
     private bool HasReflectionAttributeContext(string path, int startLine)

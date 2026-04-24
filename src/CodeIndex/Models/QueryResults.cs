@@ -16,7 +16,7 @@ public class SearchResult
     public double Score { get; set; }
 }
 
-public readonly record struct QueryCountResult(int Count, int FileCount);
+public readonly record struct QueryCountResult(int Count, int FileCount, bool IncludesSql = false);
 
 public class SymbolResult
 {
