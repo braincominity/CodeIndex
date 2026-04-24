@@ -1365,22 +1365,51 @@ probe_doctor_url() {
     return 1
 }
 
+# Redact the userinfo portion of a proxy URL so credentials in values such as
+# `http://user:password@proxy:8080` do not get printed into logs, issue
+# attachments, or support transcripts when users share `--doctor` output.
+# Handles `scheme://user@host` and `scheme://user:password@host`, leaves
+# credential-less URLs and non-URL values untouched, and preserves the rest of
+# the URL so the host/port is still visible for diagnosing reachability.
+# `http://user:password@proxy:8080` のような proxy URL の資格情報部分を
+# redact し、`--doctor` の出力を log / issue / サポート窓口に貼っても秘密が
+# 漏れないようにする。`scheme://user@host` / `scheme://user:password@host` の
+# 両形を処理し、資格情報を含まない URL や URL 以外の値はそのまま返す。
+# host/port は reachability 診断のため保持する。
+redact_proxy_userinfo() {
+    local value="$1"
+    case "$value" in
+        *://*@*)
+            local scheme="${value%%://*}"
+            local rest="${value#*://}"
+            local hostpart="${rest#*@}"
+            printf '%s://<redacted>@%s' "$scheme" "$hostpart"
+            ;;
+        *)
+            printf '%s' "$value"
+            ;;
+    esac
+}
+
 # Print the active proxy environment so users can see what curl will inherit
 # before the probes run. This is the first thing the doctor prints because
 # misconfigured proxy env vars are the single most common cause of CONNECT
-# tunnel 403 / network-policy-style failures.
+# tunnel 403 / network-policy-style failures. Values are routed through
+# `redact_proxy_userinfo` so embedded credentials never surface in the output.
 # curl に引き継がれる proxy 系環境変数を probe 前に表示する。
 # 誤った proxy 設定は CONNECT 403 系の失敗原因として最も多いため最初に出す。
+# 出力は `redact_proxy_userinfo` を通し、URL 中の資格情報が漏れないようにする。
 print_doctor_proxy_env() {
-    info "Proxy environment variables (inherited by curl):"
-    local var val
+    info "Proxy environment variables (inherited by curl; URL credentials redacted):"
+    local var val redacted
     for var in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy; do
         # Use `printenv` instead of bash indirection so an unset variable
         # under `set -u` does not abort the function.
         # `set -u` 下で未設定変数を参照して落ちないよう `printenv` を使う。
         val="$(printenv "$var" 2>/dev/null || true)"
         if [ -n "$val" ]; then
-            printf '  %s=%s\n' "$var" "$val"
+            redacted="$(redact_proxy_userinfo "$val")"
+            printf '  %s=%s\n' "$var" "$redacted"
         else
             printf '  %s=(unset)\n' "$var"
         fi

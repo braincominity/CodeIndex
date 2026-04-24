@@ -3827,6 +3827,88 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void Doctor_RedactsProxyUrlCredentialsBeforePrinting()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        // `--doctor` is the command users paste into logs, issues, and support
+        // transcripts when they're trying to diagnose a proxy-blocked install.
+        // If the proxy URL contains credentials (a common pattern on corporate
+        // MITM proxies, e.g. `http://alice:hunter2@proxy.example.com:8080`), the
+        // raw value would leak those credentials to whoever receives the
+        // output. Redact the userinfo portion before printing while keeping the
+        // host/port visible for reachability diagnosis.
+        // `--doctor` の出力は proxy 起因のインストール失敗を診断するため
+        // log / issue / サポート窓口に貼られやすい。proxy URL に資格情報が
+        // 入る形（例: 企業 MITM の `http://alice:hunter2@proxy.example.com:8080`）
+        // では raw 値を表示すると secret が共有先に漏れるため、reachability 診断
+        // に必要な host/port は保ったまま userinfo 部分だけを redact する。
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            curl() { printf '%s' "200"; return 0; }
+
+            run_doctor v1.2.3
+            """,
+            new Dictionary<string, string?>
+            {
+                ["HTTP_PROXY"] = "http://alice:hunter2@proxy.example.com:8080",
+                ["HTTPS_PROXY"] = "https://bob@secure-proxy.example.com:3128",
+                ["ALL_PROXY"] = "socks5://carol:s3cret@socks.example.com:1080",
+                ["NO_PROXY"] = "127.0.0.1,localhost",
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("hunter2", stdout);
+        Assert.DoesNotContain("hunter2", stderr);
+        Assert.DoesNotContain("s3cret", stdout);
+        Assert.DoesNotContain("s3cret", stderr);
+        Assert.DoesNotContain("alice:hunter2", stdout);
+        Assert.DoesNotContain("bob@secure-proxy", stdout);
+        Assert.DoesNotContain("carol:s3cret", stdout);
+        Assert.Contains("HTTP_PROXY=http://<redacted>@proxy.example.com:8080", stdout);
+        Assert.Contains("HTTPS_PROXY=https://<redacted>@secure-proxy.example.com:3128", stdout);
+        Assert.Contains("ALL_PROXY=socks5://<redacted>@socks.example.com:1080", stdout);
+        Assert.Contains("NO_PROXY=127.0.0.1,localhost", stdout);
+    }
+
+    [Fact]
+    public void Doctor_CredentialLessProxyUrlsAreNotRewritten()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        // The redactor must only touch values that actually carry a
+        // `scheme://userinfo@host` shape. Plain `scheme://host:port` or
+        // bare-host NO_PROXY values would otherwise be rewritten into a form
+        // that looks like it has been redacted, which is both misleading and
+        // would make diagnostic output harder to read.
+        // redactor は `scheme://userinfo@host` の形を持つ値のみを書き換える。
+        // `scheme://host:port` や bare host の NO_PROXY 値まで書き換えると、
+        // 資格情報があったかのような誤った印象を与え、診断ログが読みにくくなる。
+        var (exitCode, stdout, _) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            curl() { printf '%s' "200"; return 0; }
+
+            run_doctor v1.2.3
+            """,
+            new Dictionary<string, string?>
+            {
+                ["HTTP_PROXY"] = "http://proxy.example.com:8080",
+                ["NO_PROXY"] = "127.0.0.1,localhost,*.internal",
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("<redacted>", stdout);
+        Assert.Contains("HTTP_PROXY=http://proxy.example.com:8080", stdout);
+        Assert.Contains("NO_PROXY=127.0.0.1,localhost,*.internal", stdout);
+    }
+
+    [Fact]
     public void Doctor_ExplicitVersionArgument_ProbesReleaseAssetForThatVersion()
     {
         if (OperatingSystem.IsWindows())
