@@ -967,6 +967,19 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DoesNotTreatCommonJsNamedExportComparisonsAsAssignments()
+    {
+        var content = """
+            module.exports.foo === undefined;
+            exports.bar == null;
+            module.exports.baz !== 1;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Empty(symbols);
+    }
+
+    [Fact]
     public void Extract_JavaScript_DetectsMultilineCommonJsNamedExportAssignments()
     {
         var content = """
@@ -1126,6 +1139,19 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "baz");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DoesNotTreatCommonJsNamedExportComparisonsAsAssignments()
+    {
+        var content = """
+            module.exports.foo === undefined;
+            exports.bar == null;
+            module.exports.baz !== 1;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Empty(symbols);
     }
 
     [Fact]
