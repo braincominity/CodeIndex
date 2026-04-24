@@ -755,17 +755,16 @@ public class ReferenceExtractorTests
         var content = string.Concat(
             "function caller() {", crlf,
             "  const s = \"line1\\", crlf,
-            "} fake_in_string() line2\";", crlf,
+            "} externalCall() line2\";", crlf,
             "  runTask();", crlf,
             "}", crlf,
-            "function runTask() {}", crlf,
-            "function fake_in_string() {}");
+            "function runTask() {}");
 
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
         var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
 
         Assert.Contains(references, reference => reference.SymbolName == "runTask" && reference.ContainerName == "caller");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "fake_in_string");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "externalCall");
     }
 
     [Fact]
@@ -774,18 +773,17 @@ public class ReferenceExtractorTests
         const string content = """
             function caller() {
               const s = 'line1\
-            } fake_in_string() line2";
+            } externalCall() line2';
               runTask();
             }
             function runTask() {}
-            function fake_in_string() {}
             """;
 
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
         var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
 
         Assert.Contains(references, reference => reference.SymbolName == "runTask" && reference.ContainerName == "caller");
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "fake_in_string");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "externalCall");
     }
 
     [Fact]
@@ -793,7 +791,7 @@ public class ReferenceExtractorTests
     {
         const string content = "function f() {\n" +
             "    const s = 'line1\\\n" +
-            "of fake_in_string';\n" +
+            "of externalCall';\n" +
             "    for (\n" +
             "        const ch of `abc`\n" +
             "    ) {\n" +

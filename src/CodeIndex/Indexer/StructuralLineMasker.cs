@@ -1704,9 +1704,11 @@ internal static class StructuralLineMasker
                 if (line[pos] == '"' || line[pos] == '\'')
                 {
                     var quote = line[pos];
+                    var start = pos;
                     pos = SkipJsSingleLineStringContinuation(line, pos, out var continuesOnNextLine);
                     if (continuesOnNextLine)
                     {
+                        ReplaceWithSpaces(masked, start, pos - start);
                         activeJsTopLevelStringQuote = quote;
                         break;
                     }
