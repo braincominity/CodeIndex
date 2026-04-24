@@ -553,20 +553,25 @@ public static class SymbolExtractor
             // continuation lines like `where Validator.Check(x)` / `select Mapper.Convert(x)` /
             // `orderby Math.Abs(x)` do not match as `returnType + interface.member`. `new` is also
             // excluded so expression statements like `new System.Text.StringBuilder().Append(...)`
-            // or `new System.Net.Http.HttpClient().Dispose()` do not masquerade as an explicit
-            // interface method (returnType=`new`, interface=namespace prefix, name=type being
-            // constructed — the identifier right before the first `(`, e.g. `StringBuilder` /
-            // `HttpClient`; note the chained `.Append(...)` / `.Dispose()` tail is never part of
-            // the capture because the regex stops at the first `(`).
+            // or `new Outer.Inner().Consume()` do not masquerade as an explicit interface method
+            // (returnType=`new`, interface=the dot-chain qualifier preceding the constructed type
+            // — which may be a namespace prefix like `System.Text`, an enclosing-type chain like
+            // `Outer`, or a mix — and name=the identifier right before the first `(`, i.e. the
+            // type being constructed: `StringBuilder` / `Inner`; the trailing `.Append(...)` /
+            // `.Consume()` chain is never part of the capture because the regex stops at the
+            // first `(`).
             // Closes #362, #377.
             // 明示的インターフェース実装 (例: void IDisposable.Dispose())
             // 有効な戻り値型（ステートメントキーワードではない）とドット前のインターフェース名を要求。
             // qualified call site を伴う named-argument label のみ除外し、
             // `global::System.String` や `Alias::Type` のような alias-qualified 型は許可する。
             // `new` も除外して、`new System.Text.StringBuilder().Append(...)` や
-            // `new System.Net.Http.HttpClient().Dispose()` のような式文が
-            // returnType=`new` / interface=qualified 型 / name=末尾メンバー
-            // として明示的インターフェースメソッドに化けないようにする。
+            // `new Outer.Inner().Consume()` のような式文が、returnType=`new` /
+            // interface=構築型の手前のドット連鎖修飾子（名前空間 `System.Text` や外側型
+            // `Outer` あるいは両者の混在）/ name=構築される型（最初の `(` の直前の識別子、
+            // 例: `StringBuilder` / `Inner`。正規表現は最初の `(` で止まるので、末尾の
+            // `.Append(...)` / `.Consume()` チェーンはキャプチャされない）として
+            // 明示的インターフェースメソッドに化けないようにする。
             new("function",  new Regex($@"^\s*(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|new|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\w+\s*:\s*(?:global::)?[\w.<>:]+\.\w+\s*(?:<[^>]+>\s*)?[\(\[])(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+{CSharpExplicitInterfaceQualifierPattern}\.(?<name>\w+)\s*(?:<[^>]+>\s*)?[\(\[]", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             // Explicit interface property implementation (brace body), e.g. int IThing.Value { get; set; }
             // Mirrors the explicit-interface method row above: the qualifier is non-capturing so the
