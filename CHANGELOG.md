@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.15.1] - 2026-04-24
+
 #### Fixed
 - **Release artifacts now ship license notices and the installer preserves them** — `create-release` now copies `LICENSE`, `COMMERCIAL_LICENSE.md`, and `TRADEMARKS.md` into the published payload, and `install.sh` installs those notices when they are present alongside the binary.
 
@@ -899,6 +901,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.15.1] - 2026-04-24
+
 #### 修正
 - **release 配布物にライセンス文書を同梱し、installer でも保持するように修正** — `create-release` が `LICENSE` / `COMMERCIAL_LICENSE.md` / `TRADEMARKS.md` を publish payload にコピーするようになり、`install.sh` もそれらが同梱されている場合はバイナリと一緒に配置するようになりました。
 
@@ -1781,7 +1785,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.15.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.15.1...HEAD
+[1.15.1]: https://github.com/Widthdom/CodeIndex/compare/v1.15.0...v1.15.1
 [1.15.0]: https://github.com/Widthdom/CodeIndex/compare/v1.14.0...v1.15.0
 [1.14.0]: https://github.com/Widthdom/CodeIndex/compare/v1.13.0...v1.14.0
 [1.13.0]: https://github.com/Widthdom/CodeIndex/compare/v1.12.0...v1.13.0
