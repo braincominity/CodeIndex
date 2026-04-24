@@ -955,6 +955,8 @@ public partial class DbReader
             }
         }
 
+        PopulateOutlineDepths(symbols);
+
         return new OutlineResult
         {
             Path = filePath,
@@ -963,6 +965,55 @@ public partial class DbReader
             SymbolCount = symbols.Count,
             Symbols = symbols,
         };
+    }
+
+    private static void PopulateOutlineDepths(List<OutlineSymbol> symbols)
+    {
+        var depthCache = new Dictionary<int, int>();
+        var activeStack = new HashSet<int>();
+        for (var i = 0; i < symbols.Count; i++)
+            symbols[i].Depth = GetOutlineDepth(symbols, i, depthCache, activeStack);
+    }
+
+    private static int GetOutlineDepth(List<OutlineSymbol> symbols, int index, Dictionary<int, int> depthCache, HashSet<int> activeStack)
+    {
+        if (depthCache.TryGetValue(index, out var cachedDepth))
+            return cachedDepth;
+
+        if (!activeStack.Add(index))
+            return 0;
+
+        var symbol = symbols[index];
+        var depth = 0;
+        if (!string.IsNullOrEmpty(symbol.ContainerName))
+        {
+            var parentIndex = FindOutlineContainerIndex(symbols, index, symbol.ContainerName, symbol.ContainerKind);
+            if (parentIndex >= 0)
+                depth = GetOutlineDepth(symbols, parentIndex, depthCache, activeStack) + 1;
+        }
+
+        activeStack.Remove(index);
+        depthCache[index] = depth;
+        return depth;
+    }
+
+    private static int FindOutlineContainerIndex(List<OutlineSymbol> symbols, int childIndex, string containerName, string? containerKind)
+    {
+        var child = symbols[childIndex];
+        for (var i = childIndex - 1; i >= 0; i--)
+        {
+            var candidate = symbols[i];
+            if (!string.Equals(candidate.Name, containerName, StringComparison.Ordinal))
+                continue;
+            if (containerKind != null && !string.Equals(candidate.Kind, containerKind, StringComparison.Ordinal))
+                continue;
+            if (candidate.Line > child.Line)
+                continue;
+            if (candidate.StartLine <= child.Line && candidate.EndLine >= child.Line)
+                return i;
+        }
+
+        return -1;
     }
 
     /// <summary>

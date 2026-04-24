@@ -7816,6 +7816,68 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetOutline_ComputesContainerDepthFromSymbolChain()
+    {
+        InsertIndexedFile(
+            "src/deep.cs",
+            "csharp",
+            """
+            namespace OuterNs
+            {
+                namespace InnerNs
+                {
+                    public class OuterClass
+                    {
+                        public class NestedClass
+                        {
+                            public class DeeplyNested
+                            {
+                                public void Method() { }
+                            }
+                        }
+                    }
+                }
+            }
+            """);
+
+        var outline = _reader.GetOutline("src/deep.cs");
+
+        Assert.NotNull(outline);
+        Assert.Equal(6, outline!.Symbols.Count);
+        Assert.Collection(outline.Symbols,
+            symbol =>
+            {
+                Assert.Equal("OuterNs", symbol.Name);
+                Assert.Equal(0, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("InnerNs", symbol.Name);
+                Assert.Equal(1, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("OuterClass", symbol.Name);
+                Assert.Equal(2, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("NestedClass", symbol.Name);
+                Assert.Equal(3, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("DeeplyNested", symbol.Name);
+                Assert.Equal(4, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("Method", symbol.Name);
+                Assert.Equal(5, symbol.Depth);
+            });
+    }
+
+    [Fact]
     public void GetOutline_FileWithNoSymbols_ReturnsEmptyList()
     {
         var outline = _reader.GetOutline("docs/notes.md");
