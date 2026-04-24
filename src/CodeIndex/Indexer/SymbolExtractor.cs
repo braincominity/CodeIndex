@@ -375,7 +375,7 @@ public static class SymbolExtractor
         RegexOptions.Compiled);
 
     private static readonly Regex JavaScriptTypeScriptStarReExportRegex = new(
-        @"^\s*export\s+\*\s+from\s+(?<module>['""][^'""]+['""])\s*;?\s*$",
+        $@"^\s*export\s+\*(?:\s+as\s+(?<namespace>{JavaScriptTypeScriptIdentifierPattern}))?\s+from\s+(?<module>['""][^'""]+['""])\s*;?\s*$",
         RegexOptions.Compiled);
 
     private static readonly Regex JavaScriptTypeScriptNamedReExportRegex = new(
@@ -392,6 +392,10 @@ public static class SymbolExtractor
 
     private static readonly Regex JavaScriptTypeScriptExportedObjectLiteralPropertyRegex = new(
         $@"^\s*(?<name>{JavaScriptTypeScriptIdentifierPattern})\s*:",
+        RegexOptions.Compiled);
+
+    private static readonly Regex JavaScriptTypeScriptExportedObjectLiteralShorthandPropertyRegex = new(
+        $@"^\s*(?<name>{JavaScriptTypeScriptIdentifierPattern})\s*(?:(?=,)|(?=}})|$)",
         RegexOptions.Compiled);
 
     private const string VbVisibilityPattern = @"(?:Public|Private|Protected|Friend)(?:\s+(?:Protected|Friend))?";
@@ -4836,7 +4840,7 @@ public static class SymbolExtractor
         List<JavaScriptClassScanTarget> objectLiteralTargets)
     {
         var sanitizedLines = BuildJavaScriptTypeScriptSanitizedLines(lines);
-        ExtractJavaScriptTypeScriptReExportSymbols(fileId, lines, symbols);
+        ExtractJavaScriptTypeScriptReExportSymbols(fileId, lines, sanitizedLines, symbols);
         ExtractJavaScriptTypeScriptCommonJsNamedExportAssignments(fileId, lang, lines, sanitizedLines, symbols, privateScopeColumns);
         ExtractJavaScriptTypeScriptExportedObjectLiteralProperties(fileId, lines, sanitizedLines, symbols, objectLiteralTargets);
     }
@@ -4855,18 +4859,20 @@ public static class SymbolExtractor
         return sanitizedLines;
     }
 
-    private static void ExtractJavaScriptTypeScriptReExportSymbols(long fileId, string[] lines, List<SymbolRecord> symbols)
+    private static void ExtractJavaScriptTypeScriptReExportSymbols(long fileId, string[] rawLines, string[] sanitizedLines, List<SymbolRecord> symbols)
     {
-        for (int i = 0; i < lines.Length; i++)
+        for (int i = 0; i < sanitizedLines.Length; i++)
         {
-            var rawLine = lines[i];
-            var trimmedLine = rawLine.Trim();
-            if (trimmedLine.Length == 0)
+            var sanitizedLine = sanitizedLines[i];
+            var trimmedSanitizedLine = sanitizedLine.Trim();
+            if (trimmedSanitizedLine.Length == 0)
                 continue;
 
-            var starMatch = JavaScriptTypeScriptStarReExportRegex.Match(rawLine);
+            var starMatch = JavaScriptTypeScriptStarReExportRegex.Match(sanitizedLine);
             if (starMatch.Success)
             {
+                var startColumn = Math.Max(0, sanitizedLine.IndexOf("export", StringComparison.Ordinal));
+                var signature = rawLines[i].Trim();
                 AddSymbolRecord(
                     symbols,
                     cssSeenSymbols: null,
@@ -4878,18 +4884,47 @@ public static class SymbolExtractor
                         Name = TrimJavaScriptTypeScriptQuotedModuleName(starMatch.Groups["module"].Value),
                         Line = i + 1,
                         StartLine = i + 1,
-                        StartColumn = starMatch.Index,
+                        StartColumn = startColumn,
                         EndLine = i + 1,
-                        Signature = trimmedLine,
+                        Signature = signature,
                         Visibility = "export",
                     },
-                    rawLine);
+                    rawLines[i]);
+
+                var namespaceName = starMatch.Groups["namespace"].Value;
+                if (namespaceName.Length > 0)
+                {
+                    AddSymbolRecord(
+                        symbols,
+                        cssSeenSymbols: null,
+                        i + 1,
+                        new SymbolRecord
+                        {
+                            FileId = fileId,
+                            Kind = "property",
+                            Name = namespaceName,
+                            Line = i + 1,
+                            StartLine = i + 1,
+                            StartColumn = startColumn,
+                            EndLine = i + 1,
+                            Signature = signature,
+                            Visibility = "export",
+                        },
+                        rawLines[i]);
+                }
+
                 continue;
             }
 
-            var namedMatch = JavaScriptTypeScriptNamedReExportRegex.Match(rawLine);
-            if (!namedMatch.Success)
+            if (!TryCollectJavaScriptTypeScriptNamedReExportClause(rawLines, sanitizedLines, i, out var endLineIndex, out var clause, out var signatureText, out var startColumnText))
                 continue;
+
+            var namedMatch = JavaScriptTypeScriptNamedReExportRegex.Match(clause);
+            if (!namedMatch.Success)
+            {
+                i = endLineIndex;
+                continue;
+            }
 
             AddSymbolRecord(
                 symbols,
@@ -4902,12 +4937,12 @@ public static class SymbolExtractor
                     Name = TrimJavaScriptTypeScriptQuotedModuleName(namedMatch.Groups["module"].Value),
                     Line = i + 1,
                     StartLine = i + 1,
-                    StartColumn = namedMatch.Index,
-                    EndLine = i + 1,
-                    Signature = trimmedLine,
+                    StartColumn = startColumnText,
+                    EndLine = endLineIndex + 1,
+                    Signature = signatureText,
                     Visibility = "export",
                 },
-                rawLine);
+                rawLines[i]);
 
             foreach (var exportedName in ParseJavaScriptTypeScriptReExportedNames(namedMatch.Groups["specifiers"].Value))
             {
@@ -4922,14 +4957,96 @@ public static class SymbolExtractor
                         Name = exportedName,
                         Line = i + 1,
                         StartLine = i + 1,
-                        StartColumn = namedMatch.Index,
-                        EndLine = i + 1,
-                        Signature = trimmedLine,
+                        StartColumn = startColumnText,
+                        EndLine = endLineIndex + 1,
+                        Signature = signatureText,
                         Visibility = "export",
                     },
-                    rawLine);
+                    rawLines[i]);
             }
+
+            i = endLineIndex;
         }
+    }
+
+    private static bool TryCollectJavaScriptTypeScriptNamedReExportClause(
+        string[] rawLines,
+        string[] sanitizedLines,
+        int startLineIndex,
+        out int endLineIndex,
+        out string clause,
+        out string signature,
+        out int startColumn)
+    {
+        endLineIndex = startLineIndex;
+        clause = string.Empty;
+        signature = string.Empty;
+
+        var startLine = sanitizedLines[startLineIndex];
+        var trimmedStartLine = startLine.TrimStart();
+        if (!trimmedStartLine.StartsWith("export ", StringComparison.Ordinal)
+            || !trimmedStartLine.Contains('{'))
+        {
+            startColumn = -1;
+            return false;
+        }
+
+        startColumn = Math.Max(0, startLine.IndexOf("export", StringComparison.Ordinal));
+
+        var clauseBuilder = new System.Text.StringBuilder();
+        var signatureBuilder = new System.Text.StringBuilder();
+        var braceDepth = 0;
+        var sawOpeningBrace = false;
+
+        for (int lineIndex = startLineIndex; lineIndex < sanitizedLines.Length; lineIndex++)
+        {
+            var sanitizedLine = sanitizedLines[lineIndex].Trim();
+            if (sanitizedLine.Length > 0)
+            {
+                if (clauseBuilder.Length > 0)
+                    clauseBuilder.Append(' ');
+                clauseBuilder.Append(sanitizedLine);
+            }
+
+            var rawLine = rawLines[lineIndex].Trim();
+            if (rawLine.Length > 0)
+            {
+                if (signatureBuilder.Length > 0)
+                    signatureBuilder.Append(' ');
+                signatureBuilder.Append(rawLine);
+            }
+
+            foreach (var ch in sanitizedLines[lineIndex])
+            {
+                if (ch == '{')
+                {
+                    braceDepth++;
+                    sawOpeningBrace = true;
+                }
+                else if (ch == '}' && braceDepth > 0)
+                {
+                    braceDepth--;
+                }
+            }
+
+            endLineIndex = lineIndex;
+            if (!sawOpeningBrace || braceDepth != 0)
+                continue;
+
+            clause = clauseBuilder.ToString().Trim();
+            signature = signatureBuilder.ToString().Trim();
+            if (JavaScriptTypeScriptNamedReExportRegex.IsMatch(clause))
+                return true;
+
+            if (clause.Contains(" from ", StringComparison.Ordinal))
+                break;
+        }
+
+        endLineIndex = startLineIndex;
+        clause = string.Empty;
+        signature = string.Empty;
+        startColumn = -1;
+        return false;
     }
 
     private static void ExtractJavaScriptTypeScriptCommonJsNamedExportAssignments(
@@ -5036,7 +5153,8 @@ public static class SymbolExtractor
                         if (scanColumn >= sanitizedLine.Length)
                             break;
 
-                        var propertyMatch = JavaScriptTypeScriptExportedObjectLiteralPropertyRegex.Match(sanitizedLine[scanColumn..]);
+                        var remainingLine = sanitizedLine[scanColumn..];
+                        var propertyMatch = JavaScriptTypeScriptExportedObjectLiteralPropertyRegex.Match(remainingLine);
                         if (propertyMatch.Success)
                         {
                             var propertyName = propertyMatch.Groups["name"].Value;
@@ -5068,6 +5186,41 @@ public static class SymbolExtractor
                             }
 
                             scanColumn += propertyMatch.Length;
+                            continue;
+                        }
+
+                        var shorthandMatch = JavaScriptTypeScriptExportedObjectLiteralShorthandPropertyRegex.Match(remainingLine);
+                        if (shorthandMatch.Success)
+                        {
+                            var propertyName = shorthandMatch.Groups["name"].Value;
+                            var hasExistingContainerSymbol = symbols.Any(s =>
+                                s.Name == propertyName
+                                && s.ContainerKind == "object"
+                                && s.ContainerName == target.ContainerName);
+                            if (!hasExistingContainerSymbol)
+                            {
+                                AddSymbolRecord(
+                                    symbols,
+                                    cssSeenSymbols: null,
+                                    lineIndex + 1,
+                                    new SymbolRecord
+                                    {
+                                        FileId = fileId,
+                                        Kind = "property",
+                                        Name = propertyName,
+                                        Line = lineIndex + 1,
+                                        StartLine = lineIndex + 1,
+                                        StartColumn = scanColumn + shorthandMatch.Index,
+                                        EndLine = lineIndex + 1,
+                                        Signature = rawLines[lineIndex].Trim(),
+                                        ContainerKind = "object",
+                                        ContainerName = target.ContainerName,
+                                        Visibility = "export",
+                                    },
+                                    rawLines[lineIndex]);
+                            }
+
+                            scanColumn += shorthandMatch.Length;
                             continue;
                         }
                     }

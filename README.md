@@ -596,7 +596,7 @@ The database reflects the working tree at the time of the last index. After swit
 | Svelte | `.svelte` | -- |
 | Terraform | `.tf` | -- |
 
-JavaScript/TypeScript symbol extraction also surfaces barrel re-exports such as `export * from` / `export { foo as bar } from`, TypeScript `export type { User } from`, direct CommonJS named exports like `module.exports.foo = function () {}` / `exports.baz = value`, and exported object-literal alias properties such as `module.exports = { foo: inner }`.
+JavaScript/TypeScript symbol extraction also surfaces barrel re-exports such as `export * from`, `export * as ns from`, `export { foo as bar } from`, and TypeScript `export type { User } from`, including commented and multiline named re-export clauses, plus direct CommonJS named exports like `module.exports.foo = function () {}` / `exports.baz = value` and exported object-literal alias/shorthand properties such as `module.exports = { foo: inner }` / `module.exports = { foo, bar }`.
 
 Modern Node module layouts are indexed without renaming files: `.cjs` / `.mjs` are treated as JavaScript, and `.cts` / `.mts` (including declaration variants such as `.d.cts` / `.d.mts`) are treated as TypeScript.
 
@@ -1529,7 +1529,7 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 | Svelte | `.svelte` | -- |
 | Terraform | `.tf` | -- |
 
-JavaScript/TypeScript のシンボル抽出は、`export * from` / `export { foo as bar } from` のような barrel re-export、TypeScript の `export type { User } from`、`module.exports.foo = function () {}` / `exports.baz = value` のような直接的な CommonJS named export、`module.exports = { foo: inner }` のような exported object-literal alias property も表面化します。
+JavaScript/TypeScript のシンボル抽出は、`export * from` / `export * as ns from` / `export { foo as bar } from` のような barrel re-export と TypeScript の `export type { User } from` を、comment 付きや複数行の named re-export clause を含めて表面化します。さらに `module.exports.foo = function () {}` / `exports.baz = value` のような直接的な CommonJS named export に加え、`module.exports = { foo: inner }` / `module.exports = { foo, bar }` のような exported object-literal の alias / shorthand property も表面化します。
 
 モダンな Node モジュール構成でも、拡張子を変更せずにそのままインデックスできます。`.cjs` / `.mjs` は JavaScript、`.cts` / `.mts`（`.d.cts` / `.d.mts` の宣言ファイルを含む）は TypeScript として扱います。
 
