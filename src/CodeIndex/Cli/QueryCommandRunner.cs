@@ -2775,7 +2775,7 @@ public static class QueryCommandRunner
                 case "--max-line-width":
                     if (!TryReadRawOptionValue(args, ref i, "--max-line-width", inlineValue, out var maxLineWidthValue, out var missingMaxLineWidthError))
                         AddParseError(missingMaxLineWidthError!);
-                    else if (TryParsePositiveInt(maxLineWidthValue!, "--max-line-width", out var parsedMaxLineWidth, out var maxLineWidthError))
+                    else if (TryParseNonNegativeInt(maxLineWidthValue!, "--max-line-width", out var parsedMaxLineWidth, out var maxLineWidthError))
                     {
                         if (parsedMaxLineWidth > LineWidthFormatter.MaxAllowedLineWidth)
                             AddParseError($"--max-line-width must be less than or equal to {LineWidthFormatter.MaxAllowedLineWidth} (got '{maxLineWidthValue}').");
