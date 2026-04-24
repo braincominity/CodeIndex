@@ -22491,25 +22491,102 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunSearch_RejectsFindOnlyQueryOption()
+    public void RunSearch_QueryOptionAcceptsOptionLookingLiteral_Issue923()
     {
-        var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-            ["RunFind", "--query", "PrepareFindArgs", "--path", "src/CodeIndex/Cli/QueryCommandRunner.cs", "--count"],
-            _jsonOptions));
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue923_search_query_option");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "README.md",
+                "markdown",
+                "--path appears here\n");
 
-        Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Contains("--query is only supported by 'find'", stderr);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--query", "--path", "--path", "README.md", "--db", dbPath, "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]
-    public void RunExcerpt_RejectsFindOnlyQueryOption()
+    public void RunSearch_DoubleDashEscapesSingleOptionLookingQueryToken_Issue923()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue923_search_dashdash");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "README.md",
+                "markdown",
+                "--path appears here\n--json appears elsewhere\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--", "--path", "--path", "README.md", "--db", dbPath, "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("1", stdout.Trim());
+            Assert.Equal(string.Empty, stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("definition")]
+    [InlineData("references")]
+    [InlineData("callers")]
+    [InlineData("callees")]
+    [InlineData("symbols")]
+    [InlineData("files")]
+    [InlineData("inspect")]
+    [InlineData("impact")]
+    public void QueryCommands_AcceptNamedQueryEscapeForOptionLookingLiterals_Issue923(string command)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject($"cdidx_issue923_named_query_{command}");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Probe.cs",
+                "csharp",
+                "namespace Issue923; public class Probe { public void Run() { } } // --path\n");
+
+            var args = new[] { "--query", "--path", "--db", dbPath, "--limit", "1" };
+            var (exitCode, _, stderr) = CaptureConsole(() => RunIssue923NamedQueryCommand(command, args));
+
+            Assert.NotEqual(CommandExitCodes.UsageError, exitCode);
+            Assert.DoesNotContain("requires a value", stderr);
+            Assert.DoesNotContain("is not supported", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunExcerpt_RejectsQueryOption()
     {
         var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunExcerpt(
             ["src/CodeIndex/Cli/QueryCommandRunner.cs", "--start", "626", "--query", "src/CodeIndex/Cli/ConsoleUi.cs"],
             _jsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Contains("--query is only supported by 'find'", stderr);
+        Assert.Contains("--query is not supported by this command", stderr);
     }
 
     [Fact]
@@ -25307,6 +25384,22 @@ public class QueryCommandRunnerTests
             "callees" => QueryCommandRunner.RunCallees(args, _jsonOptions),
             "files" => QueryCommandRunner.RunFiles(args, _jsonOptions),
             "find" => QueryCommandRunner.RunFind(args, _jsonOptions),
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
+        };
+    }
+
+    private int RunIssue923NamedQueryCommand(string command, string[] args)
+    {
+        return command switch
+        {
+            "definition" => QueryCommandRunner.RunDefinition(args, _jsonOptions),
+            "references" => QueryCommandRunner.RunReferences(args, _jsonOptions),
+            "callers" => QueryCommandRunner.RunCallers(args, _jsonOptions),
+            "callees" => QueryCommandRunner.RunCallees(args, _jsonOptions),
+            "symbols" => QueryCommandRunner.RunSymbols(args, _jsonOptions),
+            "files" => QueryCommandRunner.RunFiles(args, _jsonOptions),
+            "inspect" => QueryCommandRunner.RunInspect(args, _jsonOptions),
+            "impact" => QueryCommandRunner.RunImpact(args, _jsonOptions),
             _ => throw new ArgumentOutOfRangeException(nameof(command), command, null),
         };
     }
