@@ -5613,6 +5613,26 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_DeleteUsingMixedTableAndTempSourcesAfterComma_AreNotTreatedAsComments()
+    {
+        // issue #792: `DELETE ... USING staging_log, #temp` must keep the temp source after the
+        // comma even when the previous list item is a regular table source.
+        // issue #792: `DELETE ... USING staging_log, #temp` は、直前の list item が通常テーブルでも
+        // comma 後続の temp source を保持する必要がある。
+        const string content = """
+            CREATE TABLE #staging_b (id int);
+            DELETE FROM audit_log USING staging_log, #staging_b AS b
+            WHERE audit_log.id = b.id;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "staging_log" && r.ReferenceKind == "reference");
+        Assert.Equal(1, references.Count(r => r.SymbolName == "#staging_b" && r.ReferenceKind == "reference"));
+    }
+
+    [Fact]
     public void Extract_SQL_MergeUsingDoesNotTreatOtherUsingClausesAsSources()
     {
         // issue #695: `USING` should stay on the SQL source path only for `MERGE ... USING <source>`,

@@ -342,7 +342,7 @@ public static class ReferenceExtractor
         $@"(?<![\w$])CREATE(?:\s+OR\s+(?:REPLACE|ALTER))?(?:\s+(?:TEMP|TEMPORARY))?\s+(?:PROC(?:EDURE)?|FUNCTION)\b(?:\s+IF\s+NOT\s+EXISTS)?\s+(?<name>{SqlTempIdentifierPattern})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SqlTrailingTempIdentifierRegex = new(
-        $@"^(?:{SqlTempIdentifierPattern})(?:\s+(?:AS\s+)?(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s*$",
+        $@"^(?:(?:ONLY)\b\s+)?(?<item>(?:{SqlTempIdentifierPattern}|{SqlQualifiedIdentifierNoCapturePattern}))(?:\s+(?:AS\s+)?(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SqlMergeTargetHintContinuationPrefixRegex = new(
         $@"(?<![\w$])MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?\s+{SqlQualifiedIdentifierNoCapturePattern}\s+WITH\s*\((?:[^()]|\([^()]*\))*$",
@@ -11411,9 +11411,23 @@ public static class ReferenceExtractor
         while (probe >= 0 && line[probe] == ',')
         {
             var priorListItem = line[..probe];
-            int sourceStart = priorListItem.LastIndexOf('#');
-            if (sourceStart < 0)
-                return true;
+            int sourceStart = priorListItem.LastIndexOf(',');
+            if (sourceStart >= 0)
+                sourceStart++;
+            else
+            {
+                sourceStart = priorListItem.LastIndexOf("USING", StringComparison.OrdinalIgnoreCase);
+                if (sourceStart >= 0)
+                    sourceStart += "USING".Length;
+                else
+                {
+                    sourceStart = priorListItem.LastIndexOf('#');
+                    if (sourceStart < 0)
+                        return true;
+                }
+            }
+            while (sourceStart < priorListItem.Length && char.IsWhiteSpace(priorListItem[sourceStart]))
+                sourceStart++;
 
             var listMatch = SqlTrailingTempIdentifierRegex.Match(priorListItem[sourceStart..]);
             if (!listMatch.Success)
