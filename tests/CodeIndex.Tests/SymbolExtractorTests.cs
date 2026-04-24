@@ -13255,15 +13255,66 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_PowerShell_DetectsSymbols()
     {
-        var content = "Import-Module ActiveDirectory\nusing module PSDesiredStateConfiguration\n\nclass ServerConfig {\n    [string]$Name\n}\n\nenum Environment {\n    Dev\n    Staging\n    Prod\n}\n\nfunction Get-UserInfo {\n    param($UserId)\n    Get-ADUser -Identity $UserId\n}\n\nfilter Where-Active {\n    if ($_.Enabled) { $_ }\n}";
+        var content = """
+            Import-Module ActiveDirectory
+            using module PSDesiredStateConfiguration
+            using namespace System.IO
+            using assembly System.Xml.Linq
+
+            configuration MyConfig {
+                Node 'localhost' { }
+            }
+
+            workflow TestFlow {
+                Get-Process
+            }
+
+            class ServerConfig {
+                [string]$Name
+            }
+
+            enum Environment {
+                Dev
+                Staging
+                Prod
+            }
+
+            function Get-UserInfo {
+                param($UserId)
+                Get-ADUser -Identity $UserId
+            }
+
+            function script:Private-Helper { return 42 }
+            function global:Setup-Env {
+                $env:APP_MODE = 'dev'
+            }
+            function local:Inner-Helper { return 'inner' }
+            function private:InternalUtil { return 'util' }
+
+            filter script:Where-Active {
+                if ($_.Enabled) { $_ }
+            }
+            """;
         var symbols = SymbolExtractor.Extract(1, "powershell", content);
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "ActiveDirectory");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "PSDesiredStateConfiguration");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System.IO");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System.Xml.Linq");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MyConfig");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "TestFlow");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ServerConfig");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Environment");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Get-UserInfo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Private-Helper");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Setup-Env");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Inner-Helper");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "InternalUtil");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Where-Active");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "script");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "global");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "local");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "private");
     }
 
     [Fact]

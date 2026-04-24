@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### Fixed
+- **PowerShell scope-prefixed functions and DSC/workflow declarations now extract correctly (#254, #308)** — `SymbolExtractor` now strips `script:` / `global:` / `local:` / `private:` from `function` / `filter` declaration names, and it also recognizes `configuration`, `workflow`, `using namespace`, and `using assembly` as PowerShell symbols. Added a focused regression that covers the plain and scope-prefixed function forms plus the additional top-level declaration forms. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`. Closes #254, #308.
 - **SQLite connection setup now retries transient busy/locked errors during concurrent reads** — `DbContext` now retries a few times when opening a connection or registering SQLite functions fails with a transient `SQLITE_BUSY` / `SQLITE_LOCKED` condition, which makes the concurrent-read test path more stable on Linux CI without changing the observable database contract. Affected: `src/CodeIndex/Database/DbContext.cs`.
 - **Long single-line query payloads can now be left untruncated with `--max-line-width 0` (#830)** — `search`, `references`, `find`, `excerpt`, and `inspect` now accept `--max-line-width 0` as an explicit full-line mode, so long Markdown or audit lines can be reviewed without `...(+N)...` elision when the caller needs the entire physical line. The MCP counterparts now expose the same zero-as-full-line contract through `maxLineWidth: 0`, `LineWidthFormatter` preserves the full line in that mode, and the CLI help/docs now describe the no-truncation escape hatch. Affected: `src/CodeIndex/Database/LineWidthFormatter.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`, `tests/CodeIndex.Tests/SearchSnippetFormatterTests.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CHANGELOG.md`. Closes #830.
 
@@ -904,6 +905,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 修正
+- **PowerShell の scope プレフィックス付き関数と DSC/workflow 宣言を正しく抽出するよう修正 (#254, #308)** — `SymbolExtractor` が `function` / `filter` の宣言名から `script:` / `global:` / `local:` / `private:` を外して実名を残すようになり、さらに `configuration`、`workflow`、`using namespace`、`using assembly` も PowerShell シンボルとして認識するようになりました。plain 形と scope プレフィックス付き関数、加えて追加のトップレベル宣言形をまとめて固定する regression を追加しました。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`。Closes #254, #308。
 
 ### [1.15.1] - 2026-04-24
 
