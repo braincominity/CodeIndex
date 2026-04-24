@@ -8602,6 +8602,27 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpDocCref_TreatsSameLineDelimitedDocCommentsAsDocComments()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                /** <summary><see cref="Foo"/></summary> */ void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols)
+            .Where(r => r.Line == 4 && r.ReferenceKind == "type_reference")
+            .ToList();
+
+        var fooReference = Assert.Single(references);
+        Assert.Equal("Foo", fooReference.SymbolName);
+        Assert.Equal("Run", fooReference.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpDocCref_TripleSlashKeepsPhysicalLineColumn()
     {
         const string content = """
@@ -8744,6 +8765,56 @@ public class ReferenceExtractorTests
 
         Assert.Contains(references, r => r.SymbolName == "Foo" && r.ContainerName == "Run");
         Assert.DoesNotContain(references, r => r.SymbolName == "Bar");
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatRawStringContentStartingWithDelimitedDocMarkerAsDocComment()
+    {
+        const string content = """"
+            class Foo {}
+            class Demo
+            {
+                string text = """
+                /** <summary><see cref="Foo"/></summary> */
+                """;
+
+                void Run() {}
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 5);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatVerbatimStringContentStartingWithDelimitedDocMarkerAsDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                string text = @"line1
+                /** <summary><see cref="Foo"/></summary> */
+                line3";
+
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 5);
     }
 
     [Fact]

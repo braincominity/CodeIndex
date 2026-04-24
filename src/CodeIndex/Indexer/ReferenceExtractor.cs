@@ -647,6 +647,9 @@ public static class ReferenceExtractor
         content = FileIndexer.StripLineLeadingBom(content);
         var lines = content.Split('\n');
         var structuralLines = StructuralLineMasker.MaskLines(language, lines);
+        var csharpLinesInsideMultilineStringContent = language == "csharp"
+            ? BuildCSharpMultilineStringContentLines(lines)
+            : null;
         var preparedLines = new string[lines.Length];
         for (var pi = 0; pi < lines.Length; pi++)
             preparedLines[pi] = PrepareLine(language, structuralLines[pi]);
@@ -762,6 +765,7 @@ public static class ReferenceExtractor
             var originalLine = lines[i];
             var preparedLine = preparedLines[i];
             if (language == "csharp"
+                && !(csharpLinesInsideMultilineStringContent?[i] ?? false)
                 && TryGetCSharpXmlDocCommentSpan(
                     originalLine,
                     csharpInDelimitedDocComment,
@@ -770,12 +774,20 @@ public static class ReferenceExtractor
                     out var nextCsharpDelimitedDocComment))
             {
                 var csharpDocCommentText = originalLine[csharpDocCommentStartIndex..csharpDocCommentEndExclusive];
-                if (csharpDocCommentText.IndexOf("cref=\"", StringComparison.OrdinalIgnoreCase) >= 0
-                    && CanAttachCSharpXmlDocCommentToNextDeclaration(
-                        FindInnermostContainer(containerCandidates, lineNumber)))
+                if (csharpDocCommentText.IndexOf("cref=\"", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
-                    var docContainer = FindDocumentedContainer(containerCandidates, lineNumber);
-                    if (docContainer != null)
+                    var innermostContainer = FindInnermostContainer(containerCandidates, lineNumber);
+                    var docContainer = FindDocumentedContainer(
+                        containerCandidates,
+                        structuralLines[i],
+                        lineNumber,
+                        GetCSharpSameLineDocumentedDeclarationStartColumn(
+                            originalLine,
+                            csharpDocCommentEndExclusive,
+                            nextCsharpDelimitedDocComment));
+                    if (docContainer != null
+                        && (docContainer.StartLine == lineNumber
+                            || CanAttachCSharpXmlDocCommentToNextDeclaration(innermostContainer)))
                     {
                         EmitCSharpDocCrefReferences(
                             csharpDocCommentText,
@@ -7610,8 +7622,41 @@ public static class ReferenceExtractor
         innermostContainer == null
         || innermostContainer.Kind is "class" or "struct" or "interface" or "enum" or "namespace";
 
-    private static SymbolRecord? FindDocumentedContainer(IReadOnlyList<SymbolRecord> candidates, int lineNumber)
+    private static int GetCSharpSameLineDocumentedDeclarationStartColumn(
+        string originalLine,
+        int commentEndExclusive,
+        bool nextDelimitedDocComment)
     {
+        if (nextDelimitedDocComment
+            || commentEndExclusive < 0
+            || commentEndExclusive + 1 >= originalLine.Length
+            || originalLine[commentEndExclusive] != '*'
+            || originalLine[commentEndExclusive + 1] != '/')
+        {
+            return -1;
+        }
+
+        var column = commentEndExclusive + 2;
+        while (column < originalLine.Length && char.IsWhiteSpace(originalLine[column]))
+            column++;
+
+        return column < originalLine.Length ? column : -1;
+    }
+
+    private static SymbolRecord? FindDocumentedContainer(
+        IReadOnlyList<SymbolRecord> candidates,
+        string structuralLine,
+        int lineNumber,
+        int sameLineDeclarationStartColumn)
+    {
+        var sameLineCandidate = FindSameLineDocumentedContainer(
+            candidates,
+            structuralLine,
+            lineNumber,
+            sameLineDeclarationStartColumn);
+        if (sameLineCandidate != null)
+            return sameLineCandidate;
+
         SymbolRecord? best = null;
         foreach (var candidate in candidates)
         {
@@ -7625,6 +7670,52 @@ public static class ReferenceExtractor
                        < ((best.BodyEndLine ?? best.EndLine) - (best.BodyStartLine ?? best.StartLine))))
             {
                 best = candidate;
+            }
+        }
+
+        return best;
+    }
+
+    private static SymbolRecord? FindSameLineDocumentedContainer(
+        IReadOnlyList<SymbolRecord> candidates,
+        string structuralLine,
+        int lineNumber,
+        int sameLineDeclarationStartColumn)
+    {
+        if (sameLineDeclarationStartColumn < 0)
+            return null;
+
+        SymbolRecord? best = null;
+        var bestStartColumn = int.MaxValue;
+        var bestSpanLength = int.MaxValue;
+        var bestKindRank = int.MaxValue;
+
+        foreach (var candidate in candidates)
+        {
+            if (candidate.StartLine != lineNumber
+                || candidate.EndLine != lineNumber
+                || string.IsNullOrEmpty(candidate.Signature))
+            {
+                continue;
+            }
+
+            if (!TryGetSameLineSignatureSpan(candidate, structuralLine, out var startColumn, out var endColumn)
+                || startColumn < sameLineDeclarationStartColumn)
+            {
+                continue;
+            }
+
+            var spanLength = endColumn - startColumn;
+            var kindRank = GetSameLineContainerKindRank(candidate.Kind);
+            if (best == null
+                || startColumn < bestStartColumn
+                || (startColumn == bestStartColumn && spanLength < bestSpanLength)
+                || (startColumn == bestStartColumn && spanLength == bestSpanLength && kindRank < bestKindRank))
+            {
+                best = candidate;
+                bestStartColumn = startColumn;
+                bestSpanLength = spanLength;
+                bestKindRank = kindRank;
             }
         }
 
@@ -7723,6 +7814,211 @@ public static class ReferenceExtractor
         }
 
         return -1;
+    }
+
+    private static bool[] BuildCSharpMultilineStringContentLines(string[] lines)
+    {
+        var insideStringContent = new bool[lines.Length];
+        var inBlockComment = false;
+        var inVerbatimString = false;
+        var rawStringDelimiterLength = 0;
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            insideStringContent[i] = inVerbatimString || rawStringDelimiterLength > 0;
+
+            var index = 0;
+            while (index < line.Length)
+            {
+                if (inBlockComment)
+                {
+                    var closeIndex = line.IndexOf("*/", index, StringComparison.Ordinal);
+                    if (closeIndex < 0)
+                        break;
+
+                    index = closeIndex + 2;
+                    inBlockComment = false;
+                    continue;
+                }
+
+                if (rawStringDelimiterLength > 0)
+                {
+                    var closeLength = CountCharacterRun(line, index, '"');
+                    if (closeLength >= rawStringDelimiterLength)
+                    {
+                        index += closeLength;
+                        rawStringDelimiterLength = 0;
+                        continue;
+                    }
+
+                    break;
+                }
+
+                if (inVerbatimString)
+                {
+                    if (line[index] == '"' && index + 1 < line.Length && line[index + 1] == '"')
+                    {
+                        index += 2;
+                        continue;
+                    }
+
+                    if (line[index] == '"')
+                    {
+                        index++;
+                        inVerbatimString = false;
+                        continue;
+                    }
+
+                    index++;
+                    continue;
+                }
+
+                if (StartsWithOrdinal(line, index, "//"))
+                    break;
+
+                if (StartsWithOrdinal(line, index, "/*"))
+                {
+                    inBlockComment = true;
+                    index += 2;
+                    continue;
+                }
+
+                if (TryStartCSharpRawString(line, index, out var rawOpeningLength, out var rawDelimiterLength))
+                {
+                    rawStringDelimiterLength = rawDelimiterLength;
+                    index += rawOpeningLength;
+                    continue;
+                }
+
+                if (TryStartCSharpVerbatimString(line, index, out var verbatimOpeningLength))
+                {
+                    inVerbatimString = true;
+                    index += verbatimOpeningLength;
+                    continue;
+                }
+
+                if (TryStartCSharpRegularString(line, index, out var regularOpeningLength))
+                {
+                    index += regularOpeningLength;
+                    while (index < line.Length)
+                    {
+                        if (line[index] == '\\')
+                        {
+                            index += Math.Min(2, line.Length - index);
+                            continue;
+                        }
+
+                        if (line[index] == '"')
+                        {
+                            index++;
+                            break;
+                        }
+
+                        index++;
+                    }
+
+                    continue;
+                }
+
+                if (line[index] == '\'')
+                {
+                    index++;
+                    while (index < line.Length)
+                    {
+                        if (line[index] == '\\')
+                        {
+                            index += Math.Min(2, line.Length - index);
+                            continue;
+                        }
+
+                        if (line[index] == '\'')
+                        {
+                            index++;
+                            break;
+                        }
+
+                        index++;
+                    }
+
+                    continue;
+                }
+
+                index++;
+            }
+        }
+
+        return insideStringContent;
+    }
+
+    private static bool TryStartCSharpRawString(
+        string line,
+        int startIndex,
+        out int openingLength,
+        out int delimiterLength)
+    {
+        openingLength = 0;
+        delimiterLength = 0;
+
+        var quoteIndex = startIndex;
+        while (quoteIndex < line.Length && line[quoteIndex] == '$')
+            quoteIndex++;
+
+        delimiterLength = CountCharacterRun(line, quoteIndex, '"');
+        if (delimiterLength < 3)
+            return false;
+
+        openingLength = (quoteIndex - startIndex) + delimiterLength;
+        return true;
+    }
+
+    private static bool TryStartCSharpVerbatimString(string line, int startIndex, out int openingLength)
+    {
+        openingLength = 0;
+        if (StartsWithOrdinal(line, startIndex, "$@\"") || StartsWithOrdinal(line, startIndex, "@$\""))
+        {
+            openingLength = 3;
+            return true;
+        }
+
+        if (!StartsWithOrdinal(line, startIndex, "@\""))
+            return false;
+
+        openingLength = 2;
+        return true;
+    }
+
+    private static bool TryStartCSharpRegularString(string line, int startIndex, out int openingLength)
+    {
+        openingLength = 0;
+        if (StartsWithOrdinal(line, startIndex, "$\""))
+        {
+            openingLength = 2;
+            return true;
+        }
+
+        if (line[startIndex] != '"')
+            return false;
+
+        openingLength = 1;
+        return true;
+    }
+
+    private static bool StartsWithOrdinal(string line, int startIndex, string value)
+    {
+        if (startIndex + value.Length > line.Length)
+            return false;
+
+        return string.Compare(line, startIndex, value, 0, value.Length, StringComparison.Ordinal) == 0;
+    }
+
+    private static int CountCharacterRun(string line, int startIndex, char value)
+    {
+        var index = startIndex;
+        while (index < line.Length && line[index] == value)
+            index++;
+
+        return index - startIndex;
     }
 
     private static int GetSameLineContainerKindRank(string? kind) => kind switch
