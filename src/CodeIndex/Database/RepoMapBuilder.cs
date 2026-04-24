@@ -177,6 +177,8 @@ internal sealed class RepoMapBuilder
                    (SELECT s.name
                     FROM symbols s
                     WHERE s.file_id = f.id
+                      AND f.lang = 'java'
+                      AND (f.path = 'module-info.java' OR f.path LIKE '%/module-info.java')
                       AND s.kind = 'namespace'
                     ORDER BY s.line
                     LIMIT 1) AS module_name,
