@@ -8123,6 +8123,38 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpSwitchExpressionGenericTypePatterns_DoNotSplitAtTypeArgumentCommas()
+    {
+        // issue #732 follow-up: generic type-argument commas inside a switch-expression arm
+        // are part of the type head, not arm separators.
+        // issue #732 の追補: switch 式 arm 内の generic 型引数カンマは arm 区切りではなく
+        // 型 head の一部として扱う必要がある。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+            class Shape {}
+            class Wrapper<TLeft, TRight> {}
+
+            class Demo
+            {
+                int Match(object value) => value switch
+                {
+                    Wrapper<Point, Shape> => 1,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Wrapper" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+    }
+
+    [Fact]
     public void Extract_CsharpVerbatimPatternTypeNames_DoNotCollapseIntoBarePatternTokens()
     {
         // issue #677: `@not` / `@default` are legal type names, so the non-type pattern

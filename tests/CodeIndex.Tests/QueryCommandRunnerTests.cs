@@ -16065,6 +16065,65 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpSwitchExpressionGenericTypePatternsKeepOuterTypeAndArguments()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_switch_expression_generic_type_patterns");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Probe;
+
+                class Point {}
+                class Shape {}
+                class Wrapper<TLeft, TRight> {}
+
+                class Demo
+                {
+                    int Match(object value) => value switch
+                    {
+                        Wrapper<Point, Shape> => 1,
+                        _ => 0,
+                    };
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (wrapperExitCode, wrapperStdout, wrapperStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Wrapper", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            var wrapperRows = ParseJsonLines(wrapperStdout);
+
+            var (pointExitCode, pointStdout, pointStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Point", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            var pointRows = ParseJsonLines(pointStdout);
+
+            var (shapeExitCode, shapeStdout, shapeStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Shape", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            var shapeRows = ParseJsonLines(shapeStdout);
+
+            Assert.Equal(CommandExitCodes.Success, wrapperExitCode);
+            Assert.Equal(string.Empty, wrapperStderr);
+            Assert.Single(wrapperRows);
+
+            Assert.Equal(CommandExitCodes.Success, pointExitCode);
+            Assert.Equal(string.Empty, pointStderr);
+            Assert.Single(pointRows);
+
+            Assert.Equal(CommandExitCodes.Success, shapeExitCode);
+            Assert.Equal(string.Empty, shapeStderr);
+            Assert.Single(shapeRows);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpVerbatimPatternTypesSurviveBareTokenFilter()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_verbatim_pattern_types");

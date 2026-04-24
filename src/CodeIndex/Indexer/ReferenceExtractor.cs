@@ -5102,6 +5102,7 @@ public static class ReferenceExtractor
         var parenDepth = 0;
         var bracketDepth = 0;
         var braceDepth = 0;
+        var angleDepth = 0;
         for (var index = arrowIndex - 1; index >= 0; index--)
         {
             var current = bodyText[index];
@@ -5121,6 +5122,22 @@ public static class ReferenceExtractor
                     if (bracketDepth > 0)
                         bracketDepth--;
                     break;
+                case '>':
+                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0
+                        && IsPotentialCSharpGenericClose(bodyText, index, arrowIndex))
+                    {
+                        angleDepth++;
+                    }
+
+                    break;
+                case '<':
+                    if (angleDepth > 0 && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0
+                        && IsPotentialCSharpGenericOpen(bodyText, index, arrowIndex))
+                    {
+                        angleDepth--;
+                    }
+
+                    break;
                 case '}':
                     braceDepth++;
                     break;
@@ -5131,7 +5148,7 @@ public static class ReferenceExtractor
                         break;
                     }
 
-                    if (parenDepth == 0 && bracketDepth == 0)
+                    if (parenDepth == 0 && bracketDepth == 0 && angleDepth == 0)
                     {
                         armStartOffset = SkipWhitespaceForward(bodyText, index + 1);
                         return armStartOffset < arrowIndex;
@@ -5139,7 +5156,7 @@ public static class ReferenceExtractor
 
                     break;
                 case ',':
-                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0)
                     {
                         armStartOffset = SkipWhitespaceForward(bodyText, index + 1);
                         return armStartOffset < arrowIndex;
@@ -5147,13 +5164,70 @@ public static class ReferenceExtractor
 
                     break;
                 case ';':
-                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0)
                         return false;
                     break;
             }
         }
 
         return false;
+    }
+
+    private static bool IsPotentialCSharpGenericClose(string bodyText, int index, int arrowIndex)
+    {
+        var leftIndex = SkipWhitespaceBackward(bodyText, index - 1);
+        if (leftIndex < 0)
+            return false;
+
+        var leftChar = bodyText[leftIndex];
+        if (!IsCSharpIdentifierPart(leftChar) && leftChar is not '>' and not ']' and not ')' and not '?')
+            return false;
+
+        if (IsCSharpIdentifierPart(leftChar)
+            && TryReadPreviousIdentifierToken(bodyText, leftIndex, out var previousToken)
+            && IsCSharpPatternControlKeyword(NormalizeCSharpIdentifier(previousToken)))
+        {
+            return false;
+        }
+
+        var rightIndex = SkipWhitespaceForward(bodyText, index + 1);
+        if (rightIndex >= arrowIndex)
+            return true;
+
+        if (bodyText[rightIndex] == '=' && rightIndex + 1 < bodyText.Length && bodyText[rightIndex + 1] == '>')
+            return true;
+
+        if (bodyText[rightIndex] is '>' or ',' or '?' or '{' or '[' or '(' or ')' or ']' or '.')
+            return true;
+
+        if (IsCSharpIdentifierStart(bodyText[rightIndex])
+            && TryReadNextIdentifierToken(bodyText, rightIndex, out var nextToken))
+        {
+            return NormalizeCSharpIdentifier(nextToken) is not "when";
+        }
+
+        return false;
+    }
+
+    private static bool IsPotentialCSharpGenericOpen(string bodyText, int index, int arrowIndex)
+    {
+        var leftIndex = SkipWhitespaceBackward(bodyText, index - 1);
+        if (leftIndex < 0)
+            return false;
+
+        var leftChar = bodyText[leftIndex];
+        if (!IsCSharpIdentifierPart(leftChar) && leftChar is not '>' and not ']' and not ')' and not '?')
+            return false;
+
+        var rightIndex = SkipWhitespaceForward(bodyText, index + 1);
+        if (rightIndex >= arrowIndex)
+            return false;
+
+        if (IsCSharpIdentifierStart(bodyText[rightIndex])
+            && TryReadNextIdentifierToken(bodyText, rightIndex, out _))
+            return true;
+
+        return bodyText[rightIndex] is '>' or '[' or '(';
     }
 
     private static bool TryParseCSharpSwitchExpressionArmPatternDesignation(
@@ -7612,6 +7686,25 @@ public static class ReferenceExtractor
             return false;
 
         token = text[start..(end + 1)];
+        return token.Length > 0;
+    }
+
+    private static bool TryReadNextIdentifierToken(string text, int index, out string token)
+    {
+        token = string.Empty;
+        var start = index;
+        while (start < text.Length && !IsCSharpIdentifierPart(text[start]))
+            start++;
+        if (start >= text.Length)
+            return false;
+
+        var end = start;
+        while (end < text.Length && IsCSharpIdentifierPart(text[end]))
+            end++;
+        if (end <= start)
+            return false;
+
+        token = text[start..end];
         return token.Length > 0;
     }
 
