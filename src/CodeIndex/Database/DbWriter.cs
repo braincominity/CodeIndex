@@ -926,6 +926,7 @@ public class DbWriter
         // 存在するだけで非 attribute impostor が `is_metadata_target=1` に昇格するのを防ぐ。
         var scopeNameToIds = new Dictionary<(string Scope, string Name), List<long>>();
         var rowScope = new Dictionary<long, string>();
+        var rowFileId = new Dictionary<long, long>();
         var bases = new Dictionary<long, List<string>>();
         foreach (var row in rows)
         {
@@ -940,6 +941,7 @@ public class DbWriter
             }
             string scope = GetEnclosingScope(row.QualifiedName, row.Name);
             rowScope[row.Id] = scope;
+            rowFileId[row.Id] = row.FileId;
             var scopeKey = (scope, row.Name);
             if (!scopeNameToIds.TryGetValue(scopeKey, out var sbucket))
             {
@@ -950,6 +952,16 @@ public class DbWriter
             bases[row.Id] = ParseCSharpBaseIdentifiers(row.Signature);
         }
 
+        // Per-file import tables so unqualified bases that come from `using Namespace;` /
+        // `using Alias = FQN;` directives resolve to the right in-repo class, and repo-wide
+        // aggregated `global using` so C# 10+ global directives still widen every file's
+        // lookup set. Aliases can also target a qualified type (`using AliasAttr = A.BaseAttr;`)
+        // whose target itself lives in a sibling file. Issue #435 codex review iter 5.
+        // ファイル別 import テーブル。非修飾基底が `using Namespace;` や `using Alias = FQN;` 経由
+        // で別ファイルの実体に解決される C# の一般パターンをカバーする。`global using` は全ファイルで
+        // 集約して、ファイルを跨ぐ拡張も拾う。Issue #435 codex review iter 5。
+        var (perFileImports, globalImports) = LoadCSharpImportsByFile();
+
         var targets = new HashSet<long>();
         bool changed = true;
         while (changed)
@@ -959,7 +971,10 @@ public class DbWriter
             {
                 if (targets.Contains(row.Id))
                     continue;
-                if (IsMetadataTargetByBases(bases[row.Id], rowScope[row.Id], targets, scopeNameToIds, qualifiedToIds))
+                FileImportSet? fileImports = null;
+                if (rowFileId.TryGetValue(row.Id, out var fid) && perFileImports.TryGetValue(fid, out var perFile))
+                    fileImports = perFile;
+                if (IsMetadataTargetByBases(bases[row.Id], rowScope[row.Id], targets, scopeNameToIds, qualifiedToIds, fileImports, globalImports))
                 {
                     targets.Add(row.Id);
                     changed = true;
@@ -982,20 +997,20 @@ public class DbWriter
         txn?.Commit();
     }
 
-    private List<(long Id, string Name, string? Signature, string? QualifiedName)> LoadCSharpClassRows()
+    private List<(long Id, long FileId, string Name, string? Signature, string? QualifiedName)> LoadCSharpClassRows()
     {
-        var rows = new List<(long Id, string Name, string? Signature, string? QualifiedName)>();
+        var rows = new List<(long Id, long FileId, string Name, string? Signature, string? QualifiedName)>();
         if (!ColumnExists("symbols", "signature") || !ColumnExists("symbols", "is_metadata_target"))
             return rows;
         bool hasQualified = ColumnExists("symbols", "container_qualified_name");
 
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = hasQualified
-            ? @"SELECT s.id, s.name, s.signature, s.container_qualified_name
+            ? @"SELECT s.id, s.file_id, s.name, s.signature, s.container_qualified_name
                 FROM symbols s
                 JOIN files f ON f.id = s.file_id
                 WHERE f.lang = 'csharp' AND s.kind = 'class' AND s.name IS NOT NULL"
-            : @"SELECT s.id, s.name, s.signature, NULL
+            : @"SELECT s.id, s.file_id, s.name, s.signature, NULL
                 FROM symbols s
                 JOIN files f ON f.id = s.file_id
                 WHERE f.lang = 'csharp' AND s.kind = 'class' AND s.name IS NOT NULL";
@@ -1004,11 +1019,130 @@ public class DbWriter
         {
             rows.Add((
                 reader.GetInt64(0),
-                reader.GetString(1),
-                reader.IsDBNull(2) ? null : reader.GetString(2),
-                reader.IsDBNull(3) ? null : reader.GetString(3)));
+                reader.GetInt64(1),
+                reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4)));
         }
         return rows;
+    }
+
+    // Per-file import set for C# unqualified-base resolution. `Namespaces` lists each
+    // `using Foo.Bar;` target so `class X : Base` can probe `Foo.Bar.Base` in the qualified
+    // index; `Aliases` maps `using Alias = Foo.Bar.Type;` directives so `class X : Alias`
+    // resolves to `Foo.Bar.Type`. `using static Foo.Bar;` and `extern alias Foo;` are out
+    // of scope — they do not introduce a plain namespace-prefix lookup that a C# base
+    // clause would use. Issue #435 codex review iter 5.
+    // C# 非修飾基底解決用のファイル別 import セット。`Namespaces` は `using Foo.Bar;` の集合。
+    // `Aliases` は `using Alias = Foo.Bar.Type;` のエイリアス -> ターゲット写像。`using static`
+    // と `extern alias` は base 句が引けない文脈なので対象外。Issue #435 codex review iter 5。
+    private sealed class FileImportSet
+    {
+        public List<string> Namespaces { get; } = new();
+        public Dictionary<string, string> Aliases { get; } = new(StringComparer.Ordinal);
+    }
+
+    // Load `symbols.kind='import'` rows for every C# file and partition each row into either
+    // a namespace import or an alias import. `global using` directives (C# 10+) are aggregated
+    // into a repo-wide set because they widen the import lookup in every file, even ones that
+    // do not contain them literally. The split is driven by the stored signature — `using X =
+    // Y.Z;` contains `=` before the terminating `;`, which distinguishes alias form from plain
+    // namespace form even when both names tokenise as a single identifier.
+    // `symbols.kind='import'` 行を C# ファイル別に読み、namespace 用 / alias 用に分ける。
+    // `global using`（C# 10+）はリポジトリ全体に効くので、別途集約した集合として返す。判定は
+    // 保存済み signature から行い、`=` があれば alias と認識する。
+    private (Dictionary<long, FileImportSet> PerFile, FileImportSet Global) LoadCSharpImportsByFile()
+    {
+        var perFile = new Dictionary<long, FileImportSet>();
+        var global = new FileImportSet();
+        if (!TableExists("symbols"))
+            return (perFile, global);
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"SELECT s.file_id, s.name, s.signature
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.lang = 'csharp' AND s.kind = 'import' AND s.name IS NOT NULL";
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            long fileId = reader.GetInt64(0);
+            string rawName = reader.GetString(1);
+            string? signature = reader.IsDBNull(2) ? null : reader.GetString(2);
+            if (!perFile.TryGetValue(fileId, out var bag))
+            {
+                bag = new FileImportSet();
+                perFile[fileId] = bag;
+            }
+            RegisterCSharpImport(bag, global, rawName, signature);
+        }
+        return (perFile, global);
+    }
+
+    private static void RegisterCSharpImport(FileImportSet perFile, FileImportSet global, string rawName, string? signature)
+    {
+        string name = rawName.Trim();
+        if (name.Length == 0)
+            return;
+        // `extern alias X;` surfaces as an `import` row too (see SymbolExtractor). We skip
+        // it — extern aliases map to assemblies, not to a type/namespace the writer has
+        // indexed, and the qualified-name index is unaware of the alias identity.
+        // `extern alias X;` も import 行として現れるがアセンブリ別名でしかなく resolver 側の
+        // qualified 索引には載らないので対象外。
+        if (signature != null && signature.IndexOf("extern", StringComparison.Ordinal) >= 0
+            && System.Text.RegularExpressions.Regex.IsMatch(signature, @"^\s*extern\s+alias\b"))
+        {
+            return;
+        }
+        bool isGlobal = signature != null
+            && System.Text.RegularExpressions.Regex.IsMatch(signature, @"^\s*global\s+using\b");
+        bool isStatic = signature != null
+            && System.Text.RegularExpressions.Regex.IsMatch(signature, @"^\s*(?:global\s+)?using\s+static\b");
+        // `using static Foo.Bar;` imports the static members of `Foo.Bar` into the file's
+        // scope — NOT a namespace that a base clause `class X : Base` could pull from.
+        // Drop it so we don't confuse the alias/namespace paths.
+        // `using static` は静的メンバーを取り込むだけで base 句の解決経路には使えない。
+        if (isStatic)
+            return;
+        string? aliasTarget = null;
+        string? aliasName = null;
+        if (signature != null)
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(
+                signature,
+                @"^\s*(?:global\s+)?using\s+(?<alias>\w+)\s*=\s*(?<target>[^;]+?)\s*;");
+            if (m.Success)
+            {
+                aliasName = m.Groups["alias"].Value.Trim();
+                aliasTarget = m.Groups["target"].Value.Trim();
+            }
+        }
+        if (aliasName != null && aliasTarget != null && aliasName.Length > 0 && aliasTarget.Length > 0)
+        {
+            // Normalize `global::` prefix off the alias target so the downstream qualified
+            // lookup sees the same key shape (`A.BaseAttr`) regardless of source syntax.
+            // alias の target 先頭の `global::` は剥がして qualified 索引のキー形に合わせる。
+            if (aliasTarget.StartsWith("global::", StringComparison.Ordinal))
+                aliasTarget = aliasTarget.Substring("global::".Length);
+            perFile.Aliases[aliasName] = aliasTarget;
+            if (isGlobal)
+                global.Aliases[aliasName] = aliasTarget;
+            return;
+        }
+        // Fall-through: plain `using Foo.Bar;`. `name` is captured as `Foo.Bar` by the
+        // SymbolExtractor regex, so we can use it directly. Trailing `global::` can sneak
+        // through in exotic files (`using global::System.Linq;`) — strip it for parity
+        // with the alias path so every downstream probe sees one consistent prefix.
+        // 通常の `using Foo.Bar;` は name 側に `Foo.Bar` が入っているのでそれを使う。
+        // 稀な `using global::X;` も prefix を剥がして qualified 索引と揃える。
+        string ns = name;
+        if (ns.StartsWith("global::", StringComparison.Ordinal))
+            ns = ns.Substring("global::".Length);
+        if (ns.Length == 0)
+            return;
+        perFile.Namespaces.Add(ns);
+        if (isGlobal)
+            global.Namespaces.Add(ns);
     }
 
     // Yield every qualified-name variant that callers might write against this class:
@@ -1089,7 +1223,9 @@ public class DbWriter
         string derivingScope,
         HashSet<long> resolvedTargets,
         Dictionary<(string Scope, string Name), List<long>> scopeNameToIds,
-        Dictionary<string, List<long>> qualifiedToIds)
+        Dictionary<string, List<long>> qualifiedToIds,
+        FileImportSet? fileImports,
+        FileImportSet? globalImports)
     {
         foreach (var baseName in baseIdentifiers)
         {
@@ -1208,14 +1344,155 @@ public class DbWriter
                 continue;
             }
 
-            // No in-scope same-name row — treat as external and use the BCL suffix
-            // fallback. Intentionally does NOT consult a global simple-name bucket;
-            // that was the iter 4 false-positive. / スコープチェーンに同名行が無ければ
-            // 外部基底として扱い、末尾サフィックス規約のみにフォールバックする。
+            // Import-aware fallback: the deriving file may bring the base type into scope via
+            // `using Namespace;` (plain namespace import) or `using Alias = FQN;` (alias
+            // import). The C# compiler considers these before concluding a base is external,
+            // and production codebases routinely split `A.BaseAttr : Attribute` and
+            // `B.FooAttribute : BaseAttr` across sibling files with a `using A;` at the top.
+            // Without this path, iter 4's strict same-scope rule false-negatives every such
+            // file and emits zero metadata edges. Issue #435 codex review iter 5.
+            // ファイルが持つ `using Namespace;` / `using Alias = FQN;` を経由した解決。C# の
+            // 一般的な `using A; class FooAttribute : BaseAttr {}` パターンで、`A.BaseAttr :
+            // Attribute` が別ファイルにある場合に、これが無いと iter 4 は false-negative になる。
+            bool anyImportInRepoMatch = false;
+            // 1. Alias imports: `using AliasAttr = A.BaseAttr;` → probe qualified index with
+            //    the alias target. Alias matches take precedence over namespace imports per
+            //    C# lookup rules.
+            // 1. alias import: `using AliasAttr = A.BaseAttr;` は qualified 索引を target で引く。
+            if (TryResolveAliasImport(head, fileImports, qualifiedToIds, resolvedTargets, out var aliasMatched, out var aliasResolved))
+            {
+                if (aliasResolved)
+                    return true;
+                if (aliasMatched)
+                    anyImportInRepoMatch = true;
+            }
+            if (TryResolveAliasImport(head, globalImports, qualifiedToIds, resolvedTargets, out aliasMatched, out aliasResolved))
+            {
+                if (aliasResolved)
+                    return true;
+                if (aliasMatched)
+                    anyImportInRepoMatch = true;
+            }
+            // 2. Namespace imports: for every `using Ns;` probe `Ns.head` in the qualified
+            //    index. A single file often has several namespace imports; any one that hits
+            //    an in-repo class is enough to stop the BCL suffix fallback from firing.
+            // 2. namespace import: `using Ns;` ごとに `Ns.head` を qualified 索引で引く。
+            if (TryResolveNamespaceImport(head, fileImports, qualifiedToIds, resolvedTargets, out var nsMatched, out var nsResolved))
+            {
+                if (nsResolved)
+                    return true;
+                if (nsMatched)
+                    anyImportInRepoMatch = true;
+            }
+            if (TryResolveNamespaceImport(head, globalImports, qualifiedToIds, resolvedTargets, out nsMatched, out nsResolved))
+            {
+                if (nsResolved)
+                    return true;
+                if (nsMatched)
+                    anyImportInRepoMatch = true;
+            }
+
+            if (anyImportInRepoMatch)
+            {
+                // An import resolved to a concrete in-repo class that is not (yet) a
+                // target — wait for the next fixed-point iteration. Falling through to the
+                // BCL suffix heuristic would contradict the user's explicit import and
+                // false-promote when the imported class is genuinely not an Attribute.
+                // import 経由で in-repo class には当たったが未確定。次回反復に委ねる。
+                continue;
+            }
+
+            // No in-scope same-name row AND no import match — treat as external and use the
+            // BCL suffix fallback. Intentionally does NOT consult a global simple-name
+            // bucket; that was the iter 4 false-positive. / スコープチェーンにも import にも
+            // 同名行が無ければ外部基底として扱い、末尾サフィックス規約のみにフォールバックする。
             if (head.Length > "Attribute".Length && head.EndsWith("Attribute", StringComparison.Ordinal))
                 return true;
         }
         return false;
+    }
+
+    private static bool TryResolveAliasImport(
+        string head,
+        FileImportSet? imports,
+        Dictionary<string, List<long>> qualifiedToIds,
+        HashSet<long> resolvedTargets,
+        out bool matchedAnyInRepoClass,
+        out bool resolvedToTarget)
+    {
+        matchedAnyInRepoClass = false;
+        resolvedToTarget = false;
+        if (imports == null)
+            return false;
+        if (!imports.Aliases.TryGetValue(head, out var target))
+            return false;
+        // Alias may point to BCL `Attribute` directly — honor the direct-attribute rule.
+        // alias の先が BCL Attribute そのものなら直接 attribute とみなす。
+        if (target == "System.Attribute" || target == "Attribute"
+            || target == "global::System.Attribute" || target == "global::Attribute")
+        {
+            resolvedToTarget = true;
+            return true;
+        }
+        if (target.StartsWith("global::", StringComparison.Ordinal))
+            target = target.Substring("global::".Length);
+        if (qualifiedToIds.TryGetValue(target, out var ids))
+        {
+            matchedAnyInRepoClass = true;
+            foreach (var id in ids)
+            {
+                if (resolvedTargets.Contains(id))
+                {
+                    resolvedToTarget = true;
+                    return true;
+                }
+            }
+        }
+        // Alias target did not match an in-repo class. If the target's simple-name tail
+        // ends with `Attribute` we still trust the BCL convention for an external base.
+        // alias 先が repo 内に無くても simple tail が `Attribute` で終わるなら BCL 規約で attribute 扱い。
+        int lastDotInTarget = target.LastIndexOf('.');
+        string tail = lastDotInTarget >= 0 ? target.Substring(lastDotInTarget + 1) : target;
+        if (tail.Length > "Attribute".Length && tail.EndsWith("Attribute", StringComparison.Ordinal))
+        {
+            resolvedToTarget = true;
+            return true;
+        }
+        return true;
+    }
+
+    private static bool TryResolveNamespaceImport(
+        string head,
+        FileImportSet? imports,
+        Dictionary<string, List<long>> qualifiedToIds,
+        HashSet<long> resolvedTargets,
+        out bool matchedAnyInRepoClass,
+        out bool resolvedToTarget)
+    {
+        matchedAnyInRepoClass = false;
+        resolvedToTarget = false;
+        if (imports == null)
+            return false;
+        bool any = false;
+        foreach (var ns in imports.Namespaces)
+        {
+            if (ns.Length == 0)
+                continue;
+            var key = ns + "." + head;
+            if (!qualifiedToIds.TryGetValue(key, out var ids))
+                continue;
+            any = true;
+            matchedAnyInRepoClass = true;
+            foreach (var id in ids)
+            {
+                if (resolvedTargets.Contains(id))
+                {
+                    resolvedToTarget = true;
+                    return true;
+                }
+            }
+        }
+        return any;
     }
 
     /// <summary>

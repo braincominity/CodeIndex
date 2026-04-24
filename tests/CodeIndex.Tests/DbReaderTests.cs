@@ -3587,6 +3587,138 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverHandlesImportedNamespaceBase()
+    {
+        // issue #435 codex review iter 5: the iter-4 fix made unqualified base resolution
+        // strictly same-scope only. That regressed the common C# pattern
+        // `using A; namespace B { class FooAttribute : BaseAttr {} }` where `A.BaseAttr :
+        // Attribute` is indexed in a sibling file. The iter-5 fix threads the deriving
+        // file's `using` directives into the resolver so, after a same-scope lookup miss,
+        // `BaseAttr` is probed as `A.BaseAttr` via `using A;` before falling through to
+        // the BCL `Attribute`-suffix convention.
+        // issue #435 codex review iter 5: iter 4 の strict same-scope 限定が
+        // `using A; class FooAttribute : BaseAttr` の一般的 C# パターンで false-negative を
+        // 招いた。iter 5 で `using` 指令を resolver に通し、same-scope 解決失敗後に
+        // `using A;` 経由で `A.BaseAttr` を qualified 索引に引き当てる。
+        InsertIndexedFile("src/A/BaseAttr.cs", "csharp",
+            """
+            using System;
+
+            namespace A
+            {
+                public class BaseAttr : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/B/FooAttribute.cs", "csharp",
+            """
+            using A;
+
+            namespace B
+            {
+                public class FooAttribute : BaseAttr
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/B/Svc.cs", "csharp",
+            """
+            namespace B
+            {
+                [Foo]
+                public class Svc
+                {
+                }
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        // Column-level invariant: FooAttribute must resolve through `using A;` to
+        // `A.BaseAttr : Attribute` even though B has no same-scope `BaseAttr` of its own.
+        // 列レベル不変条件: B 側に `BaseAttr` が無くても `using A;` 経由で解決されること。
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT f.path, s.is_metadata_target
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE s.kind = 'class' AND s.name = 'FooAttribute'";
+        long flag;
+        using (var reader = cmd.ExecuteReader())
+        {
+            Assert.True(reader.Read(), "FooAttribute row must exist");
+            flag = reader.GetInt64(1);
+        }
+        Assert.Equal(1L, flag);
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+        Assert.Contains(dependencies, d => d.SourcePath == "src/B/Svc.cs" && d.TargetPath == "src/B/FooAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverHandlesUsingAliasBase()
+    {
+        // issue #435 codex review iter 5: the alias form of the same regression —
+        // `using AliasAttr = A.BaseAttr; class FooAttribute : AliasAttr {}`. Before iter 5,
+        // the resolver had no knowledge of alias imports and left FooAttribute at
+        // `is_metadata_target=0`, dropping the `[Foo]` → FooAttribute metadata edge.
+        // issue #435 codex review iter 5: alias 形式の同一 regression。
+        // `using AliasAttr = A.BaseAttr;` の alias 索引を resolver に取り込み、
+        // `class FooAttribute : AliasAttr` が qualified 索引上で `A.BaseAttr` に解決される。
+        InsertIndexedFile("src/A/BaseAttr.cs", "csharp",
+            """
+            using System;
+
+            namespace A
+            {
+                public class BaseAttr : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/B/FooAttribute.cs", "csharp",
+            """
+            using AliasAttr = A.BaseAttr;
+
+            namespace B
+            {
+                public class FooAttribute : AliasAttr
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/B/Svc.cs", "csharp",
+            """
+            namespace B
+            {
+                [Foo]
+                public class Svc
+                {
+                }
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.is_metadata_target
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.path = 'src/B/FooAttribute.cs' AND s.kind = 'class' AND s.name = 'FooAttribute'";
+        var flag = cmd.ExecuteScalar();
+        Assert.Equal(1L, Convert.ToInt64(flag));
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+        Assert.Contains(dependencies, d => d.SourcePath == "src/B/Svc.cs" && d.TargetPath == "src/B/FooAttribute.cs");
+    }
+
+    [Fact]
     public void ResolveCSharpMetadataTargets_DoesNotMistakeGenericConstraintForBaseList()
     {
         // issue #435 codex review iter 1: `class Foo<T> where T : Attribute {}` has no

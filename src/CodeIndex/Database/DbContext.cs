@@ -301,7 +301,21 @@ public class DbContext : IDisposable
     // 言語別 metadata-target 列の正式 readiness。index 終端で resolver が当該言語の class-like
     // 行を全部分類した後にだけ stamp する。stamp が無い・version 不一致の言語については
     // reader が legacy ヒューリスティックにフォールバックする。Issue #435。
-    public const int MetadataTargetVersion = 1;
+    // Version 2 (#435 iter 5) made the writer-side resolver import-aware: unqualified base
+    // identifiers now resolve through the deriving file's `using Namespace;` / `using Alias =
+    // FQN;` directives (plus `global using` aggregated across the repo) before falling back
+    // to the BCL `Attribute`-suffix convention. Iter 4 DBs that only resolved through the
+    // deriving class's own scope chain would miss `using A; class FooAttribute : BaseAttr`
+    // where `A.BaseAttr : Attribute` is indexed in a sibling file. Bumping the contract
+    // forces those DBs to degrade to the legacy `signature LIKE '%: %'` reader path until a
+    // reindex republishes `is_metadata_target`.
+    // バージョン 2 (#435 iter 5)で resolver が import を考慮するようになった。非修飾な基底は
+    // deriving ファイルの `using Namespace;` / `using Alias = FQN;`（および全ファイル集約の
+    // `global using`）を通して解決してから BCL の `Attribute` サフィックス規約にフォールバック
+    // する。iter 4 の DB は `using A; class FooAttribute : BaseAttr` のような一般的な C# パターンで
+    // 正しく解決できないため、契約バージョンを上げて reader を legacy ヒューリスティックに縮退
+    // させ、再 index で republish されるまで metadata edge を誤って主張させない。
+    public const int MetadataTargetVersion = 2;
     public static string GetMetadataTargetVersionMetaKey(string lang) => $"metadata_target_version_{lang}";
 
     public int GetUserVersion()
