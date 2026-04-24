@@ -3295,6 +3295,44 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_NonExactQualifiedLookupsStaySchemaScoped()
+    {
+        InsertIndexedFile("src/sql_nonexact_scope_target.sql", "sql",
+            """
+            CREATE PROCEDURE archive.sales.proc_name
+            AS
+            BEGIN
+                SELECT 1;
+            END
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_nonexact_scope_caller.sql", "sql",
+            """
+            CREATE PROCEDURE sales.caller
+            AS
+            BEGIN
+                EXEC archive.sales.proc_name;
+            END
+            GO
+            """);
+
+        Assert.Empty(_reader.SearchReferences("sales.proc_name", lang: "sql", pathPatterns: ["sql_nonexact_scope"]));
+        Assert.Empty(_reader.GetCallers("sales.proc_name", lang: "sql", pathPatterns: ["sql_nonexact_scope"]));
+
+        Assert.Empty(_reader.SearchReferences("sales.proc_name", lang: "sql", exact: true, pathPatterns: ["sql_nonexact_scope"]));
+        Assert.Empty(_reader.GetCallers("sales.proc_name", lang: "sql", exact: true, pathPatterns: ["sql_nonexact_scope"]));
+
+        var references = Assert.Single(_reader.SearchReferences("archive.sales.proc_name", lang: "sql", pathPatterns: ["sql_nonexact_scope"]));
+        Assert.Equal(4, references.Line);
+        Assert.Equal("sales.caller", references.ContainerName);
+
+        var callers = Assert.Single(_reader.GetCallers("archive.sales.proc_name", lang: "sql", pathPatterns: ["sql_nonexact_scope"]));
+        Assert.Equal("sales.caller", callers.CallerName);
+        Assert.Equal(1, callers.ReferenceCount);
+    }
+
+    [Fact]
     public void SqlQualifiedNames_ExactLookups_DoNotConflateQuotedSingleIdentifierDotsWithQualifiedNames()
     {
         InsertIndexedFile("src/sql_dotted_identifier_collision.sql", "sql",
