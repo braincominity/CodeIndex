@@ -3324,6 +3324,237 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverDistinguishesQualifiedBases()
+    {
+        // issue #435 codex review iter 1: a qualified base like `: B.BaseAttr` must
+        // resolve specifically against the B.BaseAttr class, not leak into an unrelated
+        // A.BaseAttr that happens to be a metadata target. Before the fix, the resolver
+        // collapsed the base to its simple head (`BaseAttr`) and treated "any same-name
+        // class is target" as "this qualified reference is target", producing a false
+        // positive metadata target and therefore a spurious deps edge for `[Impostor]`.
+        // issue #435 codex review iter 1: `: B.BaseAttr` のような修飾名基底は、無関係な
+        // `A.BaseAttr`（metadata target）に誤解決してはならない。修正前は simple-name
+        // `BaseAttr` に潰して「どれかが target なら当該修飾参照も target」化していた。
+        InsertIndexedFile("src/A/BaseAttr.cs", "csharp",
+            """
+            using System;
+
+            namespace A
+            {
+                public abstract class BaseAttr : Attribute
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/B/BaseAttr.cs", "csharp",
+            """
+            namespace B
+            {
+                public class BaseAttr : BaseService
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/ImpostorFooAttribute.cs", "csharp",
+            """
+            namespace B
+            {
+                public class ImpostorFooAttribute : B.BaseAttr
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [ImpostorFoo]
+            public class Svc
+            {
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/ImpostorFooAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverHonorsQualifiedExternalSuffixFallback()
+    {
+        // issue #435 codex review iter 1: when a class derives from a qualified
+        // external base (`: ThirdParty.ValidationAttribute`), the resolver must still
+        // apply the BCL suffix fallback even if an unrelated in-repo class happens to
+        // share the same simple name (`ValidationAttribute`) and is NOT a metadata
+        // target. Pre-fix, the resolver collapsed to the simple name, found the
+        // in-repo non-target, and suppressed the suffix fallback — silently dropping
+        // the metadata edge.
+        // issue #435 codex review iter 1: `: ThirdParty.ValidationAttribute` のように
+        // 外部の修飾基底を継承するとき、repo 内に同名 non-target class がいても
+        // suffix 規約 fallback を殺してはならない。修正前は単純名に潰して in-repo
+        // non-target にぶつかり suffix fallback を潰していた。
+        InsertIndexedFile("src/InRepo/ValidationAttribute.cs", "csharp",
+            """
+            namespace InRepo
+            {
+                public class ValidationAttribute : BaseService
+                {
+                }
+            }
+            """);
+        InsertIndexedFile("src/MyValidatorAttribute.cs", "csharp",
+            """
+            public class MyValidatorAttribute : ThirdParty.ValidationAttribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [MyValidator]
+            public class Svc
+            {
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        Assert.Contains(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/MyValidatorAttribute.cs");
+    }
+
+    [Fact]
+    public void ResolveCSharpMetadataTargets_DoesNotMistakeGenericConstraintForBaseList()
+    {
+        // issue #435 codex review iter 1: `class Foo<T> where T : Attribute {}` has no
+        // base list — only a generic constraint. Before the fix, FindBaseListColon
+        // returned the first top-level `:` even when it was the `where` clause's
+        // `T : Attribute`, causing ParseCSharpBaseIdentifiers to read `Attribute` as a
+        // base and wrongly promote the class to `is_metadata_target = 1`.
+        // issue #435 codex review iter 1: `class Foo<T> where T : Attribute {}` は base
+        // list を持たず、generic constraint だけ。修正前は FindBaseListColon が
+        // `where T :` の `:` を採用し、`Attribute` を基底と解釈して target 化していた。
+        InsertIndexedFile("src/NotAnAttributeClass.cs", "csharp",
+            """
+            using System;
+
+            public class NotAnAttributeClass<T> where T : Attribute
+            {
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.is_metadata_target
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.path = 'src/NotAnAttributeClass.cs' AND s.kind = 'class' AND s.name = 'NotAnAttributeClass'";
+        var flag = cmd.ExecuteScalar();
+        Assert.Equal(0L, Convert.ToInt64(flag));
+    }
+
+    [Fact]
+    public void ResolveCSharpMetadataTargets_RespectsBaseListBeforeGenericConstraint()
+    {
+        // Companion to the `where`-only test: a class with both a base list and a
+        // generic constraint (`: BaseAttr where T : IDisposable`) must still pick up
+        // the base list and propagate metadata-target status through the fixed-point
+        // iteration, not stop at the `where` clause before reading the actual base.
+        // `where` only テストの対、base list と generic constraint を両方持つ宣言では
+        // base list を正しく拾って transitive 伝播させる必要がある。
+        InsertIndexedFile("src/BaseAttr.cs", "csharp",
+            """
+            using System;
+
+            public abstract class BaseAttr : Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/GenericAttr.cs", "csharp",
+            """
+            using System;
+
+            public sealed class GenericAttr<T> : BaseAttr where T : IDisposable
+            {
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.is_metadata_target
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.path = 'src/GenericAttr.cs' AND s.kind = 'class' AND s.name = 'GenericAttr'";
+        var flag = cmd.ExecuteScalar();
+        Assert.Equal(1L, Convert.ToInt64(flag));
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetReaderFallsBackToNameSuffixWhenColumnMissing()
+    {
+        // issue #435 codex review iter 1: reader branch (3) — when the entire
+        // `is_metadata_target` column is absent (truly ancient legacy DB that the
+        // current binary is opening read-only), the reader must degrade to the
+        // `name LIKE '%Attribute'` fallback. Pre-fix, branch (2) only required the
+        // `signature` column, so a column-missing DB still ran the signature
+        // heuristic — contradicting the documented 3-way branch.
+        // issue #435 codex review iter 1: reader branch (3) — `is_metadata_target` 列
+        // 自体が無い古い legacy DB では命名規約のみに縮退するべき。修正前は branch (2)
+        // が `signature` 列の有無だけで判定され、column 欠落 DB でも signature
+        // ヒューリスティックに落ちて 3 way 分岐のドキュメントと食い違っていた。
+        InsertIndexedFile("src/RealFooAttribute.cs", "csharp",
+            """
+            using System;
+
+            [AttributeUsage(AttributeTargets.Class)]
+            public sealed class FooAttribute : Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/ImpostorFooAttribute.cs", "csharp",
+            """
+            public class FooAttribute : BaseService
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            [Foo]
+            public class Svc
+            {
+            }
+            """);
+
+        // Drop the `is_metadata_target` column to simulate a read-only legacy DB that
+        // the current binary cannot in-place migrate. SQLite supports DROP COLUMN
+        // since 3.35 (we target 3.39+ via Microsoft.Data.Sqlite).
+        // `is_metadata_target` 列を落として、in-place 移行できない古い read-only 相当の
+        // DB を模擬する。DROP COLUMN は SQLite 3.35 以降でサポート。
+        using (var drop = _db.Connection.CreateCommand())
+        {
+            drop.CommandText = "ALTER TABLE symbols DROP COLUMN is_metadata_target";
+            drop.ExecuteNonQuery();
+        }
+
+        var legacyReader = new DbReader(_db.Connection, isReadOnly: true);
+        var dependencies = legacyReader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        // Both FooAttribute files match `name LIKE '%Attribute'`, so without
+        // signature-shape disambiguation the ambiguity suppresses the deps edge.
+        // 命名規約のみでは 2 つの同名 FooAttribute が候補になり、曖昧さでエッジ抑制。
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/RealFooAttribute.cs");
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/ImpostorFooAttribute.cs");
+    }
+
+    [Fact]
     public void SearchReferences_MatchesCSharpAttributeSuffixConvention_Substring()
     {
         // issue #293 follow-up: `references MyAuditAttribute` (substring mode) must

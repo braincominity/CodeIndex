@@ -2669,12 +2669,19 @@ public partial class DbReader
         // ambiguity against a sibling real `class MyAuditAttribute : Attribute`. Issue #435.
         // writer の resolver が current version を stamp 済みの DB では authoritative 列を優先し、
         // `class MyAuditAttribute : BaseService` のような非 Attribute 派生を ambiguity から除外する。
+        // Three-way branch keyed off the `is_metadata_target` column presence, not
+        // `signature`. Branch (2) (legacy heuristic) must only fire when both the new
+        // column and the old signature column are present — a DB missing
+        // `is_metadata_target` entirely is truly ancient and must degrade to branch (3).
+        // Issue #435 codex review.
+        // 3 way 分岐は `is_metadata_target` 列の有無で切り替え、`signature` の有無では判定しない。
+        // `is_metadata_target` 列すらない DB は真に古い legacy なので命名規約 fallback (branch 3) に落とす。
         string csharpClause;
         if (_csharpMetadataTargetReady)
         {
             csharpClause = $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND s.is_metadata_target = 1)";
         }
-        else if (_symbolColumns.Contains("signature"))
+        else if (_symbolColumns.Contains("is_metadata_target") && _symbolColumns.Contains("signature"))
         {
             csharpClause = $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND ((s.signature IS NOT NULL AND s.signature LIKE '%: %') OR (s.signature IS NULL AND s.name LIKE '%Attribute')))";
         }

@@ -901,7 +901,15 @@ public class DbWriter
         if (rows.Count == 0)
             return;
 
+        // Simple-name index: head identifier (no namespace) -> ids.
+        // 単純名の頭識別子（名前空間なし）-> ids の索引。
         var nameToIds = new Dictionary<string, List<long>>(StringComparer.Ordinal);
+        // Fully-qualified-name index: `Namespace.TypeName` -> id. Used when the base type
+        // in a signature is qualified (`: A.BaseAttr`) so we do not resolve against an
+        // unrelated same-simple-name class in another namespace. Issue #435 codex review.
+        // 完全修飾名 `Namespace.TypeName` -> id の索引。signature の基底が `A.BaseAttr` のように
+        // 修飾名のとき、別名前空間の同名 class に誤解決させないために使う。
+        var qualifiedToId = new Dictionary<string, long>(StringComparer.Ordinal);
         var bases = new Dictionary<long, List<string>>();
         foreach (var row in rows)
         {
@@ -911,6 +919,8 @@ public class DbWriter
                 nameToIds[row.Name] = bucket;
             }
             bucket.Add(row.Id);
+            foreach (var fq in EnumerateQualifiedKeys(row.QualifiedName, row.Name))
+                qualifiedToId.TryAdd(fq, row.Id);
             bases[row.Id] = ParseCSharpBaseIdentifiers(row.Signature);
         }
 
@@ -923,7 +933,7 @@ public class DbWriter
             {
                 if (targets.Contains(row.Id))
                     continue;
-                if (IsMetadataTargetByBases(bases[row.Id], targets, nameToIds))
+                if (IsMetadataTargetByBases(bases[row.Id], targets, nameToIds, qualifiedToId))
                 {
                     targets.Add(row.Id);
                     changed = true;
@@ -946,48 +956,136 @@ public class DbWriter
         txn?.Commit();
     }
 
-    private List<(long Id, string Name, string? Signature)> LoadCSharpClassRows()
+    private List<(long Id, string Name, string? Signature, string? QualifiedName)> LoadCSharpClassRows()
     {
-        var rows = new List<(long Id, string Name, string? Signature)>();
+        var rows = new List<(long Id, string Name, string? Signature, string? QualifiedName)>();
         if (!ColumnExists("symbols", "signature") || !ColumnExists("symbols", "is_metadata_target"))
             return rows;
+        bool hasQualified = ColumnExists("symbols", "container_qualified_name");
 
         using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
-            SELECT s.id, s.name, s.signature
-            FROM symbols s
-            JOIN files f ON f.id = s.file_id
-            WHERE f.lang = 'csharp' AND s.kind = 'class' AND s.name IS NOT NULL";
+        cmd.CommandText = hasQualified
+            ? @"SELECT s.id, s.name, s.signature, s.container_qualified_name
+                FROM symbols s
+                JOIN files f ON f.id = s.file_id
+                WHERE f.lang = 'csharp' AND s.kind = 'class' AND s.name IS NOT NULL"
+            : @"SELECT s.id, s.name, s.signature, NULL
+                FROM symbols s
+                JOIN files f ON f.id = s.file_id
+                WHERE f.lang = 'csharp' AND s.kind = 'class' AND s.name IS NOT NULL";
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
             rows.Add((
                 reader.GetInt64(0),
                 reader.GetString(1),
-                reader.IsDBNull(2) ? null : reader.GetString(2)));
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3)));
         }
         return rows;
+    }
+
+    // Yield every qualified-name variant that callers might write against this class:
+    // `Namespace.TypeName`, `global::Namespace.TypeName`, and (for nested classes whose
+    // `container_qualified_name` is itself `Outer.Inner.Name`) each dotted tail so
+    // `class Foo : Outer.Inner.BaseAttr` can match. Issue #435 codex review.
+    // 修飾名ルックアップで match させたい表記をすべて列挙する。`Namespace.TypeName`、
+    // `global::Namespace.TypeName`、および container が `Outer.Inner.Name` のような入れ子のとき
+    // `Inner.Name` のような dotted tail も入れる。
+    private static IEnumerable<string> EnumerateQualifiedKeys(string? containerQualifiedName, string simpleName)
+    {
+        var container = containerQualifiedName?.Trim();
+        if (string.IsNullOrEmpty(container))
+            yield break;
+        // container_qualified_name in our extractor already includes the simple type name
+        // at the tail, e.g. `A.FooAttribute` for `namespace A { class FooAttribute { } }`.
+        // Some callers may also reference the type via `global::A.FooAttribute`, so emit
+        // both forms. Defensive check: if the tail segment does not match simpleName, also
+        // append simpleName as an extra candidate so we still index a usable qualified key.
+        // container_qualified_name は末尾に自身の単純名を含む想定（例: `A.FooAttribute`）。
+        // `global::` 付きでも参照され得るため両形を yield する。末尾が simpleName と一致しない
+        // 非想定 DB でも simpleName を補った候補を 1 つ追加で出し、ルックアップ漏れを防ぐ。
+        string fq = container;
+        int lastDot = fq.LastIndexOf('.');
+        string tail = lastDot >= 0 ? fq.Substring(lastDot + 1) : fq;
+        if (!string.Equals(tail, simpleName, StringComparison.Ordinal))
+            fq = container + "." + simpleName;
+
+        yield return fq;
+        yield return "global::" + fq;
+        // Also yield dotted suffixes so `Outer.Inner.Name` can match a base reference of
+        // just `Inner.Name`. Skip the leaf-only `Name` form — that overlaps with the
+        // simple-name map and we do not want qualified-base lookup to silently resolve
+        // an unqualified match. / `Outer.Inner.Name` の末尾 `Inner.Name` のような表記を
+        // qualified ルックアップで当てるために dotted suffix も yield する。`Name` 単独は
+        // simple-name map 側と重複するので除外する。
+        int searchFrom = 0;
+        while (true)
+        {
+            int dot = fq.IndexOf('.', searchFrom);
+            if (dot < 0) break;
+            var suffix = fq.Substring(dot + 1);
+            if (suffix.IndexOf('.') < 0) break; // leaf-only — skip
+            yield return suffix;
+            searchFrom = dot + 1;
+        }
     }
 
     private static bool IsMetadataTargetByBases(
         List<string> baseIdentifiers,
         HashSet<long> resolvedTargets,
-        Dictionary<string, List<long>> nameToIds)
+        Dictionary<string, List<long>> nameToIds,
+        Dictionary<string, long> qualifiedToId)
     {
         foreach (var baseName in baseIdentifiers)
         {
             if (baseName.Length == 0)
                 continue;
             // Direct System.Attribute / Attribute reference / 直接 Attribute 派生
-            if (baseName == "Attribute" || baseName == "System.Attribute")
+            if (baseName == "Attribute"
+                || baseName == "System.Attribute"
+                || baseName == "global::System.Attribute"
+                || baseName == "global::Attribute")
                 return true;
 
-            // Resolve the head identifier (strip namespace prefix) for in-repo lookup
-            // 名前空間プレフィクスを取り除いた末尾識別子で repo 内ルックアップ
+            // Split qualified vs unqualified. Qualified bases (containing `.` or `::`)
+            // must resolve against the fully-qualified index so we do not leak into
+            // unrelated same-simple-name classes. Unqualified bases use the historical
+            // simple-name index. / 修飾名（`.` または `::` を含む）は完全修飾索引で解決し、
+            // 別名前空間の同名 class に解決してしまうのを防ぐ。非修飾名は従来どおり単純名索引を使う。
+            bool isQualified = baseName.IndexOf('.') >= 0 || baseName.IndexOf("::", StringComparison.Ordinal) >= 0;
             var head = baseName;
             int lastDot = head.LastIndexOf('.');
             if (lastDot >= 0 && lastDot + 1 < head.Length)
                 head = head.Substring(lastDot + 1);
+
+            if (isQualified)
+            {
+                // Normalize `global::` prefix — always try both forms against the qualified index.
+                // `global::` を剥がした形と元の両方で修飾索引を引く。
+                var normalized = baseName.StartsWith("global::", StringComparison.Ordinal)
+                    ? baseName.Substring("global::".Length)
+                    : baseName;
+                if (qualifiedToId.TryGetValue(baseName, out var qid)
+                    || qualifiedToId.TryGetValue(normalized, out qid))
+                {
+                    if (resolvedTargets.Contains(qid))
+                        return true;
+                    // Matched a specific qualified in-repo class that is not (yet) a target.
+                    // Wait for the next iteration instead of falling to the BCL heuristic —
+                    // promoting it would contradict the user's explicit qualified reference.
+                    // 修飾名で具体的な class に当たったが未確定。次回反復に委ねる。
+                    continue;
+                }
+                // Qualified base did not match any in-repo class — treat as external and
+                // fall through to the BCL suffix fallback below without consulting the
+                // simple-name map (which could false-match an unrelated class).
+                // 修飾名が repo 内で見つからない場合は外部基底として扱い、単純名索引は引かず
+                // 末尾サフィックス規約のフォールバックに任せる。
+                if (head.Length > "Attribute".Length && head.EndsWith("Attribute", StringComparison.Ordinal))
+                    return true;
+                continue;
+            }
 
             if (nameToIds.TryGetValue(head, out var ids))
             {
@@ -1092,6 +1190,16 @@ public class DbWriter
             if (c == ')') { if (parenDepth > 0) parenDepth--; continue; }
             if (c == '{')
                 return -1;
+            // `class Foo<T> where T : IBar {}` has no base list — only a generic constraint.
+            // If we reach a top-level `where` before finding `:`, treat that `:` as a
+            // constraint separator, not a base list opener. Issue #435 codex review.
+            // `class Foo<T> where T : IBar {}` のように base list を持たない場合、ここで遭遇する
+            // `:` は generic constraint の区切りなので base list colon として採用しない。
+            if (genericDepth == 0 && parenDepth == 0 && (c == 'w' || c == 'W')
+                && LooksLikeWhereKeyword(signature, i))
+            {
+                return -1;
+            }
             if (c == ':' && genericDepth == 0 && parenDepth == 0)
             {
                 // Skip `::` namespace alias separator / `::` 名前空間エイリアスは除外
