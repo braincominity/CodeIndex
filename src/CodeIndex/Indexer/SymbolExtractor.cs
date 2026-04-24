@@ -1353,7 +1353,7 @@ public static class SymbolExtractor
                     // がテンプレート区切りを空白にマスクするため、マスク後の
                     // `patternMatchLine` ではバッククォートが見えないことへの対処。
                     // Closes #240 follow-up（codex レビュー #5 の blocker 対応）。
-                    if (ShouldSkipJavaScriptTypeScriptStyledFactoryCandidate(lang, pattern, match, line))
+                    if (ShouldSkipJavaScriptTypeScriptStyledFactoryCandidate(lang, pattern, match, lineOffset, line))
                     {
                         lineOffset = FindNextJavaScriptTypeScriptStatementStart(patternMatchLine, lineOffset + Math.Max(1, match.Length));
                         continue;
@@ -10744,8 +10744,11 @@ public static class SymbolExtractor
     // The gate reads the raw (unmasked) source line because
     // StructuralLineMasker.MaskJsTsTemplateLiteralContents replaces template
     // delimiters with space, so the masked line cannot distinguish the shapes.
-    // Closes #240 follow-up (codex review #5 blocker).
-    // JS/TS 行における HOC 候補のうち、`styled.` / `styled(` を素のまま使い、同じ raw 行に
+    // The backtick scan is statement-local: only characters between the match end
+    // and the next `;` (or end-of-line) are inspected, so an unrelated template
+    // literal on another statement of the same line does not reopen the gate.
+    // Closes #240 follow-up (codex review #5 and #7 blockers).
+    // JS/TS 行における HOC 候補のうち、`styled.` / `styled(` を素のまま使い、同じ文内に
     // タグ付きテンプレートのバッククォートを持たない形（`const F = styled.div;`、
     // `const F = styled(Box);`）を弾く。HOC regex は識別子直後の `styled[.(`、`]`
     // を受け付けるためタグ付きテンプレート形（`styled.div\`...\``、`styled(Box)\`...\``）
@@ -10753,11 +10756,14 @@ public static class SymbolExtractor
     // コンポーネントを生成しないため function シンボルとして surface してはいけない。
     // ゲートは raw 行を参照する — `StructuralLineMasker.MaskJsTsTemplateLiteralContents`
     // がテンプレート区切りを空白にマスクするため、マスク後では形状を区別できないのが理由。
-    // Closes #240 follow-up（codex レビュー #5 の blocker 対応）。
+    // バッククォート探索は文ローカル（match 終端から次の `;` または行末まで）に限定し、
+    // 同じ行に別の文として配置された無関係なテンプレートリテラルでゲートを誤って解除しない。
+    // Closes #240 follow-up（codex レビュー #5 と #7 の blocker 対応）。
     private static bool ShouldSkipJavaScriptTypeScriptStyledFactoryCandidate(
         string? lang,
         SymbolPattern pattern,
         Match match,
+        int matchOffset,
         string rawLine)
     {
         if (lang is not ("javascript" or "typescript"))
@@ -10778,12 +10784,31 @@ public static class SymbolExtractor
         if (next != '.' && next != '(' && next != '`')
             return false;
 
-        // Backtick on the raw line indicates a tagged-template form somewhere on the
-        // same statement; keep those matches. Any non-backtick styled shape is the
-        // factory capture or plain call and must be rejected.
-        // raw 行にバッククォートがあれば同一文にタグ付きテンプレートが存在する → 維持。
-        // バッククォートが無い styled 形は factory 捕捉 / 素の呼び出しなので除外する。
-        return !rawLine.Contains('`');
+        // `styled\`...\`` form — the match itself ends with a backtick, so it is a
+        // tagged-template binding and must be kept.
+        // `styled\`...\`` 形 — match 自身がバッククォートで終わるため、タグ付きテンプレート
+        // 束縛として維持する。
+        if (next == '`')
+            return false;
+
+        // Scan forward on the raw line from the match's absolute end position,
+        // looking for a statement terminator (`;`) or backtick first. Backtick
+        // before the terminator indicates a tagged-template form on the same
+        // statement; any other styled shape is the factory capture or plain call
+        // and must be rejected.
+        // match の絶対終端位置から raw 行を前方に走査し、最初に出会うのが `;`（文終端）か
+        // バッククォートかを判定する。`;` より前にバッククォートがあれば同一文中のタグ付き
+        // テンプレート形なので維持、そうでなければ factory 捕捉 / 素の呼び出し形として除外する。
+        int cursor = matchOffset + match.Index + match.Length;
+        for (int i = cursor; i < rawLine.Length; i++)
+        {
+            var c = rawLine[i];
+            if (c == '`')
+                return false;
+            if (c == ';')
+                break;
+        }
+        return true;
     }
 
     private static bool[] FindCssQualifiedRuleAncestors(string[] lines)

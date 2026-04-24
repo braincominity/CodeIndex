@@ -481,6 +481,58 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_HocBindingPatternRejectsSameLineMultiStatementStyledFactory()
+    {
+        // A factory-capture or plain-call `styled` binding placed on the same
+        // source line as an UNRELATED tagged template (a separate statement after
+        // `;`) must still be rejected. The gate scans only between the match end
+        // and the next `;`, so the backtick in `const note = \`...\`;` does not
+        // re-open the gate for `const StyledFactory = styled.div;` earlier on the
+        // same line. Closes #240 follow-up (codex review #7 blocker).
+        // factory 捕捉 / 素の呼び出し形の `styled` 束縛と、無関係なタグ付きテンプレート
+        // （`;` で区切られた別の文）が同じ行に置かれたケースでも除外は働かなければ
+        // ならない。ゲートは match 終端から次の `;` までしか見ないので、行後半の
+        // `const note = \`...\`;` が行前半の `const StyledFactory = styled.div;` の
+        // ゲートを誤って解除しない。Closes #240 follow-up（codex レビュー #7 の
+        // blocker 対応）。
+        var content = """
+            const StyledFactory = styled.div; const note = `not a component`;
+            const StyledFactoryCall = styled(Component); const later = `still not a component`;
+            const RealStyled = styled.div`color: red;`;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "StyledFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "StyledFactoryCall");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "RealStyled");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_HocBindingPatternRejectsSameLineMultiStatementStyledFactory()
+    {
+        // Same statement-local gate applies on TypeScript input: a backtick from
+        // an unrelated later statement on the same line must not keep a
+        // factory-capture / plain-call styled binding alive. Closes #240
+        // follow-up (codex review #7 blocker).
+        // TypeScript 側でも同じ statement-local ゲートが必要。同じ行上の無関係な
+        // タグ付きテンプレートによるバッククォートが、前方の factory 捕捉 / 素の
+        // 呼び出し形 styled 束縛を生かしてはいけない。Closes #240 follow-up
+        // （codex レビュー #7 の blocker 対応）。
+        var content = """
+            const StyledFactory = styled.div; const note = `not a component`;
+            const StyledFactoryCall = styled(Component); const later = `still not a component`;
+            const TypedStyled = styled.div<Props>`color: blue;`;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "StyledFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "StyledFactoryCall");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "TypedStyled");
+    }
+
+    [Fact]
     public void Extract_TypeScript_HocBindingPatternAcceptsCallbackPropInsideFunctionTypeGeneric()
     {
         // Inline function-type generic arguments whose parameter object literal
