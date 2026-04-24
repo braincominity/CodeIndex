@@ -215,6 +215,10 @@ public class IndexCommandRunnerTests
             Assert.True(updateJson.GetProperty("graph_table_available").GetBoolean());
             Assert.True(updateJson.GetProperty("issues_table_available").GetBoolean());
             Assert.True(updateJson.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, updateJson.GetProperty("fold_ready_reason").ValueKind);
+            Assert.Equal(JsonValueKind.Null, updateJson.GetProperty("degraded_reason").ValueKind);
+            Assert.Equal(JsonValueKind.Null, updateJson.GetProperty("recommended_action").ValueKind);
+            Assert.Equal(JsonValueKind.Null, updateJson.GetProperty("alternative_action").ValueKind);
 
             using (var db = new DbContext(dbPath))
             {
@@ -639,6 +643,10 @@ public class IndexCommandRunnerTests
 
             var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var (_, initialJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.True(initialJson.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, initialJson.GetProperty("fold_ready_reason").ValueKind);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             using (var conn = OpenNonPoolingConnection(dbPath))
@@ -2859,6 +2867,10 @@ public class IndexCommandRunnerTests
 
             var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var (_, initialJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.True(initialJson.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, initialJson.GetProperty("fold_ready_reason").ValueKind);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             using (var conn = OpenNonPoolingConnection(dbPath))

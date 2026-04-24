@@ -1086,7 +1086,7 @@ public static class IndexCommandRunner
                 // `--exact` will use the Unicode fold path or fall back to ASCII NOCASE.
                 // #86 codex: AI クライアントが --exact の経路を判断できるよう fold_ready を返す。
                 fold_ready = foldReadyAfter,
-                fold_ready_reason = foldReadyReasonAfter,
+                fold_ready_reason = foldReadyAfter ? null : foldReadyReasonAfter,
                 degraded_reason = foldOnlyRemediation?.DegradedReason,
                 recommended_action = foldOnlyRemediation?.RecommendedAction,
                 alternative_action = foldOnlyRemediation?.AlternativeAction,
@@ -1759,7 +1759,7 @@ public static class IndexCommandRunner
                 // `--exact` will use the Unicode fold path or fall back to ASCII NOCASE.
                 // #86 codex: AI クライアントが --exact の経路を判断できるよう fold_ready を返す。
                 fold_ready = foldReadyAfter,
-                fold_ready_reason = foldReadyReasonAfter,
+                fold_ready_reason = foldReadyAfter ? null : foldReadyReasonAfter,
                 degraded_reason = foldOnlyRemediation?.DegradedReason,
                 recommended_action = foldOnlyRemediation?.RecommendedAction,
                 alternative_action = foldOnlyRemediation?.AlternativeAction,
