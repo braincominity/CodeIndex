@@ -1079,9 +1079,6 @@ public partial class DbReader
         if (!TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out var qualifier))
             return false;
 
-        if (HasScopedCSharpTypeCandidate(path, lineNumber, symbolName))
-            return false;
-
         var matchingContainers = GetCSharpConstantPatternContainersByMemberName(symbolName);
         if (matchingContainers.Count == 0)
             return false;
