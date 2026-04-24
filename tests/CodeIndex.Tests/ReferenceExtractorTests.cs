@@ -5576,15 +5576,17 @@ public class ReferenceExtractorTests
         const string content = """
             SELECT * FROM users, accounts;
             SELECT * FROM public.logs l, [archive].[events] e;
+            SELECT * FROM users WITH (NOLOCK), accounts;
             """;
 
         var symbols = SymbolExtractor.Extract(1, "sql", content);
         var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
 
-        Assert.Equal(1, references.Count(r => r.SymbolName == "users" && r.ReferenceKind == "reference"));
-        Assert.Equal(1, references.Count(r => r.SymbolName == "accounts" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "users" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "accounts" && r.ReferenceKind == "reference"));
         Assert.Equal(1, references.Count(r => r.SymbolName == "logs" && r.ReferenceKind == "reference"));
         Assert.Equal(1, references.Count(r => r.SymbolName == "events" && r.ReferenceKind == "reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "NOLOCK");
         Assert.DoesNotContain(references, r => r.SymbolName == "public.logs");
         Assert.DoesNotContain(references, r => r.SymbolName == "archive].[events");
     }
