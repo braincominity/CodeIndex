@@ -1794,9 +1794,12 @@ internal static class StructuralLineMasker
             return;
 
         // Skip a balanced `<...>` (TypeScript generics) so `html<T>\`...\`` still sees `html`.
-        // `<` without a matching `>` on the same line is treated as a comparison operator.
+        // `<` that does not directly abut an identifier (e.g. `foo < bar > \`plain\``) is a
+        // comparison operator, not a generic tag, so reject it. `=>` inside the bracketed range
+        // is an arrow-function type and must not count as a closing `>`.
         // `html<T>\`...\`` のジェネリクスを読み飛ばすため、同一行内で `<...>` が釣り合っている
-        // 場合のみ括弧を剥がす。そうでなければ比較演算子として扱う。
+        // 場合のみ括弧を剥がす。`foo < bar > \`plain\`` のような比較式は `<` が識別子に隣接して
+        // いないため generic と見なさない。`=>` 由来の `>` は関数型なので閉じ記号として数えない。
         if (masked[k] == '>')
         {
             int probe = k - 1;
@@ -1804,17 +1807,20 @@ internal static class StructuralLineMasker
             while (probe >= 0 && depth > 0)
             {
                 var ch = masked[probe];
+                if (ch == '>' && probe > 0 && masked[probe - 1] == '=')
+                {
+                    probe -= 2;
+                    continue;
+                }
                 if (ch == '>') depth++;
                 else if (ch == '<') depth--;
                 probe--;
             }
             if (depth != 0)
                 return;
-            k = probe;
-            while (k >= 0 && (masked[k] == ' ' || masked[k] == '\t'))
-                k--;
-            if (k < 0)
+            if (probe < 0 || !IsJsIdentifierPart(masked[probe]))
                 return;
+            k = probe;
         }
 
         if (!IsJsIdentifierPart(masked[k]))

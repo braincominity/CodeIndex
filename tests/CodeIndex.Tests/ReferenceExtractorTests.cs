@@ -6210,4 +6210,47 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "delete");
         Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "void");
     }
+
+    [Fact]
+    public void Extract_JavaScriptComparisonBeforePlainTemplate_IsNotCaptured()
+    {
+        // Regression guard: `foo < bar > \`plain\`` is a chained comparison expression, not a
+        // generic-tagged template. The backward scan behind the backtick must not strip the
+        // `<bar>` range as generics and emit a phantom `call foo`.
+        // 退行防止: `foo < bar > \`plain\`` は連鎖比較式であり、ジェネリクス付きタグ付き
+        // テンプレートではない。backtick 直前の `<...>` を generic と誤認して
+        // `call foo` を幻発行してはならない。
+        const string content = """
+            function check(foo, bar) {
+                return foo < bar > `plain`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "foo");
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "bar");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptFunctionTypeGenericTaggedTemplate_IsCaptured()
+    {
+        // issue #268: a generic type argument containing a function type `(x: T) => U` must
+        // still be read past so the tag identifier (`tag`) is captured. The `>` inside `=>`
+        // does not close the generic bracket.
+        // issue #268: 型引数に関数型 `(x: T) => U` を含むジェネリクス付きタグも読み飛ばして
+        // タグ識別子を捕捉する。`=>` の `>` は generic を閉じない。
+        const string content = """
+            function render<U>(value: U) {
+                return tag<(x: number) => U>`value=${value}`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        var tag = Assert.Single(references.Where(r => r.SymbolName == "tag" && r.ReferenceKind == "call"));
+        Assert.Equal("render", tag.ContainerName);
+    }
 }
