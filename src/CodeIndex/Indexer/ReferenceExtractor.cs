@@ -2297,6 +2297,7 @@ public static class ReferenceExtractor
             if (!TryGetCSharpSwitchExpressionArmTypePatternRange(
                     preparedContent,
                     arrowIndex,
+                    out var bodyStartOffset,
                     out var armStartOffset,
                     out var armPatternEndOffset)
                 || armStartOffset >= armPatternEndOffset)
@@ -2354,6 +2355,7 @@ public static class ReferenceExtractor
                         seen,
                         fileId,
                         currentTypeExpression,
+                        bodyStartOffset,
                         armStartOffset + currentTypeIndex);
                 }
 
@@ -2399,6 +2401,7 @@ public static class ReferenceExtractor
                 seen,
                 fileId,
                 currentTypeExpression,
+                bodyStartOffset,
                 armStartOffset + currentTypeIndex);
         }
     }
@@ -2412,6 +2415,7 @@ public static class ReferenceExtractor
         HashSet<string> seen,
         long fileId,
         string typeExpression,
+        int containerAnchorOffset,
         int absoluteTypeOffset)
     {
         var position = GetLineColumnFromOffset(preparedContent, absoluteTypeOffset, 1);
@@ -2423,12 +2427,16 @@ public static class ReferenceExtractor
         if (context.Length == 0)
             return;
 
+        var containerAnchorPosition = GetLineColumnFromOffset(preparedContent, containerAnchorOffset, 1);
+        var containerAnchorLineIndex = containerAnchorPosition.Line - 1;
         var container = FindInnermostSameLineCSharpContainer(
                             containerCandidates,
-                            preparedLines[lineIndex],
-                            position.Line,
-                            position.Column)
-                        ?? FindInnermostContainer(containerCandidates, position.Line);
+                            containerAnchorLineIndex >= 0 && containerAnchorLineIndex < preparedLines.Count
+                                ? preparedLines[containerAnchorLineIndex]
+                                : preparedLines[lineIndex],
+                            containerAnchorPosition.Line,
+                            containerAnchorPosition.Column)
+                        ?? FindInnermostContainer(containerCandidates, containerAnchorPosition.Line);
 
         AddTypeExpressionSegments(
             references,
@@ -5243,12 +5251,14 @@ public static class ReferenceExtractor
     private static bool TryGetCSharpSwitchExpressionArmTypePatternRange(
         string bodyText,
         int arrowIndex,
+        out int bodyStartOffset,
         out int armStartOffset,
         out int armPatternEndOffset)
     {
+        bodyStartOffset = 0;
         armStartOffset = 0;
         armPatternEndOffset = 0;
-        if (!TryFindCSharpSwitchExpressionBodyStartOffset(bodyText, arrowIndex, out var bodyStartOffset))
+        if (!TryFindCSharpSwitchExpressionBodyStartOffset(bodyText, arrowIndex, out bodyStartOffset))
             return false;
 
         var segmentStartOffset = bodyStartOffset + 1;
@@ -7760,7 +7770,24 @@ public static class ReferenceExtractor
                 parenIdentifierStart++;
 
                 var identifierPrefixIndex = SkipWhitespaceBackward(bodyText, parenIdentifierStart - 1);
-                return identifierPrefixIndex < 0 || bodyText[identifierPrefixIndex] != '.';
+                if (identifierPrefixIndex < 0)
+                    return true;
+
+                var identifierPrefixChar = bodyText[identifierPrefixIndex];
+                if (identifierPrefixChar == '.')
+                    return false;
+
+                if (IsCSharpIdentifierPart(identifierPrefixChar))
+                {
+                    if (!TryReadPreviousIdentifierToken(bodyText, identifierPrefixIndex, out var identifierPreviousToken))
+                        return false;
+
+                    var normalizedPreviousToken = NormalizeCSharpIdentifier(identifierPreviousToken);
+                    return normalizedPreviousToken is not ("when" or "is" or "as" or "and" or "or" or "not"
+                        or "return" or "throw" or "new" or "case" or "else" or "do");
+                }
+
+                return identifierPrefixChar is '>' or ']' or ')' or '?' or ':' or '=';
             }
 
             return parenPrefixChar is '=' or '(' or ',' or ':';

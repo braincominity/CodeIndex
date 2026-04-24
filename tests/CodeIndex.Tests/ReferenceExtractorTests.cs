@@ -8192,6 +8192,45 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpSwitchExpressionGenericDeclarationPatternWithFunctionWhenGuard_KeepsArmHead()
+    {
+        // issue #732 follow-up: a bare helper call at the end of a `when` guard still leaves the
+        // switch arm arrow as a pattern arm, not a lambda. The arm-head type must survive.
+        // issue #732 の追補: `when` guard 末尾の bare helper call があっても、その `=>` は lambda
+        // ではなく switch arm の矢印であり、arm head の型依存を落としてはいけない。
+        const string content = """
+            namespace Probe;
+
+            class Wrapper<TLeft, TRight> {}
+            class Point {}
+            class Shape {}
+
+            class Demo
+            {
+                static bool Check(object value) => true;
+
+                int Match(object value) => value switch
+                {
+                    Wrapper<Point, Shape> p when Check(p) => 1,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var wrapperRefs = references
+            .Where(r => r.SymbolName == "Wrapper" && r.ReferenceKind == "type_reference")
+            .OrderBy(r => r.Column)
+            .ToList();
+
+        Assert.Single(wrapperRefs);
+        Assert.Equal(9, wrapperRefs[0].Column);
+        Assert.Equal("Match", wrapperRefs[0].ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpVerbatimPatternTypeNames_DoNotCollapseIntoBarePatternTokens()
     {
         // issue #677: `@not` / `@default` are legal type names, so the non-type pattern

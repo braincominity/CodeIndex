@@ -16174,6 +16174,58 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpSwitchExpressionFunctionWhenGuardKeepsArmHead()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_switch_expression_function_when_guard");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Probe;
+
+                class Wrapper<TLeft, TRight> {}
+                class Point {}
+                class Shape {}
+
+                class Demo
+                {
+                    static bool Check(object value) => true;
+
+                    int Match(object value) => value switch
+                    {
+                        Wrapper<Point, Shape> p when Check(p) => 1,
+                        _ => 0,
+                    };
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (wrapperExitCode, wrapperStdout, wrapperStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Wrapper", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            var wrapperRows = ParseJsonLines(wrapperStdout)
+                .Select(document => (
+                    Line: document.RootElement.GetProperty("line").GetInt32(),
+                    Column: document.RootElement.GetProperty("column").GetInt32(),
+                    ContainerName: document.RootElement.GetProperty("container_name").GetString()))
+                .OrderBy(row => row.Line)
+                .ThenBy(row => row.Column)
+                .ToArray();
+
+            Assert.Equal(CommandExitCodes.Success, wrapperExitCode);
+            Assert.Equal(string.Empty, wrapperStderr);
+            Assert.Equal([13], wrapperRows.Select(row => row.Line).ToArray());
+            Assert.Equal([9], wrapperRows.Select(row => row.Column).ToArray());
+            Assert.All(wrapperRows, row => Assert.Equal("Match", row.ContainerName));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpVerbatimPatternTypesSurviveBareTokenFilter()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_verbatim_pattern_types");
