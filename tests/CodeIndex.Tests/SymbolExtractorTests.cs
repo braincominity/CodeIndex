@@ -9663,4 +9663,44 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System" && s.Line == 1);
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "CrlfBom" && s.Line == 3);
     }
+
+    [Fact]
+    public void Extract_Csharp_BareCrLeadingBom_IndexesFirstLineImport()
+    {
+        // Bare-`\r` direct-call input with a leading BOM: the in-extractor
+        // normalization must also rewrite `\r` → `\n`, otherwise a file
+        // authored under classic-Mac-style line endings would keep mid-file
+        // line-leading BOMs invisible to `StripLineLeadingBom` (which treats
+        // `\n` as the sole separator). Closes #183.
+        // bare `\r` 改行 + 先頭 BOM の direct call: `\r` → `\n` 正規化も必要で、
+        // classic-Mac 改行のファイルに対して mid-file 行頭 BOM を剥がし損ねる
+        // のを防ぐ。Closes #183.
+        const string content = "\uFEFFusing System;\r\r\uFEFFnamespace BareCrBom;\r";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System" && s.Line == 1);
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "BareCrBom" && s.Line == 3);
+    }
+
+    [Fact]
+    public void Extract_Csharp_MixedLineEndingsLeadingBom_IndexesDeclarationsOnAllLines()
+    {
+        // Mixed line endings (`\r\n`, bare `\r`, bare `\n`) interleaved with
+        // leading + mid-file line-leading BOMs: the in-extractor normalization
+        // must reduce the whole content to a `\n`-only stream before the
+        // helper runs, otherwise mid-file BOMs following `\r` or `\r\n\r`
+        // boundaries would survive and `^\s*`-anchored patterns would miss
+        // the next declaration. Closes #183.
+        // 混在改行（`\r\n` / bare `\r` / bare `\n`）+ 先頭/中間行頭 BOM の direct call:
+        // 正規化を helper より先に通し、`\r\n\r` や `\r` 直後の mid-file 行頭 BOM も
+        // 剥がせるようにする。Closes #183.
+        const string content = "\uFEFFusing System;\r\n\r\uFEFFnamespace MixedEnds;\n\uFEFFpublic class X { }\r\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System" && s.Line == 1);
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MixedEnds" && s.Line == 3);
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "X" && s.Line == 4);
+    }
 }

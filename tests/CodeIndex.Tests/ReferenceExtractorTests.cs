@@ -6126,4 +6126,44 @@ public class ReferenceExtractorTests
         var helperRef = Assert.Single(references.Where(r => r.SymbolName == "Helper"));
         Assert.Equal(6, helperRef.Line);
     }
+
+    [Fact]
+    public void Extract_Csharp_BareCrLeadingBom_ExtractsReferencesOnFirstLine()
+    {
+        // Bare-`\r` direct-call input with a leading BOM + mid-file line-leading
+        // BOM in front of the call site: the in-extractor `\r` → `\n`
+        // normalization must run so `StripLineLeadingBom` (which treats `\n` as
+        // the sole line separator) still sees the mid-file BOM as line-leading
+        // and strips it, letting the regex capture the call site. Closes #183.
+        // bare `\r` 改行 + 先頭 BOM + 呼び出し行頭 BOM の direct call: `\r` → `\n`
+        // 正規化を helper より先に通し、classic-Mac 改行でも呼び出し参照が拾える
+        // ことを固定。Closes #183.
+        const string content = "\uFEFFnamespace BomRefBareCr;\rpublic class C\r{\r    public void Run()\r    {\r\uFEFF        Helper();\r    }\r    public void Helper() { }\r}\r";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var helperRef = Assert.Single(references.Where(r => r.SymbolName == "Helper"));
+        Assert.Equal(6, helperRef.Line);
+    }
+
+    [Fact]
+    public void Extract_Csharp_MixedLineEndingsLeadingBom_ExtractsReferenceOnBomLine()
+    {
+        // Mixed line endings (`\r\n`, bare `\r`, bare `\n`) interleaved with a
+        // leading BOM and a mid-file line-leading BOM immediately after `\r\n\r`
+        // (a boundary that bare `\r` → `\n` step must also collapse). The call
+        // site on the BOM-prefixed line is only captured when the normalization
+        // reduces the whole content to a `\n`-only stream first. Closes #183.
+        // 混在改行 + 先頭 BOM + `\r\n\r` 直後の mid-file 行頭 BOM の direct call:
+        // 正規化を helper より先に通し、BOM 行の呼び出し参照が拾えることを固定。
+        // Closes #183.
+        const string content = "\uFEFFnamespace BomRefMixed;\r\npublic class C\r{\n    public void Run()\r\n    {\r\n\uFEFF        Helper();\n    }\r    public void Helper() { }\r\n}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var helperRef = Assert.Single(references.Where(r => r.SymbolName == "Helper"));
+        Assert.Equal(6, helperRef.Line);
+    }
 }
