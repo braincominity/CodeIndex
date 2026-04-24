@@ -71,7 +71,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
-        if (TryWriteUnsupportedOptionError("search", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--snippet-lines", "--max-line-width", "--fts", "--count", "--since", "--no-dedup", "--exact", "--exact-substring", "--exact-name"]))
+        if (TryWriteUnsupportedOptionError("search", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--snippet-lines", "--max-line-width", "--fts", "--count", "--since", "--no-dedup", "--exact", "--exact-substring", "--exact-name"], options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "search"))
             return CommandExitCodes.UsageError;
@@ -154,7 +154,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
-        if (TryWriteUnsupportedOptionError("definition", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--kind", "--body", "--count", "--path", "--exclude-path", "--exclude-tests", "--since", "--exact", "--exact-name", "--exact-substring"]))
+        if (TryWriteUnsupportedOptionError("definition", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--kind", "--body", "--count", "--path", "--exclude-path", "--exclude-tests", "--since", "--exact", "--exact-name", "--exact-substring"], options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "definition"))
             return CommandExitCodes.UsageError;
@@ -283,7 +283,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
-        if (TryWriteUnsupportedOptionError("references", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--max-line-width", "--exact", "--exact-name", "--exact-substring"]))
+        if (TryWriteUnsupportedOptionError("references", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--max-line-width", "--exact", "--exact-name", "--exact-substring"], options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "references"))
             return CommandExitCodes.UsageError;
@@ -395,7 +395,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
-        if (TryWriteUnsupportedOptionError("callers", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--exact", "--exact-name", "--exact-substring"]))
+        if (TryWriteUnsupportedOptionError("callers", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--exact", "--exact-name", "--exact-substring"], options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "callers"))
             return CommandExitCodes.UsageError;
@@ -505,7 +505,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
-        if (TryWriteUnsupportedOptionError("callees", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--exact", "--exact-name", "--exact-substring"]))
+        if (TryWriteUnsupportedOptionError("callees", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--exact", "--exact-name", "--exact-substring"], options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "callees"))
             return CommandExitCodes.UsageError;
@@ -635,7 +635,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
-        if (TryWriteUnsupportedOptionError("symbols", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--since", "--exact", "--exact-name", "--exact-substring", "--name"]))
+        if (TryWriteUnsupportedOptionError("symbols", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--kind", "--count", "--path", "--exclude-path", "--exclude-tests", "--since", "--exact", "--exact-name", "--exact-substring", "--name"], options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "symbols"))
             return CommandExitCodes.UsageError;
@@ -771,7 +771,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
-        if (TryWriteUnsupportedOptionError("files", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests", "--since"]))
+        if (TryWriteUnsupportedOptionError("files", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests", "--since"], options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "files"))
             return CommandExitCodes.UsageError;
@@ -1241,7 +1241,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
-        if (TryWriteUnsupportedOptionError("inspect", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--body", "--max-line-width", "--exact", "--exact-name", "--exact-substring"]))
+        if (TryWriteUnsupportedOptionError("inspect", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--path", "--exclude-path", "--exclude-tests", "--body", "--max-line-width", "--exact", "--exact-name", "--exact-substring"], options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "inspect"))
             return CommandExitCodes.UsageError;
@@ -1645,7 +1645,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
         var options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
-        if (TryWriteUnsupportedOptionError("impact", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests", "--depth"]))
+        if (TryWriteUnsupportedOptionError("impact", cmdArgs, ["--", "--query", "--db", "--json", "--limit", "--top", "--lang", "--count", "--path", "--exclude-path", "--exclude-tests", "--depth"], options.Query))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "impact"))
             return CommandExitCodes.UsageError;
@@ -2790,7 +2790,11 @@ public static class QueryCommandRunner
                     break;
                 default:
                     if (args[i].StartsWith('-'))
+                    {
+                        if (allowNamedQuery && query == null)
+                            query = args[i];
                         break;
+                    }
                     else if (query == null)
                     {
                         query = args[i];
@@ -2945,14 +2949,21 @@ public static class QueryCommandRunner
         return true;
     }
 
-    private static bool TryWriteUnsupportedOptionError(string commandName, string[] cmdArgs, IEnumerable<string> supportedOptions)
+    private static bool TryWriteUnsupportedOptionError(string commandName, string[] cmdArgs, IEnumerable<string> supportedOptions, string? queryLiteral = null)
     {
         var supported = supportedOptions.ToHashSet(StringComparer.Ordinal);
+        var skippedQueryLiteral = false;
         for (var i = 0; i < cmdArgs.Length; i++)
         {
             var arg = cmdArgs[i];
             if (!arg.StartsWith("-", StringComparison.Ordinal))
                 continue;
+
+            if (queryLiteral != null && !skippedQueryLiteral && arg == queryLiteral)
+            {
+                skippedQueryLiteral = true;
+                continue;
+            }
 
             var normalizedArg = TrySplitInlineOptionValue(arg, out var inlineOptionName)
                 ? inlineOptionName!

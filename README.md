@@ -292,6 +292,7 @@ cdidx search "handleRequest" --lang go   # filter by language
 cdidx search "TODO" --limit 50           # more results
 cdidx search "auth*" --fts               # raw FTS5 syntax (prefix search)
 cdidx search "Run();" --exact-substring  # case-sensitive exact substring, no FTS5
+cdidx search "--open-reports" --path README.md --count  # quoted literal that starts with --
 cdidx search --query "--path" --path README.md  # search for an option-looking literal
 ```
 
@@ -1227,6 +1228,7 @@ cdidx search "handleRequest" --lang go   # 言語でフィルタ
 cdidx search "TODO" --limit 50           # 結果数を増やす
 cdidx search "auth*" --fts               # 生のFTS5構文（前方一致検索）
 cdidx search "Run();" --exact-substring  # 大文字小文字区別の完全部分一致、FTS5 なし
+cdidx search "--open-reports" --path README.md --count  # `--` で始まる引用済みリテラル
 cdidx search --query "--path" --path README.md  # オプションに見えるリテラルを検索
 ```
 

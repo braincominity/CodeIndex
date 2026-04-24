@@ -4794,7 +4794,7 @@ public partial class DbReader
         return columns;
     }
 
-    private string GetSymbolColumnSql(string columnName, string? fallbackSql = null)
+    private string GetSymbolColumnSql(string columnName, string? fallbackSql = null, string symbolAlias = "s")
     {
         if (_symbolColumns.Contains(columnName))
         {
@@ -4803,8 +4803,8 @@ public partial class DbReader
             // 古いバイナリがカラムだけ追加して既存行を NULL のまま残しているケースに備え、
             // fallback と COALESCE してレガシーインデックスでクラッシュしないようにする。
             return fallbackSql != null
-                ? $"COALESCE(s.{columnName}, {fallbackSql})"
-                : $"s.{columnName}";
+                ? $"COALESCE({symbolAlias}.{columnName}, {fallbackSql})"
+                : $"{symbolAlias}.{columnName}";
         }
 
         return fallbackSql ?? "NULL";
@@ -5335,6 +5335,30 @@ public partial class DbReader
             for (int i = 0; i < excludePathPatterns.Count; i++)
                 cmd.Parameters.AddWithValue($"@excludePathPattern{i}", $"%{EscapeLikeQuery(excludePathPatterns[i])}%");
         }
+    }
+
+    internal static string BuildPathFiltersSql(string fileAlias, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    {
+        var sql = string.Empty;
+        if (pathPatterns != null && pathPatterns.Count > 0)
+        {
+            // Multiple --path values are OR'd together / 複数の --path 値は OR で結合する
+            var ors = new List<string>(pathPatterns.Count);
+            for (int i = 0; i < pathPatterns.Count; i++)
+                ors.Add($"{fileAlias}.path LIKE @pathPattern{i} ESCAPE '\\'");
+            sql += " AND (" + string.Join(" OR ", ors) + ")";
+        }
+
+        if (excludePathPatterns != null)
+        {
+            for (int i = 0; i < excludePathPatterns.Count; i++)
+                sql += $" AND {fileAlias}.path NOT LIKE @excludePathPattern{i} ESCAPE '\\'";
+        }
+
+        if (excludeTests)
+            sql += $" AND NOT {TestPathCondition.Replace("f.path", $"{fileAlias}.path")}";
+
+        return sql;
     }
 
     internal static DateTime? GetNullableDateTime(SqliteDataReader reader, int ordinal)

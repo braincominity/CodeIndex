@@ -8698,6 +8698,99 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpSwitchExpressionLaterGenericArmAfterWhenGuard_StillEmitsTypeHead()
+    {
+        // issue #851: a `when` clause on an earlier arm must not hide a later generic arm head.
+        // issue #851: 先行 arm の `when` 句で後続の generic arm head を隠してはならない。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+            class Shape {}
+            class Wrapper<TLeft, TRight> {}
+
+            class Demo
+            {
+                int Match(object value) => value switch
+                {
+                    Point p when p.GetHashCode() > 0 => 1,
+                    Wrapper<Point, Shape> => 2,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Wrapper" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Equal(2, references.Count(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match"));
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+    }
+
+    [Theory]
+    [InlineData("Point { X: < 0 } => 1,")]
+    [InlineData("Point { X: > 0 } => 1,")]
+    public void Extract_CsharpSwitchExpressionLaterArmAfterRelationalPattern_StillEmitsTypeHead(string previousArm)
+    {
+        // issue #852: relational pattern operators in an earlier arm must not poison later comma detection.
+        // issue #852: 先行 arm の relational pattern 演算子で後続 arm 区切りを見失ってはならない。
+        var content = $$"""
+            namespace Probe;
+
+            class Point { public int X { get; init; } }
+            class Shape {}
+
+            class Demo
+            {
+                int Match(object value) => value switch
+                {
+                    {{previousArm}}
+                    Shape => 2,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+    }
+
+    [Fact]
+    public void Extract_CsharpSwitchExpressionLaterGenericArmAfterRelationalPattern_StillEmitsTypeHead()
+    {
+        // issue #852: relational `<` in a previous recursive pattern must not hide a later generic arm.
+        // issue #852: 先行 recursive pattern の relational `<` で後続 generic arm を隠してはならない。
+        const string content = """
+            namespace Probe;
+
+            class Point { public int X { get; init; } }
+            class Shape {}
+            class Wrapper<TLeft, TRight> {}
+
+            class Demo
+            {
+                int Match(object value) => value switch
+                {
+                    Point { X: < 0 } => 1,
+                    Wrapper<Point, Shape> => 2,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Wrapper" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Equal(2, references.Count(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match"));
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+    }
+
+    [Fact]
     public void Extract_CsharpVerbatimPatternTypeNames_DoNotCollapseIntoBarePatternTokens()
     {
         // issue #677: `@not` / `@default` are legal type names, so the non-type pattern

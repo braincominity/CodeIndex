@@ -9209,6 +9209,82 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_DetectsBraceLiteralAnnotationsOnSameLineTypesAndEnumBodies()
+    {
+        var content = """
+            @Target({ElementType.TYPE}) public record Wrapped(int value) { public int twice() { return value * 2; } }
+
+            public enum Op {
+                ADD { @SuppressWarnings({"unchecked"}) public int apply(int a, int b) { return a + b; } };
+                public abstract int apply(int a, int b);
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Wrapped");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "value" && s.ContainerKind == "class" && s.ContainerName == "Wrapped");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "twice" && s.ContainerKind == "class" && s.ContainerName == "Wrapped");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "apply" && s.ContainerKind == "function" && s.ContainerName == "ADD");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "apply" && s.ContainerKind == "enum" && s.ContainerName == "Op");
+    }
+
+    [Fact]
+    public void Extract_Java_SameLineRecordsDoNotEmitPhantomHeaderFunctions()
+    {
+        var content = """
+            public record Empty(int x) {}
+            public record Inline(int x) { public int twice() { return x * 2; } }
+            public record Compact(int x) { public Compact { if (x < 0) throw new IllegalArgumentException(); } }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Empty");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Inline");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Compact");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "x" && s.ContainerName == "Empty");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "twice" && s.ContainerKind == "class" && s.ContainerName == "Inline");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Compact" && s.ContainerKind == "class" && s.ContainerName == "Compact");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name is "Empty" or "Inline" && s.ReturnType == "record");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Compact" && s.ReturnType == "record");
+    }
+
+    [Fact]
+    public void Extract_Java_SameLineCompactConstructorAfterSiblingStillIndexesConstructor()
+    {
+        var content = """
+            public record R(int x) { int first() { return x; } public R { if (x < 0) throw new IllegalArgumentException(); } }
+            public record Annotated(int x) { @Deprecated int first() { return x; } @Deprecated public Annotated { if (x < 0) throw new IllegalArgumentException(); } }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "R");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "x" && s.ContainerKind == "class" && s.ContainerName == "R");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first" && s.ContainerKind == "class" && s.ContainerName == "R");
+        var compactCtor = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "R"));
+        Assert.Equal("class", compactCtor.ContainerKind);
+        Assert.Equal("R", compactCtor.ContainerName);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first" && s.ContainerKind == "class" && s.ContainerName == "Annotated");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Annotated" && s.ContainerKind == "class" && s.ContainerName == "Annotated");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name is "R" or "Annotated" && s.ReturnType == "record");
+    }
+
+    [Fact]
+    public void Extract_Java_SameLineMembersAfterCompactConstructorStillIndex()
+    {
+        var content = """
+            public record R(int x) { public R { } int later() { return x; } }
+            public record Annotated(int x) { @Deprecated public Annotated { } @Deprecated int later() { return x; } }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "R" && s.ContainerKind == "class" && s.ContainerName == "R");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "later" && s.ContainerKind == "class" && s.ContainerName == "R");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Annotated" && s.ContainerKind == "class" && s.ContainerName == "Annotated");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "later" && s.ContainerKind == "class" && s.ContainerName == "Annotated");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.ReturnType == "record");
+    }
+
+    [Fact]
     public void Extract_Java_HandlesSameLineSiblingMethodsInsideEnumBody()
     {
         var content = """
