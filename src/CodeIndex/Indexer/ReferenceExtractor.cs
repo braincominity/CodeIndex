@@ -664,6 +664,9 @@ public static class ReferenceExtractor
         content = FileIndexer.StripLineLeadingBom(content);
         var lines = content.Split('\n');
         var structuralLines = StructuralLineMasker.MaskLines(language, lines);
+        var csharpLinesInsideMultilineStringContent = language == "csharp"
+            ? BuildCSharpMultilineStringContentLines(lines)
+            : null;
         var preparedLines = new string[lines.Length];
         for (var pi = 0; pi < lines.Length; pi++)
             preparedLines[pi] = PrepareLine(language, structuralLines[pi]);
@@ -720,6 +723,13 @@ public static class ReferenceExtractor
                               || symbol.Kind == "namespace" || symbol.Kind == "property"))
             .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
             .ToList();
+        var csharpXmlDocAttachmentScopeCandidates = language == "csharp"
+            ? symbols
+                .Where(symbol => symbol.BodyStartLine != null && symbol.BodyEndLine != null
+                                 && symbol.Kind is "class" or "struct" or "interface" or "enum" or "namespace")
+                .OrderBy(symbol => (symbol.BodyEndLine ?? symbol.EndLine) - (symbol.BodyStartLine ?? symbol.StartLine))
+                .ToList()
+            : null;
         // Enclosing-type candidates for constructor-chain rewrites (class/struct/record; namespace excluded).
         // Ordered innermost-first via ascending body range. Java enums can declare constructors and
         // chain via `this(...)` so `enum` is included; C# enums cannot declare constructors, and
@@ -775,6 +785,7 @@ public static class ReferenceExtractor
         HashSet<string>? sqlEstablishedTempObjectNames = null;
         string? sqlStatementPrefix = null;
         var sqlIdentifierScanState = default(SqlIdentifierScanState);
+        var csharpInDelimitedDocComment = false;
         if (language == "sql")
         {
             sqlEstablishedTempObjectNames = new HashSet<string>(StringComparer.Ordinal);
@@ -786,24 +797,57 @@ public static class ReferenceExtractor
             var lineNumber = i + 1;
             var originalLine = lines[i];
             var preparedLine = preparedLines[i];
+            var csharpAttrRangesOnLine = csharpAttrRanges?[i];
+            var csharpAttrTopLevelOnLine = csharpAttrTopLevelRanges?[i];
             if (language == "csharp"
-                && originalLine.IndexOf("cref=\"", StringComparison.OrdinalIgnoreCase) >= 0
-                && IsCSharpXmlDocCommentLine(originalLine))
-            {
-                var docContainer = FindDocumentedContainer(containerCandidates, lineNumber);
-                EmitCSharpDocCrefReferences(
+                && !(csharpLinesInsideMultilineStringContent?[i] ?? false)
+                && TryGetCSharpXmlDocCommentSpan(
                     originalLine,
-                    references,
-                    seen,
-                    fileId,
-                    originalLine.Trim(),
-                    lineNumber,
-                    docContainer);
+                    csharpInDelimitedDocComment,
+                    out var csharpDocCommentStartIndex,
+                    out var csharpDocCommentEndExclusive,
+                    out var nextCsharpDelimitedDocComment))
+            {
+                var csharpDocCommentText = originalLine[csharpDocCommentStartIndex..csharpDocCommentEndExclusive];
+                if (csharpDocCommentText.IndexOf("cref=\"", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    var innermostContainer = FindInnermostContainer(containerCandidates, lineNumber);
+                    var sameLineDeclarationStartColumn = GetCSharpSameLineDocumentedDeclarationStartColumn(
+                        originalLine,
+                        csharpDocCommentEndExclusive,
+                        nextCsharpDelimitedDocComment);
+                    var docContainer = FindDocumentedContainer(
+                        containerCandidates,
+                        structuralLines[i],
+                        preparedLine,
+                        csharpAttrRangesOnLine,
+                        lineNumber,
+                        sameLineDeclarationStartColumn);
+                    if (docContainer != null
+                        && (docContainer.StartLine == lineNumber
+                            || CanAttachCSharpXmlDocCommentToNextDeclaration(
+                                innermostContainer,
+                                csharpXmlDocAttachmentScopeCandidates,
+                                csharpAttrRanges,
+                                preparedLines,
+                                lineNumber,
+                                docContainer)))
+                    {
+                        EmitCSharpDocCrefReferences(
+                            csharpDocCommentText,
+                            references,
+                            seen,
+                            fileId,
+                            csharpDocCommentStartIndex,
+                            csharpDocCommentText.Trim(),
+                            lineNumber,
+                            docContainer);
+                    }
+                }
+                csharpInDelimitedDocComment = nextCsharpDelimitedDocComment;
             }
             if (string.IsNullOrWhiteSpace(preparedLine))
                 continue;
-            var csharpAttrRangesOnLine = csharpAttrRanges?[i];
-            var csharpAttrTopLevelOnLine = csharpAttrTopLevelRanges?[i];
 
             var context = originalLine.Trim();
             if (context.Length == 0)
@@ -2575,6 +2619,7 @@ public static class ReferenceExtractor
         List<ReferenceRecord> references,
         HashSet<string> seen,
         long fileId,
+        int columnOffset,
         string context,
         int lineNumber,
         SymbolRecord? container)
@@ -2590,7 +2635,7 @@ public static class ReferenceExtractor
                 seen,
                 fileId,
                 normalized,
-                crefGroup.Index,
+                columnOffset + crefGroup.Index,
                 context,
                 lineNumber,
                 container,
@@ -4969,14 +5014,53 @@ public static class ReferenceExtractor
             : aliasTarget + qualifier[firstSegment.Length..];
     }
 
-    private static bool IsCSharpXmlDocCommentLine(string line)
+    private static bool TryGetCSharpXmlDocCommentSpan(
+        string line,
+        bool inDelimitedDocComment,
+        out int commentStartIndex,
+        out int commentEndExclusive,
+        out bool nextDelimitedDocComment)
     {
+        commentStartIndex = 0;
+        commentEndExclusive = 0;
+        nextDelimitedDocComment = inDelimitedDocComment;
         if (string.IsNullOrWhiteSpace(line))
+        {
+            commentEndExclusive = inDelimitedDocComment ? line.Length : 0;
+            return inDelimitedDocComment;
+        }
+
+        var firstNonWhitespaceIndex = 0;
+        while (firstNonWhitespaceIndex < line.Length && char.IsWhiteSpace(line[firstNonWhitespaceIndex]))
+            firstNonWhitespaceIndex++;
+
+        if (inDelimitedDocComment)
+        {
+            var closeIndex = line.IndexOf("*/", StringComparison.Ordinal);
+            nextDelimitedDocComment = closeIndex < 0;
+            commentStartIndex = 0;
+            commentEndExclusive = closeIndex < 0 ? line.Length : closeIndex;
+            return true;
+        }
+
+        if (line.AsSpan(firstNonWhitespaceIndex).StartsWith("///", StringComparison.Ordinal))
+        {
+            if (line.Length != firstNonWhitespaceIndex + 3 && line[firstNonWhitespaceIndex + 3] == '/')
+                return false;
+
+            commentStartIndex = firstNonWhitespaceIndex;
+            commentEndExclusive = line.Length;
+            return true;
+        }
+
+        if (!line.AsSpan(firstNonWhitespaceIndex).StartsWith("/**", StringComparison.Ordinal))
             return false;
 
-        var trimmed = line.TrimStart();
-        return trimmed.StartsWith("///", StringComparison.Ordinal)
-            && (trimmed.Length == 3 || trimmed[3] != '/');
+        var closeAfterOpenIndex = line.IndexOf("*/", firstNonWhitespaceIndex + 3, StringComparison.Ordinal);
+        nextDelimitedDocComment = closeAfterOpenIndex < 0;
+        commentStartIndex = firstNonWhitespaceIndex;
+        commentEndExclusive = closeAfterOpenIndex < 0 ? line.Length : closeAfterOpenIndex;
+        return true;
     }
 
     private static bool HasActiveCSharpUsingStaticTarget(
@@ -8104,8 +8188,290 @@ public static class ReferenceExtractor
         return null;
     }
 
-    private static SymbolRecord? FindDocumentedContainer(IReadOnlyList<SymbolRecord> candidates, int lineNumber)
+    private static bool CanAttachCSharpXmlDocCommentToNextDeclaration(
+        SymbolRecord? innermostContainer,
+        IReadOnlyList<SymbolRecord>? scopeCandidates,
+        List<List<(int start, int end)>>? csharpAttrRanges,
+        string[] preparedLines,
+        int lineNumber,
+        SymbolRecord documentedContainer)
     {
+        if (!HasOnlyCSharpWhitespaceOrAttributesBetweenCommentAndDeclaration(
+                csharpAttrRanges,
+                preparedLines,
+                lineNumber,
+                documentedContainer.StartLine))
+        {
+            return false;
+        }
+
+        if (innermostContainer != null
+            && innermostContainer.Kind is not "class" or "struct" or "interface" or "enum" or "namespace")
+        {
+            return false;
+        }
+
+        var enclosingScope = scopeCandidates == null
+            ? null
+            : FindInnermostContainer(scopeCandidates, lineNumber);
+        if (enclosingScope?.BodyStartLine == null)
+            return true;
+
+        return IsAtCSharpXmlDocAttachmentDepth(enclosingScope, preparedLines, lineNumber);
+    }
+
+    private static bool HasOnlyCSharpWhitespaceOrAttributesBetweenCommentAndDeclaration(
+        List<List<(int start, int end)>>? csharpAttrRanges,
+        string[] preparedLines,
+        int commentLineNumber,
+        int declarationLineNumber)
+    {
+        var startLineIndex = Math.Max(commentLineNumber, 0);
+        var endLineIndex = Math.Min(declarationLineNumber - 1, preparedLines.Length);
+        for (var lineIndex = startLineIndex; lineIndex < endLineIndex; lineIndex++)
+        {
+            var line = preparedLines[lineIndex];
+            if (string.IsNullOrWhiteSpace(line))
+                continue;
+
+            if (IsCSharpAttributeOnlyLine(line, csharpAttrRanges?[lineIndex]))
+                continue;
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsCSharpAttributeOnlyLine(string preparedLine, List<(int start, int end)>? ranges)
+    {
+        if (ranges == null || ranges.Count == 0)
+            return false;
+
+        for (var i = 0; i < preparedLine.Length; i++)
+        {
+            if (char.IsWhiteSpace(preparedLine[i]))
+                continue;
+
+            var covered = false;
+            foreach (var (start, end) in ranges)
+            {
+                if (i >= start && i < end)
+                {
+                    covered = true;
+                    break;
+                }
+            }
+
+            if (!covered)
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsAtCSharpXmlDocAttachmentDepth(
+        SymbolRecord enclosingScope,
+        string[] preparedLines,
+        int lineNumber)
+    {
+        var scopeBodyStartIndex = enclosingScope.BodyStartLine!.Value - 1;
+        var commentLineIndex = lineNumber - 1;
+        if (scopeBodyStartIndex < 0
+            || scopeBodyStartIndex >= preparedLines.Length
+            || scopeBodyStartIndex >= commentLineIndex)
+        {
+            return true;
+        }
+
+        var sawScopeOpenBrace = false;
+        var nestedBraceDepth = 0;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var topLevelExecutableContinuation = false;
+        var topLevelArrowExpressionContinuation = false;
+
+        for (var i = scopeBodyStartIndex; i < commentLineIndex && i < preparedLines.Length; i++)
+        {
+            var line = preparedLines[i];
+            for (var j = 0; j < line.Length; j++)
+            {
+                var ch = line[j];
+                if (!sawScopeOpenBrace)
+                {
+                    if (ch == '{')
+                        sawScopeOpenBrace = true;
+
+                    continue;
+                }
+
+                if (nestedBraceDepth == 0)
+                {
+                    if (IsCSharpTopLevelArrowToken(line, j))
+                    {
+                        topLevelExecutableContinuation = true;
+                        topLevelArrowExpressionContinuation = !IsCSharpArrowBlockStart(line, j + 2);
+                        j++;
+                        continue;
+                    }
+
+                    if (IsCSharpTopLevelAssignmentOperator(line, j))
+                    {
+                        topLevelExecutableContinuation = true;
+                    }
+                }
+
+                if (ch == '{')
+                {
+                    nestedBraceDepth++;
+                }
+                else if (ch == '}')
+                {
+                    if (nestedBraceDepth == 0)
+                        return false;
+
+                    nestedBraceDepth--;
+                }
+                else if (ch == '(')
+                {
+                    parenDepth++;
+                }
+                else if (ch == ')' && parenDepth > 0)
+                {
+                    parenDepth--;
+                }
+                else if (ch == '[')
+                {
+                    bracketDepth++;
+                }
+                else if (ch == ']' && bracketDepth > 0)
+                {
+                    bracketDepth--;
+                }
+                else if (nestedBraceDepth == 0
+                         && ch == ';'
+                         && parenDepth == 0
+                         && bracketDepth == 0)
+                {
+                    topLevelExecutableContinuation = false;
+                    topLevelArrowExpressionContinuation = false;
+                }
+            }
+        }
+
+        return !sawScopeOpenBrace
+            || (nestedBraceDepth == 0
+                && parenDepth == 0
+                && bracketDepth == 0
+                && !topLevelExecutableContinuation
+                && !topLevelArrowExpressionContinuation);
+    }
+
+    private static bool IsCSharpTopLevelAssignmentOperator(string line, int index)
+    {
+        if (index < 0 || index >= line.Length || line[index] != '=')
+            return false;
+
+        var previous = index > 0 ? line[index - 1] : '\0';
+        var next = index + 1 < line.Length ? line[index + 1] : '\0';
+        return previous is not ('=' or '!' or '<' or '>')
+            && next is not ('=' or '>');
+    }
+
+    private static bool IsCSharpTopLevelArrowToken(string line, int index) =>
+        index >= 0
+        && index + 1 < line.Length
+        && line[index] == '='
+        && line[index + 1] == '>';
+
+    private static bool IsCSharpArrowBlockStart(string line, int index)
+    {
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+
+        return index < line.Length && line[index] == '{';
+    }
+
+    private static int GetCSharpSameLineDocumentedDeclarationStartColumn(
+        string originalLine,
+        int commentEndExclusive,
+        bool nextDelimitedDocComment)
+    {
+        if (nextDelimitedDocComment
+            || commentEndExclusive < 0
+            || commentEndExclusive + 1 >= originalLine.Length
+            || originalLine[commentEndExclusive] != '*'
+            || originalLine[commentEndExclusive + 1] != '/')
+        {
+            return -1;
+        }
+
+        var column = commentEndExclusive + 2;
+        while (column < originalLine.Length && char.IsWhiteSpace(originalLine[column]))
+            column++;
+
+        return column < originalLine.Length ? column : -1;
+    }
+
+    private static bool HasOnlyCSharpWhitespaceOrAttributesAfterColumn(
+        string preparedLine,
+        List<(int start, int end)>? ranges,
+        int startColumn)
+    {
+        if (startColumn < 0 || startColumn >= preparedLine.Length)
+            return true;
+
+        for (var i = startColumn; i < preparedLine.Length; i++)
+        {
+            if (char.IsWhiteSpace(preparedLine[i]))
+                continue;
+
+            if (ranges != null)
+            {
+                var covered = false;
+                foreach (var (start, end) in ranges)
+                {
+                    if (i >= start && i < end)
+                    {
+                        covered = true;
+                        break;
+                    }
+                }
+
+                if (covered)
+                    continue;
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private static SymbolRecord? FindDocumentedContainer(
+        IReadOnlyList<SymbolRecord> candidates,
+        string structuralLine,
+        string preparedLine,
+        List<(int start, int end)>? csharpAttrRangesOnLine,
+        int lineNumber,
+        int sameLineDeclarationStartColumn)
+    {
+        var sameLineCandidate = FindSameLineDocumentedContainer(
+            candidates,
+            structuralLine,
+            lineNumber,
+            sameLineDeclarationStartColumn);
+        if (sameLineCandidate != null)
+            return sameLineCandidate;
+        if (sameLineDeclarationStartColumn >= 0
+            && !HasOnlyCSharpWhitespaceOrAttributesAfterColumn(
+                preparedLine,
+                csharpAttrRangesOnLine,
+                sameLineDeclarationStartColumn))
+        {
+            return null;
+        }
+
         SymbolRecord? best = null;
         foreach (var candidate in candidates)
         {
@@ -8122,7 +8488,53 @@ public static class ReferenceExtractor
             }
         }
 
-        return best ?? FindInnermostContainer(candidates, lineNumber);
+        return best;
+    }
+
+    private static SymbolRecord? FindSameLineDocumentedContainer(
+        IReadOnlyList<SymbolRecord> candidates,
+        string structuralLine,
+        int lineNumber,
+        int sameLineDeclarationStartColumn)
+    {
+        if (sameLineDeclarationStartColumn < 0)
+            return null;
+
+        SymbolRecord? best = null;
+        var bestStartColumn = int.MaxValue;
+        var bestSpanLength = int.MaxValue;
+        var bestKindRank = int.MaxValue;
+
+        foreach (var candidate in candidates)
+        {
+            if (candidate.StartLine != lineNumber
+                || candidate.EndLine != lineNumber
+                || string.IsNullOrEmpty(candidate.Signature))
+            {
+                continue;
+            }
+
+            if (!TryGetSameLineSignatureSpan(candidate, structuralLine, out var startColumn, out var endColumn)
+                || startColumn < sameLineDeclarationStartColumn)
+            {
+                continue;
+            }
+
+            var spanLength = endColumn - startColumn;
+            var kindRank = GetSameLineContainerKindRank(candidate.Kind);
+            if (best == null
+                || startColumn < bestStartColumn
+                || (startColumn == bestStartColumn && spanLength < bestSpanLength)
+                || (startColumn == bestStartColumn && spanLength == bestSpanLength && kindRank < bestKindRank))
+            {
+                best = candidate;
+                bestStartColumn = startColumn;
+                bestSpanLength = spanLength;
+                bestKindRank = kindRank;
+            }
+        }
+
+        return best;
     }
 
     private static SymbolRecord? FindInnermostSameLineCSharpContainer(
@@ -8217,6 +8629,211 @@ public static class ReferenceExtractor
         }
 
         return -1;
+    }
+
+    private static bool[] BuildCSharpMultilineStringContentLines(string[] lines)
+    {
+        var insideStringContent = new bool[lines.Length];
+        var inBlockComment = false;
+        var inVerbatimString = false;
+        var rawStringDelimiterLength = 0;
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            insideStringContent[i] = inVerbatimString || rawStringDelimiterLength > 0;
+
+            var index = 0;
+            while (index < line.Length)
+            {
+                if (inBlockComment)
+                {
+                    var closeIndex = line.IndexOf("*/", index, StringComparison.Ordinal);
+                    if (closeIndex < 0)
+                        break;
+
+                    index = closeIndex + 2;
+                    inBlockComment = false;
+                    continue;
+                }
+
+                if (rawStringDelimiterLength > 0)
+                {
+                    var closeLength = CountCharacterRun(line, index, '"');
+                    if (closeLength >= rawStringDelimiterLength)
+                    {
+                        index += closeLength;
+                        rawStringDelimiterLength = 0;
+                        continue;
+                    }
+
+                    break;
+                }
+
+                if (inVerbatimString)
+                {
+                    if (line[index] == '"' && index + 1 < line.Length && line[index + 1] == '"')
+                    {
+                        index += 2;
+                        continue;
+                    }
+
+                    if (line[index] == '"')
+                    {
+                        index++;
+                        inVerbatimString = false;
+                        continue;
+                    }
+
+                    index++;
+                    continue;
+                }
+
+                if (StartsWithOrdinal(line, index, "//"))
+                    break;
+
+                if (StartsWithOrdinal(line, index, "/*"))
+                {
+                    inBlockComment = true;
+                    index += 2;
+                    continue;
+                }
+
+                if (TryStartCSharpRawString(line, index, out var rawOpeningLength, out var rawDelimiterLength))
+                {
+                    rawStringDelimiterLength = rawDelimiterLength;
+                    index += rawOpeningLength;
+                    continue;
+                }
+
+                if (TryStartCSharpVerbatimString(line, index, out var verbatimOpeningLength))
+                {
+                    inVerbatimString = true;
+                    index += verbatimOpeningLength;
+                    continue;
+                }
+
+                if (TryStartCSharpRegularString(line, index, out var regularOpeningLength))
+                {
+                    index += regularOpeningLength;
+                    while (index < line.Length)
+                    {
+                        if (line[index] == '\\')
+                        {
+                            index += Math.Min(2, line.Length - index);
+                            continue;
+                        }
+
+                        if (line[index] == '"')
+                        {
+                            index++;
+                            break;
+                        }
+
+                        index++;
+                    }
+
+                    continue;
+                }
+
+                if (line[index] == '\'')
+                {
+                    index++;
+                    while (index < line.Length)
+                    {
+                        if (line[index] == '\\')
+                        {
+                            index += Math.Min(2, line.Length - index);
+                            continue;
+                        }
+
+                        if (line[index] == '\'')
+                        {
+                            index++;
+                            break;
+                        }
+
+                        index++;
+                    }
+
+                    continue;
+                }
+
+                index++;
+            }
+        }
+
+        return insideStringContent;
+    }
+
+    private static bool TryStartCSharpRawString(
+        string line,
+        int startIndex,
+        out int openingLength,
+        out int delimiterLength)
+    {
+        openingLength = 0;
+        delimiterLength = 0;
+
+        var quoteIndex = startIndex;
+        while (quoteIndex < line.Length && line[quoteIndex] == '$')
+            quoteIndex++;
+
+        delimiterLength = CountCharacterRun(line, quoteIndex, '"');
+        if (delimiterLength < 3)
+            return false;
+
+        openingLength = (quoteIndex - startIndex) + delimiterLength;
+        return true;
+    }
+
+    private static bool TryStartCSharpVerbatimString(string line, int startIndex, out int openingLength)
+    {
+        openingLength = 0;
+        if (StartsWithOrdinal(line, startIndex, "$@\"") || StartsWithOrdinal(line, startIndex, "@$\""))
+        {
+            openingLength = 3;
+            return true;
+        }
+
+        if (!StartsWithOrdinal(line, startIndex, "@\""))
+            return false;
+
+        openingLength = 2;
+        return true;
+    }
+
+    private static bool TryStartCSharpRegularString(string line, int startIndex, out int openingLength)
+    {
+        openingLength = 0;
+        if (StartsWithOrdinal(line, startIndex, "$\""))
+        {
+            openingLength = 2;
+            return true;
+        }
+
+        if (line[startIndex] != '"')
+            return false;
+
+        openingLength = 1;
+        return true;
+    }
+
+    private static bool StartsWithOrdinal(string line, int startIndex, string value)
+    {
+        if (startIndex + value.Length > line.Length)
+            return false;
+
+        return string.Compare(line, startIndex, value, 0, value.Length, StringComparison.Ordinal) == 0;
+    }
+
+    private static int CountCharacterRun(string line, int startIndex, char value)
+    {
+        var index = startIndex;
+        while (index < line.Length && line[index] == value)
+            index++;
+
+        return index - startIndex;
     }
 
     private static int GetSameLineContainerKindRank(string? kind) => kind switch
