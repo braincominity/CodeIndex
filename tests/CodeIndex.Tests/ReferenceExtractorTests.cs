@@ -6319,6 +6319,33 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_SemicolonlessTempRoutineEstablishmentStillEmitsCallEdges()
+    {
+        // issue #656 follow-up (codex review #1): a `CREATE PROCEDURE|FUNCTION #x` line that ends
+        // without `;` (the typical T-SQL `GO`-batch shape, where the routine body uses BEGIN/END)
+        // must still establish `#x` before the next-line `EXEC` / `CALL` is processed. Without the
+        // matching `CanSqlStatementEstablishTempObject()` flush, the call edge would silently be
+        // dropped by the new proc-call `#`-gate even though the routine is defined right above.
+        // issue #656 フォローアップ（codex review #1）: `;` で閉じない `CREATE PROCEDURE|FUNCTION #x`
+        // 行（routine 本体に BEGIN/END を使う典型的な T-SQL `GO` バッチ形）でも、次行の `EXEC` /
+        // `CALL` を処理する前に `#x` を確立しなければならない。これに対応する
+        // `CanSqlStatementEstablishTempObject()` の flush を追加しないと、新しい proc 呼び出し
+        // `#` ゲートが上行で定義された routine の call edge を黙って落としてしまう。
+        const string content = """
+            CREATE PROCEDURE #localSp AS SELECT 1
+            EXEC #localSp;
+            CREATE FUNCTION #localFn() RETURNS INT AS BEGIN RETURN 1 END
+            CALL #localFn;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "#localSp" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "#localFn" && r.ReferenceKind == "call" && r.Line == 4);
+    }
+
+    [Fact]
     public void Extract_SQL_QuotedTempProcCallsBypassHashCommentGate()
     {
         // issue #656: quoted forms are unambiguously identifiers (MySQL uses `#` for comments but

@@ -1885,7 +1885,8 @@ public static class ReferenceExtractor
         return SqlTargetReferenceRegex.IsMatch(statement)
             || SqlTruncateTargetRegex.IsMatch(statement)
             || SqlSelectIntoTempTargetStatementRegex.IsMatch(statement)
-            || SqlCreateTempTableRegex.IsMatch(statement);
+            || SqlCreateTempTableRegex.IsMatch(statement)
+            || SqlCreateTempRoutineRegex.IsMatch(statement);
     }
 
     private static bool CanSqlStatementRequireLineCommentCarry(string statement)
