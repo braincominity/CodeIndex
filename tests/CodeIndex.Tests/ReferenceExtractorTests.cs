@@ -8304,6 +8304,69 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpCaseListPatternTypeHead_EmitsTypeReference()
+    {
+        // issue #667: `case List<int> [_, ..]:` and similar list-pattern case labels must keep
+        // the leading type head as a `type_reference` so DEVELOPER_GUIDE.md's documented positive
+        // example for C# type-position edges stays test-backed.
+        // issue #667: `case List<int> [_, ..]:` のような list pattern の case ラベルでも先頭型 head を
+        // `type_reference` として残し、DEVELOPER_GUIDE.md の positive example をテストで裏付ける。
+        const string content = """
+            using System.Collections.Generic;
+
+            namespace Probe;
+
+            class Demo
+            {
+                bool MatchSpaced(object value)
+                {
+                    switch (value)
+                    {
+                        case List<int> [_, ..]:
+                            return true;
+                    }
+
+                    return false;
+                }
+
+                bool MatchPacked(object value)
+                {
+                    switch (value)
+                    {
+                        case List<double>[_]:
+                            return true;
+                    }
+
+                    return false;
+                }
+
+                bool MatchEmptyRest(object value)
+                {
+                    switch (value)
+                    {
+                        case List<string> [..]:
+                            return true;
+                    }
+
+                    return false;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var listRefs = references
+            .Where(r => r.SymbolName == "List" && r.ReferenceKind == "type_reference")
+            .ToList();
+
+        Assert.Equal(3, listRefs.Count);
+        Assert.Contains(listRefs, r => r.ContainerName == "MatchSpaced");
+        Assert.Contains(listRefs, r => r.ContainerName == "MatchPacked");
+        Assert.Contains(listRefs, r => r.ContainerName == "MatchEmptyRest");
+    }
+
+    [Fact]
     public void Extract_CsharpSwitchExpressionTypePatterns_EmitEveryGenuineTypeHead()
     {
         // issue #732: switch-expression arm heads should follow the same type-vs-constant
