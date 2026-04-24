@@ -774,9 +774,86 @@ public class McpServerTests : IDisposable
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Changed","lang":"csharp","exact":true}}}""")!;
         var response = _server.HandleMessage(request)!;
 
+        var row = response["result"]!["structuredContent"]!["results"]![0]!;
         Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
-        Assert.Equal("Hook", response["result"]!["structuredContent"]!["results"]![0]!["callerName"]!.GetValue<string>());
-        Assert.Equal("Changed", response["result"]!["structuredContent"]!["results"]![0]!["calleeName"]!.GetValue<string>());
+        Assert.Equal("Hook", row["callerName"]!.GetValue<string>());
+        Assert.Equal("Changed", row["calleeName"]!.GetValue<string>());
+        // #501: MCP wire format exposes referenceKind (preferred summary), referenceKinds (sorted distinct), and hasMixedReferenceKinds
+        // #501: MCP のワイヤ形式は referenceKind（要約）、referenceKinds（ソート済み distinct）、hasMixedReferenceKinds を返す
+        Assert.Equal("subscribe", row["referenceKind"]!.GetValue<string>());
+        Assert.False(row["hasMixedReferenceKinds"]!.GetValue<bool>());
+        var kinds = row["referenceKinds"]!.AsArray().Select(k => k!.GetValue<string>()).ToArray();
+        Assert.Equal(new[] { "subscribe" }, kinds);
+    }
+
+    [Fact]
+    public void ToolsCall_Callers_SurfacesMixedReferenceKindsForCallAndSubscribeContainer()
+    {
+        InsertIndexedFile("src/MixedOwner.cs", "csharp",
+            """
+            using System;
+
+            public class MixedOwner
+            {
+                public event EventHandler? Changed;
+
+                public void SetupAndFire()
+                {
+                    Changed += OnChanged;
+                    Changed(this, EventArgs.Empty);
+                }
+
+                private void OnChanged(object? sender, EventArgs e) { }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Changed","lang":"csharp","exact":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var row = response["result"]!["structuredContent"]!["results"]![0]!;
+        Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
+        Assert.Equal("SetupAndFire", row["callerName"]!.GetValue<string>());
+        Assert.Equal("Changed", row["calleeName"]!.GetValue<string>());
+        Assert.Equal(2, row["referenceCount"]!.GetValue<int>());
+        Assert.True(row["hasMixedReferenceKinds"]!.GetValue<bool>());
+        var kinds = row["referenceKinds"]!.AsArray().Select(k => k!.GetValue<string>()).ToArray();
+        Assert.Equal(new[] { "call", "subscribe" }, kinds);
+        // #501: preferred summary (`instantiate` > `subscribe` > `MIN(call)`) is `subscribe` for the mixed call+subscribe set
+        // #501: 混在時の preferred 要約（`instantiate` > `subscribe` > `MIN(call)`）は `subscribe`
+        Assert.Equal("subscribe", row["referenceKind"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_SurfacesMixedReferenceKindsInBundledCallers()
+    {
+        InsertIndexedFile("src/MixedOwner.cs", "csharp",
+            """
+            using System;
+
+            public class MixedOwner
+            {
+                public event EventHandler? Changed;
+
+                public void SetupAndFire()
+                {
+                    Changed += OnChanged;
+                    Changed(this, EventArgs.Empty);
+                }
+
+                private void OnChanged(object? sender, EventArgs e) { }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Changed","lang":"csharp","exact":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var caller = response["result"]!["structuredContent"]!["callers"]![0]!;
+
+        Assert.Equal("SetupAndFire", caller["callerName"]!.GetValue<string>());
+        Assert.Equal("Changed", caller["calleeName"]!.GetValue<string>());
+        Assert.Equal("subscribe", caller["referenceKind"]!.GetValue<string>());
+        Assert.True(caller["hasMixedReferenceKinds"]!.GetValue<bool>());
+        var kinds = caller["referenceKinds"]!.AsArray().Select(k => k!.GetValue<string>()).ToArray();
+        Assert.Equal(new[] { "call", "subscribe" }, kinds);
     }
 
     [Fact]
@@ -809,10 +886,16 @@ public class McpServerTests : IDisposable
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callees","arguments":{"query":"Hook","lang":"csharp","exact":true}}}""")!;
         var response = _server.HandleMessage(request)!;
 
+        var row = response["result"]!["structuredContent"]!["results"]![0]!;
         Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
-        Assert.Equal("Hook", response["result"]!["structuredContent"]!["results"]![0]!["callerName"]!.GetValue<string>());
-        Assert.Equal("Changed", response["result"]!["structuredContent"]!["results"]![0]!["calleeName"]!.GetValue<string>());
-        Assert.Equal("subscribe", response["result"]!["structuredContent"]!["results"]![0]!["referenceKind"]!.GetValue<string>());
+        Assert.Equal("Hook", row["callerName"]!.GetValue<string>());
+        Assert.Equal("Changed", row["calleeName"]!.GetValue<string>());
+        Assert.Equal("subscribe", row["referenceKind"]!.GetValue<string>());
+        // #501: callees rows stay split per kind so referenceKinds is a single-element array and hasMixedReferenceKinds is false
+        // #501: callees 行は kind 単位で分かれるため referenceKinds は単要素、hasMixedReferenceKinds は false
+        Assert.False(row["hasMixedReferenceKinds"]!.GetValue<bool>());
+        var kinds = row["referenceKinds"]!.AsArray().Select(k => k!.GetValue<string>()).ToArray();
+        Assert.Equal(new[] { "subscribe" }, kinds);
     }
 
     [Fact]
