@@ -554,7 +554,10 @@ public static class SymbolExtractor
             // `orderby Math.Abs(x)` do not match as `returnType + interface.member`. `new` is also
             // excluded so expression statements like `new System.Text.StringBuilder().Append(...)`
             // or `new System.Net.Http.HttpClient().Dispose()` do not masquerade as an explicit
-            // interface method (returnType=`new`, interface=qualified type, name=trailing member).
+            // interface method (returnType=`new`, interface=namespace prefix, name=type being
+            // constructed — the identifier right before the first `(`, e.g. `StringBuilder` /
+            // `HttpClient`; note the chained `.Append(...)` / `.Dispose()` tail is never part of
+            // the capture because the regex stops at the first `(`).
             // Closes #362, #377.
             // 明示的インターフェース実装 (例: void IDisposable.Dispose())
             // 有効な戻り値型（ステートメントキーワードではない）とドット前のインターフェース名を要求。

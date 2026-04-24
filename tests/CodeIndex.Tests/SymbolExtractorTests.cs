@@ -8380,13 +8380,19 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_CSharp_DoesNotMatchNewExpressionStatementsAsExplicitInterfaceDefinitions()
     {
-        // Issue #362: `new System.Text.StringBuilder().Append(...)` などの式文が
-        // returnType=`new` / interface=qualified 型 / name=末尾メンバーとして
-        // 明示的インターフェースメソッド定義に化けないこと。
+        // Issue #362: `new System.Text.StringBuilder().Append(...)` などの式文が、
+        // 正規表現が最初の `(` で止まるために returnType=`new` / interface=名前空間修飾 /
+        // name=構築されている型（`StringBuilder` / `HttpClient` / `Inner`）として
+        // 明示的インターフェースメソッド定義に化けないこと。ブレース初期化子形
+        // (`new Outer.Inner { A = 1 }.Consume();`) と `_ = new ...` 形も phantom を
+        // 生成しないことを同じフィクスチャ内で固定する。
         // Issue #362: expression statements like `new System.Text.StringBuilder().Append(...)`
-        // must not masquerade as explicit interface method definitions where returnType=`new`,
-        // interface=qualified type, name=trailing member.
-        var content = "public class Svc\n{\n    public int Real() => 42;\n\n    public void ChainedNew()\n    {\n        new System.Text.StringBuilder().Append(\"a\").Append(\"b\").ToString();\n    }\n\n    public void DiscardNew()\n    {\n        _ = new System.Text.RegularExpressions.Regex(\"pattern\");\n    }\n\n    public void UseNew()\n    {\n        new System.Net.Http.HttpClient().Dispose();\n    }\n}\n\npublic class Consumer : System.IDisposable\n{\n    void System.IDisposable.Dispose() { }\n}";
+        // must not masquerade as explicit interface method definitions. The phantom name would
+        // be the identifier right before the first `(` — the type being constructed
+        // (`StringBuilder` / `HttpClient` / `Inner`), because the explicit-interface regex
+        // stops at the first `(`. Brace-initializer forms (`new Outer.Inner { A = 1 }.Consume();`)
+        // and discard forms (`_ = new ...`) are also pinned in the same fixture.
+        var content = "public class Svc\n{\n    public int Real() => 42;\n\n    public void ChainedNew()\n    {\n        new System.Text.StringBuilder().Append(\"a\").Append(\"b\").ToString();\n    }\n\n    public void DiscardNew()\n    {\n        _ = new System.Text.RegularExpressions.Regex(\"pattern\");\n    }\n\n    public void UseNew()\n    {\n        new System.Net.Http.HttpClient().Dispose();\n    }\n\n    public void BraceInitNew()\n    {\n        new Outer.Inner { A = 1 }.Consume();\n    }\n}\n\npublic class Outer\n{\n    public class Inner { public int A { get; set; } public void Consume() { } }\n}\n\npublic class Consumer : System.IDisposable\n{\n    void System.IDisposable.Dispose() { }\n}";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
         // Real definitions should be extracted / 実際の定義は抽出されるべき
@@ -8395,17 +8401,29 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ChainedNew");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "DiscardNew");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "UseNew");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "BraceInitNew");
+        // Nested Outer.Inner and its real members must still be captured (regression guard for
+        // brace-initializer fixture / 回帰防止: ブレース初期化子用フィクスチャの実体定義)
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Outer");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Inner");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Consume");
         // Explicit interface impl on Consumer class must still be captured (regression guard)
         // Consumer クラスの明示的インターフェース実装は引き続き抽出されること（回帰防止）
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Dispose" && s.ReturnType == "void");
-        // Phantom function rows from new-expression statements must NOT be produced
-        // new 式文から phantom function 行が生成されないこと
+        // Phantom function rows from new-expression statements must NOT be produced,
+        // whether the chain ends in parentheses (`new T().M(...)`) or a brace-initializer
+        // (`new T { ... }.M(...)`). 構築される型名 (`StringBuilder` / `HttpClient` / `Regex`
+        // / `Inner`) が function 行として出ないこと。
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "StringBuilder");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Regex");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "HttpClient");
-        // The `new` keyword itself must not become a function name either
-        // `new` キーワード自体が function 名になっても困る
-        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "new");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Inner" && s.ReturnType == "new");
+        // The `new` keyword itself must never appear as ANY symbol name — not just function.
+        // Earlier review flagged that a `Kind == "function"`-only check would miss a future
+        // regression that mis-classified the phantom under a different kind.
+        // `new` 予約語はどの kind でもシンボル名にならないこと（`function` 限定だと別 kind へ
+        // 回帰したときに検出できない、というレビュー指摘への対応）。
+        Assert.DoesNotContain(symbols, s => s.Name == "new");
     }
 
     [Fact]
