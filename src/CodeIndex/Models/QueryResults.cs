@@ -377,6 +377,14 @@ public class SymbolAnalysisResult
     /// インデックスに参照テーブルが無いと true / false で区別可能。空が本物かどうか見極める。
     /// </summary>
     public bool GraphTableAvailable { get; set; } = true;
+    /// <summary>
+    /// True when bundled SQL graph-backed reads in this analysis reflect the current
+    /// call-column / qualified-name contract.
+    /// bundle 内の SQL graph 読み取りが current 契約に揃っているかどうか。
+    /// </summary>
+    public bool SqlGraphContractReady { get; set; } = true;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SqlGraphContractDegradedReason { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ExactZeroHintResult? ExactZeroHint { get; set; }
     /// <summary>

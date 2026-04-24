@@ -1243,6 +1243,7 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             var analysis = reader.AnalyzeSymbol(options.Query, options.Limit, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.MaxLineWidth);
+            var sqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var exactSignal = exact && analysis.ExactIndexAvailable.HasValue
                 ? new ExactQuerySignal(
                     analysis.ExactIndexAvailable.Value,
@@ -1250,12 +1251,17 @@ public static class QueryCommandRunner
                     analysis.ExactHasMissingTable ?? false,
                     analysis.DegradedReason)
                 : (ExactQuerySignal?)null;
+            analysis.SqlGraphContractReady = sqlGraphSignal.Ready;
+            analysis.SqlGraphContractDegradedReason = sqlGraphSignal.DegradedReason;
             WorkspaceMetadataEnricher.Enrich(analysis, options.DbPath, options.DbPathExplicit);
             if (exactSignal.HasValue)
                 WriteExactBundleWarningIfNeeded(exact, options.Json, exactSignal.Value, reader, options);
+            WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
             if (options.Json)
             {
-                Console.WriteLine(JsonSerializer.Serialize(analysis, jsonOptions));
+                var payload = JsonSerializer.SerializeToNode(analysis, jsonOptions)!.AsObject();
+                AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+                Console.WriteLine(payload.ToJsonString(jsonOptions));
             }
             else
             {

@@ -487,6 +487,7 @@ public partial class McpServer
         {
             var results = reader.SearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth);
             var exactSignal = reader.GetReferencesExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests);
+            var sqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
                 () => reader.CountSearchReferences(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false) > 0,
@@ -510,6 +511,7 @@ public partial class McpServer
             };
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
+            AddSqlGraphContractSignal(payload, sqlGraphSignal);
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);
@@ -737,9 +739,13 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var analysis = reader.AnalyzeSymbol(query, limit, lang, includeBody, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth);
+            var sqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
+            analysis.SqlGraphContractReady = sqlGraphSignal.Ready;
+            analysis.SqlGraphContractDegradedReason = sqlGraphSignal.DegradedReason;
             WorkspaceMetadataEnricher.Enrich(analysis, _dbPath, _dbPathExplicit);
             var structured = JsonSerializer.SerializeToNode(analysis, _jsonOptions)!.AsObject();
             AddExactSignalAliases(structured);
+            AddSqlGraphContractSignal(structured, sqlGraphSignal);
             structured.Remove("exactZeroHint");
             AddExactZeroHint(structured, analysis.ExactZeroHint);
             structured["maxLineWidth"] = maxLineWidth;

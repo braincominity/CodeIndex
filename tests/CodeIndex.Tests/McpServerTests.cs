@@ -1141,6 +1141,57 @@ public class McpServerTests : IDisposable
         Assert.Contains("not indexed", response["result"]!["structuredContent"]!["graphSupportReason"]!.GetValue<string>());
     }
 
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_StaleSqlGraphContractIncludesDegradedState()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_analyze_symbol_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+            DowngradeSqlGraphContractRows(dbPath);
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"fn_Target","lang":"sql","exact":true}}}""")!;
+            var response = server.HandleMessage(request)!;
+            var structured = response["result"]!["structuredContent"]!;
+
+            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
+            Assert.False(structured["sqlGraphContractReady"]!.GetValue<bool>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sqlGraphContractDegradedReason"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_References_StaleSqlGraphContractIncludesDegradedState()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_references_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+            DowngradeSqlGraphContractRows(dbPath);
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"fn_Target","lang":"sql"}}}""")!;
+            var response = server.HandleMessage(request)!;
+            var structured = response["result"]!["structuredContent"]!;
+
+            Assert.Equal(1, structured["count"]!.GetValue<int>());
+            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
+            Assert.False(structured["sqlGraphContractReady"]!.GetValue<bool>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sqlGraphContractDegradedReason"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("callers", "attribute")]
     [InlineData("callers", "annotation")]
