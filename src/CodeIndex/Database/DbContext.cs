@@ -368,7 +368,25 @@ public class DbContext : IDisposable
     // 偶然でしか metadata edge を張れなかった。iter-7 DB はこの展開なしで index された
     // ため alias-qualified 基底の edge が黙って落ちていた。契約バージョンを上げて再 index
     // を強制する。
-    public const int MetadataTargetVersion = 5;
+    // Version 6 (#435 iter 9) extends alias-qualified expansion to the `::`
+    // separator. C# accepts both `Alias.X` (member access) and `Alias::X`
+    // (qualified-alias-member, §7.8) for using aliases that name a namespace,
+    // and production code uses the `::` form to disambiguate namespaces from
+    // type names. Iter-8 only split on `.` in the expansion helper, so
+    // `class FooAttribute : Alias::MetaBase` still fell through to the BCL
+    // suffix heuristic and dropped the `[FooAttribute]` edge. Iter-8 DBs that
+    // indexed without this expansion must degrade to the legacy reader path
+    // until a reindex republishes `is_metadata_target` with `::`-aware
+    // resolution.
+    // バージョン 6 (#435 iter 9) で alias 修飾展開が `::` 区切りにも対応した。C# では
+    // using alias が名前空間を指す場合、`Alias.X`（メンバ アクセス）と `Alias::X`
+    // （qualified-alias-member、§7.8）のどちらも許容され、現場コードは名前空間と型
+    // 名を衝突させないために `::` を使うことがある。iter-8 の展開 helper は `.` のみで
+    // 区切っていたため `class FooAttribute : Alias::MetaBase` は BCL サフィックス規約
+    // まで抜け落ち、`[FooAttribute]` の edge が落ちていた。iter-8 DB はこの展開なしで
+    // index されたため、再 index で `::` 対応の resolver が `is_metadata_target` を
+    // republish するまで reader を legacy 経路へ縮退させる。
+    public const int MetadataTargetVersion = 6;
     public static string GetMetadataTargetVersionMetaKey(string lang) => $"metadata_target_version_{lang}";
 
     public int GetUserVersion()

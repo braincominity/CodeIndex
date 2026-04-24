@@ -1531,35 +1531,69 @@ public class DbWriter
     }
 
     // Expand a qualified C# base name against `using Alias = Target;` entries so that
-    // `Alias.C` resolves to `Target.C`. Returns null when the first dotted segment is
-    // not an alias in the given import set. Alias targets are pre-canonicalized by
-    // `RegisterCSharpImport` (no `global::`, no verbatim `@`); a leading `global::`
-    // in the stored target is still stripped defensively for older migrations.
-    // The splice preserves the remaining dotted suffix verbatim so chained member
-    // lookups like `Alias.Outer.Inner` collapse to `Target.Outer.Inner`.
-    // Issue #435 codex review iter 8.
-    // qualified 基底名を alias import で展開。`Alias.C` を `Target.C` に書き換え、
-    // 先頭セグメントが alias でなければ null を返す。alias target は登録時に canonical
-    // 化済み（`global::` なし・`@` なし）だが、旧マイグレーション対応で念のため `global::`
-    // を剥がす。残りのドット付き接尾辞はそのまま繋げるため `Alias.Outer.Inner` のような
-    // 連鎖にも追従する。Issue #435 iter 8。
+    // `Alias.C` and `Alias::C` both resolve to `Target.C`. The C# spec allows either
+    // `.` (member access) or `::` (qualified-alias-member, §7.8) as the alias
+    // separator for using-alias directives when the alias names a namespace.
+    // Returns null when the first segment is not an alias in the given import set.
+    // Alias targets are pre-canonicalized by `RegisterCSharpImport` (no `global::`,
+    // no verbatim `@`); a leading `global::` in the stored target is still stripped
+    // defensively for older migrations. The rest of the qualified name after the
+    // alias separator is spliced with `.` so `Alias::Outer.Inner` collapses to
+    // `Target.Outer.Inner` — that matches how `qualifiedToIds` keys are stored.
+    // Issue #435 codex review iter 8 + iter 9 (`::` separator).
+    // qualified 基底名を alias import で展開。`Alias.C` と `Alias::C` のいずれも
+    // `Target.C` に書き換える。C# の仕様では using alias が名前空間を指す場合、
+    // alias 区切りとして `.`（メンバ アクセス）または `::`（qualified-alias-member、
+    // §7.8）が使える。先頭セグメントが alias でなければ null。alias target は登録時
+    // に canonical 化済み（`global::` なし・`@` なし）だが、旧マイグレーション対応で
+    // `global::` を剥がす。alias 区切り以降は `.` で繋ぎ直すので `Alias::Outer.Inner`
+    // も `Target.Outer.Inner` に畳める — `qualifiedToIds` のキー形式に合わせる。
+    // Issue #435 iter 8 + iter 9（`::` 区切り）。
     private static string? ExpandCSharpAliasQualifiedBase(string qualified, FileImportSet? imports)
     {
         if (imports == null)
             return null;
         if (qualified.Length == 0)
             return null;
+        // Find the earliest alias separator: either `.` or `::`, whichever comes first.
+        // alias 区切り（`.` または `::`）の先頭出現位置を採用する。
         int firstDot = qualified.IndexOf('.');
-        if (firstDot <= 0)
+        int firstColonColon = qualified.IndexOf("::", StringComparison.Ordinal);
+        int boundary;
+        int sepLen;
+        if (firstDot < 0 && firstColonColon < 0)
             return null;
-        string prefix = qualified.Substring(0, firstDot);
+        if (firstDot < 0)
+        {
+            boundary = firstColonColon;
+            sepLen = 2;
+        }
+        else if (firstColonColon < 0)
+        {
+            boundary = firstDot;
+            sepLen = 1;
+        }
+        else if (firstDot < firstColonColon)
+        {
+            boundary = firstDot;
+            sepLen = 1;
+        }
+        else
+        {
+            boundary = firstColonColon;
+            sepLen = 2;
+        }
+        if (boundary <= 0)
+            return null;
+        string prefix = qualified.Substring(0, boundary);
         if (!imports.Aliases.TryGetValue(prefix, out var target))
             return null;
         if (target.StartsWith("global::", StringComparison.Ordinal))
             target = target.Substring("global::".Length);
         if (target.Length == 0)
             return null;
-        return target + qualified.Substring(firstDot);
+        string suffix = qualified.Substring(boundary + sepLen);
+        return suffix.Length == 0 ? target : target + "." + suffix;
     }
 
     private static bool TryResolveAliasImport(
