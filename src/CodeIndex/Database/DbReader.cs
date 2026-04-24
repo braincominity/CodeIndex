@@ -1085,10 +1085,7 @@ public partial class DbReader
             return false;
         }
 
-        var patternContext = contextForFilter;
-        var patternColumn = columnNumber;
-        TryBuildCSharpUsingStaticPatternContextWindow(path, lineNumber, contextForFilter, columnNumber, out patternContext, out patternColumn);
-        if (!IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn))
+        if (!TryBuildCSharpUsingStaticPatternContextWindow(path, lineNumber, contextForFilter, columnNumber, symbolName))
             return false;
 
         var activeTargets = GetActiveCSharpUsingStaticTargets(path, lineNumber);
@@ -2267,46 +2264,53 @@ public partial class DbReader
             || TryConsumeTrailingCSharpToken(text, ref cursor, "default");
     }
 
-    private void TryBuildCSharpUsingStaticPatternContextWindow(string path, int lineNumber, string contextForFilter, int columnNumber, out string patternContext, out int patternColumn)
+    private bool TryBuildCSharpUsingStaticPatternContextWindow(string path, int lineNumber, string contextForFilter, int columnNumber, string symbolName)
     {
-        patternContext = contextForFilter;
-        patternColumn = columnNumber;
+        var patternContext = contextForFilter;
+        var patternColumn = columnNumber;
         if (!_hasChunksTable
             || string.IsNullOrWhiteSpace(path)
             || string.IsNullOrWhiteSpace(contextForFilter)
+            || string.IsNullOrWhiteSpace(symbolName)
             || lineNumber <= 1
             || columnNumber <= 0)
         {
-            return;
+            return IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn);
         }
 
-        var startLine = Math.Max(1, lineNumber - 2);
-        if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap, startLine, lineNumber)
-            || !lineMap.TryGetValue(lineNumber, out var currentLine))
+        var maxLookback = lineNumber - 1;
+        var lookback = Math.Min(2, maxLookback);
+        while (true)
         {
-            return;
+            var startLine = Math.Max(1, lineNumber - lookback);
+            if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap, startLine, lineNumber)
+                || !lineMap.TryGetValue(lineNumber, out var currentLine))
+            {
+                return IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn);
+            }
+
+            var lines = new List<string>();
+            var prefixLength = 0;
+            for (var absoluteLine = startLine; absoluteLine <= lineNumber; absoluteLine++)
+            {
+                if (!lineMap.TryGetValue(absoluteLine, out var lineText))
+                    continue;
+
+                if (absoluteLine < lineNumber)
+                    prefixLength += lineText.Length + 1;
+                lines.Add(lineText);
+            }
+
+            patternContext = lines.Count <= 1 ? currentLine : string.Join('\n', lines);
+            patternColumn = lines.Count <= 1 ? columnNumber : prefixLength + columnNumber;
+            if (IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn))
+                return true;
+
+            if (startLine == 1 || lookback >= maxLookback)
+                return false;
+
+            lookback = Math.Min(maxLookback, Math.Max(lookback + 1, lookback * 2));
         }
-
-        var lines = new List<string>();
-        var prefixLength = 0;
-        for (var absoluteLine = startLine; absoluteLine <= lineNumber; absoluteLine++)
-        {
-            if (!lineMap.TryGetValue(absoluteLine, out var lineText))
-                continue;
-
-            if (absoluteLine < lineNumber)
-                prefixLength += lineText.Length + 1;
-            lines.Add(lineText);
-        }
-
-        if (lines.Count <= 1)
-        {
-            patternContext = currentLine;
-            return;
-        }
-
-        patternContext = string.Join('\n', lines);
-        patternColumn = prefixLength + columnNumber;
     }
 
     private static int SkipCSharpTriviaBackward(string text, int cursor)
