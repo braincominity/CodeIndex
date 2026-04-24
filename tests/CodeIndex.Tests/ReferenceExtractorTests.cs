@@ -9572,6 +9572,7 @@ public class ReferenceExtractorTests
         var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
         Assert.Equal(2, pointRefs.Count);
         Assert.All(pointRefs, r => Assert.Equal("Run", r.ContainerName));
+        Assert.DoesNotContain(references, r => r.SymbolName == "Point" && r.ReferenceKind == "call");
     }
 
     [Fact]
