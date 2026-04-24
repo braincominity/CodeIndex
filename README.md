@@ -292,6 +292,7 @@ cdidx search "handleRequest" --lang go   # filter by language
 cdidx search "TODO" --limit 50           # more results
 cdidx search "auth*" --fts               # raw FTS5 syntax (prefix search)
 cdidx search "Run();" --exact-substring  # case-sensitive exact substring, no FTS5
+cdidx search --query "--path" --path README.md  # search for an option-looking literal
 ```
 
 Output:
@@ -472,6 +473,7 @@ cdidx map --path src/ --exclude-tests --json
 | `--limit <n>` | Query commands | Max results (default: 20; `map` uses it per section) |
 | `--lang <lang>` | Query commands | Filter by language (case-insensitive; `--lang Python` is treated as `--lang python`). Unknown values emit an `Available: <languages>` hint on zero-result responses in human-readable output. |
 | `--path <pattern>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | Restrict results to paths containing this text. Repeatable; multiple values are OR'd together |
+| `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | Pass a query literal explicitly, useful when the query starts with `-`. Query commands except `find` also accept `-- <query>` as a one-token query escape while continuing to parse later options. |
 | `--exclude-path <pattern>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude paths containing this text (repeatable) |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | Exclude likely test files and prefer production code |
 | `--snippet-lines <n>` | `search` | Search snippet length for human-readable output and JSON/MCP snippets (default: 8, max: 20) |
@@ -500,7 +502,7 @@ cdidx map --path src/ --exclude-tests --json
 | `--reverse` | `deps` | Reverse lookup: show files that depend ON the matched path |
 | `--top <n>` | Query commands | Alias for `--limit` |
 
-If a string value itself begins with `--`, pass it as `--opt=<value>` rather than a separated value. For example, use `--path=--json-dir` or `--db=--tmp.db`.
+If a query itself begins with `-`, pass it as `--query <query>` or `-- <query>`. If an option value itself begins with `--`, pass it as `--opt=<value>` rather than a separated value, for example `--path=--json-dir` or `--db=--tmp.db`.
 
 ### Exit codes
 
@@ -1223,6 +1225,7 @@ cdidx search "handleRequest" --lang go   # 言語でフィルタ
 cdidx search "TODO" --limit 50           # 結果数を増やす
 cdidx search "auth*" --fts               # 生のFTS5構文（前方一致検索）
 cdidx search "Run();" --exact-substring  # 大文字小文字区別の完全部分一致、FTS5 なし
+cdidx search --query "--path" --path README.md  # オプションに見えるリテラルを検索
 ```
 
 出力:
@@ -1402,6 +1405,7 @@ cdidx map --path src/ --exclude-tests --json
 | `--dry-run` | `index` | DB に書き込まず、どの変更が発生するかだけを走査して報告 |
 | `--limit <n>` | クエリ系 | 最大結果数（デフォルト: 20。`map` では各セクションごとの件数） |
 | `--path <pattern>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate` | 指定文字列を含むパスに結果を絞る。繰り返し指定可（複数値は OR で結合） |
+| `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | クエリを明示的なリテラルとして渡す。クエリが `-` で始まる場合に有用。`find` 以外のクエリ系コマンドでは `-- <query>` も1トークンのクエリエスケープとして受け付け、その後のオプション解析を続ける。 |
 | `--exclude-path <pattern>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | 指定文字列を含むパスを除外（繰り返し指定可） |
 | `--exclude-tests` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect` | テストらしいパスを除外し、本番コードを優先 |
 | `--snippet-lines <n>` | `search` | 人間向け出力と JSON/MCP スニペットの抜粋行数（デフォルト: 8、最大: 20） |
@@ -1431,7 +1435,7 @@ cdidx map --path src/ --exclude-tests --json
 | `--reverse` | `deps` | 逆引き: 指定パスに依存しているファイルを表示 |
 | `--top <n>` | クエリ系 | `--limit` のエイリアス |
 
-文字列の値自体が `--` で始まる場合は、分離形式ではなく `--opt=<value>` で渡してください。たとえば `--path=--json-dir` や `--db=--tmp.db` のように指定します。
+クエリ自体が `-` で始まる場合は `--query <query>` または `-- <query>` で渡してください。オプション値自体が `--` で始まる場合は、分離形式ではなく `--opt=<value>` で渡します。たとえば `--path=--json-dir` や `--db=--tmp.db` のように指定します。
 
 ### 終了コード
 
