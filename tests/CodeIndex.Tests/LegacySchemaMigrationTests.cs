@@ -1,3 +1,4 @@
+using System.Reflection;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Models;
@@ -394,6 +395,48 @@ public class LegacySchemaMigrationTests : IDisposable
             File.SetUnixFileMode(_dbDir, originalMode);
             SqliteConnection.ClearAllPools();
         }
+    }
+
+    [Fact]
+    public void DbContext_OpenSqliteConnectionWithRetry_RetriesTransientBusy()
+    {
+        // The retry helper should back off on transient busy/locked failures before giving up.
+        // retry helper は transient busy/locked ではすぐ諦めず backoff して再試行するべき。
+        var attempts = 0;
+        var sleeps = new List<int>();
+        var connection = DbContext.OpenSqliteConnectionWithRetry(
+            () => new SqliteConnection("Data Source=:memory:"),
+            _ =>
+            {
+                attempts++;
+                if (attempts < 3)
+                    throw CreateTransientBusyException();
+            },
+            sleep: sleeps.Add,
+            maxOpenAttempts: 5);
+
+        try
+        {
+            Assert.Equal(3, attempts);
+            Assert.Equal(new[] { 50, 100 }, sleeps);
+            Assert.NotNull(connection);
+        }
+        finally
+        {
+            connection.Dispose();
+        }
+    }
+
+    private static SqliteException CreateTransientBusyException()
+    {
+        var exception = Activator.CreateInstance(
+            typeof(SqliteException),
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+            binder: null,
+            args: ["busy", 5],
+            culture: null) as SqliteException;
+
+        return exception ?? throw new InvalidOperationException("Failed to create SqliteException for retry test.");
     }
 
     [Fact]

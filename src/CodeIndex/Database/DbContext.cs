@@ -133,8 +133,9 @@ public class DbContext : IDisposable
 
         try
         {
-            _connection = new SqliteConnection(builder.ConnectionString);
-            _connection.Open();
+            _connection = OpenSqliteConnectionWithRetry(
+                () => new SqliteConnection(builder.ConnectionString),
+                static connection => connection.Open());
             RegisterConnectionFunctions(_connection);
 
             // Enable WAL mode and verify it was applied / WALモードを有効にし適用を確認
@@ -176,6 +177,39 @@ public class DbContext : IDisposable
     // read-only FS では -journal / -shm を作れず CANTOPEN(14) を返すことが多い。
     private static bool IsReadOnlyOpenError(SqliteException ex) =>
         ex.SqliteErrorCode is 8 or 14 or 10;
+
+    private static bool IsTransientBusyError(SqliteException ex) =>
+        ex.SqliteErrorCode is 5 or 6;
+
+    internal static SqliteConnection OpenSqliteConnectionWithRetry(
+        Func<SqliteConnection> createConnection,
+        Action<SqliteConnection> openConnection,
+        Action<int>? sleep = null,
+        int maxOpenAttempts = 5)
+    {
+        SqliteConnection? connection = null;
+        for (var attempt = 1; attempt <= maxOpenAttempts; attempt++)
+        {
+            connection?.Dispose();
+            connection = createConnection();
+            try
+            {
+                openConnection(connection);
+                return connection;
+            }
+            catch (SqliteException ex) when (IsTransientBusyError(ex) && attempt < maxOpenAttempts)
+            {
+                sleep?.Invoke(50 * attempt);
+            }
+            catch
+            {
+                connection.Dispose();
+                throw;
+            }
+        }
+
+        throw new InvalidOperationException("Failed to open SQLite connection.");
+    }
 
     // Detect whether a SQLite URI explicitly requests read-only semantics. Only URIs that
     // set `immutable=1` or `mode=ro` take the read-only escape hatch — plain `file:`

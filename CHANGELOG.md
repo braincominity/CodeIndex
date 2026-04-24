@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Fixed
 - **C# exact/name queries now normalize verbatim identifiers (#651)** — `symbols`, `definition`, `inspect`, `references`, `callers`, and `callees` now canonicalize C# verbatim identifiers before resolving exact/name matches, so inputs such as `@class` and `@int` hit the indexed `class` / `int` symbols instead of returning false zero-result misses. Added a focused CLI regression that covers `symbols --name @int --exact-name --count`, `definition @class --exact-name --count`, and `inspect @class --exact`. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/DbSymbolReader.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`. Closes #651.
+- **SQLite open retry/backoff now survives transient busy failures (#962)** — `DbContext` once again retries `SqliteConnection.Open()` on transient busy/locked errors before giving up, so concurrent index/query startup does not fail immediately when SQLite reports `SQLITE_BUSY`. Added a focused regression that exercises the retry helper with synthetic busy failures and verifies the backoff sequence. Affected: `src/CodeIndex/Database/DbContext.cs`, `tests/CodeIndex.Tests/LegacySchemaMigrationTests.cs`. Closes #962.
 
 ### [1.15.1] - 2026-04-24
 
@@ -906,6 +907,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### 修正
 - **C# の exact/name クエリで verbatim 識別子を正規化するよう修正 (#651)** — `symbols` / `definition` / `inspect` / `references` / `callers` / `callees` が、C# の verbatim 識別子を exact/name 判定の前に canonical 化するようになりました。これにより `@class` や `@int` でも、インデックス済みの `class` / `int` シンボルに正しくヒットし、誤った 0 件結果になりません。`symbols --name @int --exact-name --count`、`definition @class --exact-name --count`、`inspect @class --exact` を固定する CLI regression を追加しました。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/DbSymbolReader.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`。Closes #651。
+- **SQLite の open retry/backoff が transient busy 失敗でも継続するよう修正 (#962)** — `DbContext` が `SqliteConnection.Open()` の transient busy/locked エラーに対して、諦める前に再試行するよう戻しました。SQLite が `SQLITE_BUSY` を返したときでも、並行する index/query の起動が即失敗しないようになります。synthetic な busy 失敗で retry helper と backoff sequence を検証する回帰テストも追加しました。対象: `src/CodeIndex/Database/DbContext.cs`, `tests/CodeIndex.Tests/LegacySchemaMigrationTests.cs`。Closes #962。
 
 ### [1.15.1] - 2026-04-24
 
