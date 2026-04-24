@@ -2904,8 +2904,10 @@ public class DbReaderTests : IDisposable
         var unused = _reader.GetUnusedSymbols(limit: 10, kind: "function", lang: "sql",
             pathPatterns: ["sql_name_mismatch_fixture"], excludePathPatterns: null, excludeTests: false);
         Assert.DoesNotContain(unused, symbol => symbol.Name == "dbo.fn_GetOrderItems");
-        Assert.Equal((1, 1), _reader.CountUnusedSymbols(kind: "function", lang: "sql",
-            pathPatterns: ["sql_name_mismatch_fixture"], excludePathPatterns: null, excludeTests: false));
+        var unusedCount = _reader.CountUnusedSymbols(kind: "function", lang: "sql",
+            pathPatterns: ["sql_name_mismatch_fixture"], excludePathPatterns: null, excludeTests: false);
+        Assert.Equal(1, unusedCount.Count);
+        Assert.Equal(1, unusedCount.FileCount);
     }
 
     [Fact]
@@ -2949,8 +2951,10 @@ public class DbReaderTests : IDisposable
             pathPatterns: ["sql_bare_call_"], excludePathPatterns: null, excludeTests: false);
         Assert.DoesNotContain(unused, symbol => symbol.Name == "dbo.fn_Target");
         Assert.Contains(unused, symbol => symbol.Name == "sales.host");
-        Assert.Equal((1, 1), _reader.CountUnusedSymbols(kind: "function", lang: "sql",
-            pathPatterns: ["sql_bare_call_"], excludePathPatterns: null, excludeTests: false));
+        var unusedCount = _reader.CountUnusedSymbols(kind: "function", lang: "sql",
+            pathPatterns: ["sql_bare_call_"], excludePathPatterns: null, excludeTests: false);
+        Assert.Equal(1, unusedCount.Count);
+        Assert.Equal(1, unusedCount.FileCount);
     }
 
     [Fact]
@@ -3299,14 +3303,14 @@ public class DbReaderTests : IDisposable
         Assert.Equal("sales.caller", reference.ContainerName);
         Assert.Equal(4, reference.Line);
         Assert.Equal(1, _reader.CountSearchReferences("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
-        Assert.Equal(new QueryCountResult(1, 1), _reader.CountSearchReferencesTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
 
         var callers = _reader.GetCallers("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]);
         var caller = Assert.Single(callers);
         Assert.Equal("sales.caller", caller.CallerName);
         Assert.Equal(1, caller.ReferenceCount);
         Assert.Equal(1, _reader.CountCallers("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
-        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCallersTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountCallersTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
 
         var impact = _reader.AnalyzeImpact("sales.fn_Target", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_dotted_identifier_graph"]);
         Assert.Equal("sales.fn_Target", Assert.Single(impact.Definitions).Name);
@@ -3487,13 +3491,13 @@ public class DbReaderTests : IDisposable
             _reader.SearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
         Assert.Equal("dbo.Caller", reference.ContainerName);
         Assert.Equal(1, _reader.CountSearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
-        Assert.Equal(new QueryCountResult(1, 1), _reader.CountSearchReferencesTotal("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
 
         var caller = Assert.Single(
             _reader.GetCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
         Assert.Equal("dbo.Caller", caller.CallerName);
         Assert.Equal(1, _reader.CountCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
-        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCallersTotal("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountCallersTotal("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
 
         var impact = _reader.AnalyzeImpact("dbo.fn_Target", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_schema_scoped"]);
         Assert.Equal("dbo.Caller", Assert.Single(impact.Callers).CallerName);
@@ -3548,27 +3552,27 @@ public class DbReaderTests : IDisposable
             _reader.SearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
         Assert.Equal("dbo.Caller", dboReference.ContainerName);
         Assert.Equal(1, _reader.CountSearchReferences("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
-        Assert.Equal(new QueryCountResult(1, 1), _reader.CountSearchReferencesTotal("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
 
         var salesReference = Assert.Single(
             _reader.SearchReferences("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
         Assert.Equal("dbo.Caller", salesReference.ContainerName);
         Assert.Equal(1, _reader.CountSearchReferences("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
-        Assert.Equal(new QueryCountResult(1, 1), _reader.CountSearchReferencesTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
 
         var dboCaller = Assert.Single(
             _reader.GetCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
         Assert.Equal("dbo.Caller", dboCaller.CallerName);
         Assert.Equal(1, dboCaller.ReferenceCount);
         Assert.Equal(1, _reader.CountCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
-        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCallersTotal("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountCallersTotal("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
 
         var salesCaller = Assert.Single(
             _reader.GetCallers("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
         Assert.Equal("dbo.Caller", salesCaller.CallerName);
         Assert.Equal(1, salesCaller.ReferenceCount);
         Assert.Equal(1, _reader.CountCallers("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
-        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCallersTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountCallersTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_same_line_multi"]));
 
         var dependencies = _reader.GetFileDependencies(limit: 10, lang: "sql", pathPatterns: ["sql_same_line_multi"], excludePathPatterns: null, excludeTests: false)
             .OrderBy(edge => edge.TargetPath, StringComparer.Ordinal)
@@ -3633,7 +3637,7 @@ public class DbReaderTests : IDisposable
         Assert.Equal("fn_A", callee.CalleeName);
         Assert.Equal("dbo.usp_GetOrders", callee.CallerName);
         Assert.Equal(1, _reader.CountCallees("dbo.usp_GetOrders", lang: "sql", exact: true, pathPatterns: ["sql_callee_schema_scoped"]));
-        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCalleesTotal("dbo.usp_GetOrders", lang: "sql", exact: true, pathPatterns: ["sql_callee_schema_scoped"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountCalleesTotal("dbo.usp_GetOrders", lang: "sql", exact: true, pathPatterns: ["sql_callee_schema_scoped"]));
     }
 
     [Fact]
@@ -3679,21 +3683,21 @@ public class DbReaderTests : IDisposable
             _reader.SearchReferences("sales.fn_Target", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
         Assert.Equal("sales.Caller", reference.ContainerName);
         Assert.Equal(1, _reader.CountSearchReferences("sales.fn_Target", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
-        Assert.Equal(new QueryCountResult(1, 1), _reader.CountSearchReferencesTotal("sales.fn_Target", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("sales.fn_Target", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
 
         var caller = Assert.Single(
             _reader.GetCallers("sales.fn_Target", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
         Assert.Equal("sales.Caller", caller.CallerName);
         Assert.Equal(1, caller.ReferenceCount);
         Assert.Equal(1, _reader.CountCallers("sales.fn_Target", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
-        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCallersTotal("sales.fn_Target", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountCallersTotal("sales.fn_Target", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
 
         var callee = Assert.Single(
             _reader.GetCallees("sales.Caller", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
         Assert.Equal("fn_Target", callee.CalleeName);
         Assert.Equal("sales.Caller", callee.CallerName);
         Assert.Equal(1, _reader.CountCallees("sales.Caller", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
-        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCalleesTotal("sales.Caller", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountCalleesTotal("sales.Caller", lang: "sql", pathPatterns: ["sql_nonexact_schema_scoped"]));
     }
 
     [Fact]
@@ -3723,7 +3727,7 @@ public class DbReaderTests : IDisposable
         Assert.Equal("fn_Target", normalizedCallee.CalleeName);
         Assert.Equal(2, normalizedCallee.ReferenceCount);
         Assert.Equal(1, _reader.CountCallees("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_exact_bracketed_callee"]));
-        Assert.Equal(new QueryCountResult(1, 1), _reader.CountCalleesTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_exact_bracketed_callee"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountCalleesTotal("sales.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_exact_bracketed_callee"]));
 
         var bracketedCallee = Assert.Single(
             _reader.GetCallees("[sales].[fn_Target]", lang: "sql", exact: true, pathPatterns: ["sql_exact_bracketed_callee"]));

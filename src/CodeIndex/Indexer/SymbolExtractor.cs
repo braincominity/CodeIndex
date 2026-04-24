@@ -1593,6 +1593,28 @@ public static class SymbolExtractor
                             line.Length);
                     }
 
+                    // C# candidates that only become visible after string-literal content is
+                    // blanked (for example, code inside an interpolation hole of an outer
+                    // string) must not be emitted as declarations. A real declaration starts in
+                    // root code, not in nested interpolation code. Gate on the raw-line start
+                    // column so exact definition / inspect lookups do not pick up call-site
+                    // fragments from interpolated log strings. Closes #790.
+                    // C# では、外側文字列本文を空白化した結果として見えるようになった候補
+                    // （例: 補間文字列ホール内のコード）を宣言として emit してはならない。
+                    // 本物の宣言は root code から始まり、入れ子の補間コードからは始まらない。
+                    // raw 行上の開始列でゲートし、補間ログ文字列内の呼び出し断片が
+                    // exact definition / inspect に混入しないようにする。Closes #790.
+                    if (lang == "csharp"
+                        && csharpLineStartStates != null
+                        && !IsCSharpRootCodePosition(line, csharpLineStartStates[i], csharpGateRawStartColumn))
+                    {
+                        lineOffset = FindNextSameLineBraceStatementStart(
+                            matchLine,
+                            absoluteStartColumn + Math.Max(1, match.Length),
+                            lang);
+                        continue;
+                    }
+
                     if (lang == "csharp"
                         && pattern.BodyStyle == BodyStyle.None
                         && (pattern.Kind == "property" || IsCSharpFieldLikeFunctionPattern(pattern))
@@ -13216,6 +13238,18 @@ public static class SymbolExtractor
         }
 
         return result;
+    }
+
+    private static bool IsCSharpRootCodePosition(string line, CSharpLexState lineStartState, int rawColumn)
+    {
+        var clampedColumn = Math.Clamp(rawColumn, 0, line.Length);
+        var stateAtColumn = clampedColumn == 0
+            ? lineStartState
+            : LexCSharpLine(line[..clampedColumn], lineStartState).EndState;
+
+        return stateAtColumn.Mode == CSharpLexMode.Code
+            && stateAtColumn.InterpolationReturnMode == CSharpLexMode.Code
+            && stateAtColumn.InterpolationBraceDepth == 0;
     }
 
     // Translate a column in a CollapseCSharpGenericTypeWhitespace-collapsed match line back

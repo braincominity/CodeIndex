@@ -7032,6 +7032,7 @@ public static class ReferenceExtractor
     {
         var angleDepth = 0;
         var bracketDepth = 0;
+        var parenDepth = 0;
         var currentLineIndex = questionLineIndex;
         var currentColumn = questionColumn - 1;
         while (TryGetPreviousTopLevelToken(
@@ -7048,6 +7049,7 @@ public static class ReferenceExtractor
             {
                 if (angleDepth == 0
                     && bracketDepth == 0
+                    && parenDepth == 0
                     && (string.Equals(identifierToken, "as", StringComparison.Ordinal)
                         || string.Equals(identifierToken, "is", StringComparison.Ordinal)))
                 {
@@ -7067,7 +7069,7 @@ public static class ReferenceExtractor
                     currentColumn = tokenStartColumn - 1;
                     continue;
                 case ',':
-                    if (angleDepth > 0 || bracketDepth > 0)
+                    if (angleDepth > 0 || bracketDepth > 0 || parenDepth > 0)
                     {
                         currentLineIndex = tokenLineIndex;
                         currentColumn = tokenStartColumn - 1;
@@ -7098,6 +7100,19 @@ public static class ReferenceExtractor
                         return false;
 
                     bracketDepth--;
+                    currentLineIndex = tokenLineIndex;
+                    currentColumn = tokenStartColumn - 1;
+                    continue;
+                case ')':
+                    parenDepth++;
+                    currentLineIndex = tokenLineIndex;
+                    currentColumn = tokenStartColumn - 1;
+                    continue;
+                case '(':
+                    if (parenDepth == 0)
+                        return false;
+
+                    parenDepth--;
                     currentLineIndex = tokenLineIndex;
                     currentColumn = tokenStartColumn - 1;
                     continue;
