@@ -13536,6 +13536,134 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Csharp_LeadingBom_IndexesFirstLineImport()
+    {
+        // BOM-prefixed C# source: `using System;` on line 1 must still be captured.
+        // Closes #183.
+        // BOM 付き C# ソース: 1 行目の `using System;` も取りこぼさない。Closes #183.
+        const string content = "\uFEFFusing System;\n\nnamespace BomTest;\n\npublic class WithBom {\n    public void Run() { }\n}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var bomLess = SymbolExtractor.Extract(2, "csharp", content[1..]);
+        Assert.Equal(bomLess.Count, symbols.Count);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System" && s.Line == 1);
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "BomTest");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "WithBom");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Run");
+    }
+
+    [Fact]
+    public void Extract_Python_LeadingBom_IndexesFirstLineDef()
+    {
+        // BOM-prefixed Python: `def at_start():` on line 1 must still be captured.
+        // Closes #183.
+        // BOM 付き Python: 1 行目の `def at_start():` も取りこぼさない。Closes #183.
+        const string content = "\uFEFFdef at_start():\n    pass\n";
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "at_start" && s.Line == 1);
+    }
+
+    [Fact]
+    public void Extract_Csharp_MidFileBom_IndexesAffectedLine()
+    {
+        // Mid-file BOM (e.g. from file concatenation): the `\uFEFFnamespace MidBom;` line
+        // must still yield a namespace symbol, on its real line number. Closes #183.
+        // ファイル連結などで挟まった mid-file BOM: `\uFEFFnamespace MidBom;` 行も
+        // 実際の行番号で namespace として拾う。Closes #183.
+        const string content = "using System;\n\n\uFEFFnamespace MidBom;\n\npublic class X { }\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var ns = Assert.Single(symbols.Where(s => s.Kind == "namespace"));
+        Assert.Equal("MidBom", ns.Name);
+        Assert.Equal(3, ns.Line);
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "X");
+    }
+
+    [Fact]
+    public void Extract_NullContent_ReturnsEmpty()
+    {
+        // Direct callers that pass `null` must not throw. The #183 CRLF-normalization
+        // step added ahead of StripLineLeadingBom would otherwise dereference `null`
+        // before the helper's IsNullOrEmpty guard could run. Closes #183.
+        // direct call で `null` を渡してもスローしない。#183 で StripLineLeadingBom
+        // の前段に CRLF 正規化を入れたため、helper 側 IsNullOrEmpty まで届かず
+        // `null` を逆参照してしまう回帰を防ぐ。Closes #183.
+        Assert.Empty(SymbolExtractor.Extract(1, "csharp", null!));
+    }
+
+    [Fact]
+    public void Extract_EmptyContent_ReturnsEmpty()
+    {
+        // Empty content returns no symbols and does not throw. Closes #183.
+        // 空入力はシンボル 0 個で、例外にならない。Closes #183.
+        Assert.Empty(SymbolExtractor.Extract(1, "csharp", string.Empty));
+    }
+
+    [Fact]
+    public void Extract_Csharp_CrlfLeadingBom_IndexesFirstLineImport()
+    {
+        // Direct-call input with CRLF line endings AND a leading BOM: the CRLF → LF
+        // normalization must run before StripLineLeadingBom so the line-leading BOM
+        // logic still recognizes mid-file BOMs (helper treats `\n` as the sole line
+        // separator). Closes #183.
+        // CRLF 改行 + 先頭 BOM の direct call: StripLineLeadingBom は `\n` を唯一の
+        // 行区切りとして扱うので、CRLF → LF 正規化を helper より先に通さないと
+        // mid-file 行頭 BOM を剥がし損ねる。Closes #183.
+        const string content = "\uFEFFusing System;\r\n\r\n\uFEFFnamespace CrlfBom;\r\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System" && s.Line == 1);
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "CrlfBom" && s.Line == 3);
+    }
+
+    [Fact]
+    public void Extract_Csharp_BareCrLeadingBom_IndexesFirstLineImport()
+    {
+        // Bare-`\r` direct-call input with a leading BOM: the in-extractor
+        // normalization must also rewrite `\r` → `\n`, otherwise a file
+        // authored under classic-Mac-style line endings would keep mid-file
+        // line-leading BOMs invisible to `StripLineLeadingBom` (which treats
+        // `\n` as the sole separator). Closes #183.
+        // bare `\r` 改行 + 先頭 BOM の direct call: `\r` → `\n` 正規化も必要で、
+        // classic-Mac 改行のファイルに対して mid-file 行頭 BOM を剥がし損ねる
+        // のを防ぐ。Closes #183.
+        const string content = "\uFEFFusing System;\r\r\uFEFFnamespace BareCrBom;\r";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System" && s.Line == 1);
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "BareCrBom" && s.Line == 3);
+    }
+
+    [Fact]
+    public void Extract_Csharp_MixedLineEndingsLeadingBom_IndexesDeclarationsOnAllLines()
+    {
+        // Mixed line endings (`\r\n`, bare `\r`, bare `\n`) interleaved with
+        // leading + mid-file line-leading BOMs: the in-extractor normalization
+        // must reduce the whole content to a `\n`-only stream before the
+        // helper runs, otherwise mid-file BOMs following `\r` or `\r\n\r`
+        // boundaries would survive and `^\s*`-anchored patterns would miss
+        // the next declaration. Closes #183.
+        // 混在改行（`\r\n` / bare `\r` / bare `\n`）+ 先頭/中間行頭 BOM の direct call:
+        // 正規化を helper より先に通し、`\r\n\r` や `\r` 直後の mid-file 行頭 BOM も
+        // 剥がせるようにする。Closes #183.
+        const string content = "\uFEFFusing System;\r\n\r\uFEFFnamespace MixedEnds;\n\uFEFFpublic class X { }\r\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System" && s.Line == 1);
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MixedEnds" && s.Line == 3);
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "X" && s.Line == 4);
+    }
+
+    [Fact]
     public void Extract_CSharp_InstallScriptFixture_CompletesWithinPracticalBudget()
     {
         // issue #447 regression: the real InstallScriptTests fixture previously drove C#

@@ -12385,4 +12385,119 @@ public class ReferenceExtractorTests
         var test = Assert.Single(references.Where(r => r.SymbolName == "Test"));
         Assert.Equal("annotation", test.ReferenceKind);
     }
+
+    [Fact]
+    public void Extract_Csharp_LeadingBom_ExtractsReferencesOnFirstLine()
+    {
+        // BOM-prefixed C# source: reference extraction on line 1 must still work.
+        // Closes #183.
+        // BOM 付き C# ソース: 1 行目の参照抽出も機能する。Closes #183.
+        const string content = "\uFEFFusing System;\n\nnamespace BomRef;\n\npublic class C\n{\n    public void Run() { Helper(); }\n    public void Helper() { }\n}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System" && s.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Helper");
+    }
+
+    [Fact]
+    public void Extract_Csharp_MidFileBom_ExtractsReferencesOnAffectedLine()
+    {
+        // Mid-file BOM right before a call site: the reference must still be captured
+        // on its real line number. Closes #183.
+        // mid-file BOM が呼び出し行直前に挟まっても、実際の行番号で参照を拾う。Closes #183.
+        const string content = "namespace BomRef;\npublic class C\n{\n    public void Run()\n    {\n\uFEFF        Helper();\n    }\n    public void Helper() { }\n}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var helperRef = Assert.Single(references.Where(r => r.SymbolName == "Helper"));
+        Assert.Equal(6, helperRef.Line);
+    }
+
+    [Fact]
+    public void Extract_NullContent_ReturnsEmpty()
+    {
+        // Direct callers that pass `null` must not throw. The #183 CRLF-normalization
+        // step added ahead of StripLineLeadingBom would otherwise dereference `null`
+        // before the helper's IsNullOrEmpty guard could run. Closes #183.
+        // direct call で `null` を渡してもスローしない。#183 で StripLineLeadingBom
+        // の前段に CRLF 正規化を入れたため、helper 側 IsNullOrEmpty まで届かず
+        // `null` を逆参照してしまう回帰を防ぐ。Closes #183.
+        Assert.Empty(ReferenceExtractor.Extract(1, "csharp", null!, Array.Empty<CodeIndex.Models.SymbolRecord>()));
+    }
+
+    [Fact]
+    public void Extract_EmptyContent_ReturnsEmpty()
+    {
+        // Empty content returns no references and does not throw. Closes #183.
+        // 空入力は参照 0 個で、例外にならない。Closes #183.
+        Assert.Empty(ReferenceExtractor.Extract(1, "csharp", string.Empty, Array.Empty<CodeIndex.Models.SymbolRecord>()));
+    }
+
+    [Fact]
+    public void Extract_Csharp_CrlfLeadingBom_ExtractsReferencesOnFirstLine()
+    {
+        // Direct-call input with CRLF line endings AND a leading BOM: the CRLF → LF
+        // normalization must run before StripLineLeadingBom so call sites on mid-file
+        // BOM lines are still captured. Closes #183.
+        // CRLF 改行 + 先頭 BOM の direct call: CRLF → LF 正規化を helper より先に通す
+        // ことで、mid-file 行頭 BOM 直後の呼び出しも参照として拾える。Closes #183.
+        const string content = "\uFEFFnamespace BomRefCrlf;\r\npublic class C\r\n{\r\n    public void Run()\r\n    {\r\n\uFEFF        Helper();\r\n    }\r\n    public void Helper() { }\r\n}\r\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var helperRef = Assert.Single(references.Where(r => r.SymbolName == "Helper"));
+        Assert.Equal(6, helperRef.Line);
+    }
+
+    [Fact]
+    public void Extract_Csharp_BareCrLeadingBom_ExtractsReferenceOnBomLine()
+    {
+        // Bare-`\r` direct-call input with a leading BOM + mid-file line-leading
+        // BOM in front of the call site: the in-extractor `\r` → `\n`
+        // normalization must run so `StripLineLeadingBom` (which treats `\n` as
+        // the sole line separator) still sees the mid-file BOM as line-leading
+        // and strips it, letting the regex capture the call site on the
+        // BOM-prefixed line. Closes #183.
+        // bare `\r` 改行 + 先頭 BOM + 呼び出し行頭 BOM の direct call: `\r` → `\n`
+        // 正規化を helper より先に通し、classic-Mac 改行でも BOM 行の呼び出し
+        // 参照が拾えることを固定。Closes #183.
+        const string content = "\uFEFFnamespace BomRefBareCr;\rpublic class C\r{\r    public void Run()\r    {\r\uFEFF        Helper();\r    }\r    public void Helper() { }\r}\r";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var helperRef = Assert.Single(references.Where(r => r.SymbolName == "Helper"));
+        Assert.Equal(6, helperRef.Line);
+    }
+
+    [Fact]
+    public void Extract_Csharp_MixedLineEndingsLeadingBom_ExtractsReferenceOnBomLine()
+    {
+        // Mixed line endings (`\r\n`, bare `\r`, bare `\n`) interleaved with a
+        // leading BOM and a mid-file line-leading BOM positioned immediately
+        // after a real `\r\n\r` boundary (the blank line uses bare `\r`, so the
+        // BOM follows `\r\n` + `\r`). The call site on the BOM-prefixed line is
+        // only captured when the normalization collapses `\r\n` AND bare `\r`
+        // to `\n` before `StripLineLeadingBom` runs — otherwise the `\r`
+        // immediately preceding the mid-file BOM would keep the BOM
+        // non-line-leading (helper treats `\n` as the sole line separator).
+        // Line 7 assertion accounts for the blank line inserted by that extra
+        // `\r`. Closes #183.
+        // 混在改行（`\r\n` / bare `\r` / bare `\n`）+ 先頭 BOM + `\r\n\r` 境界直後の
+        // mid-file 行頭 BOM の direct call: `\r\n` と bare `\r` の双方を `\n` に
+        // 正規化してからでないと、BOM 直前の `\r` のせいで helper からは BOM が
+        // 行頭扱いされず呼び出し参照が拾えない。bare `\r` による空行が挟まる分、
+        // Helper は行 7。Closes #183.
+        const string content = "\uFEFFnamespace BomRefMixed;\r\npublic class C\r{\n    public void Run()\r\n    {\r\n\r\uFEFF        Helper();\n    }\r    public void Helper() { }\r\n}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var helperRef = Assert.Single(references.Where(r => r.SymbolName == "Helper"));
+        Assert.Equal(7, helperRef.Line);
+    }
 }
