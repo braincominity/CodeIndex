@@ -569,37 +569,41 @@ public partial class DbReader
         string? lang = null,
         IReadOnlyList<string>? pathPatterns = null,
         IReadOnlyList<string>? excludePathPatterns = null,
-        bool excludeTests = false)
+        bool excludeTests = false,
+        bool includeSqlGraphContractSignal = true)
         => CombineExactSignals(
             BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
                 _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase"),
             GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
-            GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
+            includeSqlGraphContractSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null);
 
     public ExactQuerySignal GetCallersExactQuerySignal(
         string? lang = null,
         IReadOnlyList<string>? pathPatterns = null,
         IReadOnlyList<string>? excludePathPatterns = null,
-        bool excludeTests = false)
+        bool excludeTests = false,
+        bool includeSqlGraphContractSignal = true)
         => CombineExactSignals(
             BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
                 _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase"),
             GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
-            GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
+            includeSqlGraphContractSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null);
 
     public ExactQuerySignal GetCalleesExactQuerySignal(
         string? lang = null,
         IReadOnlyList<string>? pathPatterns = null,
         IReadOnlyList<string>? excludePathPatterns = null,
-        bool excludeTests = false)
+        bool excludeTests = false,
+        bool includeSqlGraphContractSignal = true)
         => CombineExactSignals(
             BuildExactGraphSignal(ContainerNameExactGraphIndexAvailable,
                 _foldReady ? "idx_symbol_refs_container_name_folded" : "idx_symbol_refs_container_nocase"),
             GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
-            GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
+            includeSqlGraphContractSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null);
 
     public ExactQuerySignal GetAnalyzeSymbolExactQuerySignal(
         bool includeGraphSignal = true,
+        bool includeSqlGraphContractSignal = true,
         string? lang = null,
         IReadOnlyList<string>? pathPatterns = null,
         IReadOnlyList<string>? excludePathPatterns = null,
@@ -608,7 +612,7 @@ public partial class DbReader
         return CombineExactSignals(
             GetDefinitionExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
             includeGraphSignal ? BuildAnalyzeGraphExactQuerySignal() : null,
-            includeGraphSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null);
+            includeGraphSignal && includeSqlGraphContractSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null);
     }
 
     internal bool HasGraphApplicableFiles(string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
@@ -654,6 +658,12 @@ public partial class DbReader
         return input.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
     }
 
+    internal static bool IsSqlLanguage(string? lang)
+        => string.Equals(lang, "sql", StringComparison.OrdinalIgnoreCase);
+
+    internal static bool ContainsSqlLanguage(IEnumerable<string?> langs)
+        => langs.Any(IsSqlLanguage);
+
     private static bool AllowSqlLeafFallbackForQuery(string query)
         => !SqlNameResolver.HasQualifier(query);
 
@@ -682,6 +692,36 @@ public partial class DbReader
         return reader.TrackedRead()
             ? new QueryCountResult(reader.GetInt32(0), reader.GetInt32(1))
             : new QueryCountResult(0, 0);
+    }
+
+    internal bool AnyFilePathHasLanguage(IEnumerable<string> paths, string lang)
+    {
+        var distinctPaths = paths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Distinct(StringComparer.Ordinal)
+            .Take(256)
+            .ToList();
+        if (distinctPaths.Count == 0)
+            return false;
+
+        using var cmd = _conn.CreateCommand();
+        var placeholders = new List<string>(distinctPaths.Count);
+        for (int i = 0; i < distinctPaths.Count; i++)
+        {
+            var parameterName = $"@sqlPath{i}";
+            placeholders.Add(parameterName);
+            cmd.Parameters.AddWithValue(parameterName, distinctPaths[i]);
+        }
+
+        cmd.CommandText = $"""
+            SELECT 1
+            FROM files
+            WHERE lang = @sqlPathLang
+              AND path IN ({string.Join(", ", placeholders)})
+            LIMIT 1
+            """;
+        cmd.Parameters.AddWithValue("@sqlPathLang", lang);
+        return cmd.ExecuteScalar() != null;
     }
 
     /// <summary>

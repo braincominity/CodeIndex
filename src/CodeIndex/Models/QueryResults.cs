@@ -382,7 +382,8 @@ public class SymbolAnalysisResult
     /// call-column / qualified-name contract.
     /// bundle 内の SQL graph 読み取りが current 契約に揃っているかどうか。
     /// </summary>
-    public bool SqlGraphContractReady { get; set; } = true;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? SqlGraphContractReady { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? SqlGraphContractDegradedReason { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

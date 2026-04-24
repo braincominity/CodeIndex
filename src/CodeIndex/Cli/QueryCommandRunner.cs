@@ -306,11 +306,21 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             WriteGraphReferenceKindHint("references", options.Kind, options.Json);
-            var sqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var exactGraphLanguage = exact
+                ? reader.GetExactGraphSupportedDefinitionLanguage(options.Query, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests)
+                : null;
             if (options.CountOnly)
             {
                 var counts = reader.CountSearchReferencesTotal(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
-                var exactSignalForCount = reader.GetReferencesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+                var effectiveSqlGraphSignal = counts.Count > 0
+                    ? NarrowSqlGraphContractSignalByLanguages(
+                        baseSqlGraphSignal,
+                        reader.SearchReferences(options.Query, 1, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.MaxLineWidth).Select(result => result.Lang),
+                        options.Lang,
+                        exactGraphLanguage)
+                    : NarrowSqlGraphContractSignal(baseSqlGraphSignal, DbReader.IsSqlLanguage(options.Lang) || DbReader.IsSqlLanguage(exactGraphLanguage));
+                var exactSignalForCount = reader.GetReferencesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: effectiveSqlGraphSignal.Relevant);
                 var exactZeroHintForCount = BuildExactZeroHint(
                     exact && reader._hasReferencesTable,
                     () => reader.CountSearchReferences(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
@@ -318,19 +328,20 @@ public static class QueryCommandRunner
                     () => reader.SearchReferences(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
                     r => r.SymbolName);
                 WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignalForCount, reader, options);
-                WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
+                WriteSqlGraphContractWarningIfNeeded(options.Json, effectiveSqlGraphSignal, reader, options);
                 if (counts.Count == 0)
                 {
-                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
+                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount, extraFields: payload => AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal));
                     return CommandExitCodes.Success;
                 }
 
-                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
+                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, extraFields: payload => AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal));
                 return CommandExitCodes.Success;
             }
 
             var results = reader.SearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.MaxLineWidth);
-            var exactSignal = reader.GetReferencesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Lang), options.Lang, exactGraphLanguage);
+            var exactSignal = reader.GetReferencesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
                 () => reader.CountSearchReferences(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
@@ -413,11 +424,21 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             WriteGraphReferenceKindHint("callers", options.Kind, options.Json);
-            var sqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var exactGraphLanguage = exact
+                ? reader.GetExactGraphSupportedDefinitionLanguage(options.Query, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests)
+                : null;
             if (options.CountOnly)
             {
                 var counts = reader.CountCallersTotal(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
-                var exactSignalForCount = reader.GetCallersExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+                var effectiveSqlGraphSignal = counts.Count > 0
+                    ? NarrowSqlGraphContractSignalByLanguages(
+                        baseSqlGraphSignal,
+                        reader.GetCallers(options.Query, 1, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact).Select(result => result.Lang),
+                        options.Lang,
+                        exactGraphLanguage)
+                    : NarrowSqlGraphContractSignal(baseSqlGraphSignal, DbReader.IsSqlLanguage(options.Lang) || DbReader.IsSqlLanguage(exactGraphLanguage));
+                var exactSignalForCount = reader.GetCallersExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: effectiveSqlGraphSignal.Relevant);
                 var exactZeroHintForCount = BuildExactZeroHint(
                     exact && reader._hasReferencesTable,
                     () => reader.CountCallers(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
@@ -425,19 +446,20 @@ public static class QueryCommandRunner
                     () => reader.GetCallers(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
                     r => r.CalleeName);
                 WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignalForCount, reader, options);
-                WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
+                WriteSqlGraphContractWarningIfNeeded(options.Json, effectiveSqlGraphSignal, reader, options);
                 if (counts.Count == 0)
                 {
-                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
+                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount, extraFields: payload => AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal));
                     return CommandExitCodes.Success;
                 }
 
-                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
+                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, extraFields: payload => AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal));
                 return CommandExitCodes.Success;
             }
 
             var results = reader.GetCallers(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
-            var exactSignal = reader.GetCallersExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Lang), options.Lang, exactGraphLanguage);
+            var exactSignal = reader.GetCallersExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
                 () => reader.CountCallers(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
@@ -516,11 +538,21 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             WriteGraphReferenceKindHint("callees", options.Kind, options.Json);
-            var sqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var exactGraphLanguage = exact
+                ? reader.GetExactGraphSupportedDefinitionLanguage(options.Query, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests)
+                : null;
             if (options.CountOnly)
             {
                 var counts = reader.CountCalleesTotal(options.Query, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
-                var exactSignalForCount = reader.GetCalleesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+                var effectiveSqlGraphSignal = counts.Count > 0
+                    ? NarrowSqlGraphContractSignalByLanguages(
+                        baseSqlGraphSignal,
+                        reader.GetCallees(options.Query, 1, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact).Select(result => result.Lang),
+                        options.Lang,
+                        exactGraphLanguage)
+                    : NarrowSqlGraphContractSignal(baseSqlGraphSignal, DbReader.IsSqlLanguage(options.Lang) || DbReader.IsSqlLanguage(exactGraphLanguage));
+                var exactSignalForCount = reader.GetCalleesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: effectiveSqlGraphSignal.Relevant);
                 var exactZeroHintForCount = BuildExactZeroHint(
                     exact && reader._hasReferencesTable,
                     () => reader.CountCallees(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
@@ -528,19 +560,20 @@ public static class QueryCommandRunner
                     () => reader.GetCallees(options.Query, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false),
                     r => r.CallerName);
                 WriteExactGraphWarningIfNeeded(exact, options.Json, exactSignalForCount, reader, options);
-                WriteSqlGraphContractWarningIfNeeded(options.Json, sqlGraphSignal, reader, options);
+                WriteSqlGraphContractWarningIfNeeded(options.Json, effectiveSqlGraphSignal, reader, options);
                 if (counts.Count == 0)
                 {
-                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
+                    WriteGraphCountResult(reader, 0, 0, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, exactZeroHintForCount, extraFields: payload => AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal));
                     return CommandExitCodes.Success;
                 }
 
-                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, extraFields: payload => AddSqlGraphContractJsonFields(payload, sqlGraphSignal));
+                WriteGraphCountResult(reader, counts.Count, counts.FileCount, options, jsonOptions, reader._hasReferencesTable, exactSignalForCount, extraFields: payload => AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal));
                 return CommandExitCodes.Success;
             }
 
             var results = reader.GetCallees(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact);
-            var exactSignal = reader.GetCalleesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Lang), options.Lang, exactGraphLanguage);
+            var exactSignal = reader.GetCalleesExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
                 () => reader.CountCallees(options.Query, ExactZeroHintProbeLimit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact: false) > 0,
@@ -1243,7 +1276,15 @@ public static class QueryCommandRunner
         return WithDb(options.DbPath, reader =>
         {
             var analysis = reader.AnalyzeSymbol(options.Query, options.Limit, options.Lang, options.IncludeBody, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.MaxLineWidth);
-            var sqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var sqlGraphSignal = NarrowSqlGraphContractSignal(
+                reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
+                DbReader.IsSqlLanguage(options.Lang)
+                    || DbReader.IsSqlLanguage(analysis.GraphLanguage)
+                    || DbReader.IsSqlLanguage(analysis.File?.Lang)
+                    || DbReader.ContainsSqlLanguage(analysis.Definitions.Select(definition => definition.Lang))
+                    || DbReader.ContainsSqlLanguage(analysis.References.Select(reference => reference.Lang))
+                    || DbReader.ContainsSqlLanguage(analysis.Callers.Select(caller => caller.Lang))
+                    || DbReader.ContainsSqlLanguage(analysis.Callees.Select(callee => callee.Lang)));
             var exactSignal = exact && analysis.ExactIndexAvailable.HasValue
                 ? new ExactQuerySignal(
                     analysis.ExactIndexAvailable.Value,
@@ -1251,8 +1292,8 @@ public static class QueryCommandRunner
                     analysis.ExactHasMissingTable ?? false,
                     analysis.DegradedReason)
                 : (ExactQuerySignal?)null;
-            analysis.SqlGraphContractReady = sqlGraphSignal.Ready;
-            analysis.SqlGraphContractDegradedReason = sqlGraphSignal.DegradedReason;
+            analysis.SqlGraphContractReady = sqlGraphSignal.Relevant ? sqlGraphSignal.Ready : null;
+            analysis.SqlGraphContractDegradedReason = sqlGraphSignal.Relevant ? sqlGraphSignal.DegradedReason : null;
             WorkspaceMetadataEnricher.Enrich(analysis, options.DbPath, options.DbPathExplicit);
             if (exactSignal.HasValue)
                 WriteExactBundleWarningIfNeeded(exact, options.Json, exactSignal.Value, reader, options);
@@ -1614,7 +1655,12 @@ public static class QueryCommandRunner
         {
             var maxDepth = options.ContextAfter > 0 ? options.ContextAfter : 5; // --depth is parsed into ContextAfter
             var analysis = reader.AnalyzeImpact(options.Query, maxDepth, options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
-            var sqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var sqlGraphSignal = NarrowSqlGraphContractSignal(
+                reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
+                DbReader.IsSqlLanguage(options.Lang)
+                    || DbReader.ContainsSqlLanguage(analysis.Definitions.Select(definition => definition.Lang))
+                    || DbReader.ContainsSqlLanguage(analysis.Callers.Select(caller => caller.Lang))
+                    || reader.AnyFilePathHasLanguage(analysis.FileImpacts.SelectMany(impact => new[] { impact.SourcePath, impact.TargetPath }), "sql"));
             var confirmedCount = analysis.Callers.Count;
             var confirmedFileCount = analysis.Callers.Select(r => r.Path).Distinct().Count();
             var hintCount = analysis.FileImpacts.Count;
@@ -1832,7 +1878,11 @@ public static class QueryCommandRunner
         {
             var reverse = cmdArgs.Any(a => a == "--reverse");
             var results = reader.GetFileDependencies(options.Limit, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, reverse);
-            var sqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var sqlGraphSignal = NarrowSqlGraphContractSignalByPaths(
+                reader,
+                reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
+                results.SelectMany(result => new[] { result.SourcePath, result.TargetPath }),
+                options.Lang);
             if (results.Count == 0)
             {
                 if (options.Json && !reader._hasReferencesTable)
@@ -1891,10 +1941,11 @@ public static class QueryCommandRunner
 
         return WithDb(options.DbPath, reader =>
         {
-            var sqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             if (groupByName)
             {
                 var groupedResults = reader.GetGroupedSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+                var effectiveSqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, groupedResults.Select(result => result.Symbol.Lang), options.Lang);
                 if (groupedResults.Count == 0)
                 {
                     if (options.CountOnly)
@@ -1902,7 +1953,7 @@ public static class QueryCommandRunner
                         if (options.Json)
                         {
                             var payload = BuildGroupedHotspotsZeroJsonPayload(reader, jsonOptions, countOnly: true, graphAvailable: reader._hasReferencesTable);
-                            AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+                            AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
                             Console.WriteLine(payload.ToJsonString(jsonOptions));
                         }
                         else
@@ -1911,7 +1962,7 @@ public static class QueryCommandRunner
                     else if (options.Json)
                     {
                         var payload = BuildGroupedHotspotsZeroJsonPayload(reader, jsonOptions, countOnly: false, graphAvailable: reader._hasReferencesTable);
-                        AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+                        AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
                         Console.WriteLine(payload.ToJsonString(jsonOptions));
                     }
                     else
@@ -1920,7 +1971,7 @@ public static class QueryCommandRunner
                         WriteZeroResultHints(options, reader);
                         WriteKindHint(options.Kind, reader);
                         WriteLangHint(options.Lang, reader);
-                        WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
+                        WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
                         WriteDegradedGraphZeroResult(reader, "hotspots", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                     }
                     return options.CountOnly ? CommandExitCodes.Success : CommandExitCodes.NotFound;
@@ -1943,13 +1994,13 @@ public static class QueryCommandRunner
                             ["definition_site_total"] = definitionSiteTotal,
                             ["grouped_by"] = HotspotsGroupedByNameKind,
                         };
-                        AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+                        AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
                         Console.WriteLine(payload.ToJsonString(jsonOptions));
                     }
                     else
                     {
                         Console.WriteLine($"{groupedResults.Count}");
-                        WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
+                        WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
                     }
                     return CommandExitCodes.Success;
                 }
@@ -1975,7 +2026,7 @@ public static class QueryCommandRunner
                         ["grouped_by"] = HotspotsGroupedByNameKind,
                         ["hotspots"] = JsonSerializer.SerializeToNode(items, jsonOptions)
                     };
-                    AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+                    AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
@@ -1988,12 +2039,13 @@ public static class QueryCommandRunner
                         Console.WriteLine($"{g.ReferenceCount,5} refs  {ConsoleUi.ColorizeKind(s.Kind, 12)} {s.Name,-40} {s.Path}:{s.Line}{vis}{multi}");
                     }
                     Console.Error.WriteLine($"({groupedResults.Count} unique name/kind groups, {definitionSiteTotal} definition sites)");
-                    WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
+                    WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
                 }
                 return CommandExitCodes.Success;
             }
 
             var results = reader.GetSymbolHotspots(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Symbol.Lang), options.Lang);
             var hotspotSignal = reader.GetHotspotFamilySignal(options.Lang);
             if (results.Count == 0)
             {
@@ -2128,10 +2180,12 @@ public static class QueryCommandRunner
 
             bool? graphSupported = options.Lang != null ? ReferenceExtractor.SupportsLanguage(options.Lang) : null;
             var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(options.Lang, graphSupported);
-            var sqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             if (options.CountOnly)
             {
                 var countSummary = reader.CountUnusedSymbols(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+                var effectiveSqlGraphSignal = NarrowSqlGraphContractSignal(
+                    reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
+                    DbReader.IsSqlLanguage(options.Lang));
                 if (options.Json)
                 {
                     var payload = new JsonObject
@@ -2144,19 +2198,23 @@ public static class QueryCommandRunner
                         ["graph_table_available"] = reader._hasReferencesTable,
                         ["degraded"] = !reader._hasReferencesTable
                     };
-                    AddSqlGraphContractJsonFields(payload, sqlGraphSignal);
+                    AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else
                 {
                     Console.WriteLine($"{countSummary.Count}");
-                    WriteSqlGraphContractWarningIfNeeded(json: false, sqlGraphSignal, reader, options);
+                    WriteSqlGraphContractWarningIfNeeded(json: false, effectiveSqlGraphSignal, reader, options);
                     WriteDegradedGraphZeroResult(reader, "unused", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
                 }
                 return CommandExitCodes.Success;
             }
 
             var results = reader.GetUnusedSymbols(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
+            var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(
+                reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
+                results.Select(result => result.Lang),
+                options.Lang);
             if (results.Count == 0)
             {
                 if (options.Json)
@@ -3510,8 +3568,36 @@ public static class QueryCommandRunner
         Console.Error.WriteLine("Hint: rerun `cdidx index <projectPath>` to restore authoritative cross-file hotspot families.");
     }
 
+    internal static SqlGraphContractSignal NarrowSqlGraphContractSignal(SqlGraphContractSignal signal, bool relevant)
+    {
+        if (!signal.Relevant || relevant)
+            return signal;
+
+        return new SqlGraphContractSignal(Ready: true, Relevant: false, DegradedReason: null);
+    }
+
+    internal static SqlGraphContractSignal NarrowSqlGraphContractSignalByLanguages(
+        SqlGraphContractSignal signal,
+        IEnumerable<string?> langs,
+        params string?[] additionalLangs)
+        => NarrowSqlGraphContractSignal(
+            signal,
+            additionalLangs.Any(DbReader.IsSqlLanguage) || DbReader.ContainsSqlLanguage(langs));
+
+    internal static SqlGraphContractSignal NarrowSqlGraphContractSignalByPaths(
+        DbReader reader,
+        SqlGraphContractSignal signal,
+        IEnumerable<string> paths,
+        params string?[] additionalLangs)
+        => NarrowSqlGraphContractSignal(
+            signal,
+            additionalLangs.Any(DbReader.IsSqlLanguage) || reader.AnyFilePathHasLanguage(paths, "sql"));
+
     private static void AddSqlGraphContractJsonFields(JsonObject payload, SqlGraphContractSignal signal)
     {
+        if (!signal.Relevant)
+            return;
+
         payload["sql_graph_contract_ready"] = signal.Ready;
         if (!signal.Ready)
         {
@@ -3523,7 +3609,7 @@ public static class QueryCommandRunner
 
     private static void WriteSqlGraphContractWarningIfNeeded(bool json, SqlGraphContractSignal signal, DbReader reader, QueryCommandOptions options)
     {
-        if (json || signal.Ready || signal.DegradedReason == null)
+        if (json || !signal.Relevant || signal.Ready || signal.DegradedReason == null)
             return;
 
         Console.Error.WriteLine($"WARN: {signal.DegradedReason}");

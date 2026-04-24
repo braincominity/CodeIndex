@@ -646,17 +646,24 @@ public partial class DbReader
             hasUnsupportedEnumMember,
             hasSupportedGraphDefinition);
         var unsupportedSymbolKind = hasUnsupportedEnumMember ? "enum_member" : null;
+        var references = SearchReferences(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact, maxLineWidth);
+        var callers = GetCallers(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
+        var callees = GetCallees(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
+        var sqlGraphRelevant = IsSqlLanguage(lang)
+            || IsSqlLanguage(graphLanguage)
+            || ContainsSqlLanguage(definitions.Select(definition => definition.Lang))
+            || ContainsSqlLanguage(references.Select(reference => reference.Lang))
+            || ContainsSqlLanguage(callers.Select(caller => caller.Lang))
+            || ContainsSqlLanguage(callees.Select(callee => callee.Lang));
         var exactSignal = exact
             ? GetAnalyzeSymbolExactQuerySignal(
                 includeGraphSignal: hasGraphApplicableFiles,
+                includeSqlGraphContractSignal: sqlGraphRelevant,
                 lang: lang,
                 pathPatterns: pathPatterns,
                 excludePathPatterns: excludePathPatterns,
                 excludeTests: excludeTests)
             : (ExactQuerySignal?)null;
-        var references = SearchReferences(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact, maxLineWidth);
-        var callers = GetCallers(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
-        var callees = GetCallees(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
         var relaxedSymbols = exact && definitions.Count == 0 && references.Count == 0 && callers.Count == 0 && callees.Count == 0
             ? SearchSymbols(query, Math.Max(limit, 5), kind: null, lang, pathPatterns, excludePathPatterns, excludeTests, since: null, exact: false)
             : null;
