@@ -258,6 +258,12 @@ public static class ReferenceExtractor
         @"(?:(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")\s*\.\s*)*(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")";
     private const string SqlQualifiedIdentifierPattern =
         @"(?:(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")\s*\.\s*)*(?<name>" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")";
+    private const string SqlSourceAliasTailPattern =
+        @"(?:\s+(?:AS\s+)?(?!JOIN\b|ON\b|USING\b|WHERE\b|GROUP\b|HAVING\b|ORDER\b|LIMIT\b|OFFSET\b|FETCH\b|UNION\b|EXCEPT\b|INTERSECT\b|RETURNING\b|FOR\b|WINDOW\b)(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + "))?";
+    private const string SqlSourceTableHintTailPattern =
+        @"(?:\s+WITH\s*\((?:[^()]|\([^()]*\))*\))?";
+    private const string SqlSourceListItemPattern =
+        @"(?:(?:ONLY|LATERAL)\b\s+)*" + SqlQualifiedIdentifierPattern + SqlSourceTableHintTailPattern + SqlSourceAliasTailPattern;
     private const string SqlTopTargetModifierPattern =
         @"TOP\s*\([^)\r\n]*\)(?:\s+PERCENT)?(?:\s+WITH\s+TIES)?";
     private const string SqlMergeTargetHintPattern =
@@ -266,16 +272,24 @@ public static class ReferenceExtractor
         @"(?<![\w$])(?:EXEC|EXECUTE|CALL)\b\s+(?:@\w+\s*=\s*)?" + SqlProcCallQualifierPattern + @"(?<name>" + SqlProcCallIdentifierPattern + @")",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // SQL named source references that should become `reference` edges rather than `call` edges.
-    // Bare `USING` is intentionally excluded because SQL dialects also reuse it for non-source
-    // syntax such as `CREATE INDEX ... USING btree (...)` and `ALTER TABLE ... USING expr`.
+    // `FROM` now captures comma-separated source lists in a single pass so later tables such as
+    // `accounts` in `FROM users, accounts` are not dropped. `JOIN` / `APPLY` keep the single-source
+    // path. Bare `USING` stays excluded because SQL dialects also reuse it for non-source syntax
+    // such as `CREATE INDEX ... USING btree (...)` and `ALTER TABLE ... USING expr`.
     // `FROM dbo.fn_TableValued(...)` intentionally stays out because the trailing `(` means the
-    // shared CallRegex already captures it as a function call. issues #284 / #695.
+    // shared CallRegex already captures it as a function call. issues #284 / #695 / #802.
     // SQL のソース参照で、`call` ではなく `reference` として扱うべき形。
-    // bare な `USING` は `CREATE INDEX ... USING btree (...)` や
-    // `ALTER TABLE ... USING expr` のような非 source 構文にも使われるため意図的に除外する。
+    // `FROM` は comma-separated な source list を 1 回で拾い、`FROM users, accounts` の
+    // `accounts` のような後続 table を落とさない。`JOIN` / `APPLY` は単一 source のまま。
+    // bare な `USING` は `CREATE INDEX ... USING btree (...)` や `ALTER TABLE ... USING expr`
+    // のような非 source 構文にも使われるため意図的に除外する。
     // `FROM dbo.fn_TableValued(...)` は末尾 `(` により既存 CallRegex が `call` を出すため除外する。
+    // issues #284 / #695 / #802.
+    private static readonly Regex SqlFromSourceListRegex = new(
+        $@"(?<![\w$])FROM\b\s+{SqlSourceListItemPattern}(?:\s*,\s*{SqlSourceListItemPattern})*",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SqlSourceReferenceRegex = new(
-        $@"(?<![\w$])(?:FROM|JOIN|(?:CROSS|OUTER)\s+APPLY)\b\s+(?:(?:ONLY|LATERAL)\b\s+)*{SqlQualifiedIdentifierPattern}",
+        $@"(?<![\w$])(?:JOIN|(?:CROSS|OUTER)\s+APPLY)\b\s+{SqlSourceListItemPattern}",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SqlMergeUsingSourceRegex = new(
         $@"(?<![\w$])MERGE\b(?:\s+{SqlTopTargetModifierPattern})?(?:\s+INTO)?\s+{SqlQualifiedIdentifierNoCapturePattern}(?:\s+{SqlMergeTargetHintPattern})?(?:\s+(?:AS\s+)?(?!USING\b|WITH\b)(?:{SqlQuotedIdentifierPattern}|{SqlBareIdentifierPattern}))?\s+USING\b\s+(?:(?:ONLY|LATERAL)\b\s+)*{SqlQualifiedIdentifierPattern}",
@@ -291,6 +305,9 @@ public static class ReferenceExtractor
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SqlDeleteUsingListContinuationPrefixRegex = new(
         @"(?<![\w$])DELETE\b[\s\S]*\bUSING\b[\s\S]*,\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SqlFromListContinuationPrefixRegex = new(
+        @"(?<![\w$])FROM\b[\s\S]*,\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex SqlTargetReferencePrefixRegex = new(
         $@"(?<![\w$])(?:INSERT(?:\s+{SqlTopTargetModifierPattern})?\s+INTO|UPDATE\b(?:\s+(?:{SqlTopTargetModifierPattern}|ONLY\b))*|DELETE\b(?:\s+{SqlTopTargetModifierPattern})?\s+FROM(?:\s+ONLY\b)?|TRUNCATE\s+TABLE(?:\s+ONLY\b)?|CREATE(?:\s+(?:TEMP|TEMPORARY))?\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?)\s*$",
@@ -1317,37 +1334,74 @@ public static class ReferenceExtractor
                                     "call", context, lineNumber, sqlCallContainer);
                             }
 
+                            foreach (Match match in SqlFromSourceListRegex.Matches(sqlStatement))
+                            {
+                                if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
+                                    continue;
+                                foreach (Capture capture in match.Groups["name"].Captures)
+                                {
+                                    if (capture.Index < sqlStatementLineOffset)
+                                        continue;
+                                    var followedByOpenParen = IsFollowedByOpenParen(sqlStatement, capture.Index + capture.Length);
+                                    NormalizeSqlIdentifier(capture.Value, capture.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                    int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+                                    if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                        continue;
+                                    if (followedByOpenParen)
+                                    {
+                                        var sqlCallContainer = ResolveContainerForCall(capture.Index);
+                                        AddChainReference(
+                                            references, seen, fileId, resolvedName, nameColumn + 1,
+                                            "call", context, lineNumber, sqlCallContainer);
+                                        if (!wasQuoted)
+                                        {
+                                            sqlSuppressedCallIndices?.Add(
+                                                GetSqlCallLikeSuppressionIndex(sqlStatement, capture.Index) + sqlStatementStart - sqlLineOffset);
+                                        }
+                                        continue;
+                                    }
+                                    if (resolvedName.StartsWith("#", StringComparison.Ordinal)
+                                        && (sqlEstablishedTempObjectNames == null || !sqlEstablishedTempObjectNames.Contains(resolvedName)))
+                                        continue;
+
+                                    var sqlReferenceContainer = ResolveContainerForCall(capture.Index);
+                                    AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                                }
+                            }
+
                             foreach (Match match in SqlSourceReferenceRegex.Matches(sqlStatement))
                             {
                                 if (IsInsideSqlDoubleQuotedRegion(sqlStatement, match.Index))
                                     continue;
-                                var nameGroup = match.Groups["name"];
-                                if (nameGroup.Index < sqlStatementLineOffset)
-                                    continue;
-                                var followedByOpenParen = IsFollowedByOpenParen(sqlStatement, nameGroup.Index + nameGroup.Length);
-                                NormalizeSqlIdentifier(nameGroup.Value, nameGroup.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
-                                int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
-                                if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
-                                    continue;
-                                if (followedByOpenParen)
+                                foreach (Capture capture in match.Groups["name"].Captures)
                                 {
-                                    var sqlCallContainer = ResolveContainerForCall(nameGroup.Index);
-                                    AddChainReference(
-                                        references, seen, fileId, resolvedName, nameColumn + 1,
-                                        "call", context, lineNumber, sqlCallContainer);
-                                    if (!wasQuoted)
+                                    if (capture.Index < sqlStatementLineOffset)
+                                        continue;
+                                    var followedByOpenParen = IsFollowedByOpenParen(sqlStatement, capture.Index + capture.Length);
+                                    NormalizeSqlIdentifier(capture.Value, capture.Index, out var resolvedName, out var nameIndex, out var wasQuoted);
+                                    int nameColumn = nameIndex + sqlStatementStart - sqlLineOffset;
+                                    if (!wasQuoted && IsIgnoredCallName(language, resolvedName))
+                                        continue;
+                                    if (followedByOpenParen)
                                     {
-                                        sqlSuppressedCallIndices?.Add(
-                                            GetSqlCallLikeSuppressionIndex(sqlStatement, nameGroup.Index) + sqlStatementStart - sqlLineOffset);
+                                        var sqlCallContainer = ResolveContainerForCall(capture.Index);
+                                        AddChainReference(
+                                            references, seen, fileId, resolvedName, nameColumn + 1,
+                                            "call", context, lineNumber, sqlCallContainer);
+                                        if (!wasQuoted)
+                                        {
+                                            sqlSuppressedCallIndices?.Add(
+                                                GetSqlCallLikeSuppressionIndex(sqlStatement, capture.Index) + sqlStatementStart - sqlLineOffset);
+                                        }
+                                        continue;
                                     }
-                                    continue;
-                                }
-                                if (resolvedName.StartsWith("#", StringComparison.Ordinal)
-                                    && (sqlEstablishedTempObjectNames == null || !sqlEstablishedTempObjectNames.Contains(resolvedName)))
-                                    continue;
+                                    if (resolvedName.StartsWith("#", StringComparison.Ordinal)
+                                        && (sqlEstablishedTempObjectNames == null || !sqlEstablishedTempObjectNames.Contains(resolvedName)))
+                                        continue;
 
-                                var sqlReferenceContainer = ResolveContainerForCall(nameGroup.Index);
-                                AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                                    var sqlReferenceContainer = ResolveContainerForCall(capture.Index);
+                                    AddReference(references, seen, fileId, resolvedName, nameColumn, "reference", context, lineNumber, sqlReferenceContainer);
+                                }
                             }
 
                             foreach (Match match in SqlMergeUsingSourceRegex.Matches(sqlStatement))
@@ -1996,6 +2050,7 @@ public static class ReferenceExtractor
 
         return CanSqlStatementEstablishTempObject(statement)
             || SqlTargetReferencePrefixRegex.IsMatch(statement)
+            || SqlFromListContinuationPrefixRegex.IsMatch(statement)
             || SqlSelectIntoTempPrefixRegex.IsMatch(statement)
             || SqlDeleteUsingPrefixRegex.IsMatch(statement)
             || SqlDeleteUsingListContinuationPrefixRegex.IsMatch(statement)

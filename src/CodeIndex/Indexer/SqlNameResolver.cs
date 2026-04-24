@@ -45,7 +45,7 @@ internal static class SqlNameResolver
 
         return TryGetQualifiedNameAtColumn(context, columnNumber, out var match)
             && match.SegmentCount == queryParts.SegmentCount
-            && match.NormalizedName.Contains(queryParts.NormalizedName, StringComparison.OrdinalIgnoreCase);
+            && string.Equals(match.NormalizedName, queryParts.NormalizedName, StringComparison.OrdinalIgnoreCase);
     }
 
     public static bool ContextContainsQualifiedName(string? context, string? query)
@@ -202,7 +202,7 @@ internal static class SqlNameResolver
         var foldedCandidate = NameFold.Fold(match.NormalizedName) ?? match.NormalizedName;
         var foldedQuery = NameFold.Fold(queryParts.NormalizedName) ?? queryParts.NormalizedName;
         return match.SegmentCount == queryParts.SegmentCount
-            && foldedCandidate.Contains(foldedQuery, StringComparison.Ordinal);
+            && string.Equals(foldedCandidate, foldedQuery, StringComparison.Ordinal);
     }
 
     public static bool ContextContainsQualifiedNameFolded(string? context, string? query)
