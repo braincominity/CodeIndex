@@ -16226,6 +16226,49 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CSharpSwitchExpressionLaterArmAfterWhenGuardStillEmitsTypeHead()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_switch_expression_later_arm_after_when_guard");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/cases.cs", "csharp",
+                """
+                namespace Probe;
+
+                class Point {}
+                class Shape {}
+
+                class Demo
+                {
+                    int Match(object value) => value switch
+                    {
+                        Point p when p.GetHashCode() > 0 => 1,
+                        Shape => 2,
+                        _ => 0,
+                    };
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (shapeExitCode, shapeStdout, shapeStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Shape", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                _jsonOptions));
+            var shapeRows = ParseJsonLines(shapeStdout)
+                .Select(document => document.RootElement.GetProperty("container_name").GetString())
+                .ToArray();
+
+            Assert.Equal(CommandExitCodes.Success, shapeExitCode);
+            Assert.Equal(string.Empty, shapeStderr);
+            Assert.Equal(["Match"], shapeRows);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_CSharpVerbatimPatternTypesSurviveBareTokenFilter()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_verbatim_pattern_types");

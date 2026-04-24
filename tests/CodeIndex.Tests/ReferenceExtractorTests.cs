@@ -8231,6 +8231,36 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpSwitchExpressionLaterArmAfterWhenGuard_StillEmitsTypeHead()
+    {
+        // issue #732 follow-up: a `when` clause on an earlier arm must not truncate the rest of
+        // the switch-expression body and hide later arm heads.
+        // issue #732 の追補: 先行 arm の `when` 句で後続 arm まで切り落としてはならない。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+            class Shape {}
+
+            class Demo
+            {
+                int Match(object value) => value switch
+                {
+                    Point p when p.GetHashCode() > 0 => 1,
+                    Shape => 2,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+    }
+
+    [Fact]
     public void Extract_CsharpVerbatimPatternTypeNames_DoNotCollapseIntoBarePatternTokens()
     {
         // issue #677: `@not` / `@default` are legal type names, so the non-type pattern

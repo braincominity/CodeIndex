@@ -742,7 +742,16 @@ public static class ReferenceExtractor
         // ワークスペース全体の同名型 rescue には cross-file 可視性が必要なため、
         // extractor は曖昧な unqualified using-static pattern head を残し、
         // read path 側で判定させる。
-        static bool HasActiveSameFileCSharpTypeCandidate(string typeExpression, int lineNumber) => false;
+        bool HasActiveSameFileCSharpTypeCandidate(string typeExpression, int lineNumber)
+        {
+            _ = lineNumber;
+            var normalized = NormalizeCSharpAliasTargetForTypeLookup(typeExpression);
+            if (string.IsNullOrWhiteSpace(normalized))
+                return false;
+
+            normalized = TrimLeadingCSharpGlobalQualifier(normalized);
+            return csharpKnownTypeNames.Contains(normalized);
+        }
 
         var references = new List<ReferenceRecord>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -2291,8 +2300,7 @@ public static class ReferenceExtractor
                 break;
 
             searchIndex = arrowIndex + 2;
-            if (IsPotentialCSharpLambdaArrow(preparedContent, arrowIndex))
-                continue;
+            var looksLikeLambda = IsPotentialCSharpLambdaArrow(preparedContent, arrowIndex);
 
             if (!TryGetCSharpSwitchExpressionArmTypePatternRange(
                     preparedContent,
@@ -2333,13 +2341,25 @@ public static class ReferenceExtractor
                 currentContinuationIndex = SkipWhitespace(armText, typeGroup.Index + typeGroup.Length);
             }
 
+            var currentTypeLineNumber = GetLineNumberFromOffset(preparedContent, armStartOffset + currentTypeIndex, 1);
+            if (looksLikeLambda
+                && !HasStrongCSharpSwitchExpressionTypeSignal(
+                    currentTypeExpression,
+                    currentTypeLineNumber,
+                    csharpQualifiedTypePatternLookup,
+                    csharpUsingAliases,
+                    hasActiveSameFileCSharpTypeCandidate))
+            {
+                continue;
+            }
+
             while (TryConsumeCSharpLogicalPatternKeyword(armText, currentContinuationIndex, out var nextHeadCursor))
             {
                 if (!IsCSharpLogicalConstantPatternHead(
                         armText,
                         currentTypeExpression,
                         nextHeadCursor,
-                        GetLineNumberFromOffset(preparedContent, armStartOffset + currentTypeIndex, 1),
+                        currentTypeLineNumber,
                         csharpQualifiedConstantPatternMemberLookup,
                         csharpQualifiedTypePatternLookup,
                         csharpUsingAliases,
@@ -2374,16 +2394,16 @@ public static class ReferenceExtractor
                 currentTypeExpression = nextTypeGroup.Value;
                 currentTypeIndex = nextTypeGroup.Index;
                 currentContinuationIndex = SkipWhitespace(armText, nextTypeGroup.Index + nextTypeGroup.Length);
+                currentTypeLineNumber = GetLineNumberFromOffset(preparedContent, armStartOffset + currentTypeIndex, 1);
             }
 
             if (currentTypeExpression.Length == 0)
                 continue;
 
-            var lineNumber = GetLineNumberFromOffset(preparedContent, armStartOffset + currentTypeIndex, 1);
             if (IsCSharpNonTypePatternExpression(currentTypeExpression)
                 || IsCSharpConstantPatternMemberHead(
                     currentTypeExpression,
-                    lineNumber,
+                    currentTypeLineNumber,
                     csharpQualifiedConstantPatternMemberLookup,
                     csharpUsingAliases,
                     csharpUsingStatics,
@@ -2404,6 +2424,21 @@ public static class ReferenceExtractor
                 bodyStartOffset,
                 armStartOffset + currentTypeIndex);
         }
+    }
+
+    private static bool HasStrongCSharpSwitchExpressionTypeSignal(
+        string typeExpression,
+        int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedTypePatternLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
+        Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
+    {
+        return IsCSharpQualifiedTypePatternHead(
+                   typeExpression,
+                   lineNumber,
+                   csharpQualifiedTypePatternLookup,
+                   csharpUsingAliases)
+               || hasActiveSameFileCSharpTypeCandidate(typeExpression, lineNumber);
     }
 
     private static void EmitCSharpSwitchExpressionArmTypePatternReference(
@@ -5266,20 +5301,19 @@ public static class ReferenceExtractor
             return false;
 
         var segmentText = bodyText[segmentStartOffset..arrowIndex];
-        var whenOffset = FindTopLevelCSharpWhenKeywordOffset(segmentText);
-        var patternSegment = whenOffset >= 0 ? segmentText[..whenOffset] : segmentText;
-        if (string.IsNullOrWhiteSpace(patternSegment))
-            return false;
-
-        var lastCommaOffset = FindLastTopLevelCSharpComma(patternSegment);
+        var lastCommaOffset = FindLastTopLevelCSharpComma(segmentText);
         var relativeArmStart = lastCommaOffset >= 0
-            ? SkipWhitespaceForward(patternSegment, lastCommaOffset + 1)
-            : SkipWhitespaceForward(patternSegment, 0);
-        if (relativeArmStart >= patternSegment.Length)
+            ? SkipWhitespaceForward(segmentText, lastCommaOffset + 1)
+            : SkipWhitespaceForward(segmentText, 0);
+        if (relativeArmStart >= segmentText.Length)
             return false;
 
-        var relativePatternEnd = patternSegment.Length;
-        while (relativePatternEnd > relativeArmStart && char.IsWhiteSpace(patternSegment[relativePatternEnd - 1]))
+        var armSegment = segmentText[relativeArmStart..];
+        var whenOffset = FindTopLevelCSharpWhenKeywordOffset(armSegment);
+        var relativePatternEnd = whenOffset >= 0
+            ? relativeArmStart + whenOffset
+            : segmentText.Length;
+        while (relativePatternEnd > relativeArmStart && char.IsWhiteSpace(segmentText[relativePatternEnd - 1]))
             relativePatternEnd--;
         if (relativePatternEnd <= relativeArmStart)
             return false;
