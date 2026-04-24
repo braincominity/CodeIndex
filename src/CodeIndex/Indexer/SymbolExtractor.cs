@@ -375,11 +375,11 @@ public static class SymbolExtractor
         RegexOptions.Compiled);
 
     private static readonly Regex JavaScriptTypeScriptStarReExportRegex = new(
-        $@"^\s*export\s*(?:type\s+)?\*(?:\s*as\s+(?<namespace>{JavaScriptTypeScriptIdentifierPattern}))?\s*from\s*(?<module>['""][^'""]+['""])\s*;?\s*$",
+        $@"^\s*export\s*(?:type\s+)?\*(?:\s*as\s+(?<namespace>{JavaScriptTypeScriptIdentifierPattern}))?\s*from\s*(?<module>['""][^'""]+['""])(?:\s+(?:with|assert)\s+\{{[^}}]*\}})?\s*;?\s*$",
         RegexOptions.Compiled);
 
     private static readonly Regex JavaScriptTypeScriptNamedReExportRegex = new(
-        @"^\s*export\s*(?:type\s+)?\{\s*(?<specifiers>[^}]+)\s*\}\s*from\s*(?<module>['""][^'""]+['""])\s*;?\s*$",
+        @"^\s*export\s*(?:type\s+)?\{\s*(?<specifiers>[^}]+)\s*\}\s*from\s*(?<module>['""][^'""]+['""])(?:\s+(?:with|assert)\s+\{[^}]*\})?\s*;?\s*$",
         RegexOptions.Compiled);
 
     private static readonly Regex JavaScriptTypeScriptCommonJsNamedExportAssignmentRegex = new(
@@ -5196,13 +5196,17 @@ public static class SymbolExtractor
                 continue;
             }
 
-            if (rhs.Length == 0
-                || StartsJavaScriptTypeScriptClassAssignmentValue(rhs))
+            var classificationRhs = StartsJavaScriptTypeScriptPotentialGenericArrowAssignmentValue(rhs)
+                ? CollectJavaScriptTypeScriptAssignedRhsHeader(sanitizedLines, rhsStartLineIndex, rhsStartColumn)
+                : rhs;
+
+            if (classificationRhs.Length == 0
+                || StartsJavaScriptTypeScriptClassAssignmentValue(classificationRhs))
             {
                 continue;
             }
 
-            var kind = StartsJavaScriptTypeScriptFunctionAssignmentValue(rhs)
+            var kind = StartsJavaScriptTypeScriptFunctionAssignmentValue(classificationRhs)
                 ? "function"
                 : "property";
 
@@ -5487,6 +5491,124 @@ public static class SymbolExtractor
 
         var asyncRemainder = rhs["async".Length..].TrimStart();
         return IsJavaScriptTypeScriptKeywordAt(asyncRemainder, 0, "function");
+    }
+
+    private static bool StartsJavaScriptTypeScriptPotentialGenericArrowAssignmentValue(string rhs)
+    {
+        rhs = rhs.TrimStart();
+        if (IsJavaScriptTypeScriptKeywordAt(rhs, 0, "async"))
+            rhs = rhs["async".Length..].TrimStart();
+
+        return rhs.Length > 0 && rhs[0] == '<';
+    }
+
+    private static string CollectJavaScriptTypeScriptAssignedRhsHeader(string[] sanitizedLines, int startLineIndex, int startColumn)
+    {
+        var builder = new System.Text.StringBuilder();
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var genericDepth = 0;
+        var sawGenericStart = false;
+
+        for (int lineIndex = startLineIndex; lineIndex < sanitizedLines.Length; lineIndex++)
+        {
+            var sanitizedLine = sanitizedLines[lineIndex];
+            var column = lineIndex == startLineIndex
+                ? Math.Max(0, startColumn)
+                : 0;
+            if (column >= sanitizedLine.Length)
+                continue;
+
+            if (builder.Length > 0)
+                builder.Append(' ');
+
+            for (; column < sanitizedLine.Length; column++)
+            {
+                var ch = sanitizedLine[column];
+                builder.Append(ch);
+
+                if (!sawGenericStart)
+                {
+                    if (char.IsWhiteSpace(ch))
+                        continue;
+
+                    if (ch == '<')
+                    {
+                        sawGenericStart = true;
+                        genericDepth = 1;
+                    }
+
+                    continue;
+                }
+
+                switch (ch)
+                {
+                    case '<':
+                        if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                            genericDepth++;
+                        break;
+                    case '>':
+                        if (parenDepth == 0
+                            && bracketDepth == 0
+                            && braceDepth == 0
+                            && genericDepth > 0
+                            && (column == 0 || sanitizedLine[column - 1] != '='))
+                        {
+                            genericDepth--;
+                        }
+                        break;
+                    case '(':
+                        parenDepth++;
+                        break;
+                    case ')':
+                        if (parenDepth > 0)
+                            parenDepth--;
+                        break;
+                    case '[':
+                        bracketDepth++;
+                        break;
+                    case ']':
+                        if (bracketDepth > 0)
+                            bracketDepth--;
+                        break;
+                    case '{':
+                        if (genericDepth == 0 && parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                            return builder.ToString().Trim();
+
+                        braceDepth++;
+                        break;
+                    case '}':
+                        if (braceDepth > 0)
+                            braceDepth--;
+                        break;
+                    case '=':
+                        if (column + 1 < sanitizedLine.Length
+                            && sanitizedLine[column + 1] == '>'
+                            && genericDepth == 0
+                            && parenDepth == 0
+                            && bracketDepth == 0
+                            && braceDepth == 0)
+                        {
+                            builder.Append('>');
+                            column++;
+                            return builder.ToString().Trim();
+                        }
+                        break;
+                }
+            }
+
+            if (sawGenericStart
+                && genericDepth == 0
+                && parenDepth == 0
+                && bracketDepth == 0
+                && braceDepth == 0)
+            {
+                break;
+            }
+        }
+
+        return builder.ToString().Trim();
     }
 
     private static bool StartsJavaScriptTypeScriptGenericArrowAssignmentValue(string rhs)
@@ -5811,7 +5933,65 @@ public static class SymbolExtractor
     }
 
     private static int FindJavaScriptTypeScriptBalancedGenericListEnd(string text, int startIndex)
-        => FindJavaScriptTypeScriptBalancedDelimiterEnd(text, startIndex, '<', '>');
+    {
+        if (startIndex < 0
+            || startIndex >= text.Length
+            || text[startIndex] != '<')
+        {
+            return -1;
+        }
+
+        var depth = 0;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        for (int index = startIndex; index < text.Length; index++)
+        {
+            var ch = text[index];
+            switch (ch)
+            {
+                case '<':
+                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0)
+                        depth++;
+                    break;
+                case '>':
+                    if (parenDepth == 0
+                        && bracketDepth == 0
+                        && braceDepth == 0
+                        && depth > 0
+                        && (index == 0 || text[index - 1] != '='))
+                    {
+                        depth--;
+                        if (depth == 0)
+                            return index;
+                    }
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    break;
+            }
+        }
+
+        return -1;
+    }
 
     private static int FindJavaScriptTypeScriptBalancedDelimiterEnd(string text, int startIndex, char openChar, char closeChar)
     {

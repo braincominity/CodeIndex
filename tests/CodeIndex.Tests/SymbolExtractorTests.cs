@@ -168,6 +168,25 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DetectsReExportSurfaceSymbolsWithImportAttributes()
+    {
+        var content = """
+            export * from './util' with { type: 'json' };
+            export { foo as bar } from './other' with { type: 'json' };
+            export * from './legacy' assert { type: 'json' };
+            export { baz as qux } from './older' assert { type: 'json' };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./util");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./other");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./legacy");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./older");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "qux");
+    }
+
+    [Fact]
     public void Extract_JavaScript_StringBraceDoesNotBreakFollowingContainerAssignment()
     {
         var content = """"
@@ -963,6 +982,25 @@ public class SymbolExtractorTests
             module.exports.bar =
               <T>(value: T) => value;
             module.exports.baz = (<T>(value: T) => value);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "baz");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsMultilineAndConstrainedGenericArrowCommonJsNamedExportAssignments()
+    {
+        var content = """
+            module.exports.foo = <T>(
+              value: T
+            ) => value;
+            module.exports.bar = <T extends (...args: any[]) => number>(value: T) => value;
+            module.exports.baz = async <T>(
+              value: T
+            ) => value;
             """;
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
