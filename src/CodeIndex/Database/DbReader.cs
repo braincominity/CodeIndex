@@ -3555,7 +3555,7 @@ public partial class DbReader
         if (_foldReady)
             cmd.Parameters.AddWithValue("@nameFolded", NameFold.Fold(normalizedSymbolName) ?? normalizedSymbolName);
         using var reader = cmd.ExecuteTrackedReader();
-        return reader.TrackedRead() ? reader.GetString(0) : normalizedSymbolName;
+        return reader.TrackedRead() ? reader.GetString(0) : symbolName;
     }
 
     /// <summary>
