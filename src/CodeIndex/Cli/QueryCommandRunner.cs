@@ -2175,12 +2175,15 @@ public static class QueryCommandRunner
 
             bool? graphSupported = options.Lang != null ? ReferenceExtractor.SupportsLanguage(options.Lang) : null;
             var graphSupportReason = ReferenceExtractor.BuildGraphSupportReason(options.Lang, graphSupported);
+            var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             if (options.CountOnly)
             {
                 var countSummary = reader.CountUnusedSymbols(options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
-                var effectiveSqlGraphSignal = NarrowSqlGraphContractSignal(
-                    reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
-                    countSummary.IncludesSql || DbReader.IsSqlLanguage(options.Lang));
+                var effectiveSqlGraphSignal = countSummary.Count == 0
+                    ? baseSqlGraphSignal
+                    : NarrowSqlGraphContractSignal(
+                        baseSqlGraphSignal,
+                        countSummary.IncludesSql || DbReader.IsSqlLanguage(options.Lang));
                 if (options.Json)
                 {
                     var payload = new JsonObject
@@ -2206,7 +2209,6 @@ public static class QueryCommandRunner
             }
 
             var results = reader.GetUnusedSymbols(options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
-            var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests);
             var sqlGraphSignal = results.Count == 0
                 ? baseSqlGraphSignal
                 : NarrowSqlGraphContractSignalByLanguages(
