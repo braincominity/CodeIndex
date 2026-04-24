@@ -186,6 +186,9 @@ public static class DbPathResolver
 
     public static bool UriRequestsReadOnly(string uriText)
     {
+        if (!uriText.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            return false;
+
         var qIdx = uriText.IndexOf('?');
         if (qIdx < 0) return false;
         var query = uriText[(qIdx + 1)..];
