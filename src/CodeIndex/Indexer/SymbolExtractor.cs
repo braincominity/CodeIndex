@@ -10772,54 +10772,17 @@ public static class SymbolExtractor
     // 別の文として配置された無関係なテンプレートリテラルでゲートを誤って解除しない。
     // さらに Prettier 整形のように `styled.div` / `styled(Component)` の次行にバッククォートを
     // 置くケースへ対応するため、スキャナはブロックコメント状態を引き継ぎつつ複数行を前方走査する
-    // （行数上限付き）。JS/TS の文頭キーワード（`const`、`let`、`var`、`function`、`class`、
-    // `return`、`import` 等）で始まる新しい行は暗黙 ASI による文終端として扱い走査を打ち切る。
-    // これにより `const X = styled.div\nconst Y = 5;` は `;` が `styled.div` 行に無くても
-    // 引き続き除外される。さらに行コメント（`//`）・ブロックコメント（`/* ... */`）・
-    // 通常の文字列リテラル（`'...'` / `"..."`）を構文として理解し、コメントや文字列内の
-    // バッククォートが非テンプレート束縛を延命させたり、コメント内の `;` が同一文内の本物の
-    // バッククォートより先に文終端として扱われて実タグ付きテンプレートを落とすことを防ぐ。
-    // Closes #240 follow-up（codex レビュー #5・#7・#8・#9 の blocker 対応）。
+    // （行数上限付き）。継続行の最初の実トークンがタグ付きテンプレートの継続として妥当な
+    // 文字（バッククォート・`.`・`<`）でない場合は ASI による文終端として走査を打ち切る。
+    // これにより `const X = styled.div\nfoo(\`...\`)` や `const X = styled.div\nawait foo(\`...\`)`
+    // のような「次行が式文」のケースでも phantom `function` シンボルを出さない。さらに
+    // `const X = styled.div\nconst Y = 5;` のような「次行が宣言文」のケースも引き続き除外される。
+    // 加えて行コメント（`//`）・ブロックコメント（`/* ... */`）・通常の文字列リテラル
+    // （`'...'` / `"..."`）を構文として理解し、コメントや文字列内のバッククォートが非テンプレート
+    // 束縛を延命させたり、コメント内の `;` が同一文内の本物のバッククォートより先に文終端として
+    // 扱われて実タグ付きテンプレートを落とすことを防ぐ。
+    // Closes #240 follow-up（codex レビュー #5・#7・#8・#9・#10 の blocker 対応）。
     private const int JsTsStyledFactoryGateMaxLookaheadLines = 8;
-    private static readonly string[] JsTsStatementStarterKeywords = new[]
-    {
-        "const", "let", "var", "function", "class", "type", "interface", "enum",
-        "namespace", "module", "declare", "export", "import", "return", "throw",
-        "if", "for", "while", "do", "switch", "try", "break", "continue", "async",
-    };
-
-    private static bool IsJsTsStatementStarterLine(string line)
-    {
-        int i = 0;
-        while (i < line.Length && (line[i] == ' ' || line[i] == '\t'))
-            i++;
-        if (i >= line.Length)
-            return false;
-        foreach (var kw in JsTsStatementStarterKeywords)
-        {
-            if (i + kw.Length > line.Length)
-                continue;
-            if (string.CompareOrdinal(line, i, kw, 0, kw.Length) != 0)
-                continue;
-            var end = i + kw.Length;
-            // Require a non-identifier character (or end-of-line) after the keyword
-            // so `constructor`, `letme`, `varargs`, etc. are not mistaken for
-            // statement starters. Tagged-template continuation lines legitimately
-            // begin with whitespace followed by a backtick or an identifier
-            // (the selector string), which we do not want to treat as a new
-            // statement.
-            // キーワード直後は識別子境界でなければならない — `constructor`、`letme`、
-            // `varargs` 等を文頭扱いしないため。タグ付きテンプレートの継続行は
-            // バッククォートや識別子（セレクタ文字列）で始まるのが正当な形で、それを
-            // 新しい文の開始として扱わないようにする。
-            if (end >= line.Length)
-                return true;
-            var c = line[end];
-            if (!(char.IsLetterOrDigit(c) || c == '_' || c == '$'))
-                return true;
-        }
-        return false;
-    }
 
     private static bool ShouldSkipJavaScriptTypeScriptStyledFactoryCandidate(
         string? lang,
@@ -10860,15 +10823,25 @@ public static class SymbolExtractor
         // backtick. Comments (`//`, `/* ... */`) and plain string literals
         // (`'...'`, `"..."`) are skipped so only real source characters drive the
         // accept/reject decision. Block-comment state carries across line
-        // boundaries. A continuation line that begins with a JS/TS statement
-        // starter keyword terminates the scan under implicit ASI semantics.
+        // boundaries. On every continuation line (li > lineIndex) the first
+        // non-whitespace, non-comment character must be a valid tagged-template
+        // continuation starter — a backtick (the template itself), `.` (member
+        // chain such as `.attrs\`...\``), or `<` (TypeScript generic type args);
+        // anything else is treated as ASI-inserted statement termination and
+        // causes the gate to reject. This rejects `const X = styled.div\nfoo(\`x\`)`
+        // (expression statement beginning with an identifier), `const X = styled.div\nawait foo(\`x\`)`
+        // (top-level await), `const X = styled.div\nconst Y = 5;` (declaration), etc.
         // The first real backtick → accept (tagged template on this statement).
         // The first real `;` → reject (factory-capture or plain call).
         // match の絶対終端位置から raw ソースを前方走査し、Prettier 整形の複数行タグ付き
         // テンプレートにも対応するため、所定の行数まで改行をまたいで走査する。コメント
         // （`//`、`/* ... */`）や通常文字列（`'...'`、`"..."`）はスキップし、実コード上の
-        // 文字だけで判定する。ブロックコメント状態は行境界をまたいで持ち越す。新しい行が
-        // JS/TS の文頭キーワードで始まる場合は暗黙 ASI による文終端として走査を打ち切る。
+        // 文字だけで判定する。ブロックコメント状態は行境界をまたいで持ち越す。継続行
+        // （li > lineIndex）の最初の空白・コメント以外の文字は、タグ付きテンプレートの継続
+        // として妥当な開始文字（バッククォート・`.`・`<`）でなければならない。それ以外は
+        // 暗黙 ASI による文終端として扱い走査を打ち切る。これにより `const X = styled.div\nfoo(\`x\`)`
+        // （識別子始まりの式文）、`const X = styled.div\nawait foo(\`x\`)`（top-level await）、
+        // `const X = styled.div\nconst Y = 5;`（宣言文）等は phantom `function` を出さない。
         // バッククォート → 維持（同一文のタグ付きテンプレート）、`;` → 除外（factory 捕捉 /
         // 素の呼び出し形）。
         bool inBlockComment = false;
@@ -10876,9 +10849,8 @@ public static class SymbolExtractor
         for (int li = lineIndex; li <= maxLine; li++)
         {
             var raw = lines[li];
-            if (li > lineIndex && !inBlockComment && IsJsTsStatementStarterLine(raw))
-                break;
             int i = li == lineIndex ? matchOffset + match.Index + match.Length : 0;
+            bool firstCharChecked = li == lineIndex;
             while (i < raw.Length)
             {
                 if (inBlockComment)
@@ -10893,6 +10865,14 @@ public static class SymbolExtractor
                     continue;
                 }
                 var c = raw[i];
+                // Whitespace — skip so the first-meaningful-char check sees
+                // the actual continuation token.
+                // 空白 — 継続行先頭判定は実トークンまで進めるためスキップする。
+                if (c == ' ' || c == '\t')
+                {
+                    i++;
+                    continue;
+                }
                 // Line comment — the rest of this raw line is comment.
                 // 行コメント — 同一 raw 行の残りは全てコメント。
                 if (c == '/' && i + 1 < raw.Length && raw[i + 1] == '/')
@@ -10906,6 +10886,18 @@ public static class SymbolExtractor
                     inBlockComment = true;
                     i += 2;
                     continue;
+                }
+                // On continuation lines, the first real (non-whitespace,
+                // non-comment) character must be a valid tagged-template
+                // continuation starter. Anything else → ASI terminated;
+                // treat this as a new statement and reject the HOC binding.
+                // 継続行の最初の実文字が backtick / `.` / `<` でなければ
+                // ASI による文終端として扱い、HOC 束縛として採用しない。
+                if (!firstCharChecked)
+                {
+                    firstCharChecked = true;
+                    if (c != '`' && c != '.' && c != '<')
+                        return true;
                 }
                 // Plain string literal — skip to the matching closing quote on
                 // the same raw line. Unterminated plain strings are invalid JS/TS

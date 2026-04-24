@@ -664,6 +664,70 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_HocBindingPatternRejectsExpressionStatementWithBacktickOnNextStatement()
+    {
+        // ASI inserts a `;` between `styled.div` and the next line's expression
+        // statement when that statement begins with an identifier / `await` /
+        // other non-continuation token. A statement-starter keyword allowlist
+        // cannot detect this — a bare `foo(\`x\`)` or `await foo(\`x\`)` is a
+        // valid expression statement that ASI terminates before but whose
+        // first line-token is an identifier, not a keyword. The gate must
+        // reject these shapes by inspecting the first meaningful character of
+        // each continuation line: only a backtick (template itself), `.`
+        // (member chain), or `<` (TypeScript generics) may continue the
+        // expression. Closes #240 follow-up (codex review #10 blocker,
+        // upstream issue #910).
+        // ASI は `styled.div` の次行が識別子始まり・`await` 始まり等の非継続トークンで
+        // 始まる式文のとき、暗黙の `;` を挿入する。文頭キーワード allowlist では
+        // これらを検出できない（`foo(\`x\`)` や `await foo(\`x\`)` は識別子始まりの
+        // 式文であり、キーワード始まりではない）。ゲートは継続行の最初の実トークンを
+        // 見て判定する必要がある — バッククォート（テンプレート自体）、`.`（メンバー
+        // チェーン）、`<`（TypeScript generics）のみが式を継続可能で、それ以外は
+        // 新しい文として走査を打ち切る。Closes #240 follow-up（codex レビュー #10 の
+        // blocker 対応、上流 issue #910）。
+        var content = """
+            const IdentifierStartFactory = styled.div
+            foo(`not a template`)
+            const AwaitStartFactory = styled.div
+            await foo(`not a template`)
+            const CallExprFactory = styled(Component)
+            foo(`not a template`)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "IdentifierStartFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "AwaitStartFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "CallExprFactory");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_HocBindingPatternRejectsExpressionStatementWithBacktickOnNextStatement()
+    {
+        // Same ASI-aware continuation rule on the TypeScript side. Closes #240
+        // follow-up (codex review #10 blocker, upstream issue #910).
+        // TypeScript 側でも同じ ASI 対応の継続ルールが必要。Closes #240 follow-up
+        // （codex レビュー #10 の blocker 対応、上流 issue #910）。
+        var content = """
+            const IdentifierStartFactory = styled.div
+            foo(`not a template`)
+            const AwaitStartFactory = styled.div
+            await foo(`not a template`)
+            const CallExprFactory = styled(Component)
+            foo(`not a template`)
+            const AnnotatedIdentifierStart: StyledComponent<'div'> = styled.div
+            foo(`not a template`)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "IdentifierStartFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "AwaitStartFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "CallExprFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "AnnotatedIdentifierStart");
+    }
+
+    [Fact]
     public void Extract_TypeScript_HocBindingPatternAcceptsCallbackPropInsideFunctionTypeGeneric()
     {
         // Inline function-type generic arguments whose parameter object literal
