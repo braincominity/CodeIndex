@@ -1116,6 +1116,9 @@ public partial class DbReader
             return false;
         }
 
+        if (HasActiveCSharpUsingTypeAlias(path, lineNumber, symbolName))
+            return false;
+
         var patternContext = contextForFilter;
         var patternColumn = columnNumber;
         if (!TryBuildCSharpUsingStaticPatternContextWindow(
@@ -1138,9 +1141,6 @@ public partial class DbReader
 
         var activeTargets = GetActiveCSharpUsingStaticTargets(path, lineNumber);
         if (activeTargets.Count == 0)
-            return false;
-
-        if (HasActiveCSharpUsingAlias(path, lineNumber, symbolName))
             return false;
 
         var matchingContainers = GetCSharpConstantPatternContainersByMemberName(symbolName);
@@ -1179,6 +1179,9 @@ public partial class DbReader
 
     private bool HasScopedCSharpTypeCandidate(string path, int lineNumber, string symbolName)
     {
+        if (HasActiveCSharpUsingTypeAlias(path, lineNumber, symbolName))
+            return true;
+
         var activeAliasReference = ResolveActiveCSharpUsingAliasReference(path, lineNumber, symbolName);
         if (!string.Equals(activeAliasReference, symbolName, StringComparison.Ordinal)
             && IsKnownCSharpTypeQualifiedName(activeAliasReference))
@@ -1419,9 +1422,54 @@ public partial class DbReader
         return normalized;
     }
 
-    private bool HasActiveCSharpUsingAlias(string path, int lineNumber, string symbolName)
+    private bool HasActiveCSharpUsingTypeAlias(string path, int lineNumber, string symbolName)
     {
-        return TryResolveActiveCSharpUsingAliasScope(path, lineNumber, symbolName, requireTypeAlias: true, out _);
+        if (string.IsNullOrWhiteSpace(path) || string.IsNullOrWhiteSpace(symbolName))
+            return false;
+
+        if (TryResolveActiveCSharpUsingAliasScope(path, lineNumber, symbolName, requireTypeAlias: true, out _))
+            return true;
+
+        if (!_csharpUsingAliasScopesByPath.TryGetValue(path, out var scopes))
+        {
+            scopes = LoadCSharpUsingAliasScopes(path);
+            _csharpUsingAliasScopesByPath[path] = scopes;
+        }
+
+        for (var i = scopes.Count - 1; i >= 0; i--)
+        {
+            var scope = scopes[i];
+            if (!string.Equals(scope.AliasName, symbolName, StringComparison.Ordinal))
+                continue;
+            if (scope.Line > lineNumber)
+                continue;
+            if (lineNumber < scope.ScopeStartLine || lineNumber > scope.ScopeEndLine)
+                continue;
+            if (IsKnownCSharpTypeQualifiedName(scope.TargetQualifiedName))
+                return true;
+
+            var resolvedContainer = ResolveScopedCSharpContainingTypeQualifiedName(path, lineNumber, scope.TargetQualifiedName);
+            if (string.IsNullOrWhiteSpace(resolvedContainer))
+                continue;
+
+            if (IsKnownCSharpTypeQualifiedName(resolvedContainer))
+                return true;
+
+            foreach (var activeNamespace in GetActiveCSharpTypeNamespaces(path, lineNumber))
+            {
+                if (string.IsNullOrWhiteSpace(activeNamespace))
+                    continue;
+
+                var namespacedTarget = CombineDbQualifiedName(activeNamespace, resolvedContainer);
+                if (!string.IsNullOrWhiteSpace(namespacedTarget)
+                    && IsKnownCSharpTypeQualifiedName(namespacedTarget))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private HashSet<string> GetActiveCSharpUsingStaticTargets(string path, int lineNumber)

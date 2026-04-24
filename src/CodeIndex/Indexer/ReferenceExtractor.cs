@@ -882,7 +882,16 @@ public static class ReferenceExtractor
                 return false;
 
             normalized = TrimLeadingCSharpGlobalQualifier(normalized);
-            return csharpKnownTypeNames.Contains(normalized);
+            if (csharpKnownTypeNames.Contains(normalized))
+                return true;
+
+            var shortName = GetLastQualifiedSegment(normalized);
+            return csharpUsingAliases.Any(alias =>
+                alias.TargetsType
+                && alias.Line <= lineNumber
+                && lineNumber >= alias.ScopeStartLine
+                && lineNumber <= alias.ScopeEndLine
+                && string.Equals(alias.AliasName, shortName, StringComparison.Ordinal));
         }
 
         var references = new List<ReferenceRecord>();
