@@ -1221,21 +1221,25 @@ public class McpServerTests : IDisposable
     [Theory]
     [InlineData("callers", "attribute")]
     [InlineData("callers", "annotation")]
+    [InlineData("callers", "type_reference")]
     [InlineData("callees", "attribute")]
     [InlineData("callees", "annotation")]
-    public void ToolsCall_CallersOrCallees_MetadataKindReturnsToolError(string tool, string kind)
+    [InlineData("callees", "type_reference")]
+    public void ToolsCall_CallersOrCallees_NonCallGraphKindReturnsToolError(string tool, string kind)
     {
-        // issue #293 follow-up: the MCP `callers` / `callees` tools must reject `kind:
-        // attribute` / `kind: annotation` because metadata rows are attributed to the
-        // enclosing body-range symbol (so `callers Obsolete kind=attribute` reports the
-        // enclosing class instead of the annotated method, and file-level targets drop
-        // entirely). AI clients should be redirected to the `references` tool for metadata
-        // enumeration.
-        // issue #293 補足: MCP の `callers` / `callees` ツールは `kind: attribute` /
-        // `kind: annotation` を必ず弾くこと。metadata 行は body-range の外側シンボルに帰属する
+        // issue #293 + issue #444: the MCP `callers` / `callees` tools must reject non-call-graph
+        // kinds. Metadata rows (`attribute` / `annotation`) are attributed to the enclosing
+        // body-range symbol (so `callers Obsolete kind=attribute` reports the enclosing class
+        // instead of the annotated method, and file-level targets drop entirely). `type_reference`
+        // rows are compile-time type mentions (declaration types, generic constraints, `is`/`as`/
+        // `instanceof`, XML-doc `cref`) and not runtime calls. AI clients should be redirected to
+        // the `references` tool for these enumerations.
+        // issue #293 + issue #444 補足: MCP の `callers` / `callees` ツールは非 call-graph な kind を
+        // 必ず弾く。metadata 行 (`attribute` / `annotation`) は body-range の外側シンボルに帰属する
         // ため、`callers Obsolete kind=attribute` は注釈対象のメソッドではなく外側クラスを返し、
-        // file-level target は完全に脱落する。AI クライアントは metadata 列挙のために
-        // `references` ツールに誘導する。
+        // file-level target は完全に脱落する。`type_reference` は宣言型・generic 制約・`is`/`as`/
+        // `instanceof`・XML-doc `cref` といった compile-time な型言及であり実行時呼び出しではない。
+        // AI クライアントは列挙のために `references` ツールに誘導する。
         var requestJson = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\","
             + "\"params\":{\"name\":\"" + tool + "\","
             + "\"arguments\":{\"query\":\"SomeSymbol\",\"kind\":\"" + kind + "\"}}}";
@@ -1246,6 +1250,41 @@ public class McpServerTests : IDisposable
         var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
         Assert.Contains($"'kind: {kind}' is not supported on '{tool}'", text);
         Assert.Contains("'references' tool", text);
+    }
+
+    [Fact]
+    public void ToolsCall_References_AcceptsTypeReferenceKind()
+    {
+        // issue #444: `references` with `kind: "type_reference"` is a legitimate query (the
+        // compile-time type-position edges emitted by ReferenceExtractor for C#/Java base
+        // lists, declaration types, generic constraints, `is`/`as`/`instanceof`, and XML-doc
+        // `cref`). It must succeed and return the expected `reference_kind` in
+        // structuredContent, unlike the rejected `callers`/`callees` tools.
+        // issue #444: MCP `references` の `kind: "type_reference"` は compile-time な型位置エッジ
+        // を列挙する正当なクエリ（C#/Java の継承リスト・宣言型・generic 制約・`is`/`as`/
+        // `instanceof`・XML-doc `cref`）。拒否される `callers` / `callees` とは異なり、成功して
+        // structuredContent に `reference_kind` を返さなければならない。
+        InsertIndexedFile("src/Target.cs", "csharp",
+            """
+            public class TargetBase { }
+            """);
+        InsertIndexedFile("src/Consumer.cs", "csharp",
+            """
+            public class Consumer : TargetBase
+            {
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"TargetBase","kind":"type_reference","lang":"csharp","exactName":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal("type_reference", structured["kind"]!.GetValue<string>());
+        Assert.True(structured["count"]!.GetValue<int>() >= 1);
+        var results = structured["results"]!.AsArray();
+        Assert.Contains(results, r => r!["referenceKind"]!.GetValue<string>() == "type_reference"
+            && r["symbolName"]!.GetValue<string>() == "TargetBase");
     }
 
     [Fact]

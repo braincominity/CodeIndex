@@ -91,19 +91,35 @@ public partial class McpServer
     private static int ClampLimit(int limit) => Math.Clamp(limit, 1, MaxLimit);
 
     /// <summary>
-    /// Return true when the requested reference kind is a metadata kind (`attribute` /
-    /// `annotation`) — these are valid on the `references` tool but must be rejected on
-    /// `callers` / `callees`, whose data model cannot answer metadata questions correctly
-    /// (metadata rows are attributed to the enclosing body-range symbol rather than the
-    /// annotated target, so file-level targets drop entirely and method-level metadata
-    /// appears under the enclosing class).
-    /// `references` では有効だが `callers` / `callees` では構造的に誤答するため弾くべき
-    /// metadata kind (`attribute` / `annotation`) かを返す。metadata 行は注釈対象ではなく
-    /// body-range 上の外側シンボルに帰属するため、`callers` / `callees` はこの kind に
-    /// 正しく答えられない。
+    /// Return true when the requested reference kind is NOT a call-graph kind (i.e. metadata
+    /// `attribute` / `annotation` or compile-time `type_reference`) — these are valid on the
+    /// `references` tool but must be rejected on `callers` / `callees`, whose data model
+    /// cannot answer those queries correctly. Metadata rows are attributed to the enclosing
+    /// body-range symbol rather than the annotated target (so file-level targets drop
+    /// entirely and method-level metadata appears under the enclosing class); `type_reference`
+    /// rows are compile-time type-position edges (declaration types, generic constraints,
+    /// `is`/`as`/`instanceof`, XML-doc `cref`), not runtime calls, so they misreport type
+    /// mentions as caller/callee edges.
+    /// `references` では有効だが `callers` / `callees` では構造的に誤答するため弾くべき kind
+    /// （metadata: `attribute` / `annotation`、型位置: `type_reference`）かを返す。metadata 行は
+    /// 注釈対象ではなく body-range 上の外側シンボルに帰属し、`type_reference` は実行時呼び出し
+    /// ではなく compile-time な型言及（宣言型、generic 制約、`is`/`as`/`instanceof`、XML-doc
+    /// `cref` など）なので、`callers` / `callees` はいずれの kind にも正しく答えられない。
     /// </summary>
-    private static bool IsMetadataReferenceKind(string? kind) =>
-        kind == "attribute" || kind == "annotation";
+    private static bool IsNonCallGraphReferenceKind(string? kind) =>
+        kind == "attribute" || kind == "annotation" || kind == "type_reference";
+
+    /// <summary>
+    /// Build the CLI / MCP error message for a non-call-graph reference kind rejected on
+    /// `callers` / `callees`. The message explains why the kind is structurally wrong on
+    /// the command and redirects users to `references`.
+    /// `callers` / `callees` で弾いた非 call-graph kind のエラーメッセージを組み立てる。
+    /// 構造的に誤答する理由を説明し、`references` に誘導する。
+    /// </summary>
+    private static string BuildNonCallGraphKindRejectionMessage(string command, string kind) =>
+        kind == "type_reference"
+            ? $"'kind: type_reference' is not supported on '{command}'. Type-position references are compile-time edges (declaration types, generic constraints, `is`/`as`/`instanceof`, XML-doc `cref`), not runtime calls, so `{command}` cannot return accurate rows for kind 'type_reference'. Use the 'references' tool with kind 'type_reference' instead."
+            : $"'kind: {kind}' is not supported on '{command}'. Metadata references are attributed to the enclosing body-range symbol, so `{command}` cannot return accurate rows for kind '{kind}'. Use the 'references' tool with kind '{kind}' for metadata enumeration.";
 
     private JsonNode? TryGetValidatedMaxLineWidth(JsonNode? id, JsonNode? args, out int maxLineWidth, string propertyName = "maxLineWidth")
     {
@@ -536,8 +552,8 @@ public partial class McpServer
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
 
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
-        if (IsMetadataReferenceKind(kind))
-            return CreateToolErrorResponse(id, $"'kind: {kind}' is not supported on 'callers'. Metadata references are attributed to the enclosing body-range symbol, so `callers` cannot return accurate rows for kind '{kind}'. Use the 'references' tool with kind '{kind}' for metadata enumeration.");
+        if (IsNonCallGraphReferenceKind(kind))
+            return CreateToolErrorResponse(id, BuildNonCallGraphKindRejectionMessage("callers", kind!));
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var pathPatterns = ReadPathList(args, "path");
@@ -598,8 +614,8 @@ public partial class McpServer
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
 
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
-        if (IsMetadataReferenceKind(kind))
-            return CreateToolErrorResponse(id, $"'kind: {kind}' is not supported on 'callees'. Metadata references are attributed to the enclosing body-range symbol, so `callees` cannot return accurate rows for kind '{kind}'. Use the 'references' tool with kind '{kind}' for metadata enumeration.");
+        if (IsNonCallGraphReferenceKind(kind))
+            return CreateToolErrorResponse(id, BuildNonCallGraphKindRejectionMessage("callees", kind!));
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var pathPatterns = ReadPathList(args, "path");
@@ -1514,6 +1530,7 @@ public partial class McpServer
         var priorFoldVersion = db.GetMetaString("fold_key_version");
         var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
         var priorCSharpSymbolNameContractVersion = db.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey);
+        var priorMetadataTargetCsharp = db.GetMetaString(DbContext.GetMetadataTargetVersionMetaKey("csharp"));
         var priorSqlGraphContractVersion = db.GetMetaString(DbContext.SqlGraphContractVersionMetaKey);
         var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
         var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
@@ -1528,7 +1545,9 @@ public partial class McpServer
         if (rebuild)
         {
             db.ClearReadyFlags();
-            new DbWriter(db.Connection).ClearHotspotFamilyReady();
+            var rebuildWriter = new DbWriter(db.Connection);
+            rebuildWriter.ClearHotspotFamilyReady();
+            rebuildWriter.ClearMetadataTargetReady();
             db.DropAll();
         }
 
@@ -1575,6 +1594,7 @@ public partial class McpServer
         // 実書き込み直前で readiness をクリア。
         writer.ClearReadyFlags();
         writer.ClearHotspotFamilyReady();
+        writer.ClearMetadataTargetReady();
 
         // Purge stale files / 古いファイルをパージ
         var purged = writer.PurgeStaleFiles(projectPath);
@@ -1640,9 +1660,11 @@ public partial class McpServer
         // throwing, so a partial failure leaves trust degraded and `validate` still surfaces it.
         // MCP index は CLI と同等に file_issues を永続化するため、成功時は graph / issues の両方を stamp する。
         var csharpSymbolNameReadyAfter = !writer.HasAnyFilesWithLanguage("csharp");
+        var csharpMetadataTargetReadyAfter = !writer.HasAnyFilesWithLanguage("csharp");
         var sqlGraphContractReadyAfter = !writer.HasAnyFilesWithLanguage("sql");
         var foldReadyAfter = false;
         string? foldReadyReason = null;
+        _ = priorMetadataTargetCsharp;
         if (errors == 0)
         {
             writer.MarkGraphReady();
@@ -1650,6 +1672,16 @@ public partial class McpServer
             writer.MarkSqlGraphContractReady();
             writer.MarkCSharpSymbolNameContractReady();
             csharpSymbolNameReadyAfter = true;
+            if (writer.HasAnyFilesWithLanguage("csharp"))
+            {
+                writer.ResolveCSharpMetadataTargets();
+                writer.MarkMetadataTargetReady("csharp");
+                csharpMetadataTargetReadyAfter = true;
+            }
+            else
+            {
+                csharpMetadataTargetReadyAfter = true;
+            }
             sqlGraphContractReadyAfter = true;
             RestampHotspotFamilyTrust(
                 writer,
@@ -1711,6 +1743,7 @@ public partial class McpServer
             ["sql_graph_contract_ready"] = sqlGraphContractReadyAfter,
             ["sqlGraphContractReady"] = sqlGraphContractReadyAfter,
             ["csharp_symbol_name_ready"] = csharpSymbolNameReadyAfter,
+            ["csharp_metadata_target_ready"] = csharpMetadataTargetReadyAfter,
             // #86 codex review: AI clients use this to tell whether --exact will use the
             // Unicode fold path or silently fall back to ASCII NOCASE. If false after a clean
             ["fold_ready"] = foldReadyAfter,

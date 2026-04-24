@@ -399,7 +399,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "callers"))
             return CommandExitCodes.UsageError;
-        if (TryRejectMetadataKindForGraphCommand("callers", options.Kind))
+        if (TryRejectNonCallGraphKindForGraphCommand("callers", options.Kind))
             return CommandExitCodes.UsageError;
         if (!TryResolveNameExactMode(options, "callers", out var exact, out var exactError))
         {
@@ -509,7 +509,7 @@ public static class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(options, "callees"))
             return CommandExitCodes.UsageError;
-        if (TryRejectMetadataKindForGraphCommand("callees", options.Kind))
+        if (TryRejectNonCallGraphKindForGraphCommand("callees", options.Kind))
             return CommandExitCodes.UsageError;
         if (!TryResolveNameExactMode(options, "callees", out var exact, out var exactError))
         {
@@ -1544,11 +1544,14 @@ public static class QueryCommandRunner
                 ? (DateTime.UtcNow - status.IndexedAt.Value).TotalMinutes < 5 ? "fresh" : "stale"
                 : "unknown";
             var dirty = status.GitIsDirty == true ? ", dirty" : "";
-            var degraded = (!status.GraphTableAvailable
-                            || !status.IssuesTableAvailable
-                            || !status.SqlGraphContractReady
-                            || !status.HotspotFamilyReady
-                            || !status.CSharpSymbolNameReady)
+            if (IsFoldOnlyReadinessDegraded(status))
+            {
+                status.DegradedReason = BuildFoldNotReadyExplanation(status.FoldReadyReason);
+                status.RecommendedAction = BuildFoldBackfillCommand(options.DbPath, options.DbPathExplicit);
+                status.AlternativeAction = BuildFoldRebuildRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit);
+            }
+
+            var degraded = IsStatusDegraded(status)
                 ? ", DEGRADED"
                 : "";
             status.Summary = $"{status.Files} files, {status.Symbols} symbols, {status.References} refs across {status.Languages.Count} languages ({string.Join(", ", topLangs)}); index {freshness}{dirty}{degraded}";
@@ -1603,10 +1606,28 @@ public static class QueryCommandRunner
                 }
                 if (!status.CSharpSymbolNameReady)
                     Console.WriteLine($"WARN    : C# exact-name for operators / conversion operators / indexers is degraded. Run `{BuildCSharpCanonicalNameRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to upgrade canonical symbol names in place.");
+                // #435: tell the user when deps / impact metadata-attribute edges fall back
+                // to the legacy signature / name-suffix heuristic (impostor classes may be
+                // silently promoted or demoted until the authoritative resolver is re-run).
+                // #435: deps / impact の metadata-attribute edge が legacy heuristic に
+                // 縮退しているときは明示する。
+                if (!status.CSharpMetadataTargetReady)
+                    Console.WriteLine("WARN    : C# deps / impact metadata-attribute edges fall back to the signature / name-suffix heuristic. Run `cdidx index .` to re-stamp authoritative is_metadata_target values.");
                 // #86: tell the user when `--exact` is running on the ASCII NOCASE fallback.
                 // #86: --exact が ASCII NOCASE fallback で動いているときは明示する。
                 if (!status.FoldReady)
-                    Console.WriteLine("WARN    : --exact falls back to ASCII COLLATE NOCASE. Non-ASCII casing (e.g. Ä/ä) won't match. Run `cdidx backfill-fold` to upgrade without reparsing files, or `cdidx index . --rebuild` for a full rebuild.");
+                {
+                    if (IsFoldOnlyReadinessDegraded(status) && status.DegradedReason != null && status.RecommendedAction != null && status.AlternativeAction != null)
+                    {
+                        Console.WriteLine($"WARN    : {status.DegradedReason}");
+                        Console.WriteLine($"Hint    : run `{status.RecommendedAction}` to restamp folded-name columns in place.");
+                        Console.WriteLine($"Hint    : or run `{status.AlternativeAction}` for a full rebuild.");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"WARN    : {BuildFoldNotReadyWarning(status.FoldReadyReason, BuildFoldBackfillCommand(options.DbPath, options.DbPathExplicit), BuildFoldRebuildRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit))}");
+                    }
+                }
                 var totalLangs = FileIndexer.GetLanguageExtensions().Values.Distinct().Count();
                 var symbolLangs = SymbolExtractor.GetSupportedLanguages().Count;
                 Console.WriteLine($"Support : {totalLangs} detected, {symbolLangs} with symbols, {status.GraphSupportedLanguages?.Count ?? 0} with graph");
@@ -3174,6 +3195,44 @@ public static class QueryCommandRunner
            && !signal.HasMissingTable
            && signal.DegradedReason?.Contains("csharp_symbol_name_ready=false", StringComparison.OrdinalIgnoreCase) == true;
 
+    private static bool IsStatusDegraded(StatusResult status)
+        => !status.GraphTableAvailable
+           || !status.IssuesTableAvailable
+           || !status.SqlGraphContractReady
+           || !status.HotspotFamilyReady
+           || !status.CSharpSymbolNameReady
+           || !status.CSharpMetadataTargetReady
+           || !status.FoldReady;
+
+    private static bool IsFoldOnlyReadinessDegraded(StatusResult status)
+        => !status.FoldReady
+           && status.GraphTableAvailable
+           && status.IssuesTableAvailable
+           && status.SqlGraphContractReady
+           && status.HotspotFamilyReady
+           && status.CSharpSymbolNameReady
+           && status.CSharpMetadataTargetReady;
+
+    private static string BuildFoldNotReadyExplanation(string? foldReadyReason)
+        => foldReadyReason switch
+        {
+            "missing_fold_backfill" => "--exact falls back to ASCII COLLATE NOCASE because legacy rows without `name_folded` remain.",
+            "stale_fold_key_version" => "--exact falls back to ASCII COLLATE NOCASE because unchanged rows still carry an older fold-key version.",
+            "stale_fold_key_fingerprint" => "--exact falls back to ASCII COLLATE NOCASE because unchanged rows still carry folded keys generated under an older runtime fingerprint.",
+            _ => "--exact falls back to ASCII COLLATE NOCASE because some folded-name rows were not restamped under the current runtime."
+        };
+
+    private static string BuildFoldNotReadyWarning(string? foldReadyReason, string backfillCommand, string rebuildCommand)
+        => $"{BuildFoldNotReadyExplanation(foldReadyReason)} Run `{backfillCommand}` to restamp folded-name columns in place, or `{rebuildCommand}` for a full rebuild.";
+
+    private static string BuildFoldBackfillCommand(string dbPath, bool dbPathExplicit)
+    {
+        if (!dbPathExplicit)
+            return "cdidx backfill-fold";
+
+        return $"cdidx backfill-fold --db {QuoteCommandArgument(ResolveWritableDbPathOrPlaceholder(dbPath))}";
+    }
+
     private static string BuildCSharpCanonicalNameRepairCommand(DbReader reader, QueryCommandOptions options)
     {
         var status = reader.GetStatus();
@@ -3194,25 +3253,36 @@ public static class QueryCommandRunner
     private static string BuildSqlGraphContractRepairCommand(string? projectRoot, string dbPath, bool dbPathExplicit)
         => BuildReindexRepairCommand(projectRoot, dbPath, dbPathExplicit);
 
-    private static string BuildReindexRepairCommand(string? projectRoot, string dbPath, bool dbPathExplicit)
-    {
-        if (!dbPathExplicit)
-            return "cdidx index .";
+    private static string BuildFoldRebuildRepairCommand(string? projectRoot, string dbPath, bool dbPathExplicit)
+        => BuildReindexRepairCommand(projectRoot, dbPath, dbPathExplicit, rebuild: true);
 
-        var resolvedDbPath = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
-            ? dbPath
-            : Path.GetFullPath(dbPath);
+    private static string BuildReindexRepairCommand(string? projectRoot, string dbPath, bool dbPathExplicit, bool rebuild = false)
+    {
+        var rebuildSuffix = rebuild ? " --rebuild" : string.Empty;
+        if (!dbPathExplicit)
+            return $"cdidx index .{rebuildSuffix}";
+
+        var resolvedDbPath = ResolveWritableDbPathOrPlaceholder(dbPath);
         var targetProject = string.IsNullOrWhiteSpace(projectRoot)
             ? "<projectPath>"
             : QuoteCommandArgument(projectRoot);
-        return $"cdidx index {targetProject} --db {QuoteCommandArgument(resolvedDbPath)}";
+        return $"cdidx index {targetProject} --db {QuoteCommandArgument(resolvedDbPath)}{rebuildSuffix}";
     }
+
+    private static string ResolveWritableDbPathOrPlaceholder(string dbPath)
+        => DbPathResolver.TryResolveWritableMutationDbPath(dbPath, out var writableDbPath)
+            ? writableDbPath
+            : "<writable-db-path>";
 
     private static string QuoteCommandArgument(string value)
     {
-        var fullPath = value.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
-            ? value
-            : Path.GetFullPath(value);
+        if (value.Length >= 2 && value[0] == '<' && value[^1] == '>')
+            return value;
+
+        var fullPath = DbPathResolver.NormalizeDbPath(value);
+        if (!fullPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            fullPath = Path.GetFullPath(fullPath);
+
         return fullPath.IndexOfAny([' ', '\t', '"']) >= 0
             ? $"\"{fullPath.Replace("\"", "\\\"", StringComparison.Ordinal)}\""
             : fullPath;
@@ -3263,8 +3333,21 @@ public static class QueryCommandRunner
     // All valid symbol kinds emitted by SymbolExtractor / SymbolExtractor が出力する全有効シンボル種別
     private static readonly string[] AllValidKinds =
         ["class", "delegate", "enum", "event", "function", "import", "interface", "namespace", "property", "struct"];
+    // Reference kinds valid on `references --kind`. Includes the compile-time type-position
+    // `type_reference` edge emitted by ReferenceExtractor for C#/Java base lists, declaration
+    // types, generic constraints, `throws`, `is`/`as`/`instanceof`, and XML-doc `cref` targets.
+    // `references --kind` で有効な reference kind。ReferenceExtractor が C#/Java の継承リスト、
+    // 宣言型、generic 制約、`throws`、`is`/`as`/`instanceof`、XML-doc `cref` 対象向けに出力する
+    // compile-time な `type_reference` エッジを含む。
     private static readonly string[] AllValidReferenceKinds =
-        ["annotation", "attribute", "call", "instantiate", "subscribe"];
+        ["annotation", "attribute", "call", "instantiate", "subscribe", "type_reference"];
+    // Reference kinds that `callers` / `callees` can legitimately return. Metadata kinds
+    // (`attribute` / `annotation`) and type-position edges (`type_reference`) are structurally
+    // not call-graph edges, so those queries are rejected at the CLI / MCP boundary.
+    // `callers` / `callees` が正しく返せる reference kind。metadata 種別 (`attribute` / `annotation`)
+    // や型位置エッジ (`type_reference`) は構造的に call-graph エッジではないため、CLI / MCP 境界で弾く。
+    private static readonly string[] CallGraphOnlyReferenceKinds =
+        ["call", "instantiate", "subscribe"];
 
     private static void WriteKindHint(string? kind, DbReader reader)
     {
@@ -3286,53 +3369,69 @@ public static class QueryCommandRunner
         if (json || string.IsNullOrWhiteSpace(kind))
             return;
 
-        if (AllValidReferenceKinds.Contains(kind))
+        // `references` accepts all reference kinds emitted by the extractor; `callers` / `callees`
+        // are restricted to call-graph kinds. Pick the right acceptance set per command.
+        // `references` は extractor が出す全 reference kind を受け付ける。`callers` / `callees` は
+        // call-graph 種別のみ。コマンドごとに許容集合を使い分ける。
+        var acceptedKinds = command == "references" ? AllValidReferenceKinds : CallGraphOnlyReferenceKinds;
+        if (acceptedKinds.Contains(kind))
             return;
 
         if (AllValidKinds.Contains(kind))
         {
-            Console.Error.WriteLine($"WARN: '{kind}' is a symbol kind, but --kind on '{command}' filters by reference kind ({string.Join(", ", AllValidReferenceKinds)}). Use symbols/definition/hotspots/unused to filter by symbol kind.");
+            Console.Error.WriteLine($"WARN: '{kind}' is a symbol kind, but --kind on '{command}' filters by reference kind ({string.Join(", ", acceptedKinds)}). Use symbols/definition/hotspots/unused to filter by symbol kind.");
             return;
         }
 
-        Console.Error.WriteLine($"Hint: '{kind}' is not a known reference kind for '{command}'. Available reference kinds: {string.Join(", ", AllValidReferenceKinds)}");
+        Console.Error.WriteLine($"Hint: '{kind}' is not a known reference kind for '{command}'. Available reference kinds: {string.Join(", ", acceptedKinds)}");
     }
 
     // Reference kinds that are valid `references --kind` values but NOT valid
-    // `callers --kind` / `callees --kind` values. A metadata row (`attribute` /
-    // `annotation`) is attributed to its enclosing body-range symbol rather than
-    // to the annotated target itself, so `callers Obsolete --kind attribute` and
-    // equivalent `callees` queries return structurally wrong answers: method-level
-    // metadata is reported under the enclosing class, and file-level targets
-    // like `[assembly: ...]` drop entirely because `container_name` is null.
+    // `callers --kind` / `callees --kind` values.
+    // - `attribute` / `annotation`: metadata rows are attributed to the enclosing body-range
+    //   symbol rather than the annotated target itself, so `callers Obsolete --kind attribute`
+    //   and equivalent `callees` queries return structurally wrong answers (method-level
+    //   metadata reported under the enclosing class; file-level targets such as
+    //   `[assembly: ...]` drop entirely because `container_name` is null).
+    // - `type_reference`: type-position edges are compile-time references, not runtime calls,
+    //   so `callers Foo --kind type_reference` misreports type mentions as caller edges
+    //   (declaration types, generic constraints, `is`/`as`, XML-doc `cref`, etc.).
     // Reject these kinds at the CLI boundary and redirect users to
-    // `references --kind attribute|annotation` (which IS correct).
+    // `references --kind <kind>` (which IS correct).
     // `references --kind` では有効だが、`callers --kind` / `callees --kind` では
-    // 使ってはいけない reference kind。metadata 行は注釈対象そのものではなく
-    // body-range 上の外側シンボルに帰属するため、`callers` / `callees` でこの kind を
-    // 受け付けると構造的に誤答する（メソッドレベルは外側クラスに寄り、
-    // `[assembly: ...]` のようなファイルレベルは `container_name = null` で丸ごと消える）。
-    // CLI 境界で弾き、正しい列挙パスである `references --kind attribute|annotation` に誘導する。
-    private static readonly HashSet<string> MetadataReferenceKinds = new(StringComparer.Ordinal)
+    // 使ってはいけない reference kind。
+    // - `attribute` / `annotation`: metadata 行は注釈対象そのものではなく body-range 上の
+    //   外側シンボルに帰属するため、`callers` / `callees` でこの kind を受け付けると
+    //   構造的に誤答する（メソッドレベルは外側クラスに寄り、`[assembly: ...]` のような
+    //   ファイルレベルは `container_name = null` で丸ごと消える）。
+    // - `type_reference`: 型位置エッジは compile-time な参照であり実行時呼び出しではない。
+    //   `callers Foo --kind type_reference` は宣言型や generic 制約、`is`/`as`、XML-doc `cref`
+    //   などの型言及を caller edge として誤って返す。
+    // CLI 境界で弾き、正しい列挙パスである `references --kind <kind>` に誘導する。
+    private static readonly HashSet<string> NonCallGraphReferenceKinds = new(StringComparer.Ordinal)
     {
-        "attribute", "annotation",
+        "attribute", "annotation", "type_reference",
     };
 
     /// <summary>
-    /// Reject `--kind attribute` / `--kind annotation` on commands (`callers` / `callees`)
-    /// whose data model cannot answer metadata questions correctly. Returns true if the
-    /// kind was rejected; the caller should then return `CommandExitCodes.UsageError`.
-    /// `callers` / `callees` のようにデータモデル的に metadata に答えられないコマンドで
-    /// `--kind attribute` / `--kind annotation` を弾く。弾いた場合 true を返すので、
-    /// 呼び出し側は `CommandExitCodes.UsageError` を返すこと。
+    /// Reject non-call-graph reference kinds (`attribute` / `annotation` / `type_reference`) on
+    /// commands (`callers` / `callees`) whose data model cannot answer those queries correctly.
+    /// Returns true if the kind was rejected; the caller should then return
+    /// `CommandExitCodes.UsageError`.
+    /// `callers` / `callees` のようにデータモデル的に metadata / 型位置参照に答えられない
+    /// コマンドで `--kind attribute` / `--kind annotation` / `--kind type_reference` を弾く。
+    /// 弾いた場合 true を返すので、呼び出し側は `CommandExitCodes.UsageError` を返すこと。
     /// </summary>
-    private static bool TryRejectMetadataKindForGraphCommand(string command, string? kind)
+    private static bool TryRejectNonCallGraphKindForGraphCommand(string command, string? kind)
     {
-        if (string.IsNullOrWhiteSpace(kind) || !MetadataReferenceKinds.Contains(kind))
+        if (string.IsNullOrWhiteSpace(kind) || !NonCallGraphReferenceKinds.Contains(kind))
             return false;
 
-        Console.Error.WriteLine($"Error: '--kind {kind}' is not supported on '{command}'. Metadata references are attributed to the enclosing body-range symbol rather than the annotated target, so `{command} --kind {kind}` cannot return accurate rows (file-level targets such as `[assembly: ...]` drop entirely).");
-        Console.Error.WriteLine($"Hint: use `cdidx references <name> --kind {kind}` for metadata enumeration instead.");
+        if (kind == "type_reference")
+            Console.Error.WriteLine($"Error: '--kind type_reference' is not supported on '{command}'. Type-position references are compile-time edges (declaration types, generic constraints, `is`/`as`/`instanceof`, XML-doc `cref`), not runtime calls, so `{command} --kind type_reference` cannot return accurate call-graph rows.");
+        else
+            Console.Error.WriteLine($"Error: '--kind {kind}' is not supported on '{command}'. Metadata references are attributed to the enclosing body-range symbol rather than the annotated target, so `{command} --kind {kind}` cannot return accurate rows (file-level targets such as `[assembly: ...]` drop entirely).");
+        Console.Error.WriteLine($"Hint: use `cdidx references <name> --kind {kind}` instead.");
         return true;
     }
 

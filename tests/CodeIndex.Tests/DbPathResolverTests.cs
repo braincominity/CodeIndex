@@ -47,6 +47,47 @@ public class DbPathResolverTests
     }
 
     [Fact]
+    public void TryResolveWritableMutationDbPath_ReadOnlyUri_ReturnsLocalPath()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_path_resolver_{Guid.NewGuid():N}.db");
+        var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+
+        var resolved = DbPathResolver.TryResolveWritableMutationDbPath(readOnlyUri, out var writableDbPath);
+
+        Assert.True(resolved);
+        Assert.Equal(Path.GetFullPath(dbPath), writableDbPath);
+    }
+
+    [Fact]
+    public void UriRequestsReadOnly_PlainPathWithQuestionMarkSuffix_IsFalse()
+    {
+        var plainPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_path_resolver_{Guid.NewGuid():N}?immutable=1");
+
+        Assert.False(DbPathResolver.UriRequestsReadOnly(plainPath));
+    }
+
+    [Fact]
+    public void UriRequestsReadOnly_FileUriWithReadOnlyMode_IsTrue()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_db_path_resolver_{Guid.NewGuid():N}.db");
+        var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?mode=ro";
+
+        Assert.True(DbPathResolver.UriRequestsReadOnly(readOnlyUri));
+    }
+
+    [Fact]
+    public void TryResolveWritableMutationDbPath_RelativeReadOnlyUri_ReturnsWorkingDirectoryPath()
+    {
+        var fileName = $"cdidx_db_path_resolver_{Guid.NewGuid():N}.db";
+        var readOnlyUri = $"file:{fileName}?mode=ro";
+
+        var resolved = DbPathResolver.TryResolveWritableMutationDbPath(readOnlyUri, out var writableDbPath);
+
+        Assert.True(resolved);
+        Assert.Equal(Path.GetFullPath(fileName), writableDbPath);
+    }
+
+    [Fact]
     public void ResolveProjectRootForQuery_PrefersStoredIndexedProjectRootMetadata()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_db_path_resolver_meta_root");

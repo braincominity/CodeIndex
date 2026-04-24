@@ -139,6 +139,60 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_PlainPathContainingImmutableSuffix_IndexesSuccessfully()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_plain_path_{Guid.NewGuid():N}?immutable=1");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.True(File.Exists(dbPath));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_PlainPathContainingReadOnlyModeSuffix_IndexesSuccessfully()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_plain_path_{Guid.NewGuid():N}?mode=ro");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.True(File.Exists(dbPath));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_NoOpAgainstSharedExplicitDb_DoesNotRewriteIndexedProjectRoot()
     {
         var projectRootA = CreateTempProject();
@@ -161,6 +215,10 @@ public class IndexCommandRunnerTests
             Assert.True(updateJson.GetProperty("graph_table_available").GetBoolean());
             Assert.True(updateJson.GetProperty("issues_table_available").GetBoolean());
             Assert.True(updateJson.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, updateJson.GetProperty("fold_ready_reason").ValueKind);
+            Assert.Equal(JsonValueKind.Null, updateJson.GetProperty("degraded_reason").ValueKind);
+            Assert.Equal(JsonValueKind.Null, updateJson.GetProperty("recommended_action").ValueKind);
+            Assert.Equal(JsonValueKind.Null, updateJson.GetProperty("alternative_action").ValueKind);
 
             using (var db = new DbContext(dbPath))
             {
@@ -586,6 +644,10 @@ public class IndexCommandRunnerTests
             var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
+            var (_, initialJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.True(initialJson.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, initialJson.GetProperty("fold_ready_reason").ValueKind);
+
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             using (var conn = OpenNonPoolingConnection(dbPath))
             {
@@ -788,6 +850,56 @@ public class IndexCommandRunnerTests
             {
                 Console.SetOut(originalOut);
             }
+        }
+    }
+
+    [Fact]
+    public void Run_ReadOnlyUriDbPath_PrintsActionableErrorInsteadOfCrashing()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "class App {}\n");
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+
+            var (exitCode, stdout, stderr) = RunCliInSubprocess([projectRoot, "--db", readOnlyUri, "--json"], projectRoot);
+
+            using var document = JsonDocument.Parse(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("database must be writable for index", json.GetProperty("message").GetString());
+            Assert.Contains("Point `--db` at a writable filesystem path", json.GetProperty("hint").GetString());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_ReadOnlyUriDbPath_ReturnsDryRunSummary()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "class App {}\n");
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", readOnlyUri, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("files_total").GetInt32());
+            Assert.Equal(1, json.GetProperty("languages").GetProperty("csharp").GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
         }
     }
 
@@ -2756,6 +2868,10 @@ public class IndexCommandRunnerTests
             var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
+            var (_, initialJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.True(initialJson.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, initialJson.GetProperty("fold_ready_reason").ValueKind);
+
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             using (var conn = OpenNonPoolingConnection(dbPath))
             {
@@ -3223,10 +3339,93 @@ public class IndexCommandRunnerTests
             var (exitCode, _, errorOutput) = RunCliInSubprocess([projectRoot], projectRoot);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Contains("Index completed with degraded readiness", errorOutput);
+            Assert.Contains("Index completed with fold-only degraded readiness (fold_ready=false).", errorOutput);
+            Assert.Contains("older fold-key version", errorOutput);
+            Assert.Contains("cdidx backfill-fold --db", errorOutput);
+            Assert.Contains("cdidx index", errorOutput);
+            Assert.Contains("--rebuild", errorOutput);
             Assert.Contains("fold_ready=false", errorOutput);
-            Assert.DoesNotContain("graph_table_available=false", errorOutput);
-            Assert.DoesNotContain("issues_table_available=false", errorOutput);
+            Assert.DoesNotContain("Run `cdidx status --db", errorOutput);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_IncrementalJson_ReportsFoldOnlyRemediation()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version'";
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal("incremental", json.GetProperty("mode").GetString());
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal("stale_fold_key_version", json.GetProperty("fold_ready_reason").GetString());
+            Assert.Contains("older fold-key version", json.GetProperty("degraded_reason").GetString());
+            Assert.Contains("cdidx backfill-fold --db", json.GetProperty("recommended_action").GetString());
+            Assert.Contains(dbPath, json.GetProperty("recommended_action").GetString());
+            Assert.Contains("--rebuild", json.GetProperty("alternative_action").GetString());
+            Assert.Contains(dbPath, json.GetProperty("alternative_action").GetString());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_Json_ReportsFoldOnlyRemediation()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version'";
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "app.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal("update", json.GetProperty("mode").GetString());
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal("stale_fold_key_version", json.GetProperty("fold_ready_reason").GetString());
+            Assert.Contains("older fold-key version", json.GetProperty("degraded_reason").GetString());
+            Assert.Contains("cdidx backfill-fold --db", json.GetProperty("recommended_action").GetString());
+            Assert.Contains(dbPath, json.GetProperty("recommended_action").GetString());
+            Assert.Contains("--rebuild", json.GetProperty("alternative_action").GetString());
+            Assert.Contains(dbPath, json.GetProperty("alternative_action").GetString());
         }
         finally
         {
