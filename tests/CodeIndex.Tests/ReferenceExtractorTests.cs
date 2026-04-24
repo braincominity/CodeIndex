@@ -420,6 +420,30 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpInterpolatedString_KeepsSingleLineInterpolationCallReferences()
+    {
+        const string content = """
+            public class FixtureHost
+            {
+                public int Run() => 42;
+
+                public string Render()
+                {
+                    return $"value = {Run()}";
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var runReference = Assert.Single(references);
+        Assert.Equal("Run", runReference.SymbolName);
+        Assert.Equal("call", runReference.ReferenceKind);
+        Assert.Equal("Render", runReference.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpInterpolatedRawString_WithNestedRawString_DoesNotLeakPhantomReferences()
     {
         const string content = """"
@@ -470,6 +494,50 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         Assert.DoesNotContain(references, reference => reference.SymbolName == "Run");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptTemplateLiteral_KeepsSingleLineInterpolationCallReferences()
+    {
+        const string content = """
+            function run() {
+                return 42;
+            }
+
+            function use() {
+                const value = `value = ${run()}`;
+                return value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        var runReference = Assert.Single(references);
+        Assert.Equal("run", runReference.SymbolName);
+        Assert.Equal("call", runReference.ReferenceKind);
+        Assert.Equal("use", runReference.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_PythonFString_KeepsSingleLineInterpolationCallReferences()
+    {
+        const string content = """
+            def run():
+                return 42
+
+            def use():
+                value = f"value = {run()}"
+                return value
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        var runReference = Assert.Single(references);
+        Assert.Equal("run", runReference.SymbolName);
+        Assert.Equal("call", runReference.ReferenceKind);
+        Assert.Equal("use", runReference.ContainerName);
     }
 
     [Fact]

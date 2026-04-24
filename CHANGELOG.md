@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### Fixed
+- **Single-line interpolated string references are preserved again** — `ReferenceExtractor` now restores call expressions inside single-line interpolated strings / template literals for C#, JavaScript, TypeScript, and Python before call scanning, so `references` / `callers` no longer drop hits like `Run()` in `$"..."`, `` `...${run()}` ``, or `f"..."`. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
 - **SQLite connection setup now retries transient busy/locked errors during concurrent reads** — `DbContext` now retries a few times when opening a connection or registering SQLite functions fails with a transient `SQLITE_BUSY` / `SQLITE_LOCKED` condition, which makes the concurrent-read test path more stable on Linux CI without changing the observable database contract. Affected: `src/CodeIndex/Database/DbContext.cs`.
 - **Long single-line query payloads can now be left untruncated with `--max-line-width 0` (#830)** — `search`, `references`, `find`, `excerpt`, and `inspect` now accept `--max-line-width 0` as an explicit full-line mode, so long Markdown or audit lines can be reviewed without `...(+N)...` elision when the caller needs the entire physical line. The MCP counterparts now expose the same zero-as-full-line contract through `maxLineWidth: 0`, `LineWidthFormatter` preserves the full line in that mode, and the CLI help/docs now describe the no-truncation escape hatch. Affected: `src/CodeIndex/Database/LineWidthFormatter.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Cli/ConsoleUi.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `src/CodeIndex/Mcp/McpToolDefinitions.cs`, `tests/CodeIndex.Tests/SearchSnippetFormatterTests.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `README.md`, `DEVELOPER_GUIDE.md`, `CHANGELOG.md`. Closes #830.
 
@@ -904,6 +905,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+- **単行の補間文字列内の参照を再び保持** — C# / JavaScript / TypeScript / Python の単行インターポレーション式・テンプレートリテラルについて、call 抽出の前に式部分を復元するようにしたため、`references` / `callers` が `$"..."` や `` `...${run()}` ``、`f"..."` 内の `Run()` / `run()` を取りこぼさなくなった。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
 
 ### [1.15.1] - 2026-04-24
 
