@@ -9580,6 +9580,50 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpMultilinePositionalPatterns_CaptureTypeReferences()
+    {
+        // issue #969: multiline positional `case` / `is` heads must behave the same as
+        // the same-line forms and keep the real `type_reference` without phantom calls.
+        // issue #969: 改行をまたぐ positional `case` / `is` head も同一行版と同様に
+        // 本物の `type_reference` を残し、phantom な call を出してはならない。
+        const string content = """
+            namespace Probe;
+
+            class Point
+            {
+                public int X { get; }
+                public int Y { get; }
+            }
+
+            class Demo
+            {
+                void Run(object value)
+                {
+                    if (value is
+                        Point(var x, var y))
+                    {
+                    }
+
+                    switch (value)
+                    {
+                        case
+                            Point(var x, var y):
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(2, pointRefs.Count);
+        Assert.All(pointRefs, r => Assert.Equal("Run", r.ContainerName));
+        Assert.DoesNotContain(references, r => r.SymbolName == "Point" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_CsharpCaseLogicalAndNegatedTypePatterns_CaptureTypeReferences()
     {
         // issues #668/#670: logical/negated type patterns must keep the left-hand type

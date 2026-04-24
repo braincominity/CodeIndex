@@ -1742,7 +1742,7 @@ public static class ReferenceExtractor
                 // C# の positional pattern (`case Point(var x, var y):`) は型パターンの先頭であり、
                 // 呼び出しではない。`CallRegex` が `Point(` を拾ってしまうため、そのままだと
                 // 本物の `type_reference` に加えて phantom な `call` エッジが出る。
-                if (language == "csharp" && IsCSharpPatternHeadCallSite(preparedLine, callIndex))
+                if (language == "csharp" && IsCSharpPatternHeadCallSite(preparedLines, i, preparedLine, callIndex))
                     return;
 
                 var callContainer = ResolveContainerForCall(callIndex);
@@ -5249,7 +5249,7 @@ public static class ReferenceExtractor
         return cursor;
     }
 
-    private static bool IsCSharpPatternHeadCallSite(string preparedLine, int nameIndex)
+    private static bool IsCSharpPatternHeadCallSite(string[] preparedLines, int lineIndex, string preparedLine, int nameIndex)
     {
         var cursor = nameIndex;
         if (IsCSharpConstantPatternAnchor(preparedLine, ref cursor))
@@ -5260,7 +5260,27 @@ public static class ReferenceExtractor
         if (TryConsumeTrailingCSharpToken(preparedLine, ref cursor, "not"))
             cursor = SkipCSharpTriviaBackward(preparedLine, cursor);
 
-        return TryConsumeTrailingCSharpToken(preparedLine, ref cursor, "is");
+        if (TryConsumeTrailingCSharpToken(preparedLine, ref cursor, "is"))
+            return true;
+
+        for (var previous = lineIndex - 1; previous >= 0; previous--)
+        {
+            var previousLine = preparedLines[previous];
+            if (string.IsNullOrWhiteSpace(previousLine))
+                continue;
+
+            return LineEndsWithCSharpToken(previousLine, "case")
+                || LineEndsWithCSharpToken(previousLine, "is")
+                || LineEndsWithCSharpToken(previousLine, "not");
+        }
+
+        return false;
+    }
+
+    private static bool LineEndsWithCSharpToken(string text, string token)
+    {
+        var cursor = text.Length;
+        return TryConsumeTrailingCSharpToken(text, ref cursor, token);
     }
 
     private static bool TryConsumeTrailingCSharpToken(string text, ref int cursor, string token)
