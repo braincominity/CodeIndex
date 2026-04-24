@@ -9833,4 +9833,117 @@ public class SymbolExtractorTests
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "key");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "count");
     }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsClassFieldArrowWithAsiBetweenFields()
+    {
+        // ASI (Automatic Semicolon Insertion) between class fields must not swallow
+        // the next arrow-property header into the previous expression body.
+        // クラスフィールド間の ASI により式本体の後続フィールドを取りこぼさないこと。
+        var content = """
+            class Foo {
+                first = () => 42
+                second = () => 43
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        var first = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "first");
+        Assert.NotNull(first);
+        Assert.Equal("class", first.ContainerKind);
+        Assert.Equal("Foo", first.ContainerName);
+
+        var second = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "second");
+        Assert.NotNull(second);
+        Assert.Equal("class", second.ContainerKind);
+        Assert.Equal("Foo", second.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsClassFieldArrowWithAsiBetweenFields()
+    {
+        var content = """
+            class Foo {
+                first = (): number => 42
+                second = (x: number): number => x + 1
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var first = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "first");
+        Assert.NotNull(first);
+        Assert.Equal("class", first.ContainerKind);
+        Assert.Equal("number", first.ReturnType);
+
+        var second = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "second");
+        Assert.NotNull(second);
+        Assert.Equal("class", second.ContainerKind);
+        Assert.Equal("number", second.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsClassFieldArrowAsiBeforeClosingBrace()
+    {
+        // Single field without trailing `;` followed by the class-closing `}` must
+        // still be captured; ASI at `}` terminates the expression body.
+        // セミコロンなしの単一 field が直後の class 終了 `}` で終端されるケース。
+        var content = """
+            class Foo {
+                only = (): number => 7
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var only = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "only");
+        Assert.NotNull(only);
+        Assert.Equal("class", only.ContainerKind);
+        Assert.Equal("Foo", only.ContainerName);
+        Assert.Equal("number", only.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsMultiLineObjectLiteralBinding()
+    {
+        // The `{` may sit on a line after the `=` binding; collector must thread
+        // the lex state across lines to find the open brace.
+        // `{` が `=` バインディングと別行にあっても、collector は lex 状態を
+        // 跨いで open brace を検出できること。
+        var content = """
+            const obj =
+            {
+                foo() { return 1; },
+                *bar() { yield 1; },
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo" && s.ContainerKind == "object" && s.ContainerName == "obj");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar" && s.ContainerKind == "object" && s.ContainerName == "obj");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsExportDefaultObjectLiteralMembers()
+    {
+        // `export default { ... }` is a common module-shape; its shorthand members
+        // should be captured with container_name == "default".
+        // `export default { ... }` のショートハンドメンバは container_name == "default"
+        // として抽出されること。
+        var content = """
+            export default {
+                foo() { return 1; },
+                async bar() { return 2; },
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var foo = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "foo");
+        Assert.NotNull(foo);
+        Assert.Equal("object", foo.ContainerKind);
+        Assert.Equal("default", foo.ContainerName);
+
+        var bar = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "bar");
+        Assert.NotNull(bar);
+        Assert.Equal("object", bar.ContainerKind);
+        Assert.Equal("default", bar.ContainerName);
+    }
 }

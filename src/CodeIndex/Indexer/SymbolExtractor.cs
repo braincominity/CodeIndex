@@ -291,17 +291,29 @@ public static class SymbolExtractor
         @"^\s*export\s*=",
         RegexOptions.Compiled);
 
-    // Matches an object literal declaration whose right-hand side is `{ ... }`. We accept the
-    // usual const/let/var/export forms plus module.exports / exports.NAME assignments so that
-    // CommonJS style object exports also surface their method shorthand members.
-    // `{` is matched here (not later) because we need the column of the opening brace to feed
-    // ResolveRange(BodyStyle.Brace) when computing scan bounds.
-    // 右辺が `{ ... }` のオブジェクトリテラル宣言に一致する。const/let/var/export のほか、
-    // CommonJS の module.exports / exports.NAME 経路も拾ってメソッド省略記法のメンバを抽出できる
-    // ようにしている。`{` の列は ResolveRange(BodyStyle.Brace) に渡す起点として必要なので、
-    // 同じ正規表現内で一致させている。
+    // Matches the binding portion of object-literal declarations: LHS identifier plus the `=`
+    // assignment. The opening `{` is intentionally NOT required on the same line so multi-line
+    // forms like `const obj =\n{\n ... }` are still detected. Callers locate the `{` via
+    // TryFindJavaScriptTypeScriptObjectLiteralOpenBrace (lex-state aware), then hand the resulting
+    // (lineOfBrace, columnOfBrace) to ResolveRange(BodyStyle.Brace). Recognizes
+    // const/let/var/export plus CommonJS module.exports / exports.NAME assignments.
+    // オブジェクトリテラル宣言の binding 部分（LHS 識別子と `=`）に一致させる。右辺の `{` を同一行に
+    // 要求しないのは、`const obj =\n{\n ... }` のような複数行スタイルも拾うため。`{` の位置は
+    // TryFindJavaScriptTypeScriptObjectLiteralOpenBrace が lex 状態を引き継ぎつつ別途走査し、
+    // 見つけた (lineOfBrace, columnOfBrace) を ResolveRange(BodyStyle.Brace) に渡す。const/let/var/export
+    // に加え、CommonJS の module.exports / exports.NAME 代入経路にも対応する。
     private static readonly Regex JavaScriptTypeScriptObjectLiteralBindingRegex = new(
-        $@"^\s*(?:(?<visibility>export)\s+)?(?:(?<bindingKind>const|let|var)\s+(?<alias>{JavaScriptTypeScriptIdentifierPattern})|exports\.(?<exportsAlias>{JavaScriptTypeScriptIdentifierPattern})|module\.exports\.(?<moduleExportsAlias>{JavaScriptTypeScriptIdentifierPattern})|(?<moduleExports>module\.exports))(?:\s*:\s*[^=]+?)?\s*=\s*(?<open>\{{)",
+        $@"^\s*(?:(?<visibility>export)\s+)?(?:(?<bindingKind>const|let|var)\s+(?<alias>{JavaScriptTypeScriptIdentifierPattern})|exports\.(?<exportsAlias>{JavaScriptTypeScriptIdentifierPattern})|module\.exports\.(?<moduleExportsAlias>{JavaScriptTypeScriptIdentifierPattern})|(?<moduleExports>module\.exports))(?:\s*:\s*[^=]+?)?\s*=\s*",
+        RegexOptions.Compiled);
+
+    // Matches `export default` at start of line. `export default { ... }` is an anonymous object
+    // that becomes the module's default export; its method-shorthand members are attached to a
+    // virtual "default" container. Uses the same lex-aware `{` scan as the binding regex.
+    // 行頭の `export default` に一致。`export default { ... }` は無名オブジェクトでモジュールの
+    // 既定エクスポートになり、そのメソッド省略記法のメンバは仮想コンテナ "default" に紐付ける。
+    // 後続の `{` の位置は binding 用と同じ lex-aware 走査で特定する。
+    private static readonly Regex JavaScriptTypeScriptExportDefaultObjectLiteralRegex = new(
+        @"^\s*export\s+default\s*",
         RegexOptions.Compiled);
 
     private const string VbVisibilityPattern = @"(?:Public|Private|Protected|Friend)(?:\s+(?:Protected|Friend))?";
@@ -3607,44 +3619,69 @@ public static class SymbolExtractor
             lexState = lexedLine.EndState;
             var sanitizedLine = lexedLine.SanitizedLine;
 
-            var match = JavaScriptTypeScriptObjectLiteralBindingRegex.Match(sanitizedLine);
-            if (!match.Success)
-                continue;
+            var bindingMatch = JavaScriptTypeScriptObjectLiteralBindingRegex.Match(sanitizedLine);
+            Match? exportDefaultMatch = null;
+            if (!bindingMatch.Success)
+            {
+                var edm = JavaScriptTypeScriptExportDefaultObjectLiteralRegex.Match(sanitizedLine);
+                if (!edm.Success)
+                    continue;
+                exportDefaultMatch = edm;
+            }
+            var match = exportDefaultMatch ?? bindingMatch;
+            var isExportDefault = exportDefaultMatch != null;
 
             // Skip declarations nested inside a function/class body, and — for non-exported
             // const/let bindings — also inside block scopes or namespace scopes. The object
             // literal itself may be legitimate, but its method-shorthand members are already
             // reachable via the enclosing scope, and emitting them would leak non-public names
             // to the top level. `var` stays function-scoped so block-scope skip is not applied;
-            // `module.exports` / `exports.X` / `export const` are treated as exported and kept.
+            // `module.exports` / `exports.X` / `export const` / `export default` are treated as
+            // exported and kept.
             // function/class 本体内のネストした宣言はスキップする。加えて非 export の const/let は
             // ブロックスコープや namespace スコープも private 扱いにする。var は function スコープのため
-            // ブロックスコープは除外せず、module.exports / exports.X / export const は export 扱いで維持する。
-            var includeBlockScope = match.Groups["bindingKind"].Success
-                && match.Groups["bindingKind"].Value is "const" or "let";
+            // ブロックスコープは除外せず、module.exports / exports.X / export const / export default は
+            // export 扱いで維持する。
+            var includeBlockScope = !isExportDefault
+                && bindingMatch.Groups["bindingKind"].Success
+                && bindingMatch.Groups["bindingKind"].Value is "const" or "let";
             if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, i, match.Index, sanitizedLine, includeBlockScope))
                 continue;
 
-            var isExported = TryGetGroup(match, "visibility") == "export"
-                || match.Groups["exportsAlias"].Success
-                || match.Groups["moduleExportsAlias"].Success
-                || match.Groups["moduleExports"].Success;
+            var isExported = isExportDefault
+                || TryGetGroup(bindingMatch, "visibility") == "export"
+                || bindingMatch.Groups["exportsAlias"].Success
+                || bindingMatch.Groups["moduleExportsAlias"].Success
+                || bindingMatch.Groups["moduleExports"].Success;
             if (!isExported
                 && IsJavaScriptTypeScriptMatchInNamespaceScope(privateScopeColumns, i, match.Index, sanitizedLine))
             {
                 continue;
             }
 
-            var openBraceColumn = match.Groups["open"].Index;
-            var (_, bodyStartLine, bodyEndLine) = ResolveRange(lines, i, BodyStyle.Brace, lang, openBraceColumn);
+            if (!TryFindJavaScriptTypeScriptObjectLiteralOpenBrace(
+                    lines,
+                    i,
+                    match.Index + match.Length,
+                    sanitizedLine,
+                    lexState,
+                    out var openBraceLineIndex,
+                    out var openBraceColumn))
+            {
+                continue;
+            }
+
+            var (_, bodyStartLine, bodyEndLine) = ResolveRange(lines, openBraceLineIndex, BodyStyle.Brace, lang, openBraceColumn);
             if (bodyStartLine == null || bodyEndLine == null)
                 continue;
 
-            var containerName = TryGetGroup(match, "alias")
-                ?? TryGetGroup(match, "exportsAlias")
-                ?? TryGetGroup(match, "moduleExportsAlias")
-                ?? (match.Groups["moduleExports"].Success ? "module.exports" : null)
-                ?? "object";
+            var containerName = isExportDefault
+                ? "default"
+                : (TryGetGroup(bindingMatch, "alias")
+                    ?? TryGetGroup(bindingMatch, "exportsAlias")
+                    ?? TryGetGroup(bindingMatch, "moduleExportsAlias")
+                    ?? (bindingMatch.Groups["moduleExports"].Success ? "module.exports" : null)
+                    ?? "object");
 
             var candidate = CreateJavaScriptClassScanTarget(
                 lines,
@@ -3669,6 +3706,67 @@ public static class SymbolExtractor
             .OrderBy(t => t.StartIndex)
             .ThenByDescending(t => t.ScanEndExclusive)
             .ToList();
+    }
+
+    // Scans forward from (`startLineIndex`, `startColumn`) through the lex-sanitized source for
+    // the first `{`, hopping across lines when only whitespace (including newlines) remains. The
+    // passed `sanitizedStartLine` is the already-sanitized version of lines[startLineIndex] and
+    // `lineEndState` is the lexer state AFTER that line. Any non-whitespace, non-`{` character
+    // aborts the scan (returns false) so we don't misclassify arbitrary RHS expressions as object
+    // literals. Strings / comments stay masked because we drive the scan through LexJavaScriptLine.
+    // (`startLineIndex`, `startColumn`) から lex sanitized のソースを前方に走査し、最初の `{` を探す。
+    // 空白 (改行を含む) だけなら行を跨いで続行する。`sanitizedStartLine` は lines[startLineIndex] の
+    // sanitized 版で、`lineEndState` はそのライン終了時の lexer state。`{` 以外の非空白文字が現れた時点で
+    // 走査を打ち切る (false を返す) ので、オブジェクトリテラルでない右辺を誤って拾わない。
+    // LexJavaScriptLine を介するため、文字列・コメントは常にマスクされた状態で判定できる。
+    private static bool TryFindJavaScriptTypeScriptObjectLiteralOpenBrace(
+        string[] lines,
+        int startLineIndex,
+        int startColumn,
+        string sanitizedStartLine,
+        JavaScriptLexState lineEndState,
+        out int openBraceLineIndex,
+        out int openBraceColumn)
+    {
+        openBraceLineIndex = -1;
+        openBraceColumn = -1;
+
+        for (int c = Math.Max(0, startColumn); c < sanitizedStartLine.Length; c++)
+        {
+            var ch = sanitizedStartLine[c];
+            if (char.IsWhiteSpace(ch))
+                continue;
+            if (ch == '{')
+            {
+                openBraceLineIndex = startLineIndex;
+                openBraceColumn = c;
+                return true;
+            }
+            return false;
+        }
+
+        var lexState = lineEndState;
+        for (int li = startLineIndex + 1; li < lines.Length; li++)
+        {
+            var lexed = LexJavaScriptLine(lines[li], lexState);
+            lexState = lexed.EndState;
+            var nextSan = lexed.SanitizedLine;
+            for (int c = 0; c < nextSan.Length; c++)
+            {
+                var ch = nextSan[c];
+                if (char.IsWhiteSpace(ch))
+                    continue;
+                if (ch == '{')
+                {
+                    openBraceLineIndex = li;
+                    openBraceColumn = c;
+                    return true;
+                }
+                return false;
+            }
+        }
+
+        return false;
     }
 
     private static List<JavaScriptClassScanTarget> GetJavaScriptTypeScriptExistingClassScanTargets(string lang, string[] lines, List<SymbolRecord> symbols)
@@ -7615,15 +7713,18 @@ public static class SymbolExtractor
             return true;
         }
 
-        // Expression-body arrow (`=> expr;`). Walk until the class-field terminator `;` at
-        // depth 0. `{}` / `()` / `[]` are balanced; strings / comments are already masked by
-        // the upstream lexer. If we hit the end of the accumulated header without a terminator
-        // we return false so TryCapture can pull another line before retrying. Closing `}` at
-        // depth 0 means the enclosing class body ended without a `;` — give up to avoid
-        // swallowing the class brace.
-        // 式本体矢印 (`=> expr;`)。深さ 0 で `;` まで歩く。括弧類はバランスを取り、文字列・コメントは
-        // 上流の lexer でマスク済み。終端にたどり着く前に入力が尽きたら false を返して
-        // TryCapture に次の行を積ませる。深さ 0 で `}` を踏んだら囲みクラス body の終端なので諦める。
+        // Expression-body arrow (`=> expr;`). Walk until a class-field terminator at depth 0.
+        // Explicit `;` always terminates; implicit ASI also terminates when we hit the enclosing
+        // class body `}` or a newline followed by a new class-member start (identifier+`=`/`(`,
+        // `#private`, `*name`, `[computed]`, decorator, or modifier keyword). `{}` / `()` / `[]`
+        // stay balanced; strings / comments are already masked by the upstream lexer. If the
+        // accumulated header ends at depth 0 with expression tokens but no visible terminator,
+        // return false so TryCapture pulls another line and retries.
+        // 式本体矢印 (`=> expr;`)。深さ 0 でのクラスフィールド終端まで歩く。明示的な `;` は常に終端し、
+        // 暗黙の ASI は囲みクラス body の `}` か、改行直後に新しいクラスメンバの開始 (identifier+`=`/`(`、
+        // `#private`、`*name`、`[computed]`、decorator、修飾子キーワード) が来た場合にも終端する。
+        // 括弧類はバランスを取り、文字列・コメントは上流の lexer でマスク済み。終端が見えないまま
+        // 蓄積ヘッダの末尾に達したら false を返し、TryCapture に次の行を積ませる。
         var expressionStart = index;
         var parenDepth2 = 0;
         var bracketDepth2 = 0;
@@ -7653,10 +7754,59 @@ public static class SymbolExtractor
 
             if (ch == '}' && parenDepth2 == 0 && bracketDepth2 == 0 && braceDepth2 == 0)
             {
-                // Hit the enclosing class body closer before `;` — bail so the class scanner
-                // can continue normally.
-                // 囲みクラス body の `}` を先に踏んだら、クラススキャナに戻すため false を返す。
+                // Enclosing class body `}` at depth 0. If we already have expression tokens that
+                // can validly end a statement (identifier/number/`)`/`]`/`}`), treat it as ASI and
+                // emit. Otherwise bail so the class scanner handles the closer.
+                // 囲みクラス body の `}` (深さ 0)。識別子/数値/`)`/`]`/`}` のように文末になり得るトークンが
+                // 既に見えていれば ASI として終端扱いで emit する。無ければクラススキャナに委ねるため false。
+                if (lastNonWhitespace != null
+                    && CanJavaScriptTypeScriptExpressionEndAt(sanitizedHeader[lastNonWhitespace.Value]))
+                {
+                    arrowInfo = new JavaScriptTypeScriptMethodHeaderInfo(
+                        candidateName,
+                        expressionStart,
+                        visibility,
+                        genericStartColumn,
+                        genericEndColumn,
+                        returnTypeStartColumn,
+                        returnTypeEndColumn,
+                        expressionStart,
+                        HasBody: true,
+                        ExpressionBodyEndColumn: lastNonWhitespace);
+                    return true;
+                }
                 return false;
+            }
+
+            if (ch == '\n' && parenDepth2 == 0 && bracketDepth2 == 0 && braceDepth2 == 0
+                && lastNonWhitespace != null
+                && CanJavaScriptTypeScriptExpressionEndAt(sanitizedHeader[lastNonWhitespace.Value]))
+            {
+                var peek = index + 1;
+                while (peek < sanitizedHeader.Length && char.IsWhiteSpace(sanitizedHeader[peek]))
+                    peek++;
+                // peek == sanitizedHeader.Length means we exhausted the accumulated header after
+                // this newline — need more input from TryCapture. Break out of the heuristic and
+                // fall through to the normal end-of-input `return false` path.
+                // peek が末尾に達した場合は、この改行以降に蓄積ヘッダ上の文字が尽きたということなので
+                // TryCapture に次の行を積ませる必要がある。ヒューリスティックは停止し、ループ末尾の
+                // end-of-input `return false` に任せる。
+                if (peek < sanitizedHeader.Length
+                    && StartsJavaScriptTypeScriptClassMemberAt(sanitizedHeader, peek))
+                {
+                    arrowInfo = new JavaScriptTypeScriptMethodHeaderInfo(
+                        candidateName,
+                        expressionStart,
+                        visibility,
+                        genericStartColumn,
+                        genericEndColumn,
+                        returnTypeStartColumn,
+                        returnTypeEndColumn,
+                        expressionStart,
+                        HasBody: true,
+                        ExpressionBodyEndColumn: lastNonWhitespace);
+                    return true;
+                }
             }
 
             if (ch == '(') parenDepth2++;
@@ -7672,6 +7822,68 @@ public static class SymbolExtractor
         }
 
         return false;
+    }
+
+    // Returns true when `ch` is a token that can validly end a JavaScript / TypeScript expression
+    // (identifier/digit tail, closing bracket, or `$`/`_`). Operator-like characters (`+`, `.`,
+    // `,`, etc.) return false so multi-line expression continuations are not accidentally cut off
+    // by the ASI heuristic.
+    // `ch` が JavaScript / TypeScript の式を終端できるトークン (識別子/数字末尾、閉じ括弧、`$`/`_`) なら true。
+    // 演算子類 (`+`、`.`、`,` 等) は false を返すことで、複数行の式継続が ASI ヒューリスティックで
+    // 誤って途中終端されないようにする。
+    private static bool CanJavaScriptTypeScriptExpressionEndAt(char ch)
+    {
+        if (char.IsLetterOrDigit(ch))
+            return true;
+        return ch is '_' or '$' or ')' or ']' or '}';
+    }
+
+    // Returns true when the position starts a new class-body member declaration: `}` (class body
+    // close), `;` (stray empty statement), `#` / `@` / `[` / `*<name>` lead tokens, or an
+    // identifier that is either a well-known class-member modifier keyword or is followed by a
+    // class-field / method-shorthand syntactic marker (`=`, `(`, `<`, `?`, `!`, `:`, `;`).
+    // Feed a sanitized (lex-masked) header string; strings/comments must already be blanked.
+    // 指定位置がクラスボディの新しいメンバ宣言を始めるかを判定する: `}` (クラス body 閉じ)、
+    // `;` (空文)、`#` / `@` / `[` / `*<name>` の先頭トークン、あるいは識別子で「クラスメンバ修飾キーワード」
+    // または直後が `=` / `(` / `<` / `?` / `!` / `:` / `;` の場合。呼び出し側は lexer でマスク済み
+    // (文字列/コメントが blanked) の sanitizedHeader を渡すこと。
+    private static bool StartsJavaScriptTypeScriptClassMemberAt(string sanitizedHeader, int index)
+    {
+        if (index < 0 || index >= sanitizedHeader.Length)
+            return false;
+        var ch = sanitizedHeader[index];
+        if (ch is '}' or ';' or '#' or '@' or '[')
+            return true;
+        if (ch == '*')
+        {
+            var j = index + 1;
+            while (j < sanitizedHeader.Length && char.IsWhiteSpace(sanitizedHeader[j]))
+                j++;
+            if (j >= sanitizedHeader.Length)
+                return false;
+            var next = sanitizedHeader[j];
+            return IsJavaScriptTypeScriptIdentifierStart(next) || next is '#' or '[';
+        }
+        if (!IsJavaScriptTypeScriptIdentifierStart(ch))
+            return false;
+
+        var end = index + 1;
+        while (end < sanitizedHeader.Length && IsJavaScriptTypeScriptIdentifierPart(sanitizedHeader[end]))
+            end++;
+        var word = sanitizedHeader[index..end];
+        if (word is "async" or "static" or "get" or "set" or "public" or "private" or "protected"
+            or "readonly" or "override" or "abstract" or "declare" or "accessor" or "constructor")
+        {
+            return true;
+        }
+
+        var after = end;
+        while (after < sanitizedHeader.Length && sanitizedHeader[after] != '\n' && char.IsWhiteSpace(sanitizedHeader[after]))
+            after++;
+        if (after >= sanitizedHeader.Length)
+            return false;
+        var follow = sanitizedHeader[after];
+        return follow is '=' or '(' or '<' or '?' or '!' or ':' or ';';
     }
 
     // Walks a TypeScript type annotation starting at ':' through to the outer '=' that terminates
