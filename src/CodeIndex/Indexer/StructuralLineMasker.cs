@@ -2033,12 +2033,31 @@ internal static class StructuralLineMasker
                 {
                     if (holeBraceDepth >= 0)
                     {
-                        // Inside ${expr} hole: preserve body. Skip nested single-line
-                        // strings and char literals so their `}` does not close the
-                        // hole, and track nested braces for lambdas / object literals.
-                        // ${expr} ホール内: 本文を保存。内部の単行文字列・char
-                        // リテラルはスキップし、lambda / object literal のネスト brace を
-                        // 追跡して、誤って早く閉じないようにする。
+                        // Inside ${expr} hole: preserve body. Block comments and line
+                        // comments must be recognized first so a legal `/* } */` inside
+                        // the hole does not close the hole at the comment body's `}`.
+                        // Nested single-line strings and char literals are also skipped
+                        // so their `}` does not close the hole, and nested `{` / `}`
+                        // are tracked for lambdas / object literals.
+                        // ${expr} ホール内: 本文を保存。block / line コメントを先に
+                        // 認識して `/* } */` のようなコメント内 `}` でホールを早閉じ
+                        // しないようにする。単行文字列・char リテラルも同様にスキップし、
+                        // lambda / object literal 用のネスト `{` / `}` を追跡する。
+                        if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '/')
+                        {
+                            ReplaceWithSpaces(masked, pos, line.Length - pos);
+                            pos = line.Length;
+                            continue;
+                        }
+
+                        if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '*')
+                        {
+                            ReplaceWithSpaces(masked, pos, 2);
+                            blockCommentDepth = 1;
+                            pos += 2;
+                            continue;
+                        }
+
                         if (line[pos] == '"' || line[pos] == '\'')
                         {
                             pos = SkipJsSingleLineString(line, pos);
@@ -2181,11 +2200,29 @@ internal static class StructuralLineMasker
                 {
                     if (holeParenDepth >= 0)
                     {
-                        // Inside \(expr) hole: preserve body. Skip nested single-line
-                        // strings and char-like literals so `)` inside them does not
-                        // close the hole, and track nested `(` depth.
-                        // \(expr) ホール内: 本文を保存。内部の単行文字列の `)` が
-                        // 誤ってホールを閉じないようスキップ、ネスト `(` も追跡。
+                        // Inside \(expr) hole: preserve body. Block comments and line
+                        // comments must be recognized first so a legal `/* ) */` inside
+                        // the hole does not close the hole at the comment body's `)`.
+                        // Nested single-line strings are also skipped so their `)` does
+                        // not close the hole, and nested `(` / `)` are tracked.
+                        // \(expr) ホール内: 本文を保存。block / line コメントを先に
+                        // 認識して `/* ) */` のようなコメント内 `)` でホールを早閉じ
+                        // しないようにする。単行文字列もスキップし、ネスト `(` / `)` も追跡する。
+                        if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '/')
+                        {
+                            ReplaceWithSpaces(masked, pos, line.Length - pos);
+                            pos = line.Length;
+                            continue;
+                        }
+
+                        if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '*')
+                        {
+                            ReplaceWithSpaces(masked, pos, 2);
+                            blockCommentDepth = 1;
+                            pos += 2;
+                            continue;
+                        }
+
                         if (line[pos] == '"' || line[pos] == '\'')
                         {
                             pos = SkipJsSingleLineString(line, pos);
@@ -2397,6 +2434,27 @@ internal static class StructuralLineMasker
                 {
                     if (holeBraceDepth >= 0)
                     {
+                        // Inside ${expr} hole: preserve body. Block comments and line
+                        // comments must be recognized first so a legal `/* } */` inside
+                        // the hole does not close the hole at the comment body's `}`.
+                        // ${expr} ホール内: 本文を保存。block / line コメントを先に
+                        // 認識して `/* } */` のようなコメント内 `}` でホールを早閉じ
+                        // しないようにする。
+                        if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '/')
+                        {
+                            ReplaceWithSpaces(masked, pos, line.Length - pos);
+                            pos = line.Length;
+                            continue;
+                        }
+
+                        if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '*')
+                        {
+                            ReplaceWithSpaces(masked, pos, 2);
+                            blockCommentDepth = 1;
+                            pos += 2;
+                            continue;
+                        }
+
                         if (line[pos] == '"' || line[pos] == '\'')
                         {
                             pos = SkipJsSingleLineString(line, pos);

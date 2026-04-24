@@ -13156,4 +13156,114 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "deepReal" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "realScalaCall" && r.ReferenceKind == "call");
     }
+
+    [Fact]
+    public void Extract_KotlinTripleQuotedStringInterpolationHole_WithCommentContainingCloseBrace_KeepsRealCallReference()
+    {
+        // Regression for issue #385 follow-up: a `${expr}` interpolation hole in a
+        // Kotlin raw string may contain a block comment or line comment whose body
+        // happens to include `}`. The hole scanner must recognize comments first so
+        // the `}` inside the comment does not close the hole prematurely and drop
+        // the following real call from the reference graph.
+        // issue #385 続編: Kotlin の `${expr}` 補間ホール内のコメント本体に含まれる
+        // `}` でホールを早閉じしてはならず、コメント後の本物の call を残すこと。
+        const string content = """"
+            package demo
+
+            class Demo {
+                fun m() {
+                    val sql = """
+                        real: ${ /* } */ kotlinAfterComment() }
+                        line: ${ kotlinLineBefore() // }
+                        } tail
+                    """.trimIndent()
+                    realKotlinCall()
+                }
+
+                private fun kotlinAfterComment(): Int = 0
+                private fun kotlinLineBefore(): Int = 0
+                private fun realKotlinCall() {}
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "kotlinAfterComment" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "kotlinLineBefore" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realKotlinCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SwiftMultilineStringInterpolationHole_WithCommentContainingCloseParen_KeepsRealCallReference()
+    {
+        // Regression for issue #385 follow-up: a `\(expr)` interpolation hole in a
+        // Swift multi-line string may contain a block comment or line comment whose
+        // body happens to include `)`. The hole scanner must recognize comments
+        // first so the `)` inside the comment does not close the hole prematurely.
+        // issue #385 続編: Swift の `\(expr)` 補間ホール内のコメント本体に含まれる
+        // `)` でホールを早閉じせず、コメント後の本物の call を残すこと。
+        const string content = """"
+            import Foundation
+
+            class Demo {
+                func m() {
+                    let sql = """
+                        real: \( /* ) */ swiftAfterComment() )
+                        line: \( swiftLineBefore() // )
+                        ) tail
+                        """
+                    realSwiftCall()
+                }
+
+                func swiftAfterComment() -> Int { 0 }
+                func swiftLineBefore() -> Int { 0 }
+                func realSwiftCall() {}
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "swiftAfterComment" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "swiftLineBefore" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realSwiftCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_ScalaStringInterpolatorHole_WithCommentContainingCloseBrace_KeepsRealCallReference()
+    {
+        // Regression for issue #385 follow-up: an `${expr}` interpolation hole in a
+        // Scala interpolator-prefixed multi-line string may contain a block comment
+        // or line comment whose body happens to include `}`. The hole scanner must
+        // recognize comments first so the `}` inside the comment does not close
+        // the hole prematurely.
+        // issue #385 続編: Scala の `${expr}` 補間ホール内のコメント本体に含まれる
+        // `}` でホールを早閉じせず、コメント後の本物の call を残すこと。
+        const string content = """"
+            package demo
+
+            class Demo {
+              def m(): Unit = {
+                val interp = s"""
+                    |real: ${ /* } */ scalaAfterComment() }
+                    |line: ${ scalaLineBefore() // }
+                    |} tail
+                  """.stripMargin
+                realScalaCall()
+              }
+
+              def scalaAfterComment(): Int = 0
+              def scalaLineBefore(): Int = 0
+              def realScalaCall(): Unit = ()
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "scala", content);
+        var references = ReferenceExtractor.Extract(1, "scala", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "scalaAfterComment" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "scalaLineBefore" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realScalaCall" && r.ReferenceKind == "call");
+    }
 }
