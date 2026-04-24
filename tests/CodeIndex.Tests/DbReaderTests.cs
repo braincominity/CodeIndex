@@ -1,3 +1,4 @@
+using System.Text;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
@@ -9089,5 +9090,117 @@ public class DbReaderTests : IDisposable
 
         var oldSummary = _reader.CountDefinitionsTotal("countdef_only_old", since: since);
         Assert.Equal(0, oldSummary.Count);
+    }
+
+    [Fact]
+    public void EndToEnd_BomBearingFile_StripLineLeadingBomPreserveMidLineZwnbsp()
+    {
+        // End-to-end #183 vertical: real bytes on disk → FileIndexer.BuildRecord →
+        // ChunkSplitter.Split → SymbolExtractor.Extract + ReferenceExtractor.Extract
+        // → DbWriter → DbReader.Search + GetExcerpt + GetDefinitions +
+        // SearchReferences. Pins five invariants at once so the CHANGELOG claim
+        // of covering `search` / `excerpt` / `definition` / `references` surfaces
+        // is actually tested:
+        //   1. Leading BOM at offset 0 is stripped: search + definition find the
+        //      line-1 symbol (`^\s*`-anchored indexing succeeds).
+        //   2. A BOM that immediately follows `\n` is stripped: definition of the
+        //      mid-file symbol is found, and excerpt of the affected line does
+        //      not emit a phantom U+FEFF.
+        //   3. Excerpt of lines never starts with a phantom U+FEFF.
+        //   4. Non-line-leading U+FEFF (intentional ZWNBSP inside a string literal)
+        //      is preserved verbatim — the narrowing iteration of the fix must not
+        //      silently corrupt intentional mid-line ZWNBSP use.
+        //   5. A call-site reference on a BOM-bearing source is captured end-to-end,
+        //      pinning the `references` / `callers` surface through the same
+        //      pipeline rather than claiming coverage via CHANGELOG alone.
+        // Closes #183.
+        // #183 のエンドツーエンド縦串テスト: 実バイトから FileIndexer.BuildRecord →
+        // ChunkSplitter.Split → SymbolExtractor.Extract + ReferenceExtractor.Extract
+        // → DbWriter → DbReader.Search + GetExcerpt + GetDefinitions +
+        // SearchReferences まで通す。CHANGELOG が主張する search / excerpt /
+        // definition / references の全サーフェスが実際にテストされていることを
+        // 保証する 5 つの不変条件を同時に pin する:
+        //   1. オフセット 0 の先頭 BOM は剥がす。1 行目のシンボルが search /
+        //      definition で見つかる (`^\s*` 固定パターンが成立する)。
+        //   2. `\n` の直後の BOM は剥がす。該当 mid-file シンボルが definition で
+        //      見つかり、excerpt に幽霊 U+FEFF を含めない。
+        //   3. excerpt の各行は幽霊 U+FEFF で始まらない。
+        //   4. 行頭以外の U+FEFF (文字列リテラル内の意図的 ZWNBSP) はそのまま保持する。
+        //   5. BOM 付きソース中の call-site 参照がエンドツーエンドで抽出され、
+        //      references / callers 経路を同じパイプラインで pin する。
+        // Closes #183.
+        var tempDir = Path.Combine(Path.GetTempPath(), $"cdidx_bom_e2e_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var source =
+                "\uFEFFnamespace BomE2E;\n" +
+                "\n" +
+                "\uFEFFpublic class PhraseHolder\n" +
+                "{\n" +
+                "    public const string Phrase = \"A\uFEFFB\";\n" +
+                "    public void Greet() { System.Console.WriteLine(Phrase); }\n" +
+                "}\n";
+            var bytes = Encoding.UTF8.GetBytes(source);
+            var filePath = Path.Combine(tempDir, "bom_e2e.cs");
+            File.WriteAllBytes(filePath, bytes);
+
+            var indexer = new FileIndexer(tempDir);
+            var (record, content, _, _) = indexer.BuildRecordWithRawBytes(filePath);
+
+            // Line-leading BOMs are stripped; mid-line ZWNBSP inside the string literal is preserved.
+            // 行頭 BOM は剥がし、文字列リテラル内の mid-line ZWNBSP は保持されている。
+            Assert.DoesNotContain('\uFEFF', new string(content.Split('\n')[0].ToCharArray()));
+            Assert.Contains("\"A\uFEFFB\"", content);
+
+            var fileId = _writer.UpsertFile(record);
+            _writer.InsertChunks(ChunkSplitter.Split(fileId, content));
+            var symbols = SymbolExtractor.Extract(fileId, "csharp", content);
+            _writer.InsertSymbols(symbols);
+            _writer.InsertReferences(ReferenceExtractor.Extract(fileId, "csharp", content, symbols));
+
+            // 1. search finds the line-1 namespace declaration.
+            // 1. search が 1 行目の namespace 宣言を発見する。
+            var searchResults = _reader.Search("BomE2E");
+            Assert.Contains(searchResults, r => r.Path == record.Path);
+
+            // 2. GetDefinitions resolves both the line-1 namespace and the mid-file class / method.
+            // 2. GetDefinitions が 1 行目の namespace と mid-file の class / method を解決する。
+            var nsDefs = _reader.GetDefinitions("BomE2E");
+            Assert.Contains(nsDefs, d => d.Path == record.Path && d.Name == "BomE2E" && d.Line == 1);
+            var classDefs = _reader.GetDefinitions("PhraseHolder");
+            Assert.Contains(classDefs, d => d.Path == record.Path && d.Name == "PhraseHolder" && d.Line == 3);
+            var methodDefs = _reader.GetDefinitions("Greet");
+            Assert.Contains(methodDefs, d => d.Path == record.Path && d.Name == "Greet");
+
+            // 3. Excerpt of lines 1-3 never has a phantom U+FEFF at line start.
+            // 3. 1〜3 行目の excerpt には、行頭の幽霊 U+FEFF が含まれない。
+            var headExcerpt = _reader.GetExcerpt(record.Path, startLine: 1, endLine: 3);
+            Assert.NotNull(headExcerpt);
+            foreach (var line in headExcerpt!.Content.Split('\n'))
+            {
+                if (line.Length == 0) continue;
+                Assert.NotEqual('\uFEFF', line[0]);
+            }
+            Assert.Contains("namespace BomE2E;", headExcerpt.Content);
+            Assert.Contains("public class PhraseHolder", headExcerpt.Content);
+
+            // 4. Excerpt of the const-string line still carries the intentional mid-line ZWNBSP.
+            // 4. const 文字列行の excerpt には、意図的な mid-line ZWNBSP がそのまま残る。
+            var literalExcerpt = _reader.GetExcerpt(record.Path, startLine: 5, endLine: 5);
+            Assert.NotNull(literalExcerpt);
+            Assert.Contains("\"A\uFEFFB\"", literalExcerpt!.Content);
+
+            // 5. SearchReferences finds the call-site reference on the BOM-bearing file,
+            //    pinning the references / callers surface end-to-end.
+            // 5. SearchReferences が BOM 付きファイルの call-site 参照を発見し、
+            //    references / callers 経路をエンドツーエンドで pin する。
+            var refs = _reader.SearchReferences("WriteLine", lang: "csharp");
+            Assert.Contains(refs, r => r.Path == record.Path);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
     }
 }

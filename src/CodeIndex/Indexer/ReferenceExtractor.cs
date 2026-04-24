@@ -619,6 +619,32 @@ public static class ReferenceExtractor
 
         var language = lang!;
 
+        // Null / empty fast path — keep the direct-call null-safe contract that
+        // FileIndexer.StripLineLeadingBom's IsNullOrEmpty check used to provide
+        // before the CRLF normalization step was added in front of it. Closes #183.
+        // null / 空入力は早期 return。CRLF 正規化を StripLineLeadingBom の前に
+        // 入れたことで helper 側の IsNullOrEmpty による null 許容が効かなくなる
+        // ため、direct call の null セーフ契約をここで復元する。Closes #183.
+        if (string.IsNullOrEmpty(content))
+            return [];
+
+        // Normalize CRLF / CR to LF first so direct callers that bypass FileIndexer
+        // still present a `\n`-only content stream, and then strip line-leading
+        // UTF-8 BOM (U+FEFF) defensively so `^\s*`-anchored patterns match on
+        // line 1 and on any mid-file line that begins with a BOM (e.g. from file
+        // concatenation or tool insertion). StripLineLeadingBom assumes `\n` is
+        // the sole line separator, so the CRLF pass must come first. Non-line-
+        // leading U+FEFF is preserved so content with intentional ZWNBSP inside
+        // a string literal stays verbatim. Closes #183.
+        // まず CRLF / CR を LF に正規化する。StripLineLeadingBom は `\n` を唯一の
+        // 行区切りとして行頭判定するので、FileIndexer を経由しない direct call
+        // でも CRLF 正規化を済ませてから呼ばないと mid-file の行頭 BOM を剥がし
+        // 損なう。続いて行頭 U+FEFF のみ剥がし、1 行目と mid-file の行頭 BOM 両方
+        // で `^\s*` 固定パターンを成立させる。行頭以外の U+FEFF (文字列リテラル中
+        // の意図的な ZWNBSP 等) はそのまま保持する。Closes #183.
+        if (content.Contains('\r'))
+            content = content.Replace("\r\n", "\n").Replace("\r", "\n");
+        content = FileIndexer.StripLineLeadingBom(content);
         var lines = content.Split('\n');
         var structuralLines = StructuralLineMasker.MaskLines(language, lines);
         var preparedLines = new string[lines.Length];
