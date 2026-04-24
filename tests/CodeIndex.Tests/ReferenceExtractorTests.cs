@@ -8625,6 +8625,29 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatRawStringAfterDelimitedDocCloseAsDocComment()
+    {
+        const string content = """"
+            class Foo {}
+            class Bar {}
+            class Demo
+            {
+                /**
+                 * <summary><see cref="Foo"/></summary> */ string text = """<see cref="Bar"/>""";
+                void Run() {}
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols)
+            .Where(r => r.Line == 6 && r.ReferenceKind == "type_reference")
+            .ToList();
+
+        Assert.Contains(references, r => r.SymbolName == "Foo" && r.ContainerName == "Run");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Bar");
+    }
+
+    [Fact]
     public void Extract_TypeReferenceSegmentColumnMatchesOriginalLine()
     {
         // Column positions must point to the start of each dot-segment in the original line
