@@ -60,6 +60,181 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DetectsReExportSurfaceSymbols()
+    {
+        var content = """
+            export * from './util';
+            export { foo, bar } from './other'; // trailing comment
+            export { default as Helper } from './helper';
+            export * /* from './bogus-star' */ as ns from './ns';
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./util");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./other");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./helper");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./ns");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Helper");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "ns");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsMultilineStarReExportSurfaceSymbols()
+    {
+        var content = """
+            export *
+            from './util';
+            export * /* from './bogus-star' */ as ns
+            from './ns';
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./util");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./ns");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "ns");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsMinifiedReExportSurfaceSymbols()
+    {
+        var content = """
+            export{foo as bar}from './other';
+            export*as ns from './ns';
+            export*from './util';
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./other");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./ns");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./util");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "ns");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsNamedReExportWhenExportAndSpecifierListAreSplitAcrossLines()
+    {
+        var content = """
+            export
+            { foo, bar } from './other';
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./other");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsNamedAndTypeReExportSurfaceSymbols()
+    {
+        var content = """
+            export {
+              foo, // from './bogus'
+              bar,
+            } from './other';
+            export { default as Helper } from './helper'; // trailing comment
+            export type {
+              User,
+              Admin,
+            } from './types';
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./other");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./helper");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./types");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Helper");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Admin");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsTypeOnlyStarReExportSurfaceSymbols()
+    {
+        var content = """
+            export type * from './types';
+            export type * as ns from './types-ns';
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./types");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./types-ns");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "ns");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsReExportSurfaceSymbolsWithImportAttributes()
+    {
+        var content = """
+            export * from './util' with { type: 'json' };
+            export { foo as bar } from './other' with { type: 'json' };
+            export * from './legacy' assert { type: 'json' };
+            export { baz as qux } from './older' assert { type: 'json' };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./util");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./other");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./legacy");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./older");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "qux");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsMultilineStarReExportSurfaceSymbolsWithImportAttributes()
+    {
+        var content = """
+            export * from './util' with {
+              type: 'json'
+            };
+            export * as ns from './other' assert {
+              type: 'json'
+            };
+            export type * from './types' with {
+              type: 'json'
+            };
+            export type * as typeNs from './types-ns' assert {
+              type: 'json'
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./util");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./other");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./types");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./types-ns");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "ns");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "typeNs");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsNamedReExportSurfaceSymbolsWhenImportAttributeBraceStartsOnNextLine()
+    {
+        var content = """
+            export { foo as bar } from './other' with
+            {
+              type: 'json'
+            };
+            export type { User } from './types' assert
+            {
+              type: 'json'
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./other");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./types");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "User");
+    }
+
+    [Fact]
     public void Extract_JavaScript_StringBraceDoesNotBreakFollowingContainerAssignment()
     {
         var content = """"
@@ -774,6 +949,277 @@ public class SymbolExtractorTests
 
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Local");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "inside");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsCommonJsNamedExportAssignments()
+    {
+        var content = """
+            module.exports.foo = function foo() { return 1; };
+            module.exports.bar = () => 2;
+            exports.baz = 42;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "baz");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsMultilineCommonJsNamedExportAssignments()
+    {
+        var content = """
+            module.exports.foo =
+              async () => {};
+            module.exports.bar =
+              () => 2;
+            exports.baz =
+              42;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "baz");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsParenthesizedMultilineCommonJsNamedExportAssignments()
+    {
+        var content = """
+            module.exports.foo =
+              (
+                async () => 1
+              );
+            module.exports.bar =
+              (
+                function () {
+                  return 2;
+                }
+              );
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsParenthesizedSameLineCommonJsNamedExportAssignments()
+    {
+        var content = """
+            module.exports.foo = (function () { return 1; });
+            module.exports.bar = (async function () { return 2; });
+            module.exports.baz = (() => 3);
+            exports.qux = (42);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "baz");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "qux");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_CommonJsNamedExportFunctionsPreserveMultilineBraceBodyRanges()
+    {
+        var content = """
+            module.exports.foo = function ()
+            {
+              return 1;
+            };
+            module.exports.bar = () =>
+            {
+              return 2;
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "foo"));
+        Assert.Equal(1, foo.StartLine);
+        Assert.Equal(4, foo.EndLine);
+        Assert.Equal(2, foo.BodyStartLine);
+        Assert.Equal(4, foo.BodyEndLine);
+
+        var bar = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "bar"));
+        Assert.Equal(5, bar.StartLine);
+        Assert.Equal(8, bar.EndLine);
+        Assert.Equal(6, bar.BodyStartLine);
+        Assert.Equal(8, bar.BodyEndLine);
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsConditionalCommonJsNamedExportAssignmentsInTopLevelBlocks()
+    {
+        var content = """
+            if (process.env.FEATURE) {
+              module.exports.enabled = function () {
+                return true;
+              };
+            }
+            if (process.env.FLAG) {
+              exports.flag = 1;
+            }
+            function setup() {
+              module.exports.hidden = function () {
+                return false;
+              };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "enabled");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "flag");
+        Assert.DoesNotContain(symbols, s => s.Name == "hidden");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_GenericArrowCommonJsNamedExportFunctionsPreserveMultilineBraceBodyRanges()
+    {
+        var content = """
+            module.exports.foo = <T>(value: T) =>
+            {
+              return value;
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "foo"));
+        Assert.Equal(1, foo.StartLine);
+        Assert.Equal(4, foo.EndLine);
+        Assert.Equal(2, foo.BodyStartLine);
+        Assert.Equal(4, foo.BodyEndLine);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsGenericArrowCommonJsNamedExportAssignments()
+    {
+        var content = """
+            module.exports.foo = <T>(value: T) => value;
+            module.exports.bar =
+              <T>(value: T) => value;
+            module.exports.baz = (<T>(value: T) => value);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "baz");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsMultilineAndConstrainedGenericArrowCommonJsNamedExportAssignments()
+    {
+        var content = """
+            module.exports.foo = <T>(
+              value: T
+            ) => value;
+            module.exports.bar = <T extends (...args: any[]) => number>(value: T) => value;
+            module.exports.baz = async <T>(
+              value: T
+            ) => value;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "baz");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DoesNotTreatCommonJsNamedExportIdentifierPrefixesAsFunctionsOrClasses()
+    {
+        var content = """
+            module.exports.foo = functionCall();
+            module.exports.bar = classyThing;
+            module.exports.baz = (functionCall());
+            exports.qux = (classyThing);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "baz");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "qux");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && (s.Name == "foo" || s.Name == "baz"));
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && (s.Name == "bar" || s.Name == "qux"));
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsExportedObjectLiteralAliasProperties()
+    {
+        var content = """
+            const foo = 1;
+            function inner() { return 3; }
+            function named() { return 4; }
+            const answer = 42;
+            module.exports = { foo, alias: inner, named, method() {} };
+            export default { answer };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "alias" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "named" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "answer" && s.ContainerKind == "object" && s.ContainerName == "default");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "inner" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DoesNotTreatQuotedOrComputedExportedObjectLiteralKeysAsValueSideShorthandProperties()
+    {
+        var content = """
+            module.exports = { 'foo': bar, [baz]: qux, answer: 42 };
+            export default { [name]: value, visible };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "answer" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "visible" && s.ContainerKind == "object" && s.ContainerName == "default");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "bar" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "qux" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "value" && s.ContainerKind == "object" && s.ContainerName == "default");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DoesNotTreatExportedObjectLiteralSpreadsAsProperties()
+    {
+        var content = """
+            const rest = source;
+            const defaults = source;
+            const answer = 42;
+            module.exports = { ...rest, actual: 1, config: { ...rest } };
+            export default { ...defaults, answer };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "actual" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "config" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "answer" && s.ContainerKind == "object" && s.ContainerName == "default");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "rest" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "defaults" && s.ContainerKind == "object" && s.ContainerName == "default");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsExportedObjectLiteralShorthandProperties()
+    {
+        var content = """
+            const foo = 1;
+            const bar = 2;
+            module.exports = {
+              foo,
+              bar,
+              baz: foo,
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "baz" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
     }
 
     [Fact]
