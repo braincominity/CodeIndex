@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Fixed
+- **C# exact/name queries now normalize verbatim identifiers (#651)** — `symbols`, `definition`, `inspect`, `references`, `callers`, and `callees` now canonicalize C# verbatim identifiers before resolving exact/name matches, so inputs such as `@class` and `@int` hit the indexed `class` / `int` symbols instead of returning false zero-result misses. Added a focused CLI regression that covers `symbols --name @int --exact-name --count`, `definition @class --exact-name --count`, and `inspect @class --exact`. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/DbSymbolReader.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`. Closes #651.
+
 ### [1.15.0] - 2026-04-24
 
 #### Changed
@@ -895,6 +898,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 修正
+- **C# の exact/name クエリで verbatim 識別子を正規化するよう修正 (#651)** — `symbols` / `definition` / `inspect` / `references` / `callers` / `callees` が、C# の verbatim 識別子を exact/name 判定の前に canonical 化するようになりました。これにより `@class` や `@int` でも、インデックス済みの `class` / `int` シンボルに正しくヒットし、誤った 0 件結果になりません。`symbols --name @int --exact-name --count`、`definition @class --exact-name --count`、`inspect @class --exact` を固定する CLI regression を追加しました。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/DbSymbolReader.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`。Closes #651。
 
 ### [1.15.0] - 2026-04-24
 

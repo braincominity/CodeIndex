@@ -853,6 +853,7 @@ public partial class DbReader
     public List<ReferenceResult> SearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth)
     {
         maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidth);
+        query = NormalizeCSharpVerbatimQuery(query);
         if (!_hasReferencesTable)
             return new List<ReferenceResult>();
 
@@ -2763,6 +2764,14 @@ public partial class DbReader
         return segments.Count == 0 ? null : string.Join(".", segments);
     }
 
+    // Query-side mirror of the C# declaration canonicalizer. Users commonly type source
+    // spellings such as `@class` or `Outer.@class`; the DB stores the canonical names
+    // without the verbatim `@`, so query entrypoints normalize to the persisted form first.
+    // C# 宣言側 canonicalizer の query 側ミラー。`@class` / `Outer.@class` のような source
+    // spelling を受けても、DB 側の `@` なし canonical 名に合わせてから検索する。
+    private static string? NormalizeCSharpVerbatimQuery(string? query)
+        => query == null ? null : NormalizeDbCSharpQualifiedName(query);
+
     private static string? CombineDbQualifiedName(string? parentQualifiedName, string? name)
     {
         if (string.IsNullOrWhiteSpace(name))
@@ -2807,6 +2816,7 @@ public partial class DbReader
 
     public int CountSearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
+        query = NormalizeCSharpVerbatimQuery(query);
         if (ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind, exact))
             return SearchReferences(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact).Count;
 
@@ -2903,6 +2913,7 @@ public partial class DbReader
 
     public QueryCountResult CountSearchReferencesTotal(string? query = null, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
+        query = NormalizeCSharpVerbatimQuery(query);
         if (ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind, exact))
             return CountSearchReferencesTotalWithUsingStaticFilter(query, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact);
 
@@ -3005,6 +3016,7 @@ public partial class DbReader
     /// </summary>
     public List<CallerResult> GetCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
+        query = NormalizeCSharpVerbatimQuery(query);
         if (!_hasReferencesTable) return new List<CallerResult>();
         using var cmd = _conn.CreateCommand();
 
@@ -3114,6 +3126,7 @@ public partial class DbReader
 
     public int CountCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
+        query = NormalizeCSharpVerbatimQuery(query);
         if (!_hasReferencesTable) return 0;
         using var cmd = _conn.CreateCommand();
         var groupedSql = @"
@@ -3248,6 +3261,7 @@ public partial class DbReader
     /// </summary>
     public List<CalleeResult> GetCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
+        query = NormalizeCSharpVerbatimQuery(query);
         if (!_hasReferencesTable) return new List<CalleeResult>();
         using var cmd = _conn.CreateCommand();
 
@@ -3355,6 +3369,7 @@ public partial class DbReader
 
     public int CountCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
+        query = NormalizeCSharpVerbatimQuery(query);
         if (!_hasReferencesTable) return 0;
         using var cmd = _conn.CreateCommand();
         var groupedSql = @"
@@ -3497,15 +3512,16 @@ public partial class DbReader
     /// </summary>
     private string ResolveSymbolName(string symbolName, string? lang)
     {
+        var normalizedSymbolName = NormalizeCSharpVerbatimQuery(symbolName) ?? symbolName;
         // Exact lookup mirrors the leaf `--exact` readers: folded equality when FoldReady,
         // ASCII `COLLATE NOCASE` fallback on legacy / partial-backfill DBs.
         // No path/test filters — definitions outside caller scope must still be found.
         // Only considers graph-supported languages to avoid resolving to unsupported ones.
         // FoldReady なら folded equality、legacy DB では ASCII `COLLATE NOCASE` にフォールバック。
-        var normalizedName = SqlNameResolver.NormalizeQualifiedName(symbolName);
-        var leafName = SqlNameResolver.GetLeafName(symbolName);
-        var segmentCount = SqlNameResolver.GetSegmentCount(symbolName);
-        var allowLeafFallback = !SqlNameResolver.HasQualifier(symbolName);
+        var normalizedName = SqlNameResolver.NormalizeQualifiedName(normalizedSymbolName);
+        var leafName = SqlNameResolver.GetLeafName(normalizedSymbolName);
+        var segmentCount = SqlNameResolver.GetSegmentCount(normalizedSymbolName);
+        var allowLeafFallback = !SqlNameResolver.HasQualifier(normalizedSymbolName);
         using var cmd = _conn.CreateCommand();
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "resolveLang");
         var nameCondition = _foldReady
@@ -3526,7 +3542,7 @@ public partial class DbReader
                                          WHEN @allowLeafFallback = 1 AND f.lang = 'sql' AND sql_leaf_name_folded(s.name) = @leafNameFolded THEN 4
                                          ELSE 5
                                      END LIMIT 1";
-        cmd.Parameters.AddWithValue("@name", symbolName);
+        cmd.Parameters.AddWithValue("@name", normalizedSymbolName);
         cmd.Parameters.AddWithValue("@normalizedName", normalizedName);
         cmd.Parameters.AddWithValue("@normalizedNameFolded", NameFold.Fold(normalizedName) ?? normalizedName);
         cmd.Parameters.AddWithValue("@leafName", leafName);
@@ -3534,9 +3550,9 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@segmentCount", segmentCount);
         cmd.Parameters.AddWithValue("@allowLeafFallback", allowLeafFallback ? 1 : 0);
         if (_foldReady)
-            cmd.Parameters.AddWithValue("@nameFolded", NameFold.Fold(symbolName) ?? symbolName);
+            cmd.Parameters.AddWithValue("@nameFolded", NameFold.Fold(normalizedSymbolName) ?? normalizedSymbolName);
         using var reader = cmd.ExecuteTrackedReader();
-        return reader.TrackedRead() ? reader.GetString(0) : symbolName;
+        return reader.TrackedRead() ? reader.GetString(0) : normalizedSymbolName;
     }
 
     /// <summary>

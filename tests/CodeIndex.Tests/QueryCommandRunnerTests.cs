@@ -3679,6 +3679,56 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_And_Definition_NormalizeCSharpVerbatimIdentifiers()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_csharp_verbatim_query_normalization");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/verbatim.cs",
+                "csharp",
+                """
+                public class @class
+                {
+                    public int @int() => 0;
+                }
+                """);
+
+            var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--name", "@int", "--exact-name", "--count"],
+                _jsonOptions));
+            var (definitionExitCode, definitionStdout, definitionStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["@class", "--db", dbPath, "--json", "--exact-name", "--count"],
+                _jsonOptions));
+            var (inspectExitCode, inspectStdout, inspectStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["@class", "--db", dbPath, "--json", "--exact"],
+                _jsonOptions));
+
+            using var symbolsDocument = ParseJsonOutput(symbolsStdout);
+            using var definitionDocument = ParseJsonOutput(definitionStdout);
+            using var inspectDocument = ParseJsonOutput(inspectStdout);
+
+            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+            Assert.Equal(string.Empty, symbolsStderr);
+            Assert.Equal(1, symbolsDocument.RootElement.GetProperty("count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.Success, definitionExitCode);
+            Assert.Equal(string.Empty, definitionStderr);
+            Assert.Equal(1, definitionDocument.RootElement.GetProperty("count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.Success, inspectExitCode);
+            Assert.Equal(string.Empty, inspectStderr);
+            Assert.Single(inspectDocument.RootElement.GetProperty("definitions").EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_SqlExactNameCountSupportsMultipleUnicodeLeafQueries()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_sql_exact_multi_count");
