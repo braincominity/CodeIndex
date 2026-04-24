@@ -81,6 +81,20 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DetectsNamedReExportWhenExportAndSpecifierListAreSplitAcrossLines()
+    {
+        var content = """
+            export
+            { foo, bar } from './other';
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./other");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar");
+    }
+
+    [Fact]
     public void Extract_TypeScript_DetectsNamedAndTypeReExportSurfaceSymbols()
     {
         var content = """
@@ -839,6 +853,24 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DetectsMultilineCommonJsNamedExportAssignments()
+    {
+        var content = """
+            module.exports.foo =
+              async () => {};
+            module.exports.bar =
+              () => 2;
+            exports.baz =
+              42;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "baz");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DetectsExportedObjectLiteralAliasProperties()
     {
         var content = """
@@ -857,6 +889,22 @@ public class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "answer" && s.ContainerKind == "object" && s.ContainerName == "default");
         Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "inner" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DoesNotTreatQuotedOrComputedExportedObjectLiteralKeysAsValueSideShorthandProperties()
+    {
+        var content = """
+            module.exports = { 'foo': bar, [baz]: qux, answer: 42 };
+            export default { [name]: value, visible };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "answer" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "visible" && s.ContainerKind == "object" && s.ContainerName == "default");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "bar" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "qux" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "value" && s.ContainerKind == "object" && s.ContainerName == "default");
     }
 
     [Fact]

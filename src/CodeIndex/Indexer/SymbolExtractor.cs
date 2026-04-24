@@ -383,7 +383,7 @@ public static class SymbolExtractor
         RegexOptions.Compiled);
 
     private static readonly Regex JavaScriptTypeScriptCommonJsNamedExportAssignmentRegex = new(
-        $@"^\s*(?:module\.exports|exports)\.(?<name>{JavaScriptTypeScriptIdentifierPattern})(?:\s*:\s*[^=]+?)?\s*=\s*(?<rhs>.+)$",
+        $@"^\s*(?:module\.exports|exports)\.(?<name>{JavaScriptTypeScriptIdentifierPattern})(?:\s*:\s*[^=]+?)?\s*=\s*(?<rhs>.*)$",
         RegexOptions.Compiled);
 
     private static readonly Regex JavaScriptTypeScriptArrowAssignmentValueRegex = new(
@@ -4993,11 +4993,34 @@ public static class SymbolExtractor
 
         var startLine = sanitizedLines[startLineIndex];
         var trimmedStartLine = startLine.TrimStart();
-        if (!trimmedStartLine.StartsWith("export ", StringComparison.Ordinal)
-            || !trimmedStartLine.Contains('{'))
+        if (trimmedStartLine.Length == 0
+            || !trimmedStartLine.StartsWith("export", StringComparison.Ordinal))
         {
             startColumn = -1;
             return false;
+        }
+
+        var exportRemainder = trimmedStartLine["export".Length..].TrimStart();
+        if (exportRemainder.Length > 0)
+        {
+            if (exportRemainder[0] == '{')
+            {
+                // Valid same-line named re-export.
+            }
+            else if (exportRemainder.StartsWith("type", StringComparison.Ordinal))
+            {
+                var typeRemainder = exportRemainder["type".Length..].TrimStart();
+                if (typeRemainder.Length > 0 && typeRemainder[0] != '{')
+                {
+                    startColumn = -1;
+                    return false;
+                }
+            }
+            else
+            {
+                startColumn = -1;
+                return false;
+            }
         }
 
         startColumn = Math.Max(0, startLine.IndexOf("export", StringComparison.Ordinal));
@@ -5080,7 +5103,19 @@ public static class SymbolExtractor
             }
 
             var name = match.Groups["name"].Value;
-            var rhs = match.Groups["rhs"].Value.TrimStart();
+            if (!TryCollectJavaScriptTypeScriptAssignedRhs(
+                    rawLines,
+                    sanitizedLines,
+                    i,
+                    match.Groups["rhs"].Index,
+                    out var rhs,
+                    out var rhsStartLineIndex,
+                    out var rhsStartColumn,
+                    out var signature))
+            {
+                continue;
+            }
+
             if (rhs.Length == 0
                 || rhs.StartsWith("class", StringComparison.Ordinal)
                 || rhs.StartsWith("(class", StringComparison.Ordinal))
@@ -5099,8 +5134,8 @@ public static class SymbolExtractor
                 var openBraceOffset = rhs.IndexOf('{');
                 if (openBraceOffset >= 0)
                 {
-                    var openBraceColumn = match.Groups["rhs"].Index + openBraceOffset;
-                    var (_, resolvedBodyStartLine, resolvedBodyEndLine) = ResolveRange(rawLines, i, BodyStyle.Brace, lang, openBraceColumn);
+                    var openBraceColumn = rhsStartColumn + openBraceOffset;
+                    var (_, resolvedBodyStartLine, resolvedBodyEndLine) = ResolveRange(rawLines, rhsStartLineIndex, BodyStyle.Brace, lang, openBraceColumn);
                     bodyStartLine = resolvedBodyStartLine;
                     bodyEndLine = resolvedBodyEndLine;
                 }
@@ -5121,7 +5156,7 @@ public static class SymbolExtractor
                     EndLine = Math.Max(i + 1, bodyEndLine ?? (i + 1)),
                     BodyStartLine = bodyStartLine,
                     BodyEndLine = bodyEndLine,
-                    Signature = rawLines[i].Trim(),
+                    Signature = signature,
                     Visibility = "export",
                 },
                 rawLines[i]);
@@ -5254,6 +5289,12 @@ public static class SymbolExtractor
                             continue;
                         }
 
+                        if (TrySkipJavaScriptTypeScriptNonIdentifierObjectLiteralKey(sanitizedLine, ref scanColumn))
+                        {
+                            skippingPropertyValue = true;
+                            continue;
+                        }
+
                         var shorthandMatch = JavaScriptTypeScriptExportedObjectLiteralShorthandPropertyRegex.Match(remainingLine);
                         if (shorthandMatch.Success)
                         {
@@ -5326,6 +5367,105 @@ public static class SymbolExtractor
         return rhs.StartsWith("function", StringComparison.Ordinal)
             || rhs.StartsWith("async function", StringComparison.Ordinal)
             || JavaScriptTypeScriptArrowAssignmentValueRegex.IsMatch(rhs);
+    }
+
+    private static bool TryCollectJavaScriptTypeScriptAssignedRhs(
+        string[] rawLines,
+        string[] sanitizedLines,
+        int assignmentLineIndex,
+        int sameLineRhsColumn,
+        out string rhs,
+        out int rhsStartLineIndex,
+        out int rhsStartColumn,
+        out string signature)
+    {
+        rhs = string.Empty;
+        rhsStartLineIndex = assignmentLineIndex;
+        rhsStartColumn = sameLineRhsColumn;
+        signature = string.Empty;
+
+        for (int lineIndex = assignmentLineIndex; lineIndex < sanitizedLines.Length; lineIndex++)
+        {
+            var sanitizedLine = sanitizedLines[lineIndex];
+            var column = lineIndex == assignmentLineIndex
+                ? Math.Max(0, sameLineRhsColumn)
+                : 0;
+
+            while (column < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[column]))
+                column++;
+
+            if (column >= sanitizedLine.Length)
+                continue;
+
+            rhs = sanitizedLine[column..].TrimEnd();
+            rhsStartLineIndex = lineIndex;
+            rhsStartColumn = column;
+
+            var signatureBuilder = new System.Text.StringBuilder();
+            for (int signatureLineIndex = assignmentLineIndex; signatureLineIndex <= lineIndex; signatureLineIndex++)
+            {
+                var rawLine = rawLines[signatureLineIndex].Trim();
+                if (rawLine.Length == 0)
+                    continue;
+
+                if (signatureBuilder.Length > 0)
+                    signatureBuilder.Append(' ');
+                signatureBuilder.Append(rawLine);
+            }
+
+            signature = signatureBuilder.ToString();
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TrySkipJavaScriptTypeScriptNonIdentifierObjectLiteralKey(string sanitizedLine, ref int index)
+    {
+        var probe = index;
+        if (TryReadJavaScriptTypeScriptQuotedLiteralToken(sanitizedLine, ref probe, out _)
+            || TryReadJavaScriptTypeScriptNumericLiteralToken(sanitizedLine, ref probe, out _))
+        {
+            while (probe < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[probe]))
+                probe++;
+
+            if (probe >= sanitizedLine.Length || sanitizedLine[probe] != ':')
+                return false;
+
+            index = probe + 1;
+            return true;
+        }
+
+        if (probe >= sanitizedLine.Length || sanitizedLine[probe] != '[')
+            return false;
+
+        var bracketDepth = 1;
+        probe++;
+        while (probe < sanitizedLine.Length && bracketDepth > 0)
+        {
+            if (sanitizedLine[probe] == '[')
+            {
+                bracketDepth++;
+            }
+            else if (sanitizedLine[probe] == ']')
+            {
+                bracketDepth--;
+            }
+
+            probe++;
+        }
+
+        if (bracketDepth != 0)
+            return false;
+
+        while (probe < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[probe]))
+            probe++;
+
+        if (probe >= sanitizedLine.Length || sanitizedLine[probe] != ':')
+            return false;
+
+        index = probe + 1;
+        return true;
     }
 
     private static string TrimJavaScriptTypeScriptQuotedModuleName(string moduleName)
