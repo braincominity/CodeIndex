@@ -3199,6 +3199,8 @@ public static class ReferenceExtractor
                    continuationIndex,
                    typeExpression,
                    lineNumber,
+                   csharpQualifiedConstantPatternMemberLookup,
+                   csharpUsingAliases,
                    hasActiveSameFileCSharpTypeCandidate);
     }
 
@@ -5392,13 +5394,6 @@ public static class ReferenceExtractor
         if (cursor >= preparedLine.Length)
             return false;
 
-        if (!hadLeadingNot
-            && preparedLine[cursor] == ':'
-            && typeExpression.Contains('.'))
-        {
-            return false;
-        }
-
         return preparedLine[cursor] switch
         {
             ':' => !IsCSharpConstantPatternMemberHeadOrSameFileCSharpTypeCandidate(
@@ -5410,6 +5405,13 @@ public static class ReferenceExtractor
                     csharpUsingAliases,
                     csharpUsingStatics,
                     hasActiveSameFileCSharpTypeCandidate),
+            '.' => !HasCSharpDottedConstantPatternMemberTail(
+                    preparedLine,
+                    typeExpression,
+                    cursor,
+                    lineNumber,
+                    csharpQualifiedConstantPatternMemberLookup,
+                    csharpUsingAliases),
             '{' or '(' or '[' => true,
             _ => IsCSharpCaseTypePatternIdentifier(
                 preparedLine,
@@ -5755,6 +5757,8 @@ public static class ReferenceExtractor
                 cursor,
                 typeExpression,
                 lineNumber,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpUsingAliases,
                 hasActiveSameFileCSharpTypeCandidate))
         {
             return false;
@@ -5785,10 +5789,21 @@ public static class ReferenceExtractor
         int cursor,
         string typeExpression,
         int lineNumber,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> csharpQualifiedConstantPatternMemberLookup,
+        IReadOnlyList<CSharpUsingAliasRecord> csharpUsingAliases,
         Func<string, int, bool> hasActiveSameFileCSharpTypeCandidate)
     {
         if (!hasActiveSameFileCSharpTypeCandidate(typeExpression, lineNumber))
             return false;
+
+        if (IsCSharpQualifiedConstantPatternMemberHead(
+                typeExpression,
+                lineNumber,
+                csharpQualifiedConstantPatternMemberLookup,
+                csharpUsingAliases))
+        {
+            return false;
+        }
 
         int nextCursor = SkipWhitespace(preparedLine, cursor);
         return nextCursor >= preparedLine.Length || preparedLine[nextCursor] != '.';
