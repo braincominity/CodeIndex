@@ -9,6 +9,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.15.3] - 2026-04-25
+
+#### Fixed
+- Fix the missed version update in version.json.
+
 ### [1.15.2] - 2026-04-25
 
 #### Fixed
@@ -920,6 +925,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.15.3] - 2026-04-25
+
+#### 修正
+- version.jsonのバージョン修正漏れを修正
+
 ### [1.15.2] - 2026-04-25
 
 #### 修正
@@ -1826,7 +1836,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.15.2...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.15.3...HEAD
+[1.15.3]: https://github.com/Widthdom/CodeIndex/compare/v1.15.2...v1.15.3
 [1.15.2]: https://github.com/Widthdom/CodeIndex/compare/v1.15.1...v1.15.2
 [1.15.1]: https://github.com/Widthdom/CodeIndex/compare/v1.15.0...v1.15.1
 [1.15.0]: https://github.com/Widthdom/CodeIndex/compare/v1.14.0...v1.15.0
