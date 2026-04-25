@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.15.2] - 2026-04-25
+
 #### Fixed
 - **JavaScript / TypeScript line-continuation strings outside template holes no longer leak phantom references (#844, #970)** — `StructuralLineMasker` now keeps top-level JS/TS single- and double-quoted strings alive across physical line boundaries the same way it already handled template-hole continuations, so `identifier(` text inside a backslash-continued string cannot survive into `references`, `callers`, or `impact`. Added regression coverage for JavaScript with CRLF continuation and TypeScript with a normal continued string, plus a for-of scan-buffer guard for continued single-quoted text. Affected: `src/CodeIndex/Indexer/StructuralLineMasker.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`. Closes #844. Closes #970.
 - **SQL FROM lists now keep later tables after derived-table sources (#942, #974)** — `ReferenceExtractor` now treats parenthesized derived tables as skippable source-list items, so later comma-separated tables such as `accounts` in `SELECT * FROM (SELECT 1) x, accounts;` remain visible to `references` and graph queries instead of stopping at the derived-table item. The existing table-hint handling from #941 stays covered by the current regressions, and column-alias-list cases are covered by the same source-list path. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`. Closes #942, #974.
@@ -918,6 +920,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+### [1.15.2] - 2026-04-25
+
 #### 修正
 - **template hole の外側にある JavaScript / TypeScript の行継続文字列が phantom reference を漏らさないよう修正 (#844, #970)** — `StructuralLineMasker` が、template hole 継続と同様に、top-level の JS/TS 単/二重引用符文字列を物理行をまたいで保持するようになり、`identifier(` のような文字列内のテキストが `references` / `callers` / `impact` に残らなくなりました。JavaScript の CRLF 継続ケース、TypeScript の通常の継続文字列、そして continued single-quoted text の for-of scan-buffer 回帰を追加しました。対象: `src/CodeIndex/Indexer/StructuralLineMasker.cs`、`tests/CodeIndex.Tests/ReferenceExtractorTests.cs`。Closes #844。Closes #970。
 - SQL の FROM list で derived table の後ろにある表も残すよう修正 (#942) — ReferenceExtractor が parenthesized な derived table を top-level の source-list item として飛ばせるようになり、SELECT * FROM (SELECT 1) x, accounts; の accounts が references と graph query で見えるままになりました。#941 の table-hint パスは既存の regression で引き続き守られます。対象: src/CodeIndex/Indexer/ReferenceExtractor.cs, tests/CodeIndex.Tests/ReferenceExtractorTests.cs. Closes #942。
@@ -1822,7 +1826,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.15.1...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.15.2...HEAD
+[1.15.2]: https://github.com/Widthdom/CodeIndex/compare/v1.15.1...v1.15.2
 [1.15.1]: https://github.com/Widthdom/CodeIndex/compare/v1.15.0...v1.15.1
 [1.15.0]: https://github.com/Widthdom/CodeIndex/compare/v1.14.0...v1.15.0
 [1.14.0]: https://github.com/Widthdom/CodeIndex/compare/v1.13.0...v1.14.0
