@@ -1811,6 +1811,20 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsCall_ImpactAnalysis_DepthZeroReturnsResolvedSymbolWithoutCallers()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"Run","maxDepth":0}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("none", structured["impact_mode"]!.GetValue<string>());
+        Assert.Equal(1, structured["definition_count"]!.GetValue<int>());
+        Assert.Empty(structured["callers"]!.AsArray());
+        Assert.Equal("depth_zero", structured["zero_result_reason"]!.GetValue<string>());
+        Assert.Equal("Use `cdidx impact <symbol> --depth 1` or higher to traverse callers.", structured["suggestion"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void ToolsCall_ImpactAnalysis_ExcludeTestsIgnoresOutOfScopeDuplicateDefinitions()
     {
         InsertIndexedFile("src/FooService.cs", "csharp",
