@@ -65,6 +65,13 @@ public sealed class InstallScriptTests : IDisposable
             chmod +x "{{Path.Combine(installDir, "cdidx")}}"
             printf '{"version":"1.10.0"}' > "{{Path.Combine(installDir, "version.json")}}"
             : > "{{Path.Combine(installDir, nativeAssetName)}}"
+            printf 'license text' > "{{Path.Combine(installDir, "LICENSE")}}"
+            printf 'commercial license text' > "{{Path.Combine(installDir, "COMMERCIAL_LICENSE.md")}}"
+            printf 'integration policy text' > "{{Path.Combine(installDir, "INTEGRATION_POLICY.md")}}"
+            printf 'trademark text' > "{{Path.Combine(installDir, "TRADEMARKS.md")}}"
+            mkdir -p "{{Path.Combine(installDir, "LICENSES")}}"
+            printf 'fsl text' > "{{Path.Combine(installDir, "LICENSES", "FSL-1.1-ALv2.txt")}}"
+            printf 'apache text' > "{{Path.Combine(installDir, "LICENSES", "Apache-2.0.txt")}}"
 
             main
             """,
@@ -839,6 +846,7 @@ public sealed class InstallScriptTests : IDisposable
         var (exitCode, stdout, stderr) = RunInstallerSnippet(
             $$"""
             mkdir -p "{{payloadDir}}"
+            mkdir -p "{{Path.Combine(payloadDir, "LICENSES")}}"
             cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
             #!/usr/bin/env bash
             echo "cdidx v1.2.3"
@@ -848,7 +856,10 @@ public sealed class InstallScriptTests : IDisposable
             printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
             printf 'license text' > "{{Path.Combine(payloadDir, "LICENSE")}}"
             printf 'commercial license text' > "{{Path.Combine(payloadDir, "COMMERCIAL_LICENSE.md")}}"
+            printf 'integration policy text' > "{{Path.Combine(payloadDir, "INTEGRATION_POLICY.md")}}"
             printf 'trademark text' > "{{Path.Combine(payloadDir, "TRADEMARKS.md")}}"
+            printf 'fsl text' > "{{Path.Combine(payloadDir, "LICENSES", "FSL-1.1-ALv2.txt")}}"
+            printf 'apache text' > "{{Path.Combine(payloadDir, "LICENSES", "Apache-2.0.txt")}}"
             tar czf "{{archivePath}}" -C "{{payloadDir}}" .
 
             if command -v sha256sum > /dev/null 2>&1; then
@@ -897,7 +908,10 @@ public sealed class InstallScriptTests : IDisposable
             echo "INSTALL_OK"
             echo "LICENSE:$(cat "{{Path.Combine(installDir, "LICENSE")}}")"
             echo "COMMERCIAL:$(cat "{{Path.Combine(installDir, "COMMERCIAL_LICENSE.md")}}")"
+            echo "INTEGRATION:$(cat "{{Path.Combine(installDir, "INTEGRATION_POLICY.md")}}")"
             echo "TRADEMARKS:$(cat "{{Path.Combine(installDir, "TRADEMARKS.md")}}")"
+            echo "FSL:$(cat "{{Path.Combine(installDir, "LICENSES", "FSL-1.1-ALv2.txt")}}")"
+            echo "APACHE:$(cat "{{Path.Combine(installDir, "LICENSES", "Apache-2.0.txt")}}")"
             """,
             new Dictionary<string, string?>
             {
@@ -908,10 +922,16 @@ public sealed class InstallScriptTests : IDisposable
         Assert.Contains("INSTALL_OK", stdout);
         Assert.Contains("LICENSE:license text", stdout);
         Assert.Contains("COMMERCIAL:commercial license text", stdout);
+        Assert.Contains("INTEGRATION:integration policy text", stdout);
         Assert.Contains("TRADEMARKS:trademark text", stdout);
+        Assert.Contains("FSL:fsl text", stdout);
+        Assert.Contains("APACHE:apache text", stdout);
         Assert.Equal("license text", File.ReadAllText(Path.Combine(installDir, "LICENSE")));
         Assert.Equal("commercial license text", File.ReadAllText(Path.Combine(installDir, "COMMERCIAL_LICENSE.md")));
+        Assert.Equal("integration policy text", File.ReadAllText(Path.Combine(installDir, "INTEGRATION_POLICY.md")));
         Assert.Equal("trademark text", File.ReadAllText(Path.Combine(installDir, "TRADEMARKS.md")));
+        Assert.Equal("fsl text", File.ReadAllText(Path.Combine(installDir, "LICENSES", "FSL-1.1-ALv2.txt")));
+        Assert.Equal("apache text", File.ReadAllText(Path.Combine(installDir, "LICENSES", "Apache-2.0.txt")));
         Assert.Equal(string.Empty, stderr);
     }
 

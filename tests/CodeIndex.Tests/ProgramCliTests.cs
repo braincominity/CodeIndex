@@ -141,10 +141,12 @@ public class ProgramCliTests
 
         Assert.Equal(0, exitCode);
         Assert.Equal(string.Empty, stderr);
-        Assert.Contains("PolyForm Perimeter License 1.0.0", stdout);
-        Assert.Contains("competes with CodeIndex", stdout);
-        Assert.Contains("competing commercial product or service", stdout);
+        Assert.Contains("Functional Source License, Version 1.1, ALv2 Future License (FSL-1.1-ALv2)", stdout);
+        Assert.Contains("non-competing purposes", stdout);
+        Assert.Contains("Competing commercial products or services require a separate written agreement", stdout);
         Assert.Contains("separate written agreement", stdout);
+        Assert.Contains("LICENSES/Apache-2.0.txt", stdout);
+        Assert.Contains("INTEGRATION_POLICY.md", stdout);
     }
 
     private static (int ExitCode, string StdOut, string StdErr) RunCliInSubprocess(string[] args)
