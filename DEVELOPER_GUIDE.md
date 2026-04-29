@@ -37,7 +37,7 @@ src/CodeIndex/
     FileIndexer.cs            — Directory scan, shared path filtering for full/update runs, built-in skip lists plus `.gitignore` / `.cdidxignore`, extension/file-name/shebang language detection, FileRecord building
     ChunkSplitter.cs          — 80-line chunks with 10-line overlap
     SymbolExtractor.cs        — Hybrid symbol extraction: compiled regexes for most languages, plus a lightweight JS/TS lexer/state machine for class-body methods, CSS grouping/nesting selectors, per-file hash-based duplicate bookkeeping for same-line restart suppression, scope filtering, and range resolution
-    ReferenceExtractor.cs     — Regex-based call/reference extraction, including type-position `type_reference` edges plus a depth-aware fallback for nested-generic call sites (31 languages with graph queries)
+    ReferenceExtractor.cs     — Regex-based call/reference extraction, including JSX component open tags in `.jsx` / `.tsx` files, type-position `type_reference` edges plus a depth-aware fallback for nested-generic call sites (31 languages with graph queries)
   Mcp/
     McpServer.cs              — MCP server (stdin/stdout JSON-RPC 2.0 for AI coding tools; includes batch_query)
   Models/
@@ -1539,7 +1539,7 @@ LIMIT 20;
 | VB.NET | Sub, Function | Class, Module, Partial Class | Structure, Partial Structure | Interface, Partial Interface | Enum | Property | Event | Namespace, Imports | yes |
 | Zig | fn, pub fn, test | union, error | struct | -- | enum | -- | -- | @import | -- |
 | PowerShell | configuration, workflow, function, filter (scope prefixes) | class | -- | -- | enum | -- | -- | Import-Module, using module/namespace/assembly | -- |
-| CSS/SCSS | @mixin, @keyframes, `@font-face` (`font-family`), #id | `.class`, `:root`, 疑似/属性セレクタ, `%placeholder` | -- | -- | -- | `$variable`, `--custom-property` | -- | `@import`, `@use` | -- |
+| CSS/SCSS | @mixin, @keyframes, `@font-face` (`font-family`), #id | `.class`, `:root`, 疑似/属性セレクタ, `%placeholder` | -- | -- | -- | `$variable`, `%placeholder`, `@extend`, `--custom-property` | -- | `@import`, `@use` | -- |
 | Batch | ラベル (`:name`、`:name.sub`)、goto/call の着地点 (予約 `:EOF` は除外) | -- | -- | -- | -- | `set VAR=`、`set /a VAR=` (`VAR+=`、`VAR-=`、`VAR*=`、`VAR/=`、`VAR%=`、`VAR&=`、`VAR^=`、`VAR\|=`、`VAR<<=`、`VAR>>=` も)、`set /p VAR=`、`set "VAR=..."`、`@set VAR=`、`if ... set VAR=`、同一行複数ステートメント形 `set A=1 & set B=2` / `( set X=1 )` / `if ... ( set P=1 ) else set Q=2` / `for ... do set VAR=` (`rem` / `::` コメント行は引き続き除外) | -- | -- | -- |
 | HTML | -- | 専用のタグ構造 state machine で抽出するカスタム Web Component のタグ名（ハイフンを含む開始タグ、例: `<my-button>` / `<app-sidebar>`。`font-face` / `color-profile` / `annotation-xml` のような予約済み SVG / MathML のハイフン入りタグは除外） | -- | -- | -- | `id="..."` / `id='...'` 属性（state machine がタグの開始、引用符付き/なし値、複数行の引用符付き値を走査し、`id` 属性のみ採用するため、`data-id=` / `aria-*id=` / `xml:id=` は正規表現の lookbehind ではなく構造的に除外される） | -- | 外部 `<script src="...">` と `<link href="...">`（`<script>` / `<style>` / `<textarea>` / `<title>` の raw-text 本体と `<!-- ... -->` コメントはマスクされ、本体内の属性名に似た文字列から phantom シンボルが漏れない） | -- |
 

@@ -31,6 +31,14 @@ public static class ReferenceExtractor
         "zig", "css"
     ];
 
+    private static readonly Regex ScssVariableReferenceRegex = new(
+        @"(?<![\w$])\$(?<name>[A-Za-z_][\w-]*)",
+        RegexOptions.Compiled);
+
+    private static readonly Regex ScssExtendReferenceRegex = new(
+        @"@extend\s+(?<name>[%.][A-Za-z_][\w-]*)",
+        RegexOptions.Compiled);
+
     private static readonly HashSet<string> SharedIgnoredCallNames = new(StringComparer.Ordinal)
     {
         // Control flow / 制御フロー
@@ -189,6 +197,18 @@ public static class ReferenceExtractor
     private static readonly Regex StringLiteralRegex = new(
         "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`",
         RegexOptions.Compiled);
+    private static readonly Regex CssCustomPropertyReferenceRegex = new(@"\bvar\(\s*--(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex CssAnimationNameReferenceRegex = new(@"\banimation-name\s*:\s*(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex CssAnimationShorthandValueRegex = new(@"\banimation\s*:\s*(?<value>[^;{}]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex CssClassSelectorReferenceRegex = new(@"(?<![A-Za-z0-9_-])\.(?<name>[\w-]+)", RegexOptions.Compiled);
+    private static readonly HashSet<string> CssAnimationShorthandIgnoredTokens = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "ease", "ease-in", "ease-out", "ease-in-out", "linear",
+        "step-start", "step-end", "cubic-bezier", "steps",
+        "infinite", "normal", "reverse", "alternate", "alternate-reverse",
+        "none", "forwards", "backwards", "both", "running", "paused",
+        "initial", "inherit", "unset", "revert", "revert-layer",
+    };
     // SQL-specific single-quoted string stripper: preserve identifier quoting (`[...]`, `` `...` ``,
     // and ANSI `"..."`) so the SQL graph path can still see real object names while literal payloads
     // stay masked.
@@ -221,6 +241,13 @@ public static class ReferenceExtractor
     // 平坦な `<[^>\n]+>` では末尾 `>>` を釣り合わせられないため、depth-aware な fallback scanner
     // で補完する。issue #263 参照。
     private static readonly Regex CallRegex = new($@"(?<![\w$])(?<name>{CSharpIdentifierPattern})(?:\?\.)?(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
+    // JSX / TSX component element open tags. Capitalized tag names are treated as component
+    // call sites, while lowercase intrinsic HTML tags stay excluded by design.
+    // JSX / TSX の component open tag。大文字始まりの tag 名だけを component 呼び出しとして扱い、
+    // 小文字始まりの intrinsic HTML tag は意図的に除外する。
+    private static readonly Regex JsxElementOpenRegex = new(
+        @"<(?<name>[A-Z][\w$]*(?:\.[A-Za-z_$][\w$]*)*)",
+        RegexOptions.Compiled);
     // PowerShell cmdlet / function calls are statement-start or pipeline-stage forms such as
     // `Get-ChildItem -Path .`, `Write-Host "x"`, and `$items | ForEach-Object { ... }`.
     // The shared CallRegex only sees parenthesized calls and would split hyphenated cmdlets
@@ -745,12 +772,18 @@ public static class ReferenceExtractor
     /// Extract indexed references for supported languages.
     /// 対応言語向けにインデックス化する参照を抽出する。
     /// </summary>
-    public static List<ReferenceRecord> Extract(long fileId, string? lang, string content, IReadOnlyList<SymbolRecord> symbols)
+    public static List<ReferenceRecord> Extract(
+        long fileId,
+        string? lang,
+        string content,
+        IReadOnlyList<SymbolRecord> symbols,
+        string? path = null)
     {
         if (!SupportsLanguage(lang))
             return [];
 
         var language = lang!;
+        var isJsxFile = IsJsxFilePath(path);
 
         // Null / empty fast path — keep the direct-call null-safe contract that
         // FileIndexer.StripLineLeadingBom's IsNullOrEmpty check used to provide
@@ -1001,6 +1034,7 @@ public static class ReferenceExtractor
                 }
                 csharpInDelimitedDocComment = nextCsharpDelimitedDocComment;
             }
+
             if (string.IsNullOrWhiteSpace(preparedLine))
             {
                 if (language == "csharp"
@@ -1101,6 +1135,43 @@ public static class ReferenceExtractor
                 }
 
                 return container;
+            }
+
+            if (isJsxFile && (language is "javascript" or "typescript"))
+            {
+                foreach (Match match in JsxElementOpenRegex.Matches(preparedLine))
+                {
+                    var fullName = match.Groups["name"].Value;
+                    var nameIndex = match.Groups["name"].Index;
+                    var jsxContainer = ResolveContainerForCall(nameIndex);
+                    var firstDotIndex = fullName.IndexOf('.');
+
+                    AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        firstDotIndex < 0 ? fullName : fullName[..firstDotIndex],
+                        nameIndex,
+                        "call",
+                        context,
+                        lineNumber,
+                        jsxContainer);
+
+                    var dotIndex = fullName.LastIndexOf('.');
+                    if (dotIndex > 0 && dotIndex + 1 < fullName.Length)
+                    {
+                        AddReference(
+                            references,
+                            seen,
+                            fileId,
+                            fullName[(dotIndex + 1)..],
+                            nameIndex + dotIndex + 1,
+                            "call",
+                            context,
+                            lineNumber,
+                            jsxContainer);
+                    }
+                }
             }
 
             if (language == "csharp")
@@ -1254,6 +1325,18 @@ public static class ReferenceExtractor
                     context,
                     lineNumber,
                     ResolveContainerForCall,
+                    container);
+            }
+            else if (language == "css")
+            {
+                EmitCssReferences(
+                    preparedLine,
+                    context,
+                    lineNumber,
+                    references,
+                    seen,
+                    fileId,
+                    definitionNames,
                     container);
             }
 
@@ -1611,6 +1694,18 @@ public static class ReferenceExtractor
                 }
             }
 
+            if (language == "css")
+            {
+                EmitCssScssReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
+            }
+
             // C# / Java parenless initializers: `new T { ... }` / `new T<U> { ... }` /
             // `new T[] { ... }` etc. CallRegex requires a trailing `(`, so these forms slip
             // through and the type is otherwise never recorded as instantiated. Emit an
@@ -1725,6 +1820,18 @@ public static class ReferenceExtractor
                         }
                     }
                 }
+            }
+
+            if (language == "css")
+            {
+                EmitCssScssReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
             }
 
             // JavaScript / TypeScript zero-arg constructor calls may omit `()`: `new Foo;`.
@@ -2035,6 +2142,307 @@ public static class ReferenceExtractor
             ContainerKind = container?.Kind,
             ContainerName = container?.Name,
         });
+    }
+
+    private static void EmitCssReferences(
+        string preparedLine,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        HashSet<string>? definitionNames,
+        SymbolRecord? container)
+    {
+        foreach (Match match in CssCustomPropertyReferenceRegex.Matches(preparedLine))
+        {
+            var nameGroup = match.Groups["name"];
+            if (definitionNames != null && definitionNames.Contains(nameGroup.Value))
+                continue;
+
+            AddReference(references, seen, fileId, nameGroup.Value, nameGroup.Index, "reference", context, lineNumber, container);
+        }
+
+        foreach (Match match in CssAnimationNameReferenceRegex.Matches(preparedLine))
+        {
+            var nameGroup = match.Groups["name"];
+            if (definitionNames != null && definitionNames.Contains(nameGroup.Value))
+                continue;
+
+            AddReference(references, seen, fileId, nameGroup.Value, nameGroup.Index, "reference", context, lineNumber, container);
+        }
+
+        foreach (Match match in CssAnimationShorthandValueRegex.Matches(preparedLine))
+        {
+            EmitCssAnimationShorthandReferences(
+                match.Groups["value"].Value,
+                match.Groups["value"].Index,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                definitionNames,
+                container);
+        }
+
+        EmitCssClassSelectorReferences(
+            preparedLine,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            definitionNames,
+            container);
+    }
+
+    private static bool IsJsxFilePath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+
+        var extension = Path.GetExtension(path);
+        return string.Equals(extension, ".jsx", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(extension, ".tsx", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void EmitCssAnimationShorthandReferences(
+        string value,
+        int valueIndex,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        HashSet<string>? definitionNames,
+        SymbolRecord? container)
+    {
+        var segmentStart = 0;
+        var parenDepth = 0;
+        for (var i = 0; i <= value.Length; i++)
+        {
+            if (i < value.Length)
+            {
+                var ch = value[i];
+                if (ch == '(')
+                {
+                    parenDepth++;
+                    continue;
+                }
+
+                if (ch == ')' && parenDepth > 0)
+                {
+                    parenDepth--;
+                    continue;
+                }
+
+                if (ch != ',' || parenDepth > 0)
+                    continue;
+            }
+
+            EmitCssAnimationShorthandSegmentReference(
+                value,
+                valueIndex,
+                segmentStart,
+                i,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                definitionNames,
+                container);
+            segmentStart = i + 1;
+        }
+    }
+
+    private static void EmitCssAnimationShorthandSegmentReference(
+        string value,
+        int valueIndex,
+        int segmentStart,
+        int segmentEnd,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        HashSet<string>? definitionNames,
+        SymbolRecord? container)
+    {
+        var cursor = segmentStart;
+        while (cursor < segmentEnd && char.IsWhiteSpace(value[cursor]))
+            cursor++;
+
+        while (cursor < segmentEnd)
+        {
+            var tokenStart = cursor;
+            while (cursor < segmentEnd && !char.IsWhiteSpace(value[cursor]))
+                cursor++;
+
+            var token = value[tokenStart..cursor];
+            if (!IsCssAnimationNameToken(token))
+                continue;
+            if (definitionNames != null && definitionNames.Contains(token))
+                return;
+
+            AddReference(references, seen, fileId, token, valueIndex + tokenStart, "reference", context, lineNumber, container);
+            return;
+        }
+    }
+
+    private static void EmitCssClassSelectorReferences(
+        string preparedLine,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        HashSet<string>? definitionNames,
+        SymbolRecord? container)
+    {
+        var segmentStart = 0;
+        while (segmentStart < preparedLine.Length)
+        {
+            var braceIndex = preparedLine.IndexOf('{', segmentStart);
+            var segmentEnd = braceIndex >= 0 ? braceIndex : preparedLine.Length;
+            if (LooksLikeCssSelectorSegment(preparedLine, segmentStart, segmentEnd))
+            {
+                var trimmedStart = segmentStart;
+                while (trimmedStart < segmentEnd && char.IsWhiteSpace(preparedLine[trimmedStart]))
+                    trimmedStart++;
+
+                var selectorSegment = preparedLine[trimmedStart..segmentEnd];
+                foreach (Match match in CssClassSelectorReferenceRegex.Matches(selectorSegment))
+                {
+                    var nameGroup = match.Groups["name"];
+                    var name = "." + nameGroup.Value;
+                    if (definitionNames != null && definitionNames.Contains(name))
+                        continue;
+
+                    AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        name,
+                        trimmedStart + nameGroup.Index - 1,
+                        "reference",
+                        context,
+                        lineNumber,
+                        container);
+                }
+            }
+
+            if (braceIndex < 0)
+                break;
+
+            segmentStart = braceIndex + 1;
+        }
+    }
+
+    private static bool LooksLikeCssSelectorSegment(string line, int segmentStart, int segmentEnd)
+    {
+        var index = segmentStart;
+        while (index < segmentEnd && char.IsWhiteSpace(line[index]))
+            index++;
+        if (index >= segmentEnd)
+            return false;
+
+        return line[index] is '.' or '#' or '[' or '*' or ':' or '&';
+    }
+
+    private static bool IsCssAnimationNameToken(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return false;
+
+        if (CssAnimationShorthandIgnoredTokens.Contains(token))
+            return false;
+        if (token.IndexOf('(') >= 0 || token.IndexOf(')') >= 0 || token.IndexOf(',') >= 0
+            || token.IndexOf('/') >= 0 || token.IndexOf(':') >= 0 || token.IndexOf(';') >= 0)
+            return false;
+        if (IsCssAnimationTimeToken(token) || IsCssAnimationNumberToken(token))
+            return false;
+        if (token.StartsWith("--", StringComparison.Ordinal))
+            return false;
+        if (!(char.IsLetter(token[0]) || token[0] == '_' || token[0] == '-'))
+            return false;
+        if (token[0] == '-' && token.Length > 1 && (token[1] == '-' || char.IsDigit(token[1])))
+            return false;
+
+        for (var i = 1; i < token.Length; i++)
+        {
+            if (char.IsLetterOrDigit(token[i]) || token[i] == '_' || token[i] == '-')
+                continue;
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsCssAnimationTimeToken(string token)
+    {
+        if (token.Length < 2)
+            return false;
+
+        var unitLength = token.EndsWith("ms", StringComparison.OrdinalIgnoreCase)
+            ? 2
+            : token.EndsWith("s", StringComparison.OrdinalIgnoreCase)
+                ? 1
+                : 0;
+        if (unitLength == 0 || token.Length == unitLength)
+            return false;
+
+        var numberPart = token[..^unitLength];
+        var sawDigit = false;
+        var sawDot = false;
+        foreach (var ch in numberPart)
+        {
+            if (char.IsDigit(ch))
+            {
+                sawDigit = true;
+                continue;
+            }
+
+            if (ch == '.' && !sawDot)
+            {
+                sawDot = true;
+                continue;
+            }
+
+            return false;
+        }
+
+        return sawDigit;
+    }
+
+    private static bool IsCssAnimationNumberToken(string token)
+    {
+        if (token.Length == 0 || token.IndexOfAny(['(', ')', ',', '/', ':', ';']) >= 0)
+            return false;
+        if (!(char.IsDigit(token[0]) || token[0] == '.'))
+            return false;
+
+        var sawDigit = false;
+        var sawDot = false;
+        foreach (var ch in token)
+        {
+            if (char.IsDigit(ch))
+            {
+                sawDigit = true;
+                continue;
+            }
+
+            if (ch == '.' && !sawDot)
+            {
+                sawDot = true;
+                continue;
+            }
+
+            return false;
+        }
+
+        return sawDigit;
     }
 
     private static void NormalizeSqlIdentifier(
@@ -6244,6 +6652,72 @@ public static class ReferenceExtractor
         !string.IsNullOrEmpty(identifier) && identifier[0] == '@'
             ? identifier[1..]
             : identifier;
+
+    private static void EmitCssScssReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        foreach (Match match in ScssVariableReferenceRegex.Matches(preparedLine))
+        {
+            var nameGroup = match.Groups["name"];
+            if (ShouldSkipScssVariableReference(preparedLine, nameGroup.Index))
+                continue;
+
+            AddReference(
+                references,
+                seen,
+                fileId,
+                nameGroup.Value,
+                nameGroup.Index,
+                "call",
+                context,
+                lineNumber,
+                container);
+        }
+
+        foreach (Match match in ScssExtendReferenceRegex.Matches(preparedLine))
+        {
+            var nameGroup = match.Groups["name"];
+            AddReference(
+                references,
+                seen,
+                fileId,
+                nameGroup.Value,
+                nameGroup.Index,
+                "call",
+                context,
+                lineNumber,
+                container);
+        }
+    }
+
+    private static bool ShouldSkipScssVariableReference(string preparedLine, int variableIndex)
+    {
+        var trimmed = preparedLine.TrimStart();
+        if (trimmed.StartsWith("$", StringComparison.Ordinal))
+        {
+            var declarationColonIndex = preparedLine.IndexOf(':', variableIndex);
+            if (declarationColonIndex >= 0)
+                return true;
+        }
+
+        if (trimmed.StartsWith("@mixin", StringComparison.Ordinal)
+            || trimmed.StartsWith("@function", StringComparison.Ordinal))
+        {
+            var braceIndex = preparedLine.IndexOf('{');
+            if (braceIndex < 0)
+                return true;
+            if (variableIndex < braceIndex)
+                return true;
+        }
+
+        return false;
+    }
 
     private static string NormalizeCSharpQualifiedSegments(
         string preparedLine,
