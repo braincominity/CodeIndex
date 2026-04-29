@@ -17,3 +17,9 @@ The `.codex/workflows/` directory is a shared workflow library for all coding ag
 - Follow the repository-tracked `.claude/settings.json` and `.claude/hooks/bash-guard.py` policy files when running in Claude Code.
 - Do not edit those policy files during ordinary implementation work unless the task is explicitly about Claude Code guard behavior.
 - For shell search and navigation, prefer the built-in Grep / Glob tools or the locally built `cdidx` binary described in `AGENT_GUIDE.md`.
+
+## Status Contract
+
+- `status --json` and related JSON/MCP payloads currently expose the trust fields documented in `README.md` and `DEVELOPER_GUIDE.md`, including `fold_ready`, `fold_ready_reason`, `graph_table_available`, `issues_table_available`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`, `hotspot_family_ready`, `hotspot_family_degraded_reason`, `csharp_symbol_name_ready`, and `csharp_metadata_target_ready`.
+- When `fold_ready` is the only degraded readiness bit, the CLI also adds `degraded_reason`, `recommended_action`, and `alternative_action`.
+- Keep the three docs synchronized if this contract changes.
