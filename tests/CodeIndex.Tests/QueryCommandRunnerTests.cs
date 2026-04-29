@@ -13072,6 +13072,84 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunReferences_ExactJson_CssScssVariableAndExtendReferences_AreVisible()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_css_scss_variable_and_extend_references");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "styles"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "styles", "theme.scss"),
+                """
+                $primary: #3366cc;
+                $spacing-base: 8px;
+
+                @mixin rounded($radius) {
+                  border-radius: $radius;
+                }
+
+                %button-base {
+                  padding: 4px;
+                }
+
+                .button {
+                  color: $primary;
+                  padding: $spacing-base * 2;
+                  @include rounded(4px);
+                }
+
+                .card {
+                  @extend %button-base;
+                  border: 1px solid $primary;
+                }
+                """);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
+            var (primaryExitCode, primaryStdout, primaryStderr) = RunBuiltCli(["references", "$primary", "--db", dbPath, "--json", "--lang", "css", "--exact-name"]);
+            var (spacingExitCode, spacingStdout, spacingStderr) = RunBuiltCli(["references", "spacing-base", "--db", dbPath, "--json", "--lang", "css", "--exact-name"]);
+            var (buttonExitCode, buttonStdout, buttonStderr) = RunBuiltCli(["references", "%button-base", "--db", dbPath, "--json", "--lang", "css", "--exact-name"]);
+            var (radiusExitCode, radiusStdout, radiusStderr) = RunBuiltCli(["references", "radius", "--db", dbPath, "--json", "--lang", "css", "--exact-name"]);
+
+            var primaryRows = ParseJsonLines(primaryStdout);
+            var spacingRows = ParseJsonLines(spacingStdout);
+            var buttonRows = ParseJsonLines(buttonStdout);
+            var radiusRows = ParseJsonLines(radiusStdout);
+
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            Assert.Equal(CommandExitCodes.Success, primaryExitCode);
+            Assert.Equal(string.Empty, primaryStderr);
+            Assert.Equal(2, primaryRows.Count);
+            Assert.All(primaryRows, row => Assert.Equal("primary", row.RootElement.GetProperty("symbol_name").GetString()));
+            Assert.All(primaryRows, row => Assert.Equal("call", row.RootElement.GetProperty("reference_kind").GetString()));
+
+            Assert.Equal(CommandExitCodes.Success, spacingExitCode);
+            Assert.Equal(string.Empty, spacingStderr);
+            var spacingRow = Assert.Single(spacingRows);
+            Assert.Equal("spacing-base", spacingRow.RootElement.GetProperty("symbol_name").GetString());
+            Assert.Equal("call", spacingRow.RootElement.GetProperty("reference_kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, buttonExitCode);
+            Assert.Equal(string.Empty, buttonStderr);
+            var buttonRow = Assert.Single(buttonRows);
+            Assert.Equal("%button-base", buttonRow.RootElement.GetProperty("symbol_name").GetString());
+            Assert.Equal("call", buttonRow.RootElement.GetProperty("reference_kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, radiusExitCode);
+            Assert.Equal(string.Empty, radiusStderr);
+            var radiusRow = Assert.Single(radiusRows);
+            Assert.Equal("radius", radiusRow.RootElement.GetProperty("symbol_name").GetString());
+            Assert.Equal("call", radiusRow.RootElement.GetProperty("reference_kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunReferences_ExactJson_SqlModifierPrefixedObjectsResolveRealNames()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_modifier_prefixed_objects");
