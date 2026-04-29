@@ -1204,14 +1204,14 @@ public partial class DbReader
                 SELECT sr.file_id,
                        rf.lang,
                        sr.symbol_name AS raw_symbol_name,
-                       " + BuildLogicalReferenceNameExpr("rf.lang", "sr.symbol_name", "sr.context", "sr.container_name", "sr.column_number") + @" AS symbol_name,
-                       " + BuildLogicalReferenceSegmentCountExpr("rf.lang", "sr.symbol_name", "sr.context", "sr.container_name", "sr.column_number") + @" AS symbol_segment_count,
-                       " + BuildLogicalReferenceLeafFallbackAllowedExpr("rf.lang", "sr.symbol_name", "sr.context", "sr.container_name", "sr.column_number") + @" AS allow_leaf_fallback,
+                       " + BuildLogicalReferenceNameExpr("rf.lang", "sr.symbol_name", ReferenceContextSql("sr"), "sr.container_name", "sr.column_number") + @" AS symbol_name,
+                       " + BuildLogicalReferenceSegmentCountExpr("rf.lang", "sr.symbol_name", ReferenceContextSql("sr"), "sr.container_name", "sr.column_number") + @" AS symbol_segment_count,
+                       " + BuildLogicalReferenceLeafFallbackAllowedExpr("rf.lang", "sr.symbol_name", ReferenceContextSql("sr"), "sr.container_name", "sr.column_number") + @" AS allow_leaf_fallback,
                        sr.line,
                        sr.column_number,
                        " + GetLogicalReferenceKindSql("sr.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references sr
-                JOIN files rf ON rf.id = sr.file_id
+                JOIN files rf ON rf.id = sr.file_id" + ReferenceLineJoinSql("sr") + @"
                 WHERE sr.reference_kind IN " + CallGraphReferenceKindsSql + @"
                 GROUP BY rf.lang, sr.file_id, raw_symbol_name, symbol_name, symbol_segment_count, allow_leaf_fallback, sr.line, sr.column_number, logical_reference_kind
             ),
@@ -1492,13 +1492,13 @@ public partial class DbReader
             logical_references AS (
                 SELECT sr.file_id,
                        rf.lang,
-                       " + BuildLogicalReferenceNameExpr("rf.lang", "sr.symbol_name", "sr.context", "sr.container_name", "sr.column_number") + @" AS symbol_name,
-                       " + BuildLogicalReferenceSegmentCountExpr("rf.lang", "sr.symbol_name", "sr.context", "sr.container_name", "sr.column_number") + @" AS symbol_segment_count,
+                       " + BuildLogicalReferenceNameExpr("rf.lang", "sr.symbol_name", ReferenceContextSql("sr"), "sr.container_name", "sr.column_number") + @" AS symbol_name,
+                       " + BuildLogicalReferenceSegmentCountExpr("rf.lang", "sr.symbol_name", ReferenceContextSql("sr"), "sr.container_name", "sr.column_number") + @" AS symbol_segment_count,
                        sr.line,
                        sr.column_number,
                        " + GetLogicalReferenceKindSql("sr.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references sr
-                JOIN files rf ON rf.id = sr.file_id
+                JOIN files rf ON rf.id = sr.file_id" + ReferenceLineJoinSql("sr") + @"
                 WHERE sr.reference_kind IN " + CallGraphReferenceKindsSql + @"
                 GROUP BY rf.lang, sr.file_id, symbol_name, symbol_segment_count, sr.line, sr.column_number, logical_reference_kind
             ),
@@ -1843,21 +1843,21 @@ public partial class DbReader
                   AND NOT EXISTS (
                       SELECT 1
                       FROM symbol_references sr
-                      JOIN files rf ON rf.id = sr.file_id
+                      JOIN files rf ON rf.id = sr.file_id" + ReferenceLineJoinSql("sr") + @"
                       WHERE sr.symbol_name = s.name
                          OR (f.lang = 'sql' AND rf.lang = 'sql' AND (
-                                (sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_segment_count(s.name)
-                                 AND sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_normalize_name(s.name) COLLATE NOCASE)
+                                (sql_resolve_reference_segment_count_at(sr.symbol_name, " + ReferenceContextSql("sr") + @", sr.container_name, sr.column_number) = sql_segment_count(s.name)
+                                 AND sql_resolve_reference_name_at(sr.symbol_name, " + ReferenceContextSql("sr") + @", sr.container_name, sr.column_number) = sql_normalize_name(s.name) COLLATE NOCASE)
                          OR (sql_segment_count(sr.symbol_name) = 1
-                            AND sql_allow_leaf_fallback_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = 1
+                            AND sql_allow_leaf_fallback_at(sr.symbol_name, " + ReferenceContextSql("sr") + @", sr.container_name, sr.column_number) = 1
                             AND sr.symbol_name = sql_leaf_name(s.name) COLLATE NOCASE
                             AND NOT EXISTS (
                                     SELECT 1
                                     FROM symbols s_exact
                                     JOIN files f_exact ON f_exact.id = s_exact.file_id
                                     WHERE f_exact.lang = 'sql'
-                                      AND sql_segment_count(s_exact.name) = sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number)
-                                     AND sql_normalize_name(s_exact.name) = sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) COLLATE NOCASE
+                                      AND sql_segment_count(s_exact.name) = sql_resolve_reference_segment_count_at(sr.symbol_name, " + ReferenceContextSql("sr") + @", sr.container_name, sr.column_number)
+                                     AND sql_normalize_name(s_exact.name) = sql_resolve_reference_name_at(sr.symbol_name, " + ReferenceContextSql("sr") + @", sr.container_name, sr.column_number) COLLATE NOCASE
                                 ))
                          ))
                   )";
@@ -1978,6 +1978,8 @@ public partial class DbReader
 
         var graphLangs = ReferenceExtractor.GetSupportedLanguages();
         using var cmd = _conn.CreateCommand();
+        var referenceLineJoin = ReferenceLineJoinSql("sr");
+        var contextSql = ReferenceContextSql("sr");
         var sql = @"
             SELECT COUNT(*), COUNT(DISTINCT f.path), MAX(CASE WHEN f.lang = 'sql' THEN 1 ELSE 0 END)
             FROM symbols s
@@ -1986,21 +1988,21 @@ public partial class DbReader
               AND NOT EXISTS (
                   SELECT 1
                   FROM symbol_references sr
-                  JOIN files rf ON rf.id = sr.file_id
+                  JOIN files rf ON rf.id = sr.file_id" + referenceLineJoin + @"
                   WHERE sr.symbol_name = s.name
                      OR (f.lang = 'sql' AND rf.lang = 'sql' AND (
-                            (sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_segment_count(s.name)
-                             AND sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_normalize_name(s.name) COLLATE NOCASE)
+                            (sql_resolve_reference_segment_count_at(sr.symbol_name, " + contextSql + @", sr.container_name, sr.column_number) = sql_segment_count(s.name)
+                             AND sql_resolve_reference_name_at(sr.symbol_name, " + contextSql + @", sr.container_name, sr.column_number) = sql_normalize_name(s.name) COLLATE NOCASE)
                          OR (sql_segment_count(sr.symbol_name) = 1
-                            AND sql_allow_leaf_fallback_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = 1
+                            AND sql_allow_leaf_fallback_at(sr.symbol_name, " + contextSql + @", sr.container_name, sr.column_number) = 1
                             AND sr.symbol_name = sql_leaf_name(s.name) COLLATE NOCASE
                             AND NOT EXISTS (
                                     SELECT 1
                                     FROM symbols s_exact
                                     JOIN files f_exact ON f_exact.id = s_exact.file_id
                                     WHERE f_exact.lang = 'sql'
-                                      AND sql_segment_count(s_exact.name) = sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number)
-                                      AND sql_normalize_name(s_exact.name) = sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) COLLATE NOCASE
+                                      AND sql_segment_count(s_exact.name) = sql_resolve_reference_segment_count_at(sr.symbol_name, " + contextSql + @", sr.container_name, sr.column_number)
+                                      AND sql_normalize_name(s_exact.name) = sql_resolve_reference_name_at(sr.symbol_name, " + contextSql + @", sr.container_name, sr.column_number) COLLATE NOCASE
                                 ))
                      ))
               )";
