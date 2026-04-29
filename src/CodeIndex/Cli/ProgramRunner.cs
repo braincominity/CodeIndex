@@ -31,6 +31,13 @@ internal static class ProgramRunner
             return CommandExitCodes.Success;
         }
 
+        if (args[0] is "--license" or "license")
+        {
+            ConsoleUi.PrintLicenseSummary();
+            GlobalToolLog.Info($"command_complete exit_code={CommandExitCodes.Success} license_only=true");
+            return CommandExitCodes.Success;
+        }
+
         if (args[0] == "--completions")
         {
             var exitCode = RunCompletions(args[1..]);

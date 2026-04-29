@@ -91,27 +91,43 @@ public partial class McpServer
     private static int ClampLimit(int limit) => Math.Clamp(limit, 1, MaxLimit);
 
     /// <summary>
-    /// Return true when the requested reference kind is a metadata kind (`attribute` /
-    /// `annotation`) — these are valid on the `references` tool but must be rejected on
-    /// `callers` / `callees`, whose data model cannot answer metadata questions correctly
-    /// (metadata rows are attributed to the enclosing body-range symbol rather than the
-    /// annotated target, so file-level targets drop entirely and method-level metadata
-    /// appears under the enclosing class).
-    /// `references` では有効だが `callers` / `callees` では構造的に誤答するため弾くべき
-    /// metadata kind (`attribute` / `annotation`) かを返す。metadata 行は注釈対象ではなく
-    /// body-range 上の外側シンボルに帰属するため、`callers` / `callees` はこの kind に
-    /// 正しく答えられない。
+    /// Return true when the requested reference kind is NOT a call-graph kind (i.e. metadata
+    /// `attribute` / `annotation` or compile-time `type_reference`) — these are valid on the
+    /// `references` tool but must be rejected on `callers` / `callees`, whose data model
+    /// cannot answer those queries correctly. Metadata rows are attributed to the enclosing
+    /// body-range symbol rather than the annotated target (so file-level targets drop
+    /// entirely and method-level metadata appears under the enclosing class); `type_reference`
+    /// rows are compile-time type-position edges (declaration types, generic constraints,
+    /// `is`/`as`/`instanceof`, XML-doc `cref`), not runtime calls, so they misreport type
+    /// mentions as caller/callee edges.
+    /// `references` では有効だが `callers` / `callees` では構造的に誤答するため弾くべき kind
+    /// （metadata: `attribute` / `annotation`、型位置: `type_reference`）かを返す。metadata 行は
+    /// 注釈対象ではなく body-range 上の外側シンボルに帰属し、`type_reference` は実行時呼び出し
+    /// ではなく compile-time な型言及（宣言型、generic 制約、`is`/`as`/`instanceof`、XML-doc
+    /// `cref` など）なので、`callers` / `callees` はいずれの kind にも正しく答えられない。
     /// </summary>
-    private static bool IsMetadataReferenceKind(string? kind) =>
-        kind == "attribute" || kind == "annotation";
+    private static bool IsNonCallGraphReferenceKind(string? kind) =>
+        kind == "attribute" || kind == "annotation" || kind == "type_reference";
+
+    /// <summary>
+    /// Build the CLI / MCP error message for a non-call-graph reference kind rejected on
+    /// `callers` / `callees`. The message explains why the kind is structurally wrong on
+    /// the command and redirects users to `references`.
+    /// `callers` / `callees` で弾いた非 call-graph kind のエラーメッセージを組み立てる。
+    /// 構造的に誤答する理由を説明し、`references` に誘導する。
+    /// </summary>
+    private static string BuildNonCallGraphKindRejectionMessage(string command, string kind) =>
+        kind == "type_reference"
+            ? $"'kind: type_reference' is not supported on '{command}'. Type-position references are compile-time edges (declaration types, generic constraints, `is`/`as`/`instanceof`, XML-doc `cref`), not runtime calls, so `{command}` cannot return accurate rows for kind 'type_reference'. Use the 'references' tool with kind 'type_reference' instead."
+            : $"'kind: {kind}' is not supported on '{command}'. Metadata references are attributed to the enclosing body-range symbol, so `{command}` cannot return accurate rows for kind '{kind}'. Use the 'references' tool with kind '{kind}' for metadata enumeration.";
 
     private JsonNode? TryGetValidatedMaxLineWidth(JsonNode? id, JsonNode? args, out int maxLineWidth, string propertyName = "maxLineWidth")
     {
         var maxLineWidthValue = args?[propertyName]?.GetValue<int>();
-        if (maxLineWidthValue.HasValue && maxLineWidthValue.Value <= 0)
+        if (maxLineWidthValue.HasValue && maxLineWidthValue.Value < 0)
         {
             maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth;
-            return CreateToolErrorResponse(id, "maxLineWidth must be greater than or equal to 1");
+            return CreateToolErrorResponse(id, "maxLineWidth must be greater than or equal to 0");
         }
 
         if (maxLineWidthValue.HasValue && maxLineWidthValue.Value > LineWidthFormatter.MaxAllowedLineWidth)
@@ -415,6 +431,8 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "Missing required parameter: query");
         if (query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+        if (IsBareVerbatimQueryToken(query))
+            return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
@@ -471,6 +489,8 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "Missing required parameter: query");
         if (query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+        if (IsBareVerbatimQueryToken(query))
+            return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
@@ -486,14 +506,19 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.SearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth);
-            var exactSignal = reader.GetReferencesExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests);
+            var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
+            var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
+                reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
+                results.Select(result => result.Lang),
+                lang,
+                graphSupport.GraphLanguage);
+            var exactSignal = reader.GetReferencesExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
                 () => reader.CountSearchReferences(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false) > 0,
                 () => reader.CountSearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 () => reader.SearchReferences(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 r => r.SymbolName);
-            var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var payload = new JsonObject
             {
                 ["query"] = query,
@@ -510,6 +535,7 @@ public partial class McpServer
             };
             if (exact)
                 AddExactGraphSignal(payload, exactSignal);
+            AddSqlGraphContractSignal(payload, sqlGraphSignal);
             if (results.Count == 0)
             {
                 AddExactZeroHint(payload, exactZeroHint);
@@ -528,10 +554,12 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "Missing required parameter: query");
         if (query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+        if (IsBareVerbatimQueryToken(query))
+            return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
-        if (IsMetadataReferenceKind(kind))
-            return CreateToolErrorResponse(id, $"'kind: {kind}' is not supported on 'callers'. Metadata references are attributed to the enclosing body-range symbol, so `callers` cannot return accurate rows for kind '{kind}'. Use the 'references' tool with kind '{kind}' for metadata enumeration.");
+        if (IsNonCallGraphReferenceKind(kind))
+            return CreateToolErrorResponse(id, BuildNonCallGraphKindRejectionMessage("callers", kind!));
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var pathPatterns = ReadPathList(args, "path");
@@ -543,15 +571,19 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.GetCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
-            var exactSignal = reader.GetCallersExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests);
-            var sqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
+            var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
+            var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
+                reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
+                results.Select(result => result.Lang),
+                lang,
+                graphSupport.GraphLanguage);
+            var exactSignal = reader.GetCallersExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
                 () => reader.CountCallers(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false) > 0,
                 () => reader.CountCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 () => reader.GetCallers(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 r => r.CalleeName);
-            var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var payload = new JsonObject
             {
                 ["query"] = query,
@@ -586,10 +618,12 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "Missing required parameter: query");
         if (query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+        if (IsBareVerbatimQueryToken(query))
+            return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
         var kind = args?["kind"]?.GetValue<string>()?.ToLowerInvariant();
-        if (IsMetadataReferenceKind(kind))
-            return CreateToolErrorResponse(id, $"'kind: {kind}' is not supported on 'callees'. Metadata references are attributed to the enclosing body-range symbol, so `callees` cannot return accurate rows for kind '{kind}'. Use the 'references' tool with kind '{kind}' for metadata enumeration.");
+        if (IsNonCallGraphReferenceKind(kind))
+            return CreateToolErrorResponse(id, BuildNonCallGraphKindRejectionMessage("callees", kind!));
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 20);
         var pathPatterns = ReadPathList(args, "path");
@@ -601,15 +635,19 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.GetCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact);
-            var exactSignal = reader.GetCalleesExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests);
-            var sqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
+            var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
+            var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
+                reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
+                results.Select(result => result.Lang),
+                lang,
+                graphSupport.GraphLanguage);
+            var exactSignal = reader.GetCalleesExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
                 () => reader.CountCallees(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false) > 0,
                 () => reader.CountCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 () => reader.GetCallees(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
                 r => r.CallerName);
-            var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var payload = new JsonObject
             {
                 ["query"] = query,
@@ -722,6 +760,8 @@ public partial class McpServer
             return CreateToolErrorResponse(id, "Missing required parameter: query");
         if (query.Length > MaxQueryLength)
             return CreateToolErrorResponse(id, $"Query too long (max {MaxQueryLength} characters)");
+        if (IsBareVerbatimQueryToken(query))
+            return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 10);
         var lang = args?["lang"]?.GetValue<string>()?.ToLowerInvariant();
@@ -737,9 +777,21 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var analysis = reader.AnalyzeSymbol(query, limit, lang, includeBody, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth);
+            var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignal(
+                reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
+                DbReader.IsSqlLanguage(lang)
+                    || DbReader.IsSqlLanguage(analysis.GraphLanguage)
+                    || DbReader.IsSqlLanguage(analysis.File?.Lang)
+                    || DbReader.ContainsSqlLanguage(analysis.Definitions.Select(definition => definition.Lang))
+                    || DbReader.ContainsSqlLanguage(analysis.References.Select(reference => reference.Lang))
+                    || DbReader.ContainsSqlLanguage(analysis.Callers.Select(caller => caller.Lang))
+                    || DbReader.ContainsSqlLanguage(analysis.Callees.Select(callee => callee.Lang)));
+            analysis.SqlGraphContractReady = sqlGraphSignal.Relevant ? sqlGraphSignal.Ready : null;
+            analysis.SqlGraphContractDegradedReason = sqlGraphSignal.Relevant ? sqlGraphSignal.DegradedReason : null;
             WorkspaceMetadataEnricher.Enrich(analysis, _dbPath, _dbPathExplicit);
             var structured = JsonSerializer.SerializeToNode(analysis, _jsonOptions)!.AsObject();
             AddExactSignalAliases(structured);
+            AddSqlGraphContractSignal(structured, sqlGraphSignal);
             structured.Remove("exactZeroHint");
             AddExactZeroHint(structured, analysis.ExactZeroHint);
             structured["maxLineWidth"] = maxLineWidth;
@@ -768,6 +820,9 @@ public partial class McpServer
 
     private static void AddSqlGraphContractSignal(JsonObject payload, SqlGraphContractSignal signal)
     {
+        if (!signal.Relevant)
+            return;
+
         payload["sql_graph_contract_ready"] = signal.Ready;
         payload["sqlGraphContractReady"] = signal.Ready;
         if (!signal.Ready)
@@ -792,6 +847,12 @@ public partial class McpServer
             payload["degradedReason"] = snakeReason.DeepClone();
         else if (payload["degradedReason"] is JsonNode camelReason && payload["degraded_reason"] is null)
             payload["degraded_reason"] = camelReason.DeepClone();
+    }
+
+    private static bool IsBareVerbatimQueryToken(string value)
+    {
+        var trimmed = value.Trim();
+        return trimmed.Length > 0 && trimmed.All(ch => ch == '@');
     }
 
     private static Dictionary<string, string?> GetHotspotFamilyMetaSnapshot(DbContext db, Func<string, string> keyFactory)
@@ -1169,7 +1230,14 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.GetFileDependencies(limit, lang, pathPatterns, excludePaths, excludeTests, reverse);
-            var sqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
+            var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
+            var sqlGraphSignal = results.Count == 0
+                ? baseSqlGraphSignal
+                : QueryCommandRunner.NarrowSqlGraphContractSignalByPaths(
+                    reader,
+                    baseSqlGraphSignal,
+                    results.SelectMany(result => new[] { result.SourcePath, result.TargetPath }),
+                    lang);
             var payload = new JsonObject
             {
                 ["count"] = results.Count,
@@ -1190,6 +1258,8 @@ public partial class McpServer
         var query = args?["query"]?.GetValue<string>();
         if (string.IsNullOrWhiteSpace(query))
             return CreateToolErrorResponse(id, "Missing required parameter: query");
+        if (IsBareVerbatimQueryToken(query))
+            return CreateToolErrorResponse(id, "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
 
         var maxDepth = Math.Clamp(args?["maxDepth"]?.GetValue<int>() ?? 5, 1, 10);
         var limit = ClampLimit(args?["limit"]?.GetValue<int>() ?? 50);
@@ -1201,6 +1271,12 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var analysis = reader.AnalyzeImpact(query, maxDepth, limit, lang, pathPatterns, excludePaths, excludeTests);
+            var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignal(
+                reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
+                DbReader.IsSqlLanguage(lang)
+                    || DbReader.ContainsSqlLanguage(analysis.Definitions.Select(definition => definition.Lang))
+                    || DbReader.ContainsSqlLanguage(analysis.Callers.Select(caller => caller.Lang))
+                    || reader.AnyFilePathHasLanguage(analysis.FileImpacts.SelectMany(impact => new[] { impact.SourcePath, impact.TargetPath }), "sql"));
             var confirmedCount = analysis.Callers.Count;
             var confirmedFileCount = analysis.Callers.Select(r => r.Path).Distinct().Count();
             var hintCount = analysis.FileImpacts.Count;
@@ -1234,6 +1310,7 @@ public partial class McpServer
                 ["definitions"] = JsonSerializer.SerializeToNode(analysis.Definitions, _jsonOptions),
                 ["graph_table_available"] = analysis.GraphTableAvailable,
             };
+            AddSqlGraphContractSignal(payload, sqlGraphSignal);
             if (analysis.ZeroResultReason != null)
                 payload["zero_result_reason"] = analysis.ZeroResultReason;
             if (analysis.Suggestion != null)
@@ -1296,7 +1373,16 @@ public partial class McpServer
         {
             var results = reader.GetSymbolHotspots(limit, kind, lang, pathPatterns, excludePaths, excludeTests);
             var hotspotSignal = reader.GetHotspotFamilySignal(lang);
-            var sqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
+            var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
+            var zeroResultSqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignal(
+                baseSqlGraphSignal,
+                reader.ScopeMayIncludeSqlSymbols(kind, lang, pathPatterns, excludePaths, excludeTests));
+            var sqlGraphSignal = results.Count == 0
+                ? zeroResultSqlGraphSignal
+                : QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
+                    baseSqlGraphSignal,
+                    results.Select(result => result.Symbol.Lang),
+                    lang);
             var items = results.Select(r => new
             {
                 name = r.Symbol.Name,
@@ -1345,7 +1431,16 @@ public partial class McpServer
         return WithDbReader(id, reader =>
         {
             var results = reader.GetUnusedSymbols(limit, kind, lang, pathPatterns, excludePaths, excludeTests);
-            var sqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
+            var baseSqlGraphSignal = reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests);
+            var zeroResultSqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignal(
+                baseSqlGraphSignal,
+                reader.ScopeMayIncludeSqlSymbols(kind, lang, pathPatterns, excludePaths, excludeTests));
+            var sqlGraphSignal = results.Count == 0
+                ? zeroResultSqlGraphSignal
+                : QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
+                    baseSqlGraphSignal,
+                    results.Select(result => result.Lang),
+                    lang);
             var bucketCounts = results
                 .GroupBy(result => result.UnusedBucket, StringComparer.Ordinal)
                 .OrderBy(group => Array.IndexOf(new[] { "likely_unused_private", "maybe_unused_nonpublic", "public_or_exported_no_refs", "reflection_or_config_suspect" }, group.Key))
@@ -1453,6 +1548,7 @@ public partial class McpServer
         var priorFoldVersion = db.GetMetaString("fold_key_version");
         var priorFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
         var priorCSharpSymbolNameContractVersion = db.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey);
+        var priorMetadataTargetCsharp = db.GetMetaString(DbContext.GetMetadataTargetVersionMetaKey("csharp"));
         var priorSqlGraphContractVersion = db.GetMetaString(DbContext.SqlGraphContractVersionMetaKey);
         var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
         var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
@@ -1467,7 +1563,9 @@ public partial class McpServer
         if (rebuild)
         {
             db.ClearReadyFlags();
-            new DbWriter(db.Connection).ClearHotspotFamilyReady();
+            var rebuildWriter = new DbWriter(db.Connection);
+            rebuildWriter.ClearHotspotFamilyReady();
+            rebuildWriter.ClearMetadataTargetReady();
             db.DropAll();
         }
 
@@ -1514,6 +1612,7 @@ public partial class McpServer
         // 実書き込み直前で readiness をクリア。
         writer.ClearReadyFlags();
         writer.ClearHotspotFamilyReady();
+        writer.ClearMetadataTargetReady();
 
         // Purge stale files / 古いファイルをパージ
         var purged = writer.PurgeStaleFiles(projectPath);
@@ -1579,9 +1678,11 @@ public partial class McpServer
         // throwing, so a partial failure leaves trust degraded and `validate` still surfaces it.
         // MCP index は CLI と同等に file_issues を永続化するため、成功時は graph / issues の両方を stamp する。
         var csharpSymbolNameReadyAfter = !writer.HasAnyFilesWithLanguage("csharp");
+        var csharpMetadataTargetReadyAfter = !writer.HasAnyFilesWithLanguage("csharp");
         var sqlGraphContractReadyAfter = !writer.HasAnyFilesWithLanguage("sql");
         var foldReadyAfter = false;
         string? foldReadyReason = null;
+        _ = priorMetadataTargetCsharp;
         if (errors == 0)
         {
             writer.MarkGraphReady();
@@ -1589,6 +1690,16 @@ public partial class McpServer
             writer.MarkSqlGraphContractReady();
             writer.MarkCSharpSymbolNameContractReady();
             csharpSymbolNameReadyAfter = true;
+            if (writer.HasAnyFilesWithLanguage("csharp"))
+            {
+                writer.ResolveCSharpMetadataTargets();
+                writer.MarkMetadataTargetReady("csharp");
+                csharpMetadataTargetReadyAfter = true;
+            }
+            else
+            {
+                csharpMetadataTargetReadyAfter = true;
+            }
             sqlGraphContractReadyAfter = true;
             RestampHotspotFamilyTrust(
                 writer,
@@ -1650,6 +1761,7 @@ public partial class McpServer
             ["sql_graph_contract_ready"] = sqlGraphContractReadyAfter,
             ["sqlGraphContractReady"] = sqlGraphContractReadyAfter,
             ["csharp_symbol_name_ready"] = csharpSymbolNameReadyAfter,
+            ["csharp_metadata_target_ready"] = csharpMetadataTargetReadyAfter,
             // #86 codex review: AI clients use this to tell whether --exact will use the
             // Unicode fold path or silently fall back to ASCII NOCASE. If false after a clean
             ["fold_ready"] = foldReadyAfter,

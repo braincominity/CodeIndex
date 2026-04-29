@@ -10,11 +10,13 @@ public static class LineWidthFormatter
     public const int MaxAllowedLineWidth = 4096;
 
     public static int ClampMaxLineWidth(int maxLineWidth) =>
-        Math.Clamp(maxLineWidth, 1, MaxAllowedLineWidth);
+        Math.Clamp(maxLineWidth, 0, MaxAllowedLineWidth);
 
     public static ClampedTextResult ClampLine(string line, int maxLineWidth, int? focusColumn = null, int focusLength = 1)
     {
         maxLineWidth = ClampMaxLineWidth(maxLineWidth);
+        if (maxLineWidth <= 0)
+            return new ClampedTextResult(line, false);
         if (line.Length <= maxLineWidth)
             return new ClampedTextResult(line, false);
 
@@ -30,6 +32,8 @@ public static class LineWidthFormatter
             return new ClampedTextResult(string.Empty, false);
 
         maxLineWidth = ClampMaxLineWidth(maxLineWidth);
+        if (maxLineWidth <= 0)
+            return new ClampedTextResult(string.Join('\n', lines), false);
         var output = new string[lines.Count];
         var anyTruncated = false;
         for (var i = 0; i < lines.Count; i++)

@@ -26,6 +26,47 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonFString_PreservesInterpolationCalls()
+    {
+        const string content = """
+            def run():
+                return 42
+
+            def use():
+                return f"value = {run()}"
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "run"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "use");
+    }
+
+    [Fact]
+    public void Extract_PythonFString_FormatSpecifier_PreservesFollowingCalls()
+    {
+        const string content = """
+            def real_call():
+                return 1
+
+            def caller(value):
+                msg = f"{value:#x} {real_call()}"
+                return msg
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "real_call"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "caller");
+    }
+
+    [Fact]
     public void Extract_CsharpExpressionBodiedMembers_AttributeToIndividualMember()
     {
         // issue #233: expression-bodied methods and properties must attribute their
@@ -420,6 +461,30 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpInterpolatedString_KeepsSingleLineInterpolationCallReferences()
+    {
+        const string content = """
+            public class FixtureHost
+            {
+                public int Run() => 42;
+
+                public string Render()
+                {
+                    return $"value = {Run()}";
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var runReference = Assert.Single(references);
+        Assert.Equal("Run", runReference.SymbolName);
+        Assert.Equal("call", runReference.ReferenceKind);
+        Assert.Equal("Render", runReference.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpInterpolatedRawString_WithNestedRawString_DoesNotLeakPhantomReferences()
     {
         const string content = """"
@@ -470,6 +535,50 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         Assert.DoesNotContain(references, reference => reference.SymbolName == "Run");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptTemplateLiteral_KeepsSingleLineInterpolationCallReferences()
+    {
+        const string content = """
+            function run() {
+                return 42;
+            }
+
+            function use() {
+                const value = `value = ${run()}`;
+                return value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        var runReference = Assert.Single(references);
+        Assert.Equal("run", runReference.SymbolName);
+        Assert.Equal("call", runReference.ReferenceKind);
+        Assert.Equal("use", runReference.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_PythonFString_KeepsSingleLineInterpolationCallReferences()
+    {
+        const string content = """
+            def run():
+                return 42
+
+            def use():
+                value = f"value = {run()}"
+                return value
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        var runReference = Assert.Single(references);
+        Assert.Equal("run", runReference.SymbolName);
+        Assert.Equal("call", runReference.ReferenceKind);
+        Assert.Equal("use", runReference.ContainerName);
     }
 
     [Fact]
@@ -637,6 +746,78 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpIndentedRawStringBeforeBlockComment_DoesNotLeakXmlDocReferences()
+    {
+        // Regression: BuildCSharpBlockCommentLines must recognize the closing delimiter of an
+        // indented raw string. Otherwise the scanner stays in raw-string mode, misses the
+        // following ordinary block comment, and treats its `/**` opener as XML doc.
+        // 回帰: BuildCSharpBlockCommentLines はインデント付き raw string の閉じ記号を認識する必要がある。
+        // さもないと raw-string mode に居座って後続の通常 block comment を見失い、その `/**` を XML doc と
+        // 誤認してしまう。
+        var content =
+            "namespace App;\n"
+            + "\n"
+            + "public class Demo\n"
+            + "{\n"
+            + "    public void M()\n"
+            + "    {\n"
+            + "        var raw = \"\"\"\n"
+            + "            ignored content\n"
+            + "            \"\"\";\n"
+            + "\n"
+            + "        /*\n"
+            + "         * /**\n"
+            + "         * <see cref=\"PhantomCall\"/>\n"
+            + "         */\n"
+            + "\n"
+            + "        RealCall();\n"
+            + "    }\n"
+            + "\n"
+            + "    private void RealCall() { }\n"
+            + "    private void PhantomCall() { }\n"
+            + "}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "PhantomCall");
+        Assert.Contains(references, reference => reference.SymbolName == "RealCall" && reference.ContainerName == "M");
+    }
+
+    [Fact]
+    public void Extract_CsharpRawStringCloseWithSemicolon_DoesNotMaskFollowingComment()
+    {
+        // Regression for issue #988: a raw string close line with a trailing semicolon
+        // must still end raw-string tracking so the following comment line is not
+        // treated as part of the raw-string body.
+        // issue #988 回帰: 末尾にセミコロンが付く raw string の閉じ行でも raw-string tracking を
+        // 終了し、その次のコメント行が raw-string 本体として扱われないこと。
+        var lines = new[]
+        {
+            "public class Demo",
+            "{",
+            "    public string Raw() => \"\"\"",
+            "        ignored content",
+            "        \"\"\";   ",
+            "",
+            "    /// <summary><see cref=\"Helper\"/></summary>",
+            "    public void Run() { }",
+            "}",
+        };
+
+        var buildMethod = typeof(ReferenceExtractor).GetMethod(
+            "BuildCSharpMultilineStringContentLines",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(buildMethod);
+
+        var insideStringContent = (bool[])buildMethod!.Invoke(null, new object[] { lines })!;
+
+        Assert.True(insideStringContent[3]);
+        Assert.True(insideStringContent[4]);
+        Assert.False(insideStringContent[6]);
+    }
+
+    [Fact]
     public void Extract_CsharpKeywords_NotExtractedAsReferences()
     {
         // LINQ and C# contextual keywords should be ignored
@@ -746,6 +927,63 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
 
         Assert.Contains(references, reference => reference.SymbolName == "require" && reference.ContainerName == "load");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptLineContinuationString_DoesNotLeakPhantomReferences()
+    {
+        const string crlf = "\r\n";
+        var content = string.Concat(
+            "function caller() {", crlf,
+            "  const s = \"line1\\", crlf,
+            "} externalCall() line2\";", crlf,
+            "  runTask();", crlf,
+            "}", crlf,
+            "function runTask() {}");
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "runTask" && reference.ContainerName == "caller");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "externalCall");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptLineContinuationString_DoesNotLeakPhantomReferences()
+    {
+        const string content = """
+            function caller() {
+              const s = 'line1\
+            } externalCall() line2';
+              runTask();
+            }
+            function runTask() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "runTask" && reference.ContainerName == "caller");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "externalCall");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptContinuedSingleQuotedString_DoesNotPolluteForOfHeaderScan()
+    {
+        const string content = "function f() {\n" +
+            "    const s = 'line1\\\n" +
+            "of externalCall';\n" +
+            "    for (\n" +
+            "        const ch of `abc`\n" +
+            "    ) {\n" +
+            "        use(ch);\n" +
+            "    }\n" +
+            "}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
     }
 
     [Fact]
@@ -1061,6 +1299,37 @@ public class ReferenceExtractorTests
         var ready = Assert.Single(references.Where(reference => reference.SymbolName == "Ready"));
         Assert.Equal("call", ready.ReferenceKind);
         Assert.Equal("Read", ready.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpUsingStaticConstantPattern_WithTypeAliasKeepsTypeReference()
+    {
+        const string content = """
+            using Red = RealTypes.Red;
+            using static Probe.Color;
+
+            namespace Probe;
+
+            enum Color { Red, Blue }
+            class Demo
+            {
+                bool Match(object value) => value is Red;
+                void ProbeType() { _ = typeof(Red); }
+            }
+
+            namespace RealTypes;
+            class Red {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var redRefs = references.Where(reference =>
+            reference.SymbolName == "Red"
+            && reference.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(2, redRefs.Count);
+        Assert.Contains(redRefs, reference => reference.ContainerName == "Match" && reference.Line == 9);
+        Assert.Contains(redRefs, reference => reference.ContainerName == "ProbeType" && reference.Line == 10);
     }
 
     [Fact]
@@ -2752,6 +3021,45 @@ public class ReferenceExtractorTests
                 {
                     return Sink.Pick(from Status in items
                                      let cast = value as Status?
+                                     select(Status.Ready),
+                                     Demo.Status.Ready);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        Assert.Single(readyRefs);
+        Assert.Equal("Read", readyRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedEnumMemberAccess_WithNullableTupleTypeSuffixBeforeParenthesizedTerminalSelect_PreservesOnlyTrailingReference()
+    {
+        const string content = """
+            using System.Collections.Generic;
+            using System.Linq;
+
+            namespace Demo;
+
+            public enum Status
+            {
+                Ready
+            }
+
+            public static class Sink
+            {
+                public static Demo.Status Pick(object left, Demo.Status right) => right;
+            }
+
+            public sealed class Uses
+            {
+                public Demo.Status Read(IEnumerable<object> items, object value)
+                {
+                    return Sink.Pick(from Status in items
+                                     let cast = value as (int Left, int Right)?
                                      select(Status.Ready),
                                      Demo.Status.Ready);
                 }
@@ -5528,6 +5836,50 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_FromCommaSeparatedSourcesCapturesAllReferences()
+    {
+        // issue #802: comma-separated `FROM` source lists must keep every top-level source, not
+        // just the first one before the comma.
+        // issue #802: comma-separated な `FROM` source list は、comma の前にある 1 件目だけで
+        // なく top-level な全 source を保持する必要がある。
+        const string content = """
+            SELECT * FROM users, accounts;
+            SELECT * FROM public.logs l, [archive].[events] e;
+            SELECT * FROM users WITH (NOLOCK), accounts;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "users" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "accounts" && r.ReferenceKind == "reference"));
+        Assert.Equal(1, references.Count(r => r.SymbolName == "logs" && r.ReferenceKind == "reference"));
+        Assert.Equal(1, references.Count(r => r.SymbolName == "events" && r.ReferenceKind == "reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "NOLOCK");
+        Assert.DoesNotContain(references, r => r.SymbolName == "public.logs");
+        Assert.DoesNotContain(references, r => r.SymbolName == "archive].[events");
+    }
+
+    [Fact]
+    public void Extract_SQL_FromDerivedTableSourcesCapturesLaterReferences()
+    {
+        // issue #942: a derived-table source must not stop the top-level comma walk before later items.
+        // issue #942: derived table の後続にある top-level comma-separated source を落とさない。
+        const string content = """
+            SELECT * FROM (SELECT 1) x, accounts;
+            SELECT * FROM (SELECT 1) x(c1), accounts;
+            SELECT * FROM (SELECT func(subfunc(a)) FROM t) AS y, accounts;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(3, references.Count(r => r.SymbolName == "accounts" && r.ReferenceKind == "reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "x" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "y" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_SQL_DeleteUsingTempSourcesAfterComma_AreNotTreatedAsComments()
     {
         // issue #789: `#temp` after a comma in `DELETE ... USING #a, #b` must stay on the temp-table
@@ -5547,6 +5899,72 @@ public class ReferenceExtractorTests
         Assert.Equal(1, references.Count(r => r.SymbolName == "#staging_a" && r.ReferenceKind == "reference"));
         Assert.Equal(1, references.Count(r => r.SymbolName == "#staging_b" && r.ReferenceKind == "reference"));
         Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_DeleteUsingTempSourcesWithAliasesAfterComma_AreNotTreatedAsComments()
+    {
+        // issue #792: `DELETE ... USING #a AS alias, #b AS alias` must keep later temp sources on the
+        // temp-table path instead of treating the comma tail as a MySQL `# comment`.
+        // issue #792: `DELETE ... USING #a AS alias, #b AS alias` は、comma 後続を MySQL `# comment`
+        // と誤認せず、後続の temp source を temp-table 経路に残す必要がある。
+        const string content = """
+            CREATE TABLE #staging_a (id int);
+            CREATE TABLE #staging_b (id int);
+            DELETE FROM audit_log USING #staging_a AS a, #staging_b AS b
+            WHERE audit_log.id = a.id;
+            DELETE FROM audit_log USING #staging_a a, #staging_b b
+            WHERE audit_log.id = a.id;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#staging_a" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#staging_b" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_DeleteUsingQuotedIdentifierWithCommaAfterComma_AreNotTreatedAsComments()
+    {
+        // issue #792: `DELETE ... USING [schema,table], #b` must keep later temp sources on the
+        // temp-table path even when the previous list item contains a comma inside a quoted identifier.
+        // issue #792: `DELETE ... USING [schema,table], #b` は、直前の list item の quoted identifier 内に
+        // comma があっても、後続の temp source を temp-table 経路に残す必要がある。
+        const string content = """
+            CREATE TABLE #staging_b (id int);
+            DELETE FROM audit_log USING [schema,table], #staging_b AS b
+            WHERE audit_log.id = b.id;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "#staging_b" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_DeleteUsingMixedTableAndTempSourcesAfterComma_AreNotTreatedAsComments()
+    {
+        // issue #792: `DELETE ... USING reusing_data, #temp` must keep the temp source after the
+        // comma even when the previous list item is a regular table source that contains `using`
+        // as a substring.
+        // issue #792: `DELETE ... USING reusing_data, #temp` は、直前の list item が通常テーブルでも
+        // `using` を部分文字列に含む場合があっても、
+        // comma 後続の temp source を保持する必要がある。
+        const string content = """
+            CREATE TABLE #staging_b (id int);
+            DELETE FROM audit_log USING reusing_data, #staging_b AS b
+            WHERE audit_log.id = b.id;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "reusing_data" && r.ReferenceKind == "reference");
+        Assert.Equal(1, references.Count(r => r.SymbolName == "#staging_b" && r.ReferenceKind == "reference"));
     }
 
     [Fact]
@@ -6218,13 +6636,21 @@ public class ReferenceExtractorTests
     [Fact]
     public void Extract_SQL_HashCommentsDoNotLeakAsTempObjects()
     {
-        // issue #653: after restoring temp-table support, MySQL-style `# comment` tails that begin
-        // with identifier-looking text must not be mistaken for temp tables or procedures.
-        // issue #653: temp-table 対応を戻した後でも、識別子風テキストで始まる MySQL 形式の
-        // `# comment` は temp table / procedure と誤認しない。
+        // issue #653 / #656: after restoring temp-table support, MySQL-style `# comment` tails must
+        // never be mistaken for T-SQL temp tables or stored procedures. Bare `EXEC #foo;` /
+        // `EXECUTE #foo;` / `CALL #foo;` without any same-file T-SQL establishment of `#foo` should
+        // stay comments — only same-file evidence (prior `CREATE TABLE #x`, `SELECT ... INTO #x`, a
+        // mutation target of `#x`, or `CREATE PROCEDURE|FUNCTION #x`) promotes the call back to a
+        // graph edge.
+        // issue #653 / #656: temp-table 対応を戻した後も、MySQL の `# comment` 末尾を T-SQL の
+        // temp table / stored procedure と誤認しない。確立のない bare な `EXEC #foo;` /
+        // `EXECUTE #foo;` / `CALL #foo;` はコメント扱いのままとし、同一ファイル内で
+        // `CREATE TABLE #x` / `SELECT ... INTO #x` / `#x` を変更対象とする更新 /
+        // `CREATE PROCEDURE|FUNCTION #x` のいずれかで確立された `#name` だけを edge に昇格させる。
         const string content = """
             CALL #commented_out;
             EXEC #tempProc;
+            EXECUTE #tempExecute;
             SELECT * FROM #commented_source;
             INSERT INTO #audit_log (action) VALUES ('login');
             SELECT * FROM #audit_log;
@@ -6235,11 +6661,88 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
 
         Assert.DoesNotContain(references, r => r.SymbolName == "#commented_out");
-        Assert.Contains(references, r => r.SymbolName == "#tempProc" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "#tempProc");
+        Assert.DoesNotContain(references, r => r.SymbolName == "#tempExecute");
         Assert.DoesNotContain(references, r => r.SymbolName == "#commented_source");
         Assert.Equal(2, references.Count(r => r.SymbolName == "#audit_log" && r.ReferenceKind == "reference"));
         Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "#trailing_comment");
+    }
+
+    [Fact]
+    public void Extract_SQL_EstablishedTempRoutineCallsStillEmitEdges()
+    {
+        // issue #656: the bare `EXEC #sp` / `CALL #sp` / `EXECUTE #sp` comment guard must still let a
+        // T-SQL temp stored procedure defined in the same file produce call edges. Establishment is
+        // recognized from `CREATE PROCEDURE`, `CREATE PROC`, `CREATE OR ALTER PROCEDURE`, and
+        // `CREATE FUNCTION` (all with optional `TEMP|TEMPORARY` / `IF NOT EXISTS`).
+        // issue #656: bare `EXEC #sp` / `CALL #sp` / `EXECUTE #sp` のコメントガードを入れても、同一
+        // ファイル内で定義した T-SQL temp stored procedure の call edge は引き続き出す。
+        // `CREATE PROCEDURE` / `CREATE PROC` / `CREATE OR ALTER PROCEDURE` / `CREATE FUNCTION`
+        // （`TEMP|TEMPORARY` / `IF NOT EXISTS` の有無は問わない）を establishment として認識する。
+        const string content = """
+            CREATE PROCEDURE #localSp AS SELECT 1;
+            EXEC #localSp;
+            CREATE PROC ##globalSp AS SELECT 1;
+            EXECUTE ##globalSp;
+            CREATE OR ALTER PROCEDURE #altSp AS SELECT 1;
+            CALL #altSp;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "#localSp" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "##globalSp" && r.ReferenceKind == "call" && r.Line == 4);
+        Assert.Contains(references, r => r.SymbolName == "#altSp" && r.ReferenceKind == "call" && r.Line == 6);
+    }
+
+    [Fact]
+    public void Extract_SQL_SemicolonlessTempRoutineEstablishmentStillEmitsCallEdges()
+    {
+        // issue #656 follow-up (codex review #1): a `CREATE PROCEDURE|FUNCTION #x` line that ends
+        // without `;` (the typical T-SQL `GO`-batch shape, where the routine body uses BEGIN/END)
+        // must still establish `#x` before the next-line `EXEC` / `CALL` is processed. Without the
+        // matching `CanSqlStatementEstablishTempObject()` flush, the call edge would silently be
+        // dropped by the new proc-call `#`-gate even though the routine is defined right above.
+        // issue #656 フォローアップ（codex review #1）: `;` で閉じない `CREATE PROCEDURE|FUNCTION #x`
+        // 行（routine 本体に BEGIN/END を使う典型的な T-SQL `GO` バッチ形）でも、次行の `EXEC` /
+        // `CALL` を処理する前に `#x` を確立しなければならない。これに対応する
+        // `CanSqlStatementEstablishTempObject()` の flush を追加しないと、新しい proc 呼び出し
+        // `#` ゲートが上行で定義された routine の call edge を黙って落としてしまう。
+        const string content = """
+            CREATE PROCEDURE #localSp AS SELECT 1
+            EXEC #localSp;
+            CREATE FUNCTION #localFn() RETURNS INT AS BEGIN RETURN 1 END
+            CALL #localFn;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "#localSp" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "#localFn" && r.ReferenceKind == "call" && r.Line == 4);
+    }
+
+    [Fact]
+    public void Extract_SQL_QuotedTempProcCallsBypassHashCommentGate()
+    {
+        // issue #656: quoted forms are unambiguously identifiers (MySQL uses `#` for comments but
+        // not inside `[...]` / `` `...` ``), so `EXEC [#tempProc]` / `` EXEC `#tempProc` `` must
+        // keep emitting call edges without any prior in-file establishment.
+        // issue #656: 引用形は識別子として明確なので（MySQL は `#` をコメントに使うが
+        // `[...]` / `` `...` `` の内側には影響しない）、`EXEC [#tempProc]` /
+        // `` EXEC `#tempProc` `` は同一ファイル内の establish 無しでも call edge を出し続ける。
+        const string content = """
+            EXEC [#tempProc];
+            EXEC `#backtickProc`;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "#tempProc" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "#backtickProc" && r.ReferenceKind == "call" && r.Line == 2);
     }
 
     [Fact]
@@ -6865,6 +7368,42 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
     }
 
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JsTemplateHoleLineContinuationString_DoesNotCloseHoleEarlyOrLeakPhantoms(string language)
+    {
+        // Regression for issue #433: a JS/TS single/double-quoted string inside a
+        // template-literal hole may legally continue onto the next physical line via
+        // trailing `\`. The hole scanner must stay inside that string on the next line;
+        // otherwise a leading `}` closes the hole early, string text leaks as phantom
+        // references, and the real call after the string is dropped.
+        // issue #433 回帰: テンプレートホール内の JS/TS 単/二重引用符文字列は、行末の `\`
+        // により次行へ継続できる。継続行でも hole scanner は文字列内のままである必要が
+        // あり、そうでないと先頭の `}` で hole を早閉じし、文字列内テキストが phantom
+        // 参照として漏れ、本物の `runTask()` が落ちる。
+        const string content = """
+            function caller() {
+                const branch = `before ${"line1\
+            } fake_in_string() line2" + runTask()} after`;
+                realCall();
+                return branch;
+            }
+
+            function runTask() {}
+            function realCall() {}
+            function fake_in_string() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, language, content);
+        var references = ReferenceExtractor.Extract(1, language, content, symbols);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "caller");
+        Assert.Contains(references, r => r.SymbolName == "runTask" && r.ContainerName == "caller");
+        Assert.Contains(references, r => r.SymbolName == "realCall" && r.ContainerName == "caller");
+        Assert.DoesNotContain(references, r => r.SymbolName == "fake_in_string");
+    }
+
     [Fact]
     public void Extract_PythonNestedFStringInnerHoleStringLiteralWithBrace_PreservesInnerCall()
     {
@@ -7377,6 +7916,154 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JsNoParenConstructor_CapturesInstantiateReference()
+    {
+        // issue #295: JavaScript allows zero-arg constructor calls without `()`
+        // (`new Foo;`, `new Date;`, `new Demo.Provider;`, `cond ? new Demo.Helper : other`). The generic CallRegex only
+        // sees names that reach `(`, so these forms previously vanished from the
+        // reference table and downstream graph queries under-counted instantiations.
+        // issue #295: JavaScript では引数なしコンストラクタ呼び出しで `()` を省略できる
+        // (`new Foo;`, `new Date;`, `new Demo.Provider;`, `cond ? new Demo.Helper : other`)。従来の汎用 CallRegex は
+        // `(` まで届く名前しか拾えないため、これらの instantiate が参照テーブルから欠落していた。
+        const string content = """
+            class Foo {}
+
+            function run(Demo) {
+                const a = new Foo;
+                const b = new Date;
+                const c = new Demo.Provider;
+                const d = ready ? new Demo.Helper : c;
+                return [a, b, c, d];
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Foo" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "Date" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "Provider" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "Helper" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+    }
+
+    [Fact]
+    public void Extract_TsNoParenConstructorWithTypeArgs_CapturesInstantiateReference()
+    {
+        // issue #295 follow-up: TypeScript keeps the same no-paren `new` form even when
+        // a single generic argument list is present (`new Box<number>;`). The dedicated
+        // JS/TS path must keep accepting the one-level `<...>` segment already supported
+        // by the shared `CallRegex` / initializer regex family.
+        // issue #295 補足: TypeScript では generic 引数付きでも no-paren `new`
+        // (`new Box<number>;`) が現れる。専用 JS/TS 経路でも既存 regex 群と同じ
+        // 1 段の `<...>` を受け入れて instantiate を落とさないことを確認する。
+        const string content = """
+            class Box<T> {}
+
+            function run() {
+                const value = new Box<number>;
+                return value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "Box" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+    }
+
+    [Fact]
+    public void Extract_JsNoParenConstructor_NextLineMemberContinuation_DoesNotEmitPhantomInstantiate()
+    {
+        // issue #859: the no-paren `new` fix for #295 must stay suppressed when the next
+        // physical line continues the expression (`new Foo\n.bar()`), otherwise the graph
+        // regresses by inventing a standalone `instantiate Foo` edge.
+        // issue #859: #295 の no-paren `new` 修正は、次の物理行で式が継続する
+        // (`new Foo\n.bar()`) 場合に suppress を維持しないと phantom `instantiate Foo`
+        // を発生させてグラフを壊してしまう。
+        const string content = """
+            class Foo {
+                bar() {
+                    return 1;
+                }
+            }
+
+            function run() {
+                const value = new Foo
+                    .bar();
+                return value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "Foo" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+        Assert.Contains(references, r =>
+            r.SymbolName == "bar" && r.ReferenceKind == "call" && r.ContainerName == "run");
+    }
+
+    [Fact]
+    public void Extract_JsNoParenConstructor_NextLineIndexContinuation_DoesNotEmitPhantomInstantiate()
+    {
+        // issue #859: bracket continuations such as `new Foo\n[0]` are still the same
+        // expression and must not be promoted into a terminated no-paren constructor site.
+        // issue #859: `new Foo\n[0]` のような添字継続も同じ式の続きなので、
+        // 終端済み no-paren constructor として昇格させてはいけない。
+        const string content = """
+            class Foo {
+                constructor() {
+                    this[0] = 1;
+                }
+            }
+
+            function run() {
+                const value = new Foo
+                    [0];
+                return value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "Foo" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+    }
+
+    [Fact]
+    public void Extract_JsNoParenConstructor_NextLineCallContinuation_DoesNotEmitPhantomInstantiate()
+    {
+        // issue #859: the dedicated no-paren path must also stay off when the next line
+        // begins with `(`, because `new Foo\n(arg)` is a continued call expression rather
+        // than the statement-like zero-argument form fixed in #295.
+        // issue #859: 次行が `(` で始まる場合も専用 no-paren 経路は抑止されるべきで、
+        // `new Foo\n(arg)` は #295 が対象にした statement-like な zero-arg 形式ではない。
+        const string content = """
+            function Foo(value) {
+                return value;
+            }
+
+            function run(arg) {
+                const value = new Foo
+                    (arg);
+                return value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "Foo" && r.ReferenceKind == "instantiate" && r.ContainerName == "run");
+    }
+
+    [Fact]
     public void Extract_CsharpNameofTypeofDefault_CapturesArgumentAsTypeReference()
     {
         // issue #253: nameof/typeof/sizeof/default arguments are first-class compile-time
@@ -7818,9 +8505,9 @@ public class ReferenceExtractorTests
         var colorRefs = references.Where(r => r.SymbolName == "Color" && r.ReferenceKind == "type_reference").ToList();
         Assert.Single(colorRefs);
 
-        Assert.Contains(references, r => r.SymbolName == "Red" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference");
 
         Assert.Equal(
@@ -8081,6 +8768,342 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpCaseListPatternTypeHead_EmitsTypeReference()
+    {
+        // issue #667: `case List<int> [_, ..]:` and similar list-pattern case labels must keep
+        // the leading type head as a `type_reference` so DEVELOPER_GUIDE.md's documented positive
+        // example for C# type-position edges stays test-backed.
+        // issue #667: `case List<int> [_, ..]:` のような list pattern の case ラベルでも先頭型 head を
+        // `type_reference` として残し、DEVELOPER_GUIDE.md の positive example をテストで裏付ける。
+        const string content = """
+            using System.Collections.Generic;
+
+            namespace Probe;
+
+            class Demo
+            {
+                bool MatchSpaced(object value)
+                {
+                    switch (value)
+                    {
+                        case List<int> [_, ..]:
+                            return true;
+                    }
+
+                    return false;
+                }
+
+                bool MatchPacked(object value)
+                {
+                    switch (value)
+                    {
+                        case List<double>[_]:
+                            return true;
+                    }
+
+                    return false;
+                }
+
+                bool MatchEmptyRest(object value)
+                {
+                    switch (value)
+                    {
+                        case List<string> [..]:
+                            return true;
+                    }
+
+                    return false;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var listRefs = references
+            .Where(r => r.SymbolName == "List" && r.ReferenceKind == "type_reference")
+            .ToList();
+
+        Assert.Equal(3, listRefs.Count);
+        Assert.Contains(listRefs, r => r.ContainerName == "MatchSpaced");
+        Assert.Contains(listRefs, r => r.ContainerName == "MatchPacked");
+        Assert.Contains(listRefs, r => r.ContainerName == "MatchEmptyRest");
+    }
+
+    [Fact]
+    public void Extract_CsharpSwitchExpressionTypePatterns_EmitEveryGenuineTypeHead()
+    {
+        // issue #732: switch-expression arm heads should follow the same type-vs-constant
+        // discrimination as `case` labels so modern C# pattern arms remain visible to
+        // references/inspect without reclassifying constant-member arms as types.
+        // issue #732: switch 式 arm head も `case` ラベルと同じ type-vs-constant 判定を通し、
+        // modern C# pattern arm を references/inspect から見えるようにしつつ定数 member arm を
+        // 型依存へ誤分類しない。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+            class Shape {}
+            enum Color { Red }
+
+            class Demo
+            {
+                int Match(object value) => value switch
+                {
+                    Point => 1,
+                    Point or Shape => 2,
+                    Color.Red => 3,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+        var shapeRefs = references.Where(r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference").ToList();
+
+        Assert.Equal(2, pointRefs.Count);
+        Assert.Single(shapeRefs);
+        Assert.All(pointRefs, r => Assert.Equal("Match", r.ContainerName));
+        Assert.All(shapeRefs, r => Assert.Equal("Match", r.ContainerName));
+        Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Color" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+    }
+
+    [Fact]
+    public void Extract_CsharpSwitchExpressionGenericTypePatterns_DoNotSplitAtTypeArgumentCommas()
+    {
+        // issue #732 follow-up: generic type-argument commas inside a switch-expression arm
+        // are part of the type head, not arm separators.
+        // issue #732 の追補: switch 式 arm 内の generic 型引数カンマは arm 区切りではなく
+        // 型 head の一部として扱う必要がある。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+            class Shape {}
+            class Wrapper<TLeft, TRight> {}
+
+            class Demo
+            {
+                int Match(object value) => value switch
+                {
+                    Wrapper<Point, Shape> => 1,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Wrapper" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+    }
+
+    [Fact]
+    public void Extract_CsharpSwitchExpressionGenericDeclarationPatternWithRelationalWhenGuard_KeepsArmHead()
+    {
+        // issue #732 follow-up: relational `>` inside a `when` guard must not steal the
+        // arm-head generic close and make the declaration-pattern type disappear.
+        // issue #732 の追補: `when` guard 内の relational `>` が arm head 側の generic close を
+        // 奪って、宣言パターンの型依存を消してはいけない。
+        const string content = """
+            namespace Probe;
+
+            class Wrapper<TLeft, TRight> {}
+            class Point { public int X { get; init; } }
+            class Shape {}
+
+            class Demo
+            {
+                int Match(object value, int limit) => value switch
+                {
+                    Wrapper<Point, Shape> p when p is Wrapper<Point, Shape> && limit > p.GetHashCode() => 1,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var wrapperRefs = references
+            .Where(r => r.SymbolName == "Wrapper" && r.ReferenceKind == "type_reference")
+            .OrderBy(r => r.Column)
+            .ToList();
+
+        Assert.Equal(2, wrapperRefs.Count);
+        Assert.Equal([9, 43], wrapperRefs.Select(r => r.Column).ToArray());
+        Assert.All(wrapperRefs, r => Assert.Equal("Match", r.ContainerName));
+    }
+
+    [Fact]
+    public void Extract_CsharpSwitchExpressionGenericDeclarationPatternWithFunctionWhenGuard_KeepsArmHead()
+    {
+        // issue #732 follow-up: a bare helper call at the end of a `when` guard still leaves the
+        // switch arm arrow as a pattern arm, not a lambda. The arm-head type must survive.
+        // issue #732 の追補: `when` guard 末尾の bare helper call があっても、その `=>` は lambda
+        // ではなく switch arm の矢印であり、arm head の型依存を落としてはいけない。
+        const string content = """
+            namespace Probe;
+
+            class Wrapper<TLeft, TRight> {}
+            class Point {}
+            class Shape {}
+
+            class Demo
+            {
+                static bool Check(object value) => true;
+
+                int Match(object value) => value switch
+                {
+                    Wrapper<Point, Shape> p when Check(p) => 1,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var wrapperRefs = references
+            .Where(r => r.SymbolName == "Wrapper" && r.ReferenceKind == "type_reference")
+            .OrderBy(r => r.Column)
+            .ToList();
+
+        Assert.Single(wrapperRefs);
+        Assert.Equal(9, wrapperRefs[0].Column);
+        Assert.Equal("Match", wrapperRefs[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpSwitchExpressionLaterArmAfterWhenGuard_StillEmitsTypeHead()
+    {
+        // issue #732 follow-up: a `when` clause on an earlier arm must not truncate the rest of
+        // the switch-expression body and hide later arm heads.
+        // issue #732 の追補: 先行 arm の `when` 句で後続 arm まで切り落としてはならない。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+            class Shape {}
+
+            class Demo
+            {
+                int Match(object value) => value switch
+                {
+                    Point p when p.GetHashCode() > 0 => 1,
+                    Shape => 2,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+    }
+
+    [Fact]
+    public void Extract_CsharpSwitchExpressionLaterGenericArmAfterWhenGuard_StillEmitsTypeHead()
+    {
+        // issue #851: a `when` clause on an earlier arm must not hide a later generic arm head.
+        // issue #851: 先行 arm の `when` 句で後続の generic arm head を隠してはならない。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+            class Shape {}
+            class Wrapper<TLeft, TRight> {}
+
+            class Demo
+            {
+                int Match(object value) => value switch
+                {
+                    Point p when p.GetHashCode() > 0 => 1,
+                    Wrapper<Point, Shape> => 2,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Wrapper" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Equal(2, references.Count(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match"));
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+    }
+
+    [Theory]
+    [InlineData("Point { X: < 0 } => 1,")]
+    [InlineData("Point { X: > 0 } => 1,")]
+    public void Extract_CsharpSwitchExpressionLaterArmAfterRelationalPattern_StillEmitsTypeHead(string previousArm)
+    {
+        // issue #852: relational pattern operators in an earlier arm must not poison later comma detection.
+        // issue #852: 先行 arm の relational pattern 演算子で後続 arm 区切りを見失ってはならない。
+        var content = $$"""
+            namespace Probe;
+
+            class Point { public int X { get; init; } }
+            class Shape {}
+
+            class Demo
+            {
+                int Match(object value) => value switch
+                {
+                    {{previousArm}}
+                    Shape => 2,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+    }
+
+    [Fact]
+    public void Extract_CsharpSwitchExpressionLaterGenericArmAfterRelationalPattern_StillEmitsTypeHead()
+    {
+        // issue #852: relational `<` in a previous recursive pattern must not hide a later generic arm.
+        // issue #852: 先行 recursive pattern の relational `<` で後続 generic arm を隠してはならない。
+        const string content = """
+            namespace Probe;
+
+            class Point { public int X { get; init; } }
+            class Shape {}
+            class Wrapper<TLeft, TRight> {}
+
+            class Demo
+            {
+                int Match(object value) => value switch
+                {
+                    Point { X: < 0 } => 1,
+                    Wrapper<Point, Shape> => 2,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Wrapper" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Equal(2, references.Count(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match"));
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+    }
+
+    [Fact]
     public void Extract_CsharpVerbatimPatternTypeNames_DoNotCollapseIntoBarePatternTokens()
     {
         // issue #677: `@not` / `@default` are legal type names, so the non-type pattern
@@ -8222,6 +9245,319 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpUsingStaticMultiLineLogicalConstantPatterns_KeepTypeReferences()
+    {
+        // issue #779: the multi-line form `value is` + later-line `Red` / `or Red` should keep
+        // the same ambiguous constant-pattern references as the single-line form. Phantom
+        // `property Red` symbols from SymbolExtractor previously suppressed these rows entirely.
+        // issue #779: `value is` の後続行に `Red` / `or Red` が来る複数行形でも、
+        // 単一行版と同じあいまい constant-pattern 参照を保持しなければならない。以前は
+        // SymbolExtractor 側の phantom `property Red` がこの参照行を丸ごと抑止していた。
+        const string content = """
+            using static Probe.Color;
+
+            namespace Probe;
+
+            enum Color { Red, Blue }
+
+            class Demo
+            {
+                bool Match(object value) => value is
+                    Red
+                    or
+                    Red;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Red" && s.ContainerName == "Demo");
+
+        var redRefs = references.Where(r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(2, redRefs.Count);
+        Assert.All(redRefs, reference => Assert.Equal("Match", reference.ContainerName));
+        Assert.Equal([10, 12], redRefs.Select(reference => reference.Line).ToArray());
+    }
+
+    [Fact]
+    public void Extract_CsharpMultiLineCasePatterns_KeepFirstAndLaterTypeHeads()
+    {
+        // issues #843 / #747: `case` labels must keep both a first head that moves to the next
+        // line and later logical heads that continue on following lines.
+        // issues #843 / #747: `case` ラベルは、次行へ移る first head と、後続行へ続く logical head
+        // の両方を維持しなければならない。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+            class Shape {}
+
+            class Demo
+            {
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case
+                            Point:
+                            break;
+                        case Point or
+                            Shape:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+        var shapeRefs = references.Where(r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference").ToList();
+
+        Assert.Equal(2, pointRefs.Count);
+        Assert.Single(shapeRefs);
+        Assert.All(pointRefs, reference => Assert.Equal("Run", reference.ContainerName));
+        Assert.Equal("Run", shapeRefs[0].ContainerName);
+        Assert.Equal([13, 15], pointRefs.Select(reference => reference.Line).OrderBy(line => line).ToArray());
+        Assert.Equal(16, shapeRefs[0].Line);
+    }
+
+    [Fact]
+    public void Extract_CsharpCommentSeparatedMultiLineTypePatterns_KeepPendingHeads()
+    {
+        // issue #850: comment-only lines are structurally masked to trivia, so the pending
+        // multiline type-pattern state must not flush before the real type head arrives.
+        // issue #850: comment-only 行は構造マスク後に trivia 扱いになるため、複数行
+        // type-pattern の pending state を実際の型 head より先に flush してはならない。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+
+            class Demo
+            {
+                bool Match(object value) => value is
+                    // formatting-only comment
+                    Point;
+
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case
+                            // formatting-only comment
+                            Point:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+
+        Assert.Equal(2, pointRefs.Count);
+        Assert.Equal(["Match", "Run"], pointRefs.Select(reference => reference.ContainerName).OrderBy(name => name).ToArray());
+        Assert.Equal([9, 17], pointRefs.Select(reference => reference.Line).OrderBy(line => line).ToArray());
+    }
+
+    [Fact]
+    public void Extract_CsharpStandaloneNotLineMultiLineTypePatterns_KeepPendingHeads()
+    {
+        // issue #891: a standalone `not` continuation line is still valid C# trivia-separated
+        // formatting, so the pending multiline type-pattern state must survive until the head.
+        // issue #891: 単独行の `not` 継続も有効な C# フォーマットであるため、複数行
+        // type-pattern の pending state は実際の型 head まで維持しなければならない。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+
+            class Demo
+            {
+                bool Match(object value) => value is
+                    not
+                    Point;
+
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case
+                            not
+                            Point:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+
+        Assert.Equal(2, pointRefs.Count);
+        Assert.Equal(["Match", "Run"], pointRefs.Select(reference => reference.ContainerName).OrderBy(name => name).ToArray());
+        Assert.Equal([9, 17], pointRefs.Select(reference => reference.Line).OrderBy(line => line).ToArray());
+    }
+
+    [Fact]
+    public void Extract_CsharpNonTypeCaseLabels_DoNotArmMultiLineTypeCarry()
+    {
+        // issue #857: relational/non-type `case` labels like `case > 0:` must not arm the
+        // multiline type-pattern carry or the next-line call token becomes a phantom type reference.
+        // issue #857: `case > 0:` のような非型 `case` ラベルで複数行 type-pattern carry を
+        // armed にしてしまうと、次行の call token が phantom type_reference になってしまう。
+        const string content = """
+            namespace Probe;
+
+            class Demo
+            {
+                void Run(int value)
+                {
+                    switch (value)
+                    {
+                        case > 0:
+                            Target();
+                            break;
+                    }
+                }
+
+                void Target() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "Target"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerName == "Run");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Target"
+            && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpUsingStaticMultiLineCaseLogicalConstantPatterns_KeepAmbiguousHeads()
+    {
+        // issue #843: multi-line `case` labels should keep the same ambiguous using-static
+        // constant heads that the single-line form leaves for read-time filtering.
+        // issue #843: 複数行 `case` ラベルでも、単一行版と同じ using-static の曖昧な constant head
+        // を read path の判定用に残す必要がある。
+        const string content = """
+            using static Probe.Color;
+
+            namespace Probe;
+
+            enum Color { Red, Blue }
+
+            class Demo
+            {
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case
+                            Red
+                            or
+                            Red:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var redRefs = references.Where(r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(2, redRefs.Count);
+        Assert.All(redRefs, reference => Assert.Equal("Run", reference.ContainerName));
+        Assert.Equal([14, 16], redRefs.Select(reference => reference.Line).OrderBy(line => line).ToArray());
+    }
+
+    [Fact]
+    public void Extract_CsharpCommentSeparatedMultiLineUsingStaticCaseConstantPatterns_KeepAmbiguousHeads()
+    {
+        // issue #850: comment-only lines between `case` and an imported constant head must not
+        // drop the ambiguous row that the read path later suppresses or keeps.
+        // issue #850: `case` と import 済み constant head の間に comment-only 行があっても、
+        // read path が後で抑止/維持する曖昧 row を落としてはならない。
+        const string content = """
+            using static Probe.Color;
+
+            namespace Probe;
+
+            enum Color { Red }
+
+            class Demo
+            {
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case
+                            // formatting-only comment
+                            Red
+                            or
+                            Red:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var redRefs = references.Where(r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference").ToList();
+
+        Assert.Equal(2, redRefs.Count);
+        Assert.All(redRefs, reference => Assert.Equal("Run", reference.ContainerName));
+        Assert.Equal([15, 17], redRefs.Select(reference => reference.Line).OrderBy(line => line).ToArray());
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedMultiLineCaseLogicalConstantPatterns_StaySuppressed()
+    {
+        // issue #747 follow-up control: extending `case` logical-pattern carry across lines must
+        // not reintroduce phantom qualified constant/member type references.
+        // issue #747 の対照ケース: `case` の logical-pattern carry を複数行へ広げても、
+        // 修飾済み constant/member の phantom type_reference を復活させてはいけない。
+        const string content = """
+            namespace Probe;
+
+            enum Color { Red, Blue }
+
+            class Demo
+            {
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case Color.Red or
+                            Color.Blue:
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Blue" && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpUsingStaticTypeAliasPattern_KeepsTypeReference()
     {
         const string content = """
@@ -8241,6 +9577,35 @@ public class ReferenceExtractorTests
                 {
                     bool Match(object value) => value is Red;
                 }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var redRef = Assert.Single(references.Where(r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference"));
+
+        Assert.Equal("Match", redRef.ContainerName);
+        Assert.Contains("value is Red", redRef.Context, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Extract_CsharpUsingStaticNestedSameNameTypePattern_KeepsTypeReference()
+    {
+        const string content = """
+            using static Probe.Color;
+
+            namespace Probe;
+
+            enum Color
+            {
+                Red
+            }
+
+            class Outer
+            {
+                class Red {}
+
+                bool Match(object value) => value is Red;
             }
             """;
 
@@ -8303,6 +9668,10 @@ public class ReferenceExtractorTests
             {
                 void Run(object value)
                 {
+                    if (value is Point(var x, var y))
+                    {
+                    }
+
                     switch (value)
                     {
                         case Point { X: 0, Y: 0 }:
@@ -8318,8 +9687,53 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(3, pointRefs.Count);
+        Assert.All(pointRefs, r => Assert.Equal("Run", r.ContainerName));
+        Assert.DoesNotContain(references, r => r.SymbolName == "Point" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_CsharpMultilinePositionalPatterns_CaptureTypeReferences()
+    {
+        // issue #969: multiline positional `case` / `is` heads must behave the same as
+        // the same-line forms and keep the real `type_reference` without phantom calls.
+        // issue #969: 改行をまたぐ positional `case` / `is` head も同一行版と同様に
+        // 本物の `type_reference` を残し、phantom な call を出してはならない。
+        const string content = """
+            namespace Probe;
+
+            class Point
+            {
+                public int X { get; }
+                public int Y { get; }
+            }
+
+            class Demo
+            {
+                void Run(object value)
+                {
+                    if (value is
+                        Point(var x, var y))
+                    {
+                    }
+
+                    switch (value)
+                    {
+                        case
+                            Point(var x, var y):
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
         Assert.Equal(2, pointRefs.Count);
         Assert.All(pointRefs, r => Assert.Equal("Run", r.ContainerName));
+        Assert.DoesNotContain(references, r => r.SymbolName == "Point" && r.ReferenceKind == "call");
     }
 
     [Fact]
@@ -8575,6 +9989,605 @@ public class ReferenceExtractorTests
             r => r.SymbolName == "Foo"
                 && r.ReferenceKind == "type_reference"
                 && r.Line == 4);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_TreatsDelimitedDocCommentsAsDocComments()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                /**
+                 * <summary><see cref="Foo"/></summary>
+                 */
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols)
+            .Where(r => r.Line == 5 && r.ReferenceKind == "type_reference")
+            .ToList();
+
+        Assert.Single(references);
+        Assert.Equal("Foo", references[0].SymbolName);
+        Assert.Equal("Run", references[0].ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_TreatsSameLineDelimitedDocCommentsAsDocComments()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                /** <summary><see cref="Foo"/></summary> */ void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols)
+            .Where(r => r.Line == 4 && r.ReferenceKind == "type_reference")
+            .ToList();
+
+        var fooReference = Assert.Single(references);
+        Assert.Equal("Foo", fooReference.SymbolName);
+        Assert.Equal("Run", fooReference.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_TripleSlashKeepsPhysicalLineColumn()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                /// <see cref="Foo"/>
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var fooReference = Assert.Single(references.Where(r => r.SymbolName == "Foo" && r.ReferenceKind == "type_reference"));
+        var expectedColumn = content.Split('\n')[3].IndexOf("Foo", StringComparison.Ordinal) + 1;
+        Assert.Equal(expectedColumn, fooReference.Column);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatTripleSlashInsideMethodBodyAsDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                void Run()
+                {
+                    /// <see cref="Foo"/>
+                    var x = 1;
+                }
+
+                void Later() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 6);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DelimitedDocCommentsKeepPhysicalLineColumn()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                /**
+                 * <summary><see cref="Foo"/></summary>
+                 */
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var fooReference = Assert.Single(references.Where(r =>
+            r.SymbolName == "Foo"
+            && r.ReferenceKind == "type_reference"
+            && r.Line == 5));
+        var expectedColumn = content.Split('\n')[4].IndexOf("Foo", StringComparison.Ordinal) + 1;
+        Assert.Equal(expectedColumn, fooReference.Column);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatDelimitedBlockCommentsInsideMethodBodyAsDocComments()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                void Run()
+                {
+                    /** <see cref="Foo"/> */
+                    var x = 1;
+                }
+
+                void Later() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 6);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatDelimitedDocCommentInsideOrdinaryBlockCommentAsDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                /*
+                /** <summary><see cref="Foo"/></summary>
+                */
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatTripleSlashInsideOrdinaryBlockCommentAsDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                /*
+                /// <summary><see cref="Foo"/></summary>
+                */
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatTripleSlashInsideFieldInitializerLambdaAsDocComment()
+    {
+        const string content = """
+            using System;
+
+            class Foo {}
+            class Demo
+            {
+                Action callback = () =>
+                {
+                    /// <see cref="Foo"/>
+                    var x = 1;
+                };
+
+                void Later() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 8);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatDelimitedBlockCommentsInsideFieldInitializerLambdaAsDocComment()
+    {
+        const string content = """
+            using System;
+
+            class Foo {}
+            class Demo
+            {
+                Action callback = () =>
+                {
+                    /** <see cref="Foo"/> */
+                    var x = 1;
+                };
+
+                void Later() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 8);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatTripleSlashInsideBraceFreeFieldInitializerAsDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                string text = string.Concat(
+                    /// <summary><see cref="Foo"/></summary>
+                    "a",
+                    "b");
+
+                void Later() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 5);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatDelimitedBlockCommentsInsideBraceFreeFieldInitializerAsDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                string text = string.Concat(
+                    /** <summary><see cref="Foo"/></summary> */
+                    "a",
+                    "b");
+
+                void Later() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 5);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatTripleSlashInsideBraceFreeExpressionLambdaAsDocComment()
+    {
+        const string content = """
+            using System;
+            class Foo {}
+            class Demo
+            {
+                Action callback = () =>
+                    /// <summary><see cref="Foo"/></summary>
+                    Console.WriteLine(1);
+
+                void Later() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 6);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatDelimitedBlockCommentsInsideBraceFreeExpressionLambdaAsDocComment()
+    {
+        const string content = """
+            using System;
+            class Foo {}
+            class Demo
+            {
+                Action callback = () =>
+                    /** <summary><see cref="Foo"/></summary> */
+                    Console.WriteLine(1);
+
+                void Later() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 6);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatTripleSlashInsideMultilineGenericFieldHeaderAsDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                Dictionary<
+                    /// <summary><see cref="Foo"/></summary>
+                    string,
+                    int> map = new();
+
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatDelimitedDocCommentInsideMultilineGenericFieldHeaderAsDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                Dictionary<
+                    /** <summary><see cref="Foo"/></summary> */
+                    string,
+                    int> map = new();
+
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatTripleSlashBeforeTopLevelStatementAsLaterLocalFunctionDocComment()
+    {
+        const string content = """
+            class Foo {}
+            /// <summary><see cref="Foo"/></summary>
+            System.Console.WriteLine(1);
+            void Later() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatDelimitedBlockCommentBeforeTopLevelStatementAsLaterLocalFunctionDocComment()
+    {
+        const string content = """
+            class Foo {}
+            /** <summary><see cref="Foo"/></summary> */
+            System.Console.WriteLine(1);
+            void Later() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatTripleSlashBeforeTopLevelStatementAsLaterTypeDocComment()
+    {
+        const string content = """
+            class Foo {}
+            /// <summary><see cref="Foo"/></summary>
+            System.Console.WriteLine(1);
+            class Later {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatSameLineDelimitedDocCommentBeforeFieldAsLaterMethodDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                /** <summary><see cref="Foo"/></summary> */ string text = "";
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 4);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_TreatsSameLineDelimitedDocCommentBeforeAttributeAsDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                /** <summary><see cref="Foo"/></summary> */ [System.Obsolete]
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols)
+            .Where(r => r.SymbolName == "Foo" && r.ReferenceKind == "type_reference")
+            .ToList();
+
+        var fooReference = Assert.Single(references);
+        Assert.Equal("Run", fooReference.ContainerName);
+        Assert.Equal(4, fooReference.Line);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatCodeAfterDelimitedDocCloseAsDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                /**
+                 * no cref here
+                 */ string text = "<see cref=\"Foo\"/>";
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 6);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatRawStringAfterDelimitedDocCloseAsDocComment()
+    {
+        const string content = """"
+            class Foo {}
+            class Bar {}
+            class Demo
+            {
+                /**
+                 * <summary><see cref="Foo"/></summary> */ string text = """<see cref="Bar"/>""";
+                void Run() {}
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols)
+            .Where(r => r.Line == 6 && r.ReferenceKind == "type_reference")
+            .ToList();
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "Foo");
+        Assert.DoesNotContain(references, r => r.SymbolName == "Bar");
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatRawStringContentStartingWithDelimitedDocMarkerAsDocComment()
+    {
+        const string content = """"
+            class Foo {}
+            class Demo
+            {
+                string text = """
+                /** <summary><see cref="Foo"/></summary> */
+                """;
+
+                void Run() {}
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 5);
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatVerbatimStringContentStartingWithDelimitedDocMarkerAsDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                string text = @"line1
+                /** <summary><see cref="Foo"/></summary> */
+                line3";
+
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference"
+                && r.Line == 5);
     }
 
     [Fact]
@@ -11007,6 +13020,32 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SqlExecDoubleQuotedSingleIdentifierContainingDot_IsCaptured()
+    {
+        // issue #722: `"sales.fn_Target"` is one quoted identifier whose dot is part of the
+        // identifier, not a schema separator. EXEC / EXECUTE must preserve and normalize it
+        // as one call target while ordinary single-quoted SQL strings remain masked.
+        // issue #722: `"sales.fn_Target"` は dot を含む 1 つの quoted identifier であり、
+        // schema 区切りではない。EXEC / EXECUTE は 1 つの呼び出し対象として保持・正規化し、
+        // 通常の単一引用符 SQL 文字列は引き続き無視する。
+        const string content = """
+            EXEC "sales.fn_Target";
+            EXECUTE "sales.fn_Target";
+            EXEC 'sales.fn_Target';
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRefs = references
+            .Where(r => r.SymbolName == "sales.fn_Target" && r.ReferenceKind == "call")
+            .ToList();
+        Assert.Equal(2, targetRefs.Count);
+        Assert.Contains(targetRefs, r => r.Line == 1 && r.Column == 7);
+        Assert.Contains(targetRefs, r => r.Line == 2 && r.Column == 10);
+    }
+
+    [Fact]
     public void Extract_SqlCallBacktickReservedWord_SurvivesQuoteStripping()
     {
         // A MySQL user may legitimately name a procedure after a reserved word by backtick-quoting
@@ -12384,5 +14423,862 @@ public class ReferenceExtractorTests
 
         var test = Assert.Single(references.Where(r => r.SymbolName == "Test"));
         Assert.Equal("annotation", test.ReferenceKind);
+    }
+
+    [Fact]
+    public void Extract_JavaScriptTaggedTemplateLiteral_IsCapturedAsCall()
+    {
+        // issue #268: bare tagged template literals (`gql`, `sql`, etc.) must emit a `call`
+        // reference so they surface in references / callers / callees / impact.
+        // issue #268: 素のタグ付きテンプレートリテラル (`gql` / `sql` 等) も `call` として記録する。
+        const string content = """
+            function loadUser(id) {
+                return gql`query { user(id: ${id}) { name } }`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        var gql = Assert.Single(references.Where(r => r.SymbolName == "gql"));
+        Assert.Equal("call", gql.ReferenceKind);
+        Assert.Equal("loadUser", gql.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_TypeScriptStyledTaggedTemplate_CapturesLastSegment()
+    {
+        // issue #268: member-access tags like `styled.button\`...\`` must emit a `call` row on
+        // the last segment so the existing CallRegex convention (capture the final identifier)
+        // carries over to tagged templates.
+        // issue #268: `styled.button\`...\`` のようなメンバアクセスタグは、既存 CallRegex の
+        // 規約に揃えて末尾セグメントを `call` として発行する。
+        const string content = """
+            const Btn = styled.button`
+              color: red;
+            `;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        var button = Assert.Single(references.Where(r => r.SymbolName == "button"));
+        Assert.Equal("call", button.ReferenceKind);
+        Assert.DoesNotContain(references, r => r.SymbolName == "color");
+        Assert.DoesNotContain(references, r => r.SymbolName == "red");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptGenericTaggedTemplate_IsCaptured()
+    {
+        // issue #268: TS generic-tagged forms like `html<User>\`...\`` read past the balanced
+        // `<...>` so the tag identifier is still captured.
+        // issue #268: `html<User>\`...\`` のようなジェネリクス付きタグは `<...>` を読み飛ばして
+        // タグ識別子を捕捉する。
+        const string content = """
+            function render(user: User) {
+                return html<User>`<p>${user.name}</p>`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        var html = Assert.Single(references.Where(r => r.SymbolName == "html"));
+        Assert.Equal("call", html.ReferenceKind);
+        Assert.Equal("render", html.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_JavaScriptTaggedTemplateInStringLiteral_IsNotMisdetected()
+    {
+        // Regression guard: a backtick appearing inside a single- or double-quoted string must
+        // not be treated as a tagged template opener. The structural masker enters string-skip
+        // mode so the backtick is consumed as string content.
+        // 退行防止: シングル/ダブルクオート文字列内のバッククォートをタグ付きテンプレートと誤認しない。
+        const string content = """
+            function note() {
+                const s = "see gql`docs` for details";
+                return s;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "gql");
+        Assert.DoesNotContain(references, r => r.SymbolName == "docs");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptPlainTemplateLiteral_IsNotCaptured()
+    {
+        // Regression guard: an untagged template literal (preceded by `=`, operator, or
+        // statement-head keyword) must not synthesize a phantom `call` reference.
+        // 退行防止: タグのないテンプレート（`=` や演算子、ステートメント先頭キーワードの直後）を
+        // 誤って `call` として記録しない。
+        const string content = """
+            function greet(name) {
+                const msg = `Hello, ${name}!`;
+                return `Bye, ${name}.`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "return");
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "msg");
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "Hello");
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "Bye");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptTaggedTemplateInsideHole_IsCaptured()
+    {
+        // Tagged templates nested in an outer template hole (`\`outer ${inner\`hi\`} rest\``)
+        // should also be recorded because the structural masker detects both opener locations.
+        // 外側テンプレートのホール内にネストしたタグ付きテンプレートも記録できる。
+        const string content = """
+            function demo(user) {
+                return outer`header ${inner`${user.name}`} footer`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "outer" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "inner" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptDeleteTaggedTemplate_IsNotCaptured()
+    {
+        // Regression guard: `delete \`...\`` is a legal (if pointless) expression form
+        // where `delete` is an operator — not a call — even though the backward-scan
+        // behind the backtick sees the identifier tail `delete`. IsIgnoredCallName must
+        // suppress the phantom `call delete` edge.
+        // 退行防止: `delete \`...\`` は `delete` が演算子の正当な式形であり、
+        // タグ付きテンプレート検出が backward-scan で拾う `delete` を
+        // IsIgnoredCallName で握り潰す必要がある。
+        const string content = """
+            function clean(obj) {
+                delete `placeholder-${obj.id}`;
+                void `side-effect-${obj.id}`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "delete");
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "void");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptComparisonBeforePlainTemplate_IsNotCaptured()
+    {
+        // Regression guard: `foo < bar > \`plain\`` is a chained comparison expression, not a
+        // generic-tagged template. The backward scan behind the backtick must not strip the
+        // `<bar>` range as generics and emit a phantom `call foo`.
+        // 退行防止: `foo < bar > \`plain\`` は連鎖比較式であり、ジェネリクス付きタグ付き
+        // テンプレートではない。backtick 直前の `<...>` を generic と誤認して
+        // `call foo` を幻発行してはならない。
+        const string content = """
+            function check(foo, bar) {
+                return foo < bar > `plain`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "foo");
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "bar");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptComparisonBeforePlainTemplateWithoutSpaces_IsNotCaptured()
+    {
+        // Regression guard: plain JavaScript has no generics, so `foo<bar>\`plain\`` (no
+        // spaces) is a chained comparison `(foo<bar)>\`plain\``, not a generic-tagged
+        // template. The backtick backward-scan must not strip the `<bar>` range as TS
+        // generics and emit a phantom `call foo`.
+        // 退行防止: JavaScript にはジェネリクスがなく、`foo<bar>\`plain\`` は連鎖比較式
+        // `(foo<bar)>\`plain\`` である。backtick 直前の `<...>` を TypeScript generic と
+        // 誤認して `call foo` を幻発行してはならない。
+        const string content = """
+            function check(foo, bar) {
+                return foo<bar>`plain`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "foo");
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "bar");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptInOperatorBeforePlainTemplate_IsNotCaptured()
+    {
+        // Regression guard: `foo in \`plain\`` uses `in` as the membership operator, not as
+        // a tag identifier. The backtick backward-scan picks up the `in` token, so
+        // IsIgnoredCallName must suppress the phantom `call in` edge.
+        // 退行防止: `foo in \`plain\`` の `in` はメンバーシップ演算子であり、タグ識別子ではない。
+        // backward-scan が拾う `in` は IsIgnoredCallName で握り潰す。
+        const string content = """
+            function check(foo) {
+                return foo in `plain`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "in");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptForOfLoopOverPlainTemplate_IsNotCaptured()
+    {
+        // Regression guard: `for (const ch of \`abc\`)` uses `of` as the for-of iterator
+        // keyword, not as a tag identifier. The tag scanner must detect the enclosing
+        // `for (` header and drop the `of` token instead of emitting a phantom `call of`.
+        // 退行防止: `for (const ch of \`abc\`)` の `of` は for-of イテレータキーワードで
+        // あり、タグ識別子ではない。タグ検出は外側の `for (` ヘッダを認識して `of` を落とす。
+        const string content = """
+            function f() {
+                for (const ch of `abc`) {
+                    use(ch);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptForAwaitOfLoopOverPlainTemplate_IsNotCaptured()
+    {
+        // Regression guard: `for await (const x of \`...\`)` is the async iterator form. The
+        // `for` / `(` scanner must tolerate the `await` contextual keyword between them so
+        // the phantom `call of` is still suppressed.
+        // 退行防止: `for await (const x of \`...\`)` は非同期イテレータ形。`for` と `(` の間
+        // の `await` を読み飛ばして `of` の幻 `call` を抑制する。
+        const string content = """
+            async function f(iter) {
+                for await (const x of `abc`) {
+                    use(x);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptOfAsTaggedTemplate_IsCapturedAsCall()
+    {
+        // issue #268: `of` is an unreserved identifier in ECMAScript. `const of = ...;
+        // of\`hello\`` is a legal tagged-template call and must not be silenced by the
+        // for-of loop-header suppression — only the header form should be dropped.
+        // issue #268: `of` は ECMAScript の予約語ではなく、`const of = ...; of\`hello\``
+        // は正当なタグ付きテンプレート呼び出し。for-of ヘッダ抑制が正当なタグ名としての
+        // `of` まで握り潰さないことを保証する。
+        const string content = """
+            const of = (strings) => strings.raw[0];
+            function run() {
+                return of`hello`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        var hit = Assert.Single(references.Where(r => r.SymbolName == "of" && r.ReferenceKind == "call"));
+        Assert.Equal("run", hit.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_JavaScriptClassicForWithOfAsTaggedTemplate_IsCapturedAsCall()
+    {
+        // issue #268 regression: classic `for (init; cond; step)` must not silence a
+        // legitimate `of` tag used inside its init clause. The for-header probe classifies
+        // the loop shape by counting top-level `;` inside the `(...)` group — classic form
+        // has `;` and keeps `of` visible.
+        // issue #268 退行防止: 古典形 `for (init; cond; step)` 内の `of` タグは消さない。
+        // 囲む `(...)` 内のトップレベル `;` を数え、`;` 入りの classic `for` では `of` を
+        // タグとして残す。
+        const string content = """
+            const of = (strings) => strings.raw[0];
+            function run() {
+                for (of`x`; keepGoing(); step()) {
+                    break;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        var hit = Assert.Single(references.Where(r => r.SymbolName == "of" && r.ReferenceKind == "call"));
+        Assert.Equal("run", hit.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_JavaScriptMultiLineForOfLoopOverPlainTemplate_IsNotCaptured()
+    {
+        // issue #268 regression: the `for (...)` header may span multiple lines. The
+        // backward-scan from `of` must cross line boundaries to find the enclosing `(` and
+        // then confirm zero top-level `;` to classify this as the for-of form.
+        // issue #268 退行防止: `for (...)` ヘッダは複数行に跨ることがある。`of` からの
+        // 後方走査は行境界を越えて `(` を見つけ、トップレベル `;` が 0 のとき for-of 形と
+        // 判定する必要がある。
+        const string content = "function f() {\n" +
+            "    for (\n" +
+            "        const ch of `abc`\n" +
+            "    ) {\n" +
+            "        use(ch);\n" +
+            "    }\n" +
+            "}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptMultiLineForAwaitOfLoopOverPlainTemplate_IsNotCaptured()
+    {
+        // issue #268 regression: multi-line `for await (...)` with the iterator on a later
+        // line must still be suppressed. The cross-line scan has to handle the optional
+        // `await` contextual keyword between `for` and `(` too.
+        // issue #268 退行防止: 複数行 `for await (...)` で iterator 行が離れていても抑制する。
+        // `for` と `(` の間の `await` も跨いで判定する。
+        const string content = "async function f(iter) {\n" +
+            "    for await (\n" +
+            "        const x of `abc`\n" +
+            "    ) {\n" +
+            "        use(x);\n" +
+            "    }\n" +
+            "}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptTagFollowedByNbspBeforeTemplate_IsCapturedAsCall()
+    {
+        // issue #268 regression: ECMAScript WhiteSpace includes non-ASCII characters such as
+        // U+00A0 (NBSP), so `of\u00A0\`hello\`` is still a tagged-template call. The tag-to-
+        // backtick backward-scan must tolerate any `char.IsWhiteSpace` codepoint, not just
+        // ASCII space and tab.
+        // issue #268 退行防止: ECMAScript の WhiteSpace は U+00A0 (NBSP) のような非 ASCII
+        // も含むため、`of\u00A0\`hello\`` もタグ付きテンプレート呼び出しとして拾う必要があ
+        // る。タグとバッククォート間の後方走査は ASCII スペース/タブだけでなく任意の
+        // `char.IsWhiteSpace` を許容する。
+        const string content = "const of = (strings) => strings.raw[0];\n" +
+            "function run() {\n" +
+            "    return of\u00A0`hello`;\n" +
+            "}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        var hit = Assert.Single(references.Where(r => r.SymbolName == "of" && r.ReferenceKind == "call"));
+        Assert.Equal("run", hit.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_JavaScriptForOfHeaderWithNbspSeparator_IsNotCaptured()
+    {
+        // issue #268 regression: the for-of header probe must also accept non-ASCII
+        // whitespace. `for\u00A0(const ch of \`abc\`)` is a valid for-of loop and must not
+        // emit a phantom `call of`.
+        // issue #268 退行防止: for-of ヘッダ判定も非 ASCII 空白を許容する必要がある。
+        // `for\u00A0(const ch of \`abc\`)` は正当な for-of 形なので phantom `call of` を
+        // 出さない。
+        const string content = "function f() {\n" +
+            "    for\u00A0(const ch of `abc`) {\n" +
+            "        use(ch);\n" +
+            "    }\n" +
+            "}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptForAwaitOfHeaderWithNbspSeparator_IsNotCaptured()
+    {
+        // issue #268 regression: the for-await-of header probe must also tolerate non-ASCII
+        // whitespace between `for`, `await`, and `(`.
+        // issue #268 退行防止: for-await-of ヘッダ判定は `for`・`await`・`(` の間の非 ASCII
+        // 空白も許容する。
+        const string content = "async function f(iter) {\n" +
+            "    for\u00A0await\u00A0(const x of `abc`) {\n" +
+            "        use(x);\n" +
+            "    }\n" +
+            "}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptTagFollowedByBomBeforeTemplate_IsCapturedAsCall()
+    {
+        // issue #268 regression: BOM `U+FEFF` between a tag and the backtick must be treated
+        // as inter-token whitespace. .NET's `char.IsWhiteSpace('\uFEFF')` returns false so the
+        // masker has to add BOM explicitly.
+        // issue #268 退行防止: タグと backtick の間の BOM `U+FEFF` もトークン間空白として
+        // 扱う必要がある。.NET の `char.IsWhiteSpace('\uFEFF')` は false なので明示的に足す。
+        const string content = "function f() {\n" +
+            "    return of\uFEFF`hello`;\n" +
+            "}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptForOfHeaderWithBomSeparator_IsNotCaptured()
+    {
+        // issue #268 regression: for-of header probe must tolerate BOM between `for` and `(`.
+        // issue #268 退行防止: for-of ヘッダ判定は `for` と `(` の間の BOM も許容する。
+        const string content = "function f(arr) {\n" +
+            "    for\uFEFF(const ch of `abc`) {\n" +
+            "        use(ch);\n" +
+            "    }\n" +
+            "}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptForOfHeaderWithStringParen_IsNotCaptured()
+    {
+        // issue #268 regression: a string literal `)` inside the for-of header (e.g. type
+        // annotation or plain string expression) must not corrupt the paren counter. The
+        // post-pass scan buffer blanks string content before counting.
+        // issue #268 退行防止: for-of ヘッダ内の文字列リテラル `)` が paren カウンタを壊さ
+        // ないよう、post-pass のスキャンバッファで文字列内容を空白化する。
+        const string content = """
+            function f(arr) {
+                for (const x = ")" /* annotation */ && arr[0] of `abc`) {
+                    use(x);
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptMemberCallNamedInOrInstanceof_IsCapturedAsCall()
+    {
+        // issue #268 regression: adding `in`, `instanceof`, `void`, `case`, `delete` to the
+        // shared ignore list would wrongly drop member calls like `api.in(...)` or
+        // `api.instanceof(...)`. The ignore list for those tokens is tagged-template-emit
+        // only, so real member calls must still be captured by CallRegex.
+        // issue #268 退行防止: `in` / `instanceof` / `void` / `case` / `delete` を共通 ignore
+        // に足すと `api.in(...)` のような正当なメンバー呼び出しまで消えてしまう。これらは
+        // tagged-template 発行経路のみで弾き、CallRegex 経路では通常どおり捕捉する。
+        const string content = """
+            function use(api) {
+                api.in("x");
+                api.instanceof("y");
+                api.delete("z");
+                api.case(1);
+                api.void(2);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "in");
+        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "instanceof");
+        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "delete");
+        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "case");
+        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "void");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptExportDefaultBeforePlainTemplate_IsNotCaptured()
+    {
+        // issue #268 regression: `export default \`plain\`` is a valid default export of a
+        // template-literal expression; `default` is a statement keyword, not a tag identifier.
+        // The backward-scan from the backtick picks up `default`, so the tagged-template emit
+        // site has to drop it.
+        // issue #268 退行防止: `export default \`plain\`` は template リテラル式の default
+        // export として正当で、`default` はタグ識別子ではない。backward-scan が `default`
+        // を拾うため、タグ付きテンプレート発行側で弾く必要がある。
+        const string content = "export default `plain`;\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "default");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptFinallyBeforePlainTemplate_IsNotCaptured()
+    {
+        // issue #268 regression: `finally` is a clause keyword of `try ... finally { ... }`,
+        // never a tag identifier. Even malformed inputs that place `finally` right before a
+        // backtick must not emit a phantom `call finally` row.
+        // issue #268 退行防止: `finally` は try-finally 節のキーワードであり、タグ識別子には
+        // ならない。backtick の直前に `finally` が来る形（不正入力含む）でも phantom
+        // `call finally` を出さない。
+        const string content = """
+            function f() {
+                try {
+                    doWork();
+                } finally `cleanup`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "finally");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptForOfBindingPatternTaggedTemplate_IsCapturedAsCall()
+    {
+        // issue #268 regression guard: in `for (const [x = of\`tag\`] of arr)`, the inner
+        // `of` is a real tagged-template call inside the binding pattern LHS, while the
+        // outer `of` is the for-of iterator keyword. Only the iterator keyword should be
+        // suppressed; the binding-pattern tag must still be captured.
+        // issue #268 退行防止: `for (const [x = of\`tag\`] of arr)` の内側 `of` は binding
+        // pattern LHS 内の正当なタグ付きテンプレート呼び出しで、外側 `of` だけが for-of
+        // iterator keyword。内側のタグ呼び出しは必ず残す。
+        const string content = """
+            function f(arr) {
+                for (const [x = of`tag`] of arr) { use(x); }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptMultiLineTaggedTemplate_IsCapturedAsCall()
+    {
+        // issue #268 regression guard: a tag identifier can sit on a prior line from the
+        // opener backtick (`tag\n\`hello\``). Node 25.2.0 evaluates this as a real
+        // tagged-template call; the backward-scan must cross the line boundary through
+        // inter-token whitespace so `call tag` is emitted.
+        // issue #268 退行防止: タグ識別子は opener の backtick より前の行に置ける
+        // (`tag\n\`hello\``)。Node 25.2.0 は実際のタグ呼び出しとして評価するため、
+        // backward-scan は行境界をまたぐ空白を越えて `call tag` を発行する必要がある。
+        const string content = """
+            function run(tag) {
+                return tag
+            `hello`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "tag");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptObjectDefaultTaggedTemplate_IsCapturedAsCall()
+    {
+        // issue #268 regression guard: `obj.default\`x\`` is a legal tagged-template call
+        // because reserved words are valid property names in JS/TS. The bare-keyword
+        // denylist (`default` / `finally` / ...) must NOT suppress member-access tags.
+        // issue #268 退行防止: `obj.default\`x\`` は JS/TS で予約語も property 名に
+        // なれるため正当なタグ呼び出し。bare-keyword 除外リスト（`default` / `finally` /
+        // ...）はメンバーアクセスのタグを握り潰してはならない。
+        const string content = """
+            function run(obj) {
+                return obj.default`x`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "default");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptMultiLineTaggedTemplateWithLineComment_IsCapturedAsCall()
+    {
+        // issue #268 regression guard: when the multi-line tag line ends with a `//`
+        // comment (`return tag // trailing comment\n\`hello\``), the backward scan
+        // must not pick up `comment` as the tag identifier. The masker must blank the
+        // `//` comment tail so the cross-line scan sees only real code.
+        // issue #268 退行防止: 複数行タグの前行末に `//` コメントがある場合
+        // (`return tag // trailing comment\n\`hello\``)、後方スキャンが
+        // `comment` をタグ識別子と誤認してはならない。masker 側で `//` コメント以降を
+        // 空白化し、行またぎスキャンは実コードのみを見るようにする。
+        const string content = """
+            function run(tag) {
+                return tag // trailing comment
+            `hello`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "tag");
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "comment");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptObjectReturnTaggedTemplate_IsCapturedAsCall()
+    {
+        // issue #268 regression guard: `obj.return\`x\`` is a legal tagged-template call
+        // because `return` is a valid property name in JS/TS. The shared ignore list
+        // (which holds `return` / `throw` / `await` / `typeof` / `yield` for JS/TS to
+        // suppress bare-keyword phantom calls) must NOT suppress member-access tags.
+        // issue #268 退行防止: `obj.return\`x\`` は `return` が property 名として合法
+        // なので正当なタグ呼び出し。bare-keyword の phantom 呼び出しを抑止する共有
+        // ignore list（`return` / `throw` / `await` / `typeof` / `yield`）は
+        // メンバーアクセスのタグを握り潰してはならない。
+        const string content = """
+            function run(obj) {
+                return obj.return`x`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "return");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptObjectAwaitTaggedTemplate_IsCapturedAsCall()
+    {
+        // issue #268 regression guard: `obj.await\`y\`` is a legal tagged-template call;
+        // `await` is a reserved word in async contexts but is still a valid property
+        // name. Member-access tags must bypass the `IsIgnoredCallName` filter.
+        // issue #268 退行防止: `obj.await\`y\`` は await が async 内で予約語でも
+        // property 名としては合法なので正当なタグ呼び出し。メンバーアクセスのタグは
+        // `IsIgnoredCallName` を迂回する必要がある。
+        const string content = """
+            async function run(obj) {
+                return obj.await`y`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "await");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptObjectFinallyTaggedTemplate_IsCapturedAsCall()
+    {
+        // issue #268 regression guard: `obj.finally\`y\`` is a legal tagged-template call;
+        // `finally` is a reserved word but a valid property name. Member-access tags must
+        // bypass the bare-keyword denylist that handles `try {} finally \`cleanup\``.
+        // issue #268 退行防止: `obj.finally\`y\`` は `finally` が予約語でも property 名と
+        // して合法なので正当なタグ呼び出し。メンバーアクセスのタグは
+        // `try {} finally \`cleanup\`` 用の bare-keyword 除外リストを迂回する必要がある。
+        const string content = """
+            function run(obj) {
+                return obj.finally`y`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, r => r.ReferenceKind == "call" && r.SymbolName == "finally");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptInstanceofBeforePlainTemplate_IsNotCaptured()
+    {
+        // Regression guard: `foo instanceof \`plain\`` uses `instanceof` as the type-check
+        // operator, not as a tag identifier. The backtick backward-scan picks it up, so
+        // IsIgnoredCallName must suppress the phantom `call instanceof` edge.
+        // 退行防止: `foo instanceof \`plain\`` の `instanceof` は型チェック演算子であり、
+        // タグ識別子ではない。backward-scan が拾う `instanceof` は IsIgnoredCallName で握り潰す。
+        const string content = """
+            function check(foo) {
+                return foo instanceof `plain`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "instanceof");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptFunctionTypeGenericTaggedTemplate_IsCaptured()
+    {
+        // issue #268: a generic type argument containing a function type `(x: T) => U` must
+        // still be read past so the tag identifier (`tag`) is captured. The `>` inside `=>`
+        // does not close the generic bracket.
+        // issue #268: 型引数に関数型 `(x: T) => U` を含むジェネリクス付きタグも読み飛ばして
+        // タグ識別子を捕捉する。`=>` の `>` は generic を閉じない。
+        const string content = """
+            function render<U>(value: U) {
+                return tag<(x: number) => U>`value=${value}`;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        var tag = Assert.Single(references.Where(r => r.SymbolName == "tag" && r.ReferenceKind == "call"));
+        Assert.Equal("render", tag.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_Csharp_LeadingBom_ExtractsReferencesOnFirstLine()
+    {
+        // BOM-prefixed C# source: reference extraction on line 1 must still work.
+        // Closes #183.
+        // BOM 付き C# ソース: 1 行目の参照抽出も機能する。Closes #183.
+        const string content = "\uFEFFusing System;\n\nnamespace BomRef;\n\npublic class C\n{\n    public void Run() { Helper(); }\n    public void Helper() { }\n}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System" && s.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "Helper");
+    }
+
+    [Fact]
+    public void Extract_Csharp_MidFileBom_ExtractsReferencesOnAffectedLine()
+    {
+        // Mid-file BOM right before a call site: the reference must still be captured
+        // on its real line number. Closes #183.
+        // mid-file BOM が呼び出し行直前に挟まっても、実際の行番号で参照を拾う。Closes #183.
+        const string content = "namespace BomRef;\npublic class C\n{\n    public void Run()\n    {\n\uFEFF        Helper();\n    }\n    public void Helper() { }\n}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var helperRef = Assert.Single(references.Where(r => r.SymbolName == "Helper"));
+        Assert.Equal(6, helperRef.Line);
+    }
+
+    [Fact]
+    public void Extract_NullContent_ReturnsEmpty()
+    {
+        // Direct callers that pass `null` must not throw. The #183 CRLF-normalization
+        // step added ahead of StripLineLeadingBom would otherwise dereference `null`
+        // before the helper's IsNullOrEmpty guard could run. Closes #183.
+        // direct call で `null` を渡してもスローしない。#183 で StripLineLeadingBom
+        // の前段に CRLF 正規化を入れたため、helper 側 IsNullOrEmpty まで届かず
+        // `null` を逆参照してしまう回帰を防ぐ。Closes #183.
+        Assert.Empty(ReferenceExtractor.Extract(1, "csharp", null!, Array.Empty<CodeIndex.Models.SymbolRecord>()));
+    }
+
+    [Fact]
+    public void Extract_EmptyContent_ReturnsEmpty()
+    {
+        // Empty content returns no references and does not throw. Closes #183.
+        // 空入力は参照 0 個で、例外にならない。Closes #183.
+        Assert.Empty(ReferenceExtractor.Extract(1, "csharp", string.Empty, Array.Empty<CodeIndex.Models.SymbolRecord>()));
+    }
+
+    [Fact]
+    public void Extract_Csharp_CrlfLeadingBom_ExtractsReferencesOnFirstLine()
+    {
+        // Direct-call input with CRLF line endings AND a leading BOM: the CRLF → LF
+        // normalization must run before StripLineLeadingBom so call sites on mid-file
+        // BOM lines are still captured. Closes #183.
+        // CRLF 改行 + 先頭 BOM の direct call: CRLF → LF 正規化を helper より先に通す
+        // ことで、mid-file 行頭 BOM 直後の呼び出しも参照として拾える。Closes #183.
+        const string content = "\uFEFFnamespace BomRefCrlf;\r\npublic class C\r\n{\r\n    public void Run()\r\n    {\r\n\uFEFF        Helper();\r\n    }\r\n    public void Helper() { }\r\n}\r\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var helperRef = Assert.Single(references.Where(r => r.SymbolName == "Helper"));
+        Assert.Equal(6, helperRef.Line);
+    }
+
+    [Fact]
+    public void Extract_Csharp_BareCrLeadingBom_ExtractsReferenceOnBomLine()
+    {
+        // Bare-`\r` direct-call input with a leading BOM + mid-file line-leading
+        // BOM in front of the call site: the in-extractor `\r` → `\n`
+        // normalization must run so `StripLineLeadingBom` (which treats `\n` as
+        // the sole line separator) still sees the mid-file BOM as line-leading
+        // and strips it, letting the regex capture the call site on the
+        // BOM-prefixed line. Closes #183.
+        // bare `\r` 改行 + 先頭 BOM + 呼び出し行頭 BOM の direct call: `\r` → `\n`
+        // 正規化を helper より先に通し、classic-Mac 改行でも BOM 行の呼び出し
+        // 参照が拾えることを固定。Closes #183.
+        const string content = "\uFEFFnamespace BomRefBareCr;\rpublic class C\r{\r    public void Run()\r    {\r\uFEFF        Helper();\r    }\r    public void Helper() { }\r}\r";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var helperRef = Assert.Single(references.Where(r => r.SymbolName == "Helper"));
+        Assert.Equal(6, helperRef.Line);
+    }
+
+    [Fact]
+    public void Extract_Csharp_MixedLineEndingsLeadingBom_ExtractsReferenceOnBomLine()
+    {
+        // Mixed line endings (`\r\n`, bare `\r`, bare `\n`) interleaved with a
+        // leading BOM and a mid-file line-leading BOM positioned immediately
+        // after a real `\r\n\r` boundary (the blank line uses bare `\r`, so the
+        // BOM follows `\r\n` + `\r`). The call site on the BOM-prefixed line is
+        // only captured when the normalization collapses `\r\n` AND bare `\r`
+        // to `\n` before `StripLineLeadingBom` runs — otherwise the `\r`
+        // immediately preceding the mid-file BOM would keep the BOM
+        // non-line-leading (helper treats `\n` as the sole line separator).
+        // Line 7 assertion accounts for the blank line inserted by that extra
+        // `\r`. Closes #183.
+        // 混在改行（`\r\n` / bare `\r` / bare `\n`）+ 先頭 BOM + `\r\n\r` 境界直後の
+        // mid-file 行頭 BOM の direct call: `\r\n` と bare `\r` の双方を `\n` に
+        // 正規化してからでないと、BOM 直前の `\r` のせいで helper からは BOM が
+        // 行頭扱いされず呼び出し参照が拾えない。bare `\r` による空行が挟まる分、
+        // Helper は行 7。Closes #183.
+        const string content = "\uFEFFnamespace BomRefMixed;\r\npublic class C\r{\n    public void Run()\r\n    {\r\n\r\uFEFF        Helper();\n    }\r    public void Helper() { }\r\n}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var helperRef = Assert.Single(references.Where(r => r.SymbolName == "Helper"));
+        Assert.Equal(7, helperRef.Line);
     }
 }

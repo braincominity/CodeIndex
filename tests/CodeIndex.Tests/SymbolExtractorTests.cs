@@ -60,9 +60,184 @@ public class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaScript_StringBraceDoesNotBreakFollowingContainerAssignment()
+    public void Extract_JavaScript_DetectsReExportSurfaceSymbols()
     {
         var content = """
+            export * from './util';
+            export { foo, bar } from './other'; // trailing comment
+            export { default as Helper } from './helper';
+            export * /* from './bogus-star' */ as ns from './ns';
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./util");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./other");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./helper");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./ns");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Helper");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "ns");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsMultilineStarReExportSurfaceSymbols()
+    {
+        var content = """
+            export *
+            from './util';
+            export * /* from './bogus-star' */ as ns
+            from './ns';
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./util");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./ns");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "ns");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsMinifiedReExportSurfaceSymbols()
+    {
+        var content = """
+            export{foo as bar}from './other';
+            export*as ns from './ns';
+            export*from './util';
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./other");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./ns");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./util");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "ns");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsNamedReExportWhenExportAndSpecifierListAreSplitAcrossLines()
+    {
+        var content = """
+            export
+            { foo, bar } from './other';
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./other");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsNamedAndTypeReExportSurfaceSymbols()
+    {
+        var content = """
+            export {
+              foo, // from './bogus'
+              bar,
+            } from './other';
+            export { default as Helper } from './helper'; // trailing comment
+            export type {
+              User,
+              Admin,
+            } from './types';
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./other");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./helper");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./types");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Helper");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "User");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Admin");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsTypeOnlyStarReExportSurfaceSymbols()
+    {
+        var content = """
+            export type * from './types';
+            export type * as ns from './types-ns';
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./types");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./types-ns");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "ns");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsReExportSurfaceSymbolsWithImportAttributes()
+    {
+        var content = """
+            export * from './util' with { type: 'json' };
+            export { foo as bar } from './other' with { type: 'json' };
+            export * from './legacy' assert { type: 'json' };
+            export { baz as qux } from './older' assert { type: 'json' };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./util");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./other");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./legacy");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./older");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "qux");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsMultilineStarReExportSurfaceSymbolsWithImportAttributes()
+    {
+        var content = """
+            export * from './util' with {
+              type: 'json'
+            };
+            export * as ns from './other' assert {
+              type: 'json'
+            };
+            export type * from './types' with {
+              type: 'json'
+            };
+            export type * as typeNs from './types-ns' assert {
+              type: 'json'
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./util");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./other");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./types");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./types-ns");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "ns");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "typeNs");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsNamedReExportSurfaceSymbolsWhenImportAttributeBraceStartsOnNextLine()
+    {
+        var content = """
+            export { foo as bar } from './other' with
+            {
+              type: 'json'
+            };
+            export type { User } from './types' assert
+            {
+              type: 'json'
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./other");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "./types");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "User");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_StringBraceDoesNotBreakFollowingContainerAssignment()
+    {
+        var content = """"
             export class Example {
               foo() {
                 const value = "}";
@@ -73,7 +248,7 @@ public class SymbolExtractorTests
                 return 1;
               }
             }
-            """;
+            """";
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
         var example = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Example"));
@@ -89,7 +264,7 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_JavaScript_TemplateLiteralBraceDoesNotBreakFollowingContainerAssignment()
     {
-        var content = """
+        var content = """"
             export class Example {
               foo() {
                 const value = `}`;
@@ -100,7 +275,7 @@ public class SymbolExtractorTests
                 return 1;
               }
             }
-            """;
+            """";
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
         var example = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Example"));
@@ -116,7 +291,7 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_TypeScript_TemplateInterpolationBracesStillCountTowardMethodRange()
     {
-        var content = """
+        var content = """"
             export class Example {
               foo() {
                 const value = `${format({ answer: 42 })}`;
@@ -127,7 +302,7 @@ public class SymbolExtractorTests
                 return 1;
               }
             }
-            """;
+            """";
         var symbols = SymbolExtractor.Extract(1, "typescript", content);
 
         var example = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Example"));
@@ -143,11 +318,11 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_JavaScript_DetectsExportDefaultClassMembers()
     {
-        var content = """
+        var content = """""
             export default class DefaultJs {
                 run() {}
             }
-            """;
+            """"";
         var symbols = SymbolExtractor.Extract(1, "javascript", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "DefaultJs");
@@ -774,6 +949,303 @@ public class SymbolExtractorTests
 
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == "Local");
         Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "inside");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsCommonJsNamedExportAssignments()
+    {
+        var content = """
+            module.exports.foo = function foo() { return 1; };
+            module.exports.bar = () => 2;
+            exports.baz = 42;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "baz");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DoesNotTreatCommonJsNamedExportComparisonsAsAssignments()
+    {
+        var content = """
+            module.exports.foo === undefined;
+            exports.bar == null;
+            module.exports.baz !== 1;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Empty(symbols);
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsMultilineCommonJsNamedExportAssignments()
+    {
+        var content = """
+            module.exports.foo =
+              async () => {};
+            module.exports.bar =
+              () => 2;
+            exports.baz =
+              42;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "baz");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsParenthesizedMultilineCommonJsNamedExportAssignments()
+    {
+        var content = """
+            module.exports.foo =
+              (
+                async () => 1
+              );
+            module.exports.bar =
+              (
+                function () {
+                  return 2;
+                }
+              );
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsParenthesizedSameLineCommonJsNamedExportAssignments()
+    {
+        var content = """
+            module.exports.foo = (function () { return 1; });
+            module.exports.bar = (async function () { return 2; });
+            module.exports.baz = (() => 3);
+            exports.qux = (42);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "baz");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "qux");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_CommonJsNamedExportFunctionsPreserveMultilineBraceBodyRanges()
+    {
+        var content = """
+            module.exports.foo = function ()
+            {
+              return 1;
+            };
+            module.exports.bar = () =>
+            {
+              return 2;
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "foo"));
+        Assert.Equal(1, foo.StartLine);
+        Assert.Equal(4, foo.EndLine);
+        Assert.Equal(2, foo.BodyStartLine);
+        Assert.Equal(4, foo.BodyEndLine);
+
+        var bar = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "bar"));
+        Assert.Equal(5, bar.StartLine);
+        Assert.Equal(8, bar.EndLine);
+        Assert.Equal(6, bar.BodyStartLine);
+        Assert.Equal(8, bar.BodyEndLine);
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsConditionalCommonJsNamedExportAssignmentsInTopLevelBlocks()
+    {
+        var content = """
+            if (process.env.FEATURE) {
+              module.exports.enabled = function () {
+                return true;
+              };
+            }
+            if (process.env.FLAG) {
+              exports.flag = 1;
+            }
+            function setup() {
+              module.exports.hidden = function () {
+                return false;
+              };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "enabled");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "flag");
+        Assert.DoesNotContain(symbols, s => s.Name == "hidden");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_GenericArrowCommonJsNamedExportFunctionsPreserveMultilineBraceBodyRanges()
+    {
+        var content = """
+            module.exports.foo = <T>(value: T) =>
+            {
+              return value;
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var foo = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "foo"));
+        Assert.Equal(1, foo.StartLine);
+        Assert.Equal(4, foo.EndLine);
+        Assert.Equal(2, foo.BodyStartLine);
+        Assert.Equal(4, foo.BodyEndLine);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsGenericArrowCommonJsNamedExportAssignments()
+    {
+        var content = """
+            module.exports.foo = <T>(value: T) => value;
+            module.exports.bar =
+              <T>(value: T) => value;
+            module.exports.baz = (<T>(value: T) => value);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "baz");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsMultilineAndConstrainedGenericArrowCommonJsNamedExportAssignments()
+    {
+        var content = """
+            module.exports.foo = <T>(
+              value: T
+            ) => value;
+            module.exports.bar = <T extends (...args: any[]) => number>(value: T) => value;
+            module.exports.baz = async <T>(
+              value: T
+            ) => value;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "baz");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DoesNotTreatCommonJsNamedExportComparisonsAsAssignments()
+    {
+        var content = """
+            module.exports.foo === undefined;
+            exports.bar == null;
+            module.exports.baz !== 1;
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Empty(symbols);
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DoesNotTreatCommonJsNamedExportIdentifierPrefixesAsFunctionsOrClasses()
+    {
+        var content = """
+            module.exports.foo = functionCall();
+            module.exports.bar = classyThing;
+            module.exports.baz = (functionCall());
+            exports.qux = (classyThing);
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "baz");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "qux");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && (s.Name == "foo" || s.Name == "baz"));
+        Assert.DoesNotContain(symbols, s => s.Kind == "class" && (s.Name == "bar" || s.Name == "qux"));
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsExportedObjectLiteralAliasProperties()
+    {
+        var content = """
+            const foo = 1;
+            function inner() { return 3; }
+            function named() { return 4; }
+            const answer = 42;
+            module.exports = { foo, alias: inner, named, method() {} };
+            export default { answer };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "alias" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "named" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "method" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "answer" && s.ContainerKind == "object" && s.ContainerName == "default");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "inner" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DoesNotTreatQuotedOrComputedExportedObjectLiteralKeysAsValueSideShorthandProperties()
+    {
+        var content = """
+            module.exports = { 'foo': bar, [baz]: qux, answer: 42 };
+            export default { [name]: value, visible };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "answer" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "visible" && s.ContainerKind == "object" && s.ContainerName == "default");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "bar" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "qux" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "value" && s.ContainerKind == "object" && s.ContainerName == "default");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DoesNotTreatExportedObjectLiteralSpreadsAsProperties()
+    {
+        var content = """
+            const rest = source;
+            const defaults = source;
+            const answer = 42;
+            module.exports = { ...rest, actual: 1, config: { ...rest } };
+            export default { ...defaults, answer };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "actual" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "config" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "answer" && s.ContainerKind == "object" && s.ContainerName == "default");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "rest" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "defaults" && s.ContainerKind == "object" && s.ContainerName == "default");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsExportedObjectLiteralShorthandProperties()
+    {
+        var content = """
+            const foo = 1;
+            const bar = 2;
+            module.exports = {
+              foo,
+              bar,
+              baz: foo,
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "foo" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "bar" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "baz" && s.ContainerKind == "object" && s.ContainerName == "module.exports");
     }
 
     [Fact]
@@ -3203,7 +3675,7 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_CSharp_MultilineVerbatimStringBraceDoesNotBreakFollowingRangeDetection()
     {
-        var content = """
+        var content = """"
             namespace Demo;
 
             public class FixtureHost
@@ -3219,7 +3691,7 @@ public class SymbolExtractorTests
                 {
                 }
             }
-            """;
+            """";
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
         var host = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "FixtureHost"));
@@ -3230,6 +3702,51 @@ public class SymbolExtractorTests
         Assert.Equal(10, uses.EndLine);
         Assert.Equal("class", after.ContainerKind);
         Assert.Equal("FixtureHost", after.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_InterpolatedStringCallSites_DoNotEmitPhantomDescribeStateDefinitions()
+    {
+        // Regression for issue #790: method-call text inside interpolation holes of an
+        // outer multi-line string must not be stitched into fake `function` declarations.
+        // The real declaration should remain queryable, but call-site fragments from the
+        // log string must not surface as extra `DescribeState` definitions.
+        // issue #790 の回帰: 外側の複数行文字列にある interpolation hole 内のメソッド呼び出し
+        // テキストを、偽の `function` 宣言として継ぎ合わせてはならない。本物の宣言は
+        // 取得できるままにしつつ、ログ文字列由来の call-site 断片は追加の
+        // `DescribeState` 定義として現れてはならない。
+        var content = """""
+            namespace Demo;
+
+            public sealed class ReporterContext
+            {
+                public string ReportsFolderAbsolutePath { get; set; } = string.Empty;
+            }
+
+            public sealed class AuditLogGenerateService
+            {
+                internal static string DescribeState(string label, string? pathOrCommand)
+                    => $"{label}:{pathOrCommand}";
+
+                public void WriteAuditLog(ReporterContext context, string auditLogPath)
+                {
+                    var message = $"""
+                        Failed to write audit log for reports folder {context.ReportsFolderAbsolutePath}
+                        to {auditLogPath}
+                        current state {
+                            DescribeState("ReportsFolder", context.ReportsFolderAbsolutePath)}
+                        """;
+                }
+            }
+            """"";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var describeState = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "DescribeState"));
+        Assert.Equal("AuditLogGenerateService", describeState.ContainerName);
+        Assert.Equal("string", describeState.ReturnType);
+        Assert.Equal(
+            """internal static string DescribeState(string label, string? pathOrCommand) => $"{label}:{pathOrCommand}";""",
+            describeState.Signature);
     }
 
     [Fact]
@@ -3813,6 +4330,60 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_NewEnumModifier_ExtractsEnumSymbol()
+    {
+        // Closes #353: nested `new enum` (member hiding in derived type) must be captured.
+        // Modifier order is free, so both `public new enum` and `new public enum` work, and
+        // an explicit underlying-type colon must still classify as kind `enum`.
+        // Closes #353: 派生型で親のネスト enum を隠蔽する `new enum` は enum としてキャプチャする。
+        // 修飾子の順序は自由で、`public new enum` と `new public enum` の両方、
+        // 明示的な基底型指定 `: byte` が付いた場合でも kind `enum` として分類する。
+        var content = """
+            namespace Demo;
+
+            public class Derived : Base
+            {
+                public new enum Kind { A }
+                public new enum KindByte : byte { A }
+                new public enum KindReversed { A }
+                new enum KindPrivate { A }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Kind" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "KindByte" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "KindReversed" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "KindPrivate");
+    }
+
+    [Fact]
+    public void Extract_CSharp_NewDelegateModifier_ExtractsDelegateSymbol()
+    {
+        // Regression for #353 companion: nested `new delegate` (member hiding in derived type)
+        // must stay captured. Modifier order is free, so both `public new delegate` and
+        // `new public delegate` work.
+        // #353 関連の回帰テスト: 派生型で親のネスト delegate を隠蔽する `new delegate` は
+        // delegate としてキャプチャし続ける。修飾子の順序は自由で、`public new delegate` と
+        // `new public delegate` の両方を受け付ける。
+        var content = """
+            namespace Demo;
+
+            public class Derived : Base
+            {
+                public new delegate int Handler(int x);
+                new public delegate int Reversed();
+                new delegate int PrivateD();
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "Handler" && s.Visibility == "public" && s.ReturnType == "int");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "Reversed" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "delegate" && s.Name == "PrivateD");
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineClassHeader_SignatureUnchanged()
     {
         var content = """
@@ -4235,7 +4806,7 @@ public class SymbolExtractorTests
         var count = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Count"));
         Assert.Equal(5, count.StartLine);
         Assert.Equal(10, count.EndLine);
-        Assert.Equal("public partial int Count => DateTime.Now.Day switch", count.Signature);
+        Assert.Equal("public partial int Count => DateTime.Now.Day switch { > 15 => 2, _ => 1 };", count.Signature);
     }
 
     [Fact]
@@ -5434,6 +6005,57 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_ConstField_TupleReturnTypes()
+    {
+        // Closes #346: const fields with tuple / named-tuple / nullable-tuple /
+        // generic-over-tuple / global::-qualified / tuple-array return types were silently
+        // dropped because the const row's returnType char class had no `(`, `)`, `\s`, and no
+        // tuple alternative. The method row at the next priority was already immunized by
+        // the post-#349 CSharpNonTypeKeywordPattern / CSharpTypePattern consolidation, so no
+        // phantom `function const` row was emitted — the symbols simply vanished. Switching
+        // the const returnType to the shared CSharpTypePattern token restores capture for all
+        // of these shapes and preserves baselines (`public const int Plain = 42;`,
+        // `new public const int HiddenConst = 2;`).
+        // Closes #346: tuple / 名前付き tuple / nullable tuple / generic-over-tuple /
+        // `global::` 修飾 / tuple-array を戻り値型とする const フィールドは、const 行の
+        // returnType 文字クラスに `(` / `)` / `\s` も tuple 代替もなかったため、サイレントに
+        // drop されていた。method 行は #349 以後の CSharpNonTypeKeywordPattern /
+        // CSharpTypePattern 統合で既にこの後方参照経路を塞いでいるため、phantom `function const`
+        // 行は出ずに単に消えていた。const の returnType を共有トークン CSharpTypePattern に
+        // 差し替えることで、以下のすべての形を捕捉し、既存の baseline（`public const int Plain = 42;`
+        // / `new public const int HiddenConst = 2;`）も維持する。
+        var content = """
+            namespace ConstTuple;
+
+            public class Cfg
+            {
+                public const (int, int) Pair = (1, 2);
+                public const (int a, int b) NamedPair = (1, 2);
+                public const (int, int)? MaybePair = null;
+                public const (int, int)[] PairArray = null;
+                public const global::System.Int32 Qualified = 7;
+                public const int Plain = 42;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Pair" && s.Visibility == "public" && s.ReturnType == "(int, int)");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "NamedPair" && s.Visibility == "public" && s.ReturnType == "(int a, int b)");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MaybePair" && s.Visibility == "public" && s.ReturnType == "(int, int)?");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "PairArray" && s.Visibility == "public" && s.ReturnType == "(int, int)[]");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Qualified" && s.Visibility == "public" && s.ReturnType == "global::System.Int32");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Plain" && s.Visibility == "public" && s.ReturnType == "int");
+
+        // The method row must not emit a phantom `function const` row for any of the tuple
+        // shapes above. `const` itself as a name would only appear via the post-#349 backtrack
+        // the issue describes. Assert the negative so any regression of that phantom is caught.
+        // tuple 形に対して method 行が phantom `function const` 行を発行していないことを
+        // 明示的に確認する。`const` 自体が name として現れるのは #349 以後は起きないはずの
+        // 後方参照経路のみなので、将来その regression が起きたらここで検出できる。
+        Assert.DoesNotContain(symbols, s => s.Name == "const");
+    }
+
+    [Fact]
     public void Extract_CSharp_PlainField_FreeModifierOrder()
     {
         // Closes #355: plain fields (kind `property`) and multi-line field headers must also
@@ -5698,6 +6320,107 @@ public class SymbolExtractorTests
         Assert.Equal(2, nested.Count);
         Assert.Contains(nested, s => s.ContainerName == "Base");
         Assert.Contains(nested, s => s.ContainerName == "Derived");
+    }
+
+    [Fact]
+    public void Extract_CSharp_Interface_ModifierSlotMatrix_LocksInCommonLegalShapes()
+    {
+        // Closes #302: the C# interface row's modifier slot must accept the common
+        // legal declaration shapes in a single fixture so a future modifier-slot
+        // refactor (mirror of the #238 `operator checked`, #244 `static abstract`,
+        // #355 `file`, and #376 `new` families) cannot silently drop one variant.
+        // The fixture is intentionally hand-verified to be legal C# — `partial`
+        // must appear immediately before the `interface` keyword (CS0267 otherwise)
+        // so `partial public interface` is NOT a legal ordering and is intentionally
+        // absent. Non-canonical modifier order is instead demonstrated by
+        // `unsafe public interface` (the `unsafe` type modifier has no required
+        // position relative to accessibility). Covers plain `interface`, `public
+        // interface`, explicit `internal interface`, `file interface` (C# 11
+        // file-scoped, cannot combine with accessibility), bare `partial interface`,
+        // `public partial interface`, non-canonical `unsafe public interface`,
+        // `unsafe interface`, the nested `public new interface` that hides a
+        // same-named base-type member, and the nested `public new partial interface`
+        // that exercises the `new + partial` modifier interaction on nested types.
+        // Each unique name is pinned with `Assert.Single` so a silent duplicate row
+        // or a kind/visibility relabel on a sibling variant cannot make this test
+        // pass via a second matching row. The total interface-symbol count for the
+        // fixture is also asserted so a phantom extra interface emission anywhere
+        // in the file cannot slip past the per-name predicates.
+        // Closes #302: C# interface 行の修飾子スロットが、単一 fixture で代表的な
+        // 合法宣言形を受理することを固定する。修飾子スロットの将来的な再編（#238
+        // の `operator checked`、#244 の `static abstract`、#355 の `file`、#376
+        // の `new` と同じファミリの問題）で、いずれか1形を黙って落とす回帰を防ぐ。
+        // fixture は手で合法性を検証済みで、`partial` は `interface` キーワード
+        // 直前にしか置けず（違反すると CS0267）、`partial public interface` は
+        // 合法な順序ではないので意図的に含めない。非正準順序は `unsafe public
+        // interface`（`unsafe` 型修飾子は可視性に対して順序の制約がない）で代替
+        // する。plain `interface`、`public interface`、明示 `internal interface`、
+        // `file interface`（C# 11 file-scoped、accessibility と併用不可）、素の
+        // `partial interface`、`public partial interface`、非正準順の `unsafe
+        // public interface`、`unsafe interface`、同名ベースメンバを隠蔽する
+        // ネストの `public new interface`、`new + partial` 修飾子相互作用を
+        // 検証するネストの `public new partial interface` を網羅する。各ユニーク
+        // 名は `Assert.Single` で固定し、兄弟変種に silent duplicate や kind /
+        // visibility relabel が入っても別行のヒットで silent pass しないように
+        // する。fixture 全体の interface シンボル総数もアサートして、ファイル内
+        // のどこかで phantom interface が追加された場合でも per-name predicate
+        // をすり抜けないようにする。
+        var content = """
+            namespace ModifierSlotMatrix;
+
+            interface IPlain { void Do(); }
+            public interface IPublic { void Do(); }
+            internal interface IInternal { void Do(); }
+            file interface IFile { void Do(); }
+            partial interface IPartial { void Do(); }
+            public partial interface IPublicPartial { void Do(); }
+            unsafe public interface IUnsafePublic { void Do(); }
+            unsafe interface IUnsafe { void Do(); }
+
+            public class Base
+            {
+                public interface INested { void Do(); }
+            }
+            public class Derived : Base
+            {
+                public new interface INested { void Do(); }
+                public new partial interface IPartialNested { void Do(); }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IPlain" && string.IsNullOrEmpty(s.Visibility));
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IPublic" && s.Visibility == "public");
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IInternal" && s.Visibility == "internal");
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IFile" && string.IsNullOrEmpty(s.Visibility));
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IPartial" && string.IsNullOrEmpty(s.Visibility));
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IPublicPartial" && s.Visibility == "public");
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IUnsafePublic" && s.Visibility == "public");
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IUnsafe" && string.IsNullOrEmpty(s.Visibility));
+
+        // Nested `public new interface INested` must produce a second symbol attributed
+        // to the `Derived` container alongside the base-side `INested` on `Base`.
+        // `public new partial interface IPartialNested` covers the `new + partial`
+        // modifier interaction on nested types.
+        // ネストの `public new interface INested` は、基底側の `Base.INested` に加えて
+        // `Derived` コンテナ下の独立シンボルとして抽出される必要がある。
+        // `public new partial interface IPartialNested` はネスト型の `new + partial`
+        // 修飾子相互作用を検証する。
+        var nested = symbols.Where(s => s.Kind == "interface" && s.Name == "INested").ToList();
+        Assert.Equal(2, nested.Count);
+        Assert.Single(nested, s => s.ContainerName == "Base" && s.Visibility == "public");
+        Assert.Single(nested, s => s.ContainerName == "Derived" && s.Visibility == "public");
+        Assert.Single(symbols, s => s.Kind == "interface" && s.Name == "IPartialNested" && s.ContainerName == "Derived" && s.Visibility == "public");
+
+        // Fixture contains exactly 11 legal interface declarations (8 top-level +
+        // 3 nested: Base.INested, Derived.INested, Derived.IPartialNested). Pinning
+        // the aggregate count here prevents a phantom interface emission elsewhere
+        // in the file from slipping past the per-name `Assert.Single` predicates.
+        // fixture 全体の合法 interface 宣言は正確に 11 件（top-level 8 件 + nested 3
+        // 件: Base.INested、Derived.INested、Derived.IPartialNested）。集計数も
+        // アサートすることで、ファイル中のどこかで phantom interface が発生しても
+        // per-name `Assert.Single` をすり抜けないようにする。
+        Assert.Equal(11, symbols.Count(s => s.Kind == "interface"));
     }
 
     [Fact]
@@ -8512,6 +9235,82 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Java_DetectsBraceLiteralAnnotationsOnSameLineTypesAndEnumBodies()
+    {
+        var content = """
+            @Target({ElementType.TYPE}) public record Wrapped(int value) { public int twice() { return value * 2; } }
+
+            public enum Op {
+                ADD { @SuppressWarnings({"unchecked"}) public int apply(int a, int b) { return a + b; } };
+                public abstract int apply(int a, int b);
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Wrapped");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "value" && s.ContainerKind == "class" && s.ContainerName == "Wrapped");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "twice" && s.ContainerKind == "class" && s.ContainerName == "Wrapped");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "apply" && s.ContainerKind == "function" && s.ContainerName == "ADD");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "apply" && s.ContainerKind == "enum" && s.ContainerName == "Op");
+    }
+
+    [Fact]
+    public void Extract_Java_SameLineRecordsDoNotEmitPhantomHeaderFunctions()
+    {
+        var content = """
+            public record Empty(int x) {}
+            public record Inline(int x) { public int twice() { return x * 2; } }
+            public record Compact(int x) { public Compact { if (x < 0) throw new IllegalArgumentException(); } }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Empty");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Inline");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Compact");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "x" && s.ContainerName == "Empty");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "twice" && s.ContainerKind == "class" && s.ContainerName == "Inline");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Compact" && s.ContainerKind == "class" && s.ContainerName == "Compact");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name is "Empty" or "Inline" && s.ReturnType == "record");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Compact" && s.ReturnType == "record");
+    }
+
+    [Fact]
+    public void Extract_Java_SameLineCompactConstructorAfterSiblingStillIndexesConstructor()
+    {
+        var content = """
+            public record R(int x) { int first() { return x; } public R { if (x < 0) throw new IllegalArgumentException(); } }
+            public record Annotated(int x) { @Deprecated int first() { return x; } @Deprecated public Annotated { if (x < 0) throw new IllegalArgumentException(); } }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "R");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "x" && s.ContainerKind == "class" && s.ContainerName == "R");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first" && s.ContainerKind == "class" && s.ContainerName == "R");
+        var compactCtor = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "R"));
+        Assert.Equal("class", compactCtor.ContainerKind);
+        Assert.Equal("R", compactCtor.ContainerName);
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first" && s.ContainerKind == "class" && s.ContainerName == "Annotated");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Annotated" && s.ContainerKind == "class" && s.ContainerName == "Annotated");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name is "R" or "Annotated" && s.ReturnType == "record");
+    }
+
+    [Fact]
+    public void Extract_Java_SameLineMembersAfterCompactConstructorStillIndex()
+    {
+        var content = """
+            public record R(int x) { public R { } int later() { return x; } }
+            public record Annotated(int x) { @Deprecated public Annotated { } @Deprecated int later() { return x; } }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "R" && s.ContainerKind == "class" && s.ContainerName == "R");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "later" && s.ContainerKind == "class" && s.ContainerName == "R");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Annotated" && s.ContainerKind == "class" && s.ContainerName == "Annotated");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "later" && s.ContainerKind == "class" && s.ContainerName == "Annotated");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.ReturnType == "record");
+    }
+
+    [Fact]
     public void Extract_Java_HandlesSameLineSiblingMethodsInsideEnumBody()
     {
         var content = """
@@ -8549,6 +9348,104 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "MyAnnotation");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "value");
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsModuleInfoDeclarationAndDirectives()
+    {
+        const string content = """
+            open module com.example.app {
+                requires static transitive java.logging;
+                requires java.base;
+                exports com.example.api;
+                exports com.example.internal to com.example.plugin, com.example.tools;
+                opens com.example.model;
+                uses com.example.spi.MyService;
+                provides com.example.spi.MyService with com.example.impl.DefaultService, com.example.impl.BackupService;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var module = Assert.Single(symbols.Where(s => s.Kind == "namespace" && s.Name == "com.example.app"));
+        Assert.Equal(1, module.Line);
+        Assert.Equal(1, module.StartLine);
+        Assert.Equal(9, module.EndLine);
+
+        var imports = symbols.Where(s => s.Kind == "import").ToList();
+        Assert.Equal(7, imports.Count);
+        Assert.Contains(imports, s => s.Name == "java.logging" && s.ContainerName == "com.example.app");
+        Assert.Contains(imports, s => s.Name == "java.base" && s.ContainerName == "com.example.app");
+        Assert.Contains(imports, s => s.Name == "com.example.api" && s.ContainerName == "com.example.app");
+        Assert.Contains(imports, s => s.Name == "com.example.internal" && s.ContainerName == "com.example.app");
+        Assert.Contains(imports, s => s.Name == "com.example.model" && s.ContainerName == "com.example.app");
+        Assert.Equal(2, imports.Count(s => s.Name == "com.example.spi.MyService" && s.ContainerName == "com.example.app"));
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsModuleInfoDeclarationWithAllmanBrace()
+    {
+        const string content = """
+            module com.example.app
+            {
+                requires java.base;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var module = Assert.Single(symbols.Where(s => s.Kind == "namespace" && s.Name == "com.example.app"));
+        Assert.Equal(1, module.Line);
+        Assert.Equal(1, module.StartLine);
+        Assert.Equal(4, module.EndLine);
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "java.base" && s.ContainerName == "com.example.app");
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsModuleInfoDirectivesOnAllmanBraceLine()
+    {
+        const string content = """
+            module com.example.app
+            { requires java.base;
+              exports com.example.api;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var imports = symbols.Where(s => s.Kind == "import").ToList();
+        Assert.Equal(2, imports.Count);
+        Assert.Contains(imports, s => s.Name == "java.base" && s.ContainerName == "com.example.app");
+        Assert.Contains(imports, s => s.Name == "com.example.api" && s.ContainerName == "com.example.app");
+    }
+
+    [Fact]
+    public void Extract_Java_DetectsModuleInfoDirectivesWithMultilineListsAndComments()
+    {
+        const string content = """
+            module com.example.app {
+                requires /*comment*/ java.base;
+                exports com.example.internal
+                    to com.example.plugin,
+                       com.example.tools;
+                opens com.example.model
+                    to com.example.viewer,
+                       com.example.editor;
+                uses com.example.spi.MyService;
+                provides com.example.spi.MyService
+                    with com.example.impl.DefaultService,
+                         com.example.impl.BackupService;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var imports = symbols.Where(s => s.Kind == "import").ToList();
+        Assert.Equal(5, imports.Count);
+        Assert.Contains(imports, s => s.Name == "java.base");
+        Assert.Contains(imports, s => s.Name == "com.example.internal");
+        Assert.Contains(imports, s => s.Name == "com.example.model");
+        Assert.Equal(2, imports.Count(s => s.Name == "com.example.spi.MyService"));
+        Assert.Contains(imports, s => s.Signature == "requires /*comment*/ java.base;");
+        Assert.Contains(imports, s => s.Signature == "exports com.example.internal to com.example.plugin, com.example.tools;");
+        Assert.Contains(imports, s => s.Signature == "opens com.example.model to com.example.viewer, com.example.editor;");
+        Assert.Contains(imports, s => s.Signature == "provides com.example.spi.MyService with com.example.impl.DefaultService, com.example.impl.BackupService;");
     }
 
     [Fact]
@@ -8609,6 +9506,26 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "A" && s.ContainerName == "E");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "B" && s.ContainerName == "E");
+    }
+
+    [Fact]
+    public void Extract_Java_HandlesAnnotationMemberDefaultArrayValueAsBodyLess()
+    {
+        // `default { ... }` on an annotation member is part of the default value, not a real
+        // member body. The scanner must keep the declaration body-less so later same-line
+        // siblings still survive.
+        // annotation member の `default { ... }` は本体ではなく default 値の一部。
+        // body-less のまま保持し、同一行の後続 sibling を落とさないこと。
+        var content = "@interface Tags { String[] value() default {\"a\", \"b\"}; int age(); } class C {}";
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+
+        var value = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "value" && s.ContainerName == "Tags"));
+        Assert.Equal("String[] value() default {\"a\", \"b\"};", value.Signature);
+        Assert.Null(value.BodyStartLine);
+        Assert.Null(value.BodyEndLine);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "age" && s.ContainerName == "Tags" && s.BodyStartLine == null);
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "C");
     }
 
     [Fact]
@@ -9818,6 +10735,88 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_MultiLineConstantPatterns_DoNotBecomePhantomProperties()
+    {
+        // issue #779: multi-line expression-bodied constant patterns (`value is` + later-line
+        // `Red` / `or Red`) must stay inside the enclosing method body. Before the fix, the
+        // continuation lines re-entered the plain-field regex, emitted phantom `property Red`
+        // rows, and downstream reference extraction suppressed the real pattern heads.
+        // issue #779: 複数行の式本体 constant pattern（`value is` の次行に `Red` / `or Red`）
+        // は enclosing method body の内部として扱われなければならない。修正前は継続行が
+        // plain-field regex に再突入して phantom `property Red` を出し、後段の reference
+        // 抽出が本物の pattern head を抑止していた。
+        const string content = """
+            using static Demo.Color;
+
+            namespace Demo;
+
+            public enum Color
+            {
+                Red
+            }
+
+            public sealed class Uses
+            {
+                public bool Match(object value) => value is
+                    Red
+                    or
+                    Red;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var match = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Match"));
+        Assert.Equal(12, match.StartLine);
+        Assert.Equal(15, match.EndLine);
+        Assert.Equal(12, match.BodyStartLine);
+        Assert.Equal(15, match.BodyEndLine);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "Red" && s.ContainerName == "Uses");
+    }
+
+    [Fact]
+    public void Extract_CSharp_MultiLineExpressionBodiedMethod_TerminatorLineKeepsFullSignatureAndSiblingField()
+    {
+        // issue #835 / #836: when a multi-line expression-bodied member ends on the next line,
+        // a real same-line sibling after that terminating `;` must still be extracted, and the
+        // stored signature must include the continuation line through the terminator.
+        // issue #835 / #836: 複数行の式本体メンバーが次行の `;` で終わる場合でも、その
+        // `;` の後ろにある同一行 sibling は抽出されなければならず、保存される signature も
+        // 継続行を含めて終端 `;` までを保持していなければならない。
+        const string content = """
+            namespace Demo;
+
+            public enum Color
+            {
+                Red
+            }
+
+            public sealed class Uses
+            {
+                public bool Match(object value) => value is
+                    Red; public int X;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var match = Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Match"));
+        Assert.Equal(10, match.StartLine);
+        Assert.Equal(11, match.EndLine);
+        Assert.Equal(10, match.BodyStartLine);
+        Assert.Equal(11, match.BodyEndLine);
+        Assert.Equal("public bool Match(object value) => value is Red;", match.Signature);
+
+        var x = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "X"));
+        Assert.Equal(11, x.StartLine);
+        Assert.Equal(11, x.EndLine);
+        Assert.Equal("Uses", x.ContainerName);
+        Assert.Equal("class", x.ContainerKind);
+        Assert.Equal("public int X;", x.Signature);
+    }
+
+    [Fact]
     public void Extract_CSharp_SameLineAutoPropertyBeforeMethodIsCaptured()
     {
         // Mixed-kind same-line siblings must not lose the earlier brace-body property when a
@@ -10257,6 +11256,90 @@ public class SymbolExtractorTests
         Assert.Equal("public delegate void Inner<T1, T2>();", inner.Signature);
         Assert.Equal("class", inner.ContainerKind);
         Assert.Equal("Holder", inner.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CSharp_SameLineSemicolonMembersClampRangeAtTopLevelSemicolon()
+    {
+        // Body-less C# members (`void M();`, `event E;`, `delegate D();`) on the same
+        // physical line as the enclosing type's closing `}` must clamp their range at
+        // the in-line `;`. Before this fix, FindCSharpBraceRange only short-circuited
+        // when the entire scan line ended with `;`, so a single-member interface
+        // `interface I { void M(); }` and the property->method order
+        // `interface J { int P { get; } void M(); }` both bled past the `}` into the
+        // next file line, attributing the next type's brace range to M and emitting
+        // wrong end_line / body_start_line / body_end_line. Closes #515.
+        // 同じ物理行に外側型の閉じ `}` がある body-less な C# member
+        // (`void M();`, `event E;`, `delegate D();`) は、行内 `;` の時点で範囲を確定
+        // させなければならない。修正前の FindCSharpBraceRange は scan 行末が `;` で
+        // 終わる場合だけ早期 return していたため、単一メンバー interface
+        // `interface I { void M(); }` や property->method 並びの
+        // `interface J { int P { get; } void M(); }` がいずれも `}` を越えてファイル
+        // 次行に食い込み、次の型の brace 範囲を M に帰属させて end_line /
+        // body_start_line / body_end_line を誤らせていた。Closes #515.
+        var content = string.Join(
+            "\n",
+            "public interface I { void M(); }",
+            "public interface J { int P { get; } void M(); }",
+            "public interface K { void M(); int P { get; } }",
+            "public class L { public int P { get; set; } public event System.EventHandler E; }");
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var solitaryMethod = Assert.Single(symbols.Where(s =>
+            s.Kind == "function"
+            && s.Name == "M"
+            && s.ContainerKind == "interface"
+            && s.ContainerName == "I"));
+        Assert.Equal(1, solitaryMethod.Line);
+        Assert.Equal(1, solitaryMethod.StartLine);
+        Assert.Equal(1, solitaryMethod.EndLine);
+        Assert.Null(solitaryMethod.BodyStartLine);
+        Assert.Null(solitaryMethod.BodyEndLine);
+        Assert.Equal("void M();", solitaryMethod.Signature);
+
+        var afterPropertyMethod = Assert.Single(symbols.Where(s =>
+            s.Kind == "function"
+            && s.Name == "M"
+            && s.ContainerKind == "interface"
+            && s.ContainerName == "J"));
+        Assert.Equal(2, afterPropertyMethod.Line);
+        Assert.Equal(2, afterPropertyMethod.StartLine);
+        Assert.Equal(2, afterPropertyMethod.EndLine);
+        Assert.Null(afterPropertyMethod.BodyStartLine);
+        Assert.Null(afterPropertyMethod.BodyEndLine);
+        Assert.Equal("void M();", afterPropertyMethod.Signature);
+
+        // Method-then-property order keeps existing behavior: M still has no body
+        // metadata leak from the trailing property's brace range.
+        // method-then-property 並びでも、後続 property の brace 範囲が M の body
+        // メタデータに混入しないことを確認する。
+        var beforePropertyMethod = Assert.Single(symbols.Where(s =>
+            s.Kind == "function"
+            && s.Name == "M"
+            && s.ContainerKind == "interface"
+            && s.ContainerName == "K"));
+        Assert.Equal(3, beforePropertyMethod.Line);
+        Assert.Equal(3, beforePropertyMethod.StartLine);
+        Assert.Equal(3, beforePropertyMethod.EndLine);
+        Assert.Null(beforePropertyMethod.BodyStartLine);
+        Assert.Null(beforePropertyMethod.BodyEndLine);
+        Assert.Equal("void M();", beforePropertyMethod.Signature);
+
+        // Same fix also locks event range when a property accessor block precedes it
+        // on the same line (the original #473 case is regressed via the same path).
+        // 同じ修正は、property accessor block を先行させた event 並びでも range を
+        // 固定する (#473 元ケースも同じ経路で reg している)。
+        var trailingEvent = Assert.Single(symbols.Where(s =>
+            s.Kind == "event"
+            && s.Name == "E"
+            && s.ContainerKind == "class"
+            && s.ContainerName == "L"));
+        Assert.Equal(4, trailingEvent.Line);
+        Assert.Equal(4, trailingEvent.StartLine);
+        Assert.Equal(4, trailingEvent.EndLine);
+        Assert.Null(trailingEvent.BodyStartLine);
+        Assert.Null(trailingEvent.BodyEndLine);
+        Assert.Equal("public event System.EventHandler E;", trailingEvent.Signature);
     }
 
     [Fact]
@@ -11110,6 +12193,7 @@ public class SymbolExtractorTests
         Assert.Equal("public partial class Child { }", child.Signature);
         Assert.Equal("class", child.ContainerKind);
         Assert.Equal("Wrapped", child.ContainerName);
+        Assert.Equal(0, child.SameLineSignatureOccurrenceIndex);
 
         Assert.DoesNotContain(symbols, s =>
             s.Kind == "class"
@@ -11732,6 +12816,81 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_DoesNotMatchNewExpressionStatementsAsExplicitInterfaceDefinitions()
+    {
+        // Issue #362: `new System.Text.StringBuilder().Append(...)` などの式文が、
+        // 正規表現が最初の `(` で止まるために returnType=`new` / interface=手前の修飾チェーン
+        // （namespace `System.Text` / 外側型 `Outer` / `MyApp.Outer` のような両者の混在など、
+        // ドット連鎖そのもの。この位置では namespace と外側型を区別しない）/
+        // name=構築されている型（`StringBuilder` / `HttpClient` / `Inner`）として
+        // 明示的インターフェースメソッド定義に化けないこと。ブレース初期化子形
+        // (`new Outer.Inner { A = 1 }.Consume();`) と `_ = new ...` 形も同じフィクスチャで
+        // 固定し、brace-initializer 側では `Outer.Inner` / `Inner.Consume` のコンテナ関係
+        // と `Consume` が全体 1 本だけ（= brace-init から phantom `function Consume` が
+        // 増えない、別コンテナ配下や container 未設定の phantom も出ない）ことまで
+        // ピン留めする。
+        // Issue #362: expression statements like `new System.Text.StringBuilder().Append(...)`
+        // must not masquerade as explicit interface method definitions. The phantom name would
+        // be the identifier right before the first `(` — the type being constructed
+        // (`StringBuilder` / `HttpClient` / `Inner`), because the explicit-interface regex
+        // stops at the first `(` and consumes the preceding dot-chain as the would-be
+        // interface qualifier. That qualifier may be a namespace prefix (`System.Text` in
+        // `new System.Text.StringBuilder()`), an enclosing-type chain (`Outer` in
+        // `new Outer.Inner()` where `Outer` is an outer class, not a namespace), or a
+        // mix of both (e.g. `new MyApp.Outer.Inner()` where `MyApp` is a namespace and
+        // `Outer` is an enclosing type) — the regex does not distinguish which segments are
+        // namespaces and which are enclosing types at this position. Brace-initializer forms
+        // (`new Outer.Inner { A = 1 }.Consume();`) and discard forms (`_ = new ...`) are
+        // also pinned here; the brace-initializer case additionally pins the real
+        // `Outer` → `Inner` → `Consume` container chain and that exactly one `Consume`
+        // row is emitted (no phantom `function Consume` leaking out of the brace-init site).
+        var content = "public class Svc\n{\n    public int Real() => 42;\n\n    public void ChainedNew()\n    {\n        new System.Text.StringBuilder().Append(\"a\").Append(\"b\").ToString();\n    }\n\n    public void DiscardNew()\n    {\n        _ = new System.Text.RegularExpressions.Regex(\"pattern\");\n    }\n\n    public void UseNew()\n    {\n        new System.Net.Http.HttpClient().Dispose();\n    }\n\n    public void BraceInitNew()\n    {\n        new Outer.Inner { A = 1 }.Consume();\n    }\n}\n\npublic class Outer\n{\n    public class Inner { public int A { get; set; } public void Consume() { } }\n}\n\npublic class Consumer : System.IDisposable\n{\n    void System.IDisposable.Dispose() { }\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        // Real definitions should be extracted / 実際の定義は抽出されるべき
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Svc");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Real");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ChainedNew");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "DiscardNew");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "UseNew");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "BraceInitNew");
+        // Nested Outer.Inner container chain must be preserved, and exactly one Consume symbol
+        // must exist in total — emitted under Inner. Two guards here:
+        //   (a) the total `Consume` count across ALL kinds / containers must be 1, so a
+        //       phantom `function Consume` emitted under `Svc` (or with no container at all)
+        //       from `new Outer.Inner { A = 1 }.Consume();` cannot sneak past by living
+        //       outside `ContainerName == "Inner"`; and
+        //   (b) that single `Consume` must be a `function` under `Inner` under `Outer`, so a
+        //       broken container chain also fails.
+        // ネストした Outer.Inner のコンテナ関係を固定。`Consume` は全体 1 本のみ（別コンテナ
+        // 配下や container 未設定の phantom も弾く）かつ、その 1 本は `Inner` 配下に属する
+        // `function` である、という二段のガードで brace-init phantom を検出する。
+        Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Outer"));
+        Assert.Single(symbols.Where(s => s.Name == "Inner"));
+        Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Inner" && s.ContainerKind == "class" && s.ContainerName == "Outer"));
+        Assert.Single(symbols.Where(s => s.Name == "Consume"));
+        Assert.Single(symbols.Where(s => s.Kind == "function" && s.Name == "Consume" && s.ContainerKind == "class" && s.ContainerName == "Inner"));
+        // Explicit interface impl on Consumer class must still be captured (regression guard)
+        // Consumer クラスの明示的インターフェース実装は引き続き抽出されること（回帰防止）
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Dispose" && s.ReturnType == "void");
+        // Phantom function rows from new-expression statements must NOT be produced,
+        // whether the chain ends in parentheses (`new T().M(...)`) or a brace-initializer
+        // (`new T { ... }.M(...)`). 構築される型名 (`StringBuilder` / `HttpClient` / `Regex`
+        // / `Inner`) が function 行として出ないこと。
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "StringBuilder");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Regex");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "HttpClient");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "Inner" && s.ReturnType == "new");
+        // Kind-agnostic guard specifically against this #362 phantom shape: the `new` keyword
+        // itself must not sneak in under ANY kind inside this fixture. This is a targeted
+        // guard, not a general "the word `new` can never be a symbol name anywhere" claim.
+        // Issue #362 の phantom が将来別 kind に分類し直されても取りこぼさないための
+        // kind 非依存ガード。ここでの意味は「このフィクスチャの範囲内で `new` が名前に
+        // 出てこない」ことに限定しており、一般命題として主張するものではない。
+        Assert.DoesNotContain(symbols, s => s.Name == "new");
+    }
+
+    [Fact]
     public void Extract_CSharp_DoesNotMatchQualifiedNewExpressionsAsExplicitInterfaceDefinitions()
     {
         // Issue #362: qualified constructor expressions (`new Namespace.Type()`) must not be
@@ -12123,15 +13282,66 @@ public class SymbolExtractorTests
     [Fact]
     public void Extract_PowerShell_DetectsSymbols()
     {
-        var content = "Import-Module ActiveDirectory\nusing module PSDesiredStateConfiguration\n\nclass ServerConfig {\n    [string]$Name\n}\n\nenum Environment {\n    Dev\n    Staging\n    Prod\n}\n\nfunction Get-UserInfo {\n    param($UserId)\n    Get-ADUser -Identity $UserId\n}\n\nfilter Where-Active {\n    if ($_.Enabled) { $_ }\n}";
+        var content = """
+            Import-Module ActiveDirectory
+            using module PSDesiredStateConfiguration
+            using namespace System.IO
+            using assembly System.Xml.Linq
+
+            configuration MyConfig {
+                Node 'localhost' { }
+            }
+
+            workflow TestFlow {
+                Get-Process
+            }
+
+            class ServerConfig {
+                [string]$Name
+            }
+
+            enum Environment {
+                Dev
+                Staging
+                Prod
+            }
+
+            function Get-UserInfo {
+                param($UserId)
+                Get-ADUser -Identity $UserId
+            }
+
+            function script:Private-Helper { return 42 }
+            function global:Setup-Env {
+                $env:APP_MODE = 'dev'
+            }
+            function local:Inner-Helper { return 'inner' }
+            function private:InternalUtil { return 'util' }
+
+            filter script:Where-Active {
+                if ($_.Enabled) { $_ }
+            }
+            """;
         var symbols = SymbolExtractor.Extract(1, "powershell", content);
 
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "ActiveDirectory");
         Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "PSDesiredStateConfiguration");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System.IO");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System.Xml.Linq");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MyConfig");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "TestFlow");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ServerConfig");
         Assert.Contains(symbols, s => s.Kind == "enum" && s.Name == "Environment");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Get-UserInfo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Private-Helper");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Setup-Env");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Inner-Helper");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "InternalUtil");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Where-Active");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "script");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "global");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "local");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "private");
     }
 
     [Fact]
@@ -13252,6 +14462,630 @@ public class SymbolExtractorTests
         Assert.Single(ctors);
         Assert.Equal(8, ctors[0].Line);
         Assert.Contains("public static extern G(string s)", ctors[0].Signature);
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsClassFieldArrowFunction()
+    {
+        var content = """
+            class Foo {
+                handleClick = () => { };
+                handleHover = (e) => { return e; };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        var handleClick = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "handleClick");
+        Assert.NotNull(handleClick);
+        Assert.Equal("class", handleClick.ContainerKind);
+        Assert.Equal("Foo", handleClick.ContainerName);
+
+        var handleHover = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "handleHover");
+        Assert.NotNull(handleHover);
+        Assert.Equal("class", handleHover.ContainerKind);
+        Assert.Equal("Foo", handleHover.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsClassFieldArrowFunctionWithTypes()
+    {
+        var content = """
+            class Foo {
+                handleClick = (): void => { };
+                transform = <T>(x: T): T => { return x; };
+                count: number = 0;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var handleClick = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "handleClick");
+        Assert.NotNull(handleClick);
+        Assert.Equal("class", handleClick.ContainerKind);
+        Assert.Equal("Foo", handleClick.ContainerName);
+        Assert.Equal("void", handleClick.ReturnType);
+
+        var transform = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "transform");
+        Assert.NotNull(transform);
+        Assert.Equal("T", transform.ReturnType);
+
+        // Plain value field (no arrow) must not be mis-classified as a function.
+        // 素の値フィールド（アロー関数ではない）は function として検出してはならない。
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "count");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsClassFieldArrowWithExpressionBody()
+    {
+        var content = """
+            class Foo {
+                handleExpr = () => 42;
+                compute = (x) => x + 1;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        var handleExpr = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "handleExpr");
+        Assert.NotNull(handleExpr);
+        Assert.Equal("class", handleExpr.ContainerKind);
+        Assert.Equal("Foo", handleExpr.ContainerName);
+
+        var compute = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "compute");
+        Assert.NotNull(compute);
+        Assert.Equal("class", compute.ContainerKind);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsClassFieldArrowWithMultiLineExpressionBody()
+    {
+        // Regression for multi-line expression body causing scanner to skip the next field.
+        // 複数行の式本体が次の field をスキップさせる回帰の回帰テスト。
+        var content = """
+            class Foo {
+                handleExpr = (): number => 42;
+                transform = <T>(x: T): T =>
+                    x;
+                runInline = (a: number, b: number): number => a + b;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var handleExpr = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "handleExpr");
+        Assert.NotNull(handleExpr);
+        Assert.Equal("class", handleExpr.ContainerKind);
+        Assert.Equal("number", handleExpr.ReturnType);
+
+        var transform = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "transform");
+        Assert.NotNull(transform);
+        Assert.Equal("T", transform.ReturnType);
+
+        // runInline must still be captured after transform's multi-line expression body.
+        // transform の複数行式本体の後でも runInline は取りこぼされてはならない。
+        var runInline = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "runInline");
+        Assert.NotNull(runInline);
+        Assert.Equal("class", runInline.ContainerKind);
+        Assert.Equal("number", runInline.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DoesNotMisclassifyPlainClassFieldAsFunction()
+    {
+        var content = """
+            class Foo {
+                value = 42;
+                items = [1, 2, 3];
+                config = { key: "value" };
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "value");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "items");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "config");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsTopLevelGeneratorFunctions()
+    {
+        var content = """
+            function* regularGen() { yield 1; }
+            async function* asyncGen() { yield 1; }
+            function* spacedGen () { yield 1; }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "regularGen");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "asyncGen");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "spacedGen");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsTopLevelGeneratorFunctions()
+    {
+        var content = """
+            function* regularGen(): Generator<number> { yield 1; }
+            async function* asyncGen(): AsyncGenerator<number> { yield 1; }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var regular = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "regularGen");
+        Assert.NotNull(regular);
+
+        var asyncGen = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "asyncGen");
+        Assert.NotNull(asyncGen);
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsObjectLiteralMethodShorthand()
+    {
+        var content = """
+            const obj = {
+                get foo() { return 1; },
+                set foo(v) { },
+                *bar() { yield 1; },
+                async baz() { return 1; },
+                qux() { return 1; },
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        var getFoo = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "foo" && s.Line == 2);
+        Assert.NotNull(getFoo);
+        Assert.Equal("object", getFoo.ContainerKind);
+        Assert.Equal("obj", getFoo.ContainerName);
+
+        var setFoo = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "foo" && s.Line == 3);
+        Assert.NotNull(setFoo);
+        Assert.Equal("object", setFoo.ContainerKind);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar" && s.ContainerKind == "object");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "baz" && s.ContainerKind == "object");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "qux" && s.ContainerKind == "object");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsObjectLiteralMethodShorthand()
+    {
+        var content = """
+            const obj = {
+                get foo(): number { return 1; },
+                set foo(v: number) { },
+                *bar(): Generator<number> { yield 1; },
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo" && s.ContainerKind == "object" && s.ContainerName == "obj");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar" && s.ContainerKind == "object" && s.ContainerName == "obj");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsModuleExportsObjectLiteralMembers()
+    {
+        var content = """
+            module.exports = {
+                run() { return 1; },
+                *gen() { yield 1; },
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "run" && s.ContainerKind == "object");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "gen" && s.ContainerKind == "object");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DoesNotEmitObjectLiteralMembersInBlockScopeOrNonExportedNamespace()
+    {
+        // Non-exported bindings in block scope or namespace scope should be filtered out,
+        // matching the scope-filter parity already applied to other JS/TS capture paths.
+        // block scope や namespace 内の非 export バインディングは、他の JS/TS 抽出経路と
+        // 同じスコープフィルタに合わせて除外されること。
+        var content = """
+            if (Math.random() > 0.5) {
+              const blockScoped = {
+                run() { return 1; },
+              };
+            }
+
+            namespace N {
+              const hidden = {
+                run() { return 1; },
+              };
+              export const shown = {
+                ok() { return 2; },
+              };
+            }
+
+            export const topLevel = {
+              fn() { return 3; },
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "run");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ok" && s.ContainerKind == "object");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fn" && s.ContainerKind == "object");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DoesNotEmitObjectLiteralMembersForPlainValues()
+    {
+        var content = """
+            const obj = {
+                key: "value",
+                count: 42,
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "key");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "count");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsClassFieldArrowWithAsiBetweenFields()
+    {
+        // ASI (Automatic Semicolon Insertion) between class fields must not swallow
+        // the next arrow-property header into the previous expression body.
+        // クラスフィールド間の ASI により式本体の後続フィールドを取りこぼさないこと。
+        var content = """
+            class Foo {
+                first = () => 42
+                second = () => 43
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        var first = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "first");
+        Assert.NotNull(first);
+        Assert.Equal("class", first.ContainerKind);
+        Assert.Equal("Foo", first.ContainerName);
+
+        var second = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "second");
+        Assert.NotNull(second);
+        Assert.Equal("class", second.ContainerKind);
+        Assert.Equal("Foo", second.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsClassFieldArrowWithAsiBetweenFields()
+    {
+        var content = """
+            class Foo {
+                first = (): number => 42
+                second = (x: number): number => x + 1
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var first = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "first");
+        Assert.NotNull(first);
+        Assert.Equal("class", first.ContainerKind);
+        Assert.Equal("number", first.ReturnType);
+
+        var second = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "second");
+        Assert.NotNull(second);
+        Assert.Equal("class", second.ContainerKind);
+        Assert.Equal("number", second.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsClassFieldArrowAsiBeforeClosingBrace()
+    {
+        // Single field without trailing `;` followed by the class-closing `}` must
+        // still be captured; ASI at `}` terminates the expression body.
+        // セミコロンなしの単一 field が直後の class 終了 `}` で終端されるケース。
+        var content = """
+            class Foo {
+                only = (): number => 7
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var only = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "only");
+        Assert.NotNull(only);
+        Assert.Equal("class", only.ContainerKind);
+        Assert.Equal("Foo", only.ContainerName);
+        Assert.Equal("number", only.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsMultiLineObjectLiteralBinding()
+    {
+        // The `{` may sit on a line after the `=` binding; collector must thread
+        // the lex state across lines to find the open brace.
+        // `{` が `=` バインディングと別行にあっても、collector は lex 状態を
+        // 跨いで open brace を検出できること。
+        var content = """
+            const obj =
+            {
+                foo() { return 1; },
+                *bar() { yield 1; },
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "foo" && s.ContainerKind == "object" && s.ContainerName == "obj");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bar" && s.ContainerKind == "object" && s.ContainerName == "obj");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsExportDefaultObjectLiteralMembers()
+    {
+        // `export default { ... }` is a common module-shape; its shorthand members
+        // should be captured with container_name == "default".
+        // `export default { ... }` のショートハンドメンバは container_name == "default"
+        // として抽出されること。
+        var content = """
+            export default {
+                foo() { return 1; },
+                async bar() { return 2; },
+            };
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var foo = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "foo");
+        Assert.NotNull(foo);
+        Assert.Equal("object", foo.ContainerKind);
+        Assert.Equal("default", foo.ContainerName);
+
+        var bar = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "bar");
+        Assert.NotNull(bar);
+        Assert.Equal("object", bar.ContainerKind);
+        Assert.Equal("default", bar.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsClassFieldArrowComputedMemberContinuation()
+    {
+        // A bare `[` on the next line is `foo[bar]` member-access continuation per JS ASI rules,
+        // NOT a new computed class method. The scanner must not cut the expression body at `foo`.
+        // JS の ASI 規則では、次行頭の `[` は `foo[bar]` メンバアクセスの継続であり、
+        // computed method 名の開始ではない。式本体を `foo` で打ち切ってはならない。
+        var content = """
+            class Foo {
+              first = () => foo
+                [bar];
+              second = () => 43;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        var first = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "first");
+        Assert.NotNull(first);
+        Assert.Equal("class", first.ContainerKind);
+        Assert.Equal("Foo", first.ContainerName);
+        Assert.Contains("[bar]", first.Signature);
+
+        var second = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "second");
+        Assert.NotNull(second);
+        Assert.Equal("class", second.ContainerKind);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsClassFieldArrowComputedMemberContinuation()
+    {
+        var content = """
+            class Foo {
+              first = (): unknown => foo
+                [bar];
+              second = (): number => 43;
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var first = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "first");
+        Assert.NotNull(first);
+        Assert.Equal("class", first.ContainerKind);
+        Assert.Contains("[bar]", first.Signature);
+
+        var second = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "second");
+        Assert.NotNull(second);
+        Assert.Equal("number", second.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsClassFieldArrowStringLiteralBeforeClosingBrace()
+    {
+        // A string-returning arrow without a trailing `;` must be terminated by the class-body `}`.
+        // The lexer preserves opening/closing quote characters in the sanitized header, so the
+        // ASI terminator check must treat `"` / `'` / `` ` `` as valid expression ends.
+        // セミコロンなしで文字列を返す矢印フィールドは、直後のクラス終了 `}` で終端されなければならない。
+        // lexer は開閉クォートを sanitized header 上に残すため、ASI 終端チェックは
+        // `"` / `'` / `` ` `` を有効な式終端として扱わなければならない。
+        var content = """
+            class Foo {
+              only = () => "x"
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        var only = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "only");
+        Assert.NotNull(only);
+        Assert.Equal("class", only.ContainerKind);
+        Assert.Equal("Foo", only.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_JavaScript_DetectsClassFieldArrowStringLiteralWithAsiBetweenFields()
+    {
+        var content = """
+            class Foo {
+              first = () => "x"
+              second = () => 43
+              third = () => `template`
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "first" && s.ContainerName == "Foo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "second" && s.ContainerName == "Foo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "third" && s.ContainerName == "Foo");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsClassFieldArrowStringLiteralBeforeClosingBrace()
+    {
+        var content = """
+            class Foo {
+              only = (): string => "x"
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var only = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "only");
+        Assert.NotNull(only);
+        Assert.Equal("class", only.ContainerKind);
+        Assert.Equal("string", only.ReturnType);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsClassFieldArrowStringLiteralWithAsiBetweenFields()
+    {
+        var content = """
+            class Foo {
+              first = (): string => "x"
+              second = (): number => 43
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var first = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "first");
+        Assert.NotNull(first);
+        Assert.Equal("string", first.ReturnType);
+
+        var second = symbols.FirstOrDefault(s => s.Kind == "function" && s.Name == "second");
+        Assert.NotNull(second);
+        Assert.Equal("number", second.ReturnType);
+
+    }
+
+    [Fact]
+    public void Extract_Csharp_LeadingBom_IndexesFirstLineImport()
+    {
+        // BOM-prefixed C# source: `using System;` on line 1 must still be captured.
+        // Closes #183.
+        // BOM 付き C# ソース: 1 行目の `using System;` も取りこぼさない。Closes #183.
+        const string content = "\uFEFFusing System;\n\nnamespace BomTest;\n\npublic class WithBom {\n    public void Run() { }\n}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var bomLess = SymbolExtractor.Extract(2, "csharp", content[1..]);
+        Assert.Equal(bomLess.Count, symbols.Count);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System" && s.Line == 1);
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "BomTest");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "WithBom");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Run");
+    }
+
+    [Fact]
+    public void Extract_Python_LeadingBom_IndexesFirstLineDef()
+    {
+        // BOM-prefixed Python: `def at_start():` on line 1 must still be captured.
+        // Closes #183.
+        // BOM 付き Python: 1 行目の `def at_start():` も取りこぼさない。Closes #183.
+        const string content = "\uFEFFdef at_start():\n    pass\n";
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "at_start" && s.Line == 1);
+    }
+
+    [Fact]
+    public void Extract_Csharp_MidFileBom_IndexesAffectedLine()
+    {
+        // Mid-file BOM (e.g. from file concatenation): the `\uFEFFnamespace MidBom;` line
+        // must still yield a namespace symbol, on its real line number. Closes #183.
+        // ファイル連結などで挟まった mid-file BOM: `\uFEFFnamespace MidBom;` 行も
+        // 実際の行番号で namespace として拾う。Closes #183.
+        const string content = "using System;\n\n\uFEFFnamespace MidBom;\n\npublic class X { }\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var ns = Assert.Single(symbols.Where(s => s.Kind == "namespace"));
+        Assert.Equal("MidBom", ns.Name);
+        Assert.Equal(3, ns.Line);
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "X");
+    }
+
+    [Fact]
+    public void Extract_NullContent_ReturnsEmpty()
+    {
+        // Direct callers that pass `null` must not throw. The #183 CRLF-normalization
+        // step added ahead of StripLineLeadingBom would otherwise dereference `null`
+        // before the helper's IsNullOrEmpty guard could run. Closes #183.
+        // direct call で `null` を渡してもスローしない。#183 で StripLineLeadingBom
+        // の前段に CRLF 正規化を入れたため、helper 側 IsNullOrEmpty まで届かず
+        // `null` を逆参照してしまう回帰を防ぐ。Closes #183.
+        Assert.Empty(SymbolExtractor.Extract(1, "csharp", null!));
+    }
+
+    [Fact]
+    public void Extract_EmptyContent_ReturnsEmpty()
+    {
+        // Empty content returns no symbols and does not throw. Closes #183.
+        // 空入力はシンボル 0 個で、例外にならない。Closes #183.
+        Assert.Empty(SymbolExtractor.Extract(1, "csharp", string.Empty));
+    }
+
+    [Fact]
+    public void Extract_Csharp_CrlfLeadingBom_IndexesFirstLineImport()
+    {
+        // Direct-call input with CRLF line endings AND a leading BOM: the CRLF → LF
+        // normalization must run before StripLineLeadingBom so the line-leading BOM
+        // logic still recognizes mid-file BOMs (helper treats `\n` as the sole line
+        // separator). Closes #183.
+        // CRLF 改行 + 先頭 BOM の direct call: StripLineLeadingBom は `\n` を唯一の
+        // 行区切りとして扱うので、CRLF → LF 正規化を helper より先に通さないと
+        // mid-file 行頭 BOM を剥がし損ねる。Closes #183.
+        const string content = "\uFEFFusing System;\r\n\r\n\uFEFFnamespace CrlfBom;\r\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System" && s.Line == 1);
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "CrlfBom" && s.Line == 3);
+    }
+
+    [Fact]
+    public void Extract_Csharp_BareCrLeadingBom_IndexesFirstLineImport()
+    {
+        // Bare-`\r` direct-call input with a leading BOM: the in-extractor
+        // normalization must also rewrite `\r` → `\n`, otherwise a file
+        // authored under classic-Mac-style line endings would keep mid-file
+        // line-leading BOMs invisible to `StripLineLeadingBom` (which treats
+        // `\n` as the sole separator). Closes #183.
+        // bare `\r` 改行 + 先頭 BOM の direct call: `\r` → `\n` 正規化も必要で、
+        // classic-Mac 改行のファイルに対して mid-file 行頭 BOM を剥がし損ねる
+        // のを防ぐ。Closes #183.
+        const string content = "\uFEFFusing System;\r\r\uFEFFnamespace BareCrBom;\r";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System" && s.Line == 1);
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "BareCrBom" && s.Line == 3);
+    }
+
+    [Fact]
+    public void Extract_Csharp_MixedLineEndingsLeadingBom_IndexesDeclarationsOnAllLines()
+    {
+        // Mixed line endings (`\r\n`, bare `\r`, bare `\n`) interleaved with
+        // leading + mid-file line-leading BOMs: the in-extractor normalization
+        // must reduce the whole content to a `\n`-only stream before the
+        // helper runs, otherwise mid-file BOMs following `\r` or `\r\n\r`
+        // boundaries would survive and `^\s*`-anchored patterns would miss
+        // the next declaration. Closes #183.
+        // 混在改行（`\r\n` / bare `\r` / bare `\n`）+ 先頭/中間行頭 BOM の direct call:
+        // 正規化を helper より先に通し、`\r\n\r` や `\r` 直後の mid-file 行頭 BOM も
+        // 剥がせるようにする。Closes #183.
+        const string content = "\uFEFFusing System;\r\n\r\uFEFFnamespace MixedEnds;\n\uFEFFpublic class X { }\r\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "System" && s.Line == 1);
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "MixedEnds" && s.Line == 3);
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "X" && s.Line == 4);
     }
 
     [Fact]
