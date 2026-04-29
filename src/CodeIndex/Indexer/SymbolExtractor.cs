@@ -9241,6 +9241,37 @@ public static class SymbolExtractor
                     continue;
                 }
 
+                if (state.IsInterpolated && ch == '{')
+                {
+                    if (next == '{')
+                    {
+                        sanitized[i + 1] = ' ';
+                        i += 2;
+                        continue;
+                    }
+
+                    sanitized[i] = ' ';
+                    state = state with
+                    {
+                        Mode = CSharpLexMode.Code,
+                        InterpolationReturnMode = CSharpLexMode.String,
+                        InterpolationReturnRawDelimiterLength = 0,
+                        InterpolationReturnDollarCount = state.InterpolationDollarCount,
+                        InterpolationBraceDepth = 1,
+                        IsInterpolated = false,
+                        InterpolationDollarCount = 0,
+                    };
+                    i++;
+                    continue;
+                }
+
+                if (state.IsInterpolated && ch == '}' && next == '}')
+                {
+                    sanitized[i + 1] = ' ';
+                    i += 2;
+                    continue;
+                }
+
                 if (ch == '"')
                     state = state with { Mode = CSharpLexMode.Code };
 
@@ -9322,12 +9353,17 @@ public static class SymbolExtractor
                 }
 
                 if (ch == '"')
-                    state = state with
+                {
+                    state = state with { Mode = CSharpLexMode.Code };
+                    if (state.InterpolationReturnMode == CSharpLexMode.Code || state.InterpolationBraceDepth == 0)
                     {
-                        Mode = CSharpLexMode.Code,
-                        IsInterpolated = false,
-                        InterpolationDollarCount = 0,
-                    };
+                        state = state with
+                        {
+                            IsInterpolated = false,
+                            InterpolationDollarCount = 0,
+                        };
+                    }
+                }
 
                 i++;
                 continue;
@@ -9382,13 +9418,16 @@ public static class SymbolExtractor
                     for (var j = 0; j < quoteRunLength && i + j < line.Length; j++)
                         sanitized[i + j] = ' ';
 
-                    state = state with
+                    state = state with { Mode = CSharpLexMode.Code };
+                    if (state.InterpolationReturnMode == CSharpLexMode.Code || state.InterpolationBraceDepth == 0)
                     {
-                        Mode = CSharpLexMode.Code,
-                        RawDelimiterLength = 0,
-                        IsInterpolated = false,
-                        InterpolationDollarCount = 0,
-                    };
+                        state = state with
+                        {
+                            RawDelimiterLength = 0,
+                            IsInterpolated = false,
+                            InterpolationDollarCount = 0,
+                        };
+                    }
                     i += quoteRunLength;
                     continue;
                 }
@@ -9421,6 +9460,23 @@ public static class SymbolExtractor
                     {
                         sanitized[i] = ch;
                         state = state with { InterpolationBraceDepth = state.InterpolationBraceDepth - 1 };
+                        i++;
+                        continue;
+                    }
+
+                    if (state.InterpolationReturnMode == CSharpLexMode.String)
+                    {
+                        sanitized[i] = ' ';
+                        state = state with
+                        {
+                            Mode = CSharpLexMode.String,
+                            IsInterpolated = true,
+                            InterpolationDollarCount = state.InterpolationReturnDollarCount,
+                            InterpolationBraceDepth = 0,
+                            InterpolationReturnMode = CSharpLexMode.Code,
+                            InterpolationReturnRawDelimiterLength = 0,
+                            InterpolationReturnDollarCount = 0,
+                        };
                         i++;
                         continue;
                     }
@@ -9566,7 +9622,16 @@ public static class SymbolExtractor
             {
                 sanitized[i] = ' ';
                 sanitized[i + 1] = '"';
-                state = state with { Mode = CSharpLexMode.String };
+                state = state with
+                {
+                    Mode = CSharpLexMode.String,
+                    IsInterpolated = true,
+                    InterpolationBraceDepth = 0,
+                    InterpolationDollarCount = 1,
+                    InterpolationReturnMode = CSharpLexMode.Code,
+                    InterpolationReturnRawDelimiterLength = 0,
+                    InterpolationReturnDollarCount = 0
+                };
                 i += 2;
                 continue;
             }

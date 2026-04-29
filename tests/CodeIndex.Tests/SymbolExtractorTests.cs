@@ -4519,6 +4519,31 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_PlainInterpolatedStringHoleWithNestedStringLiteral_DoesNotDropLaterHelpers()
+    {
+        var content = """
+            public class Fixture
+            {
+                private static string BuildSql(string tableName)
+                {
+                    var sql = $"PRAGMA index_list('{tableName.Replace("'", "''")}')";
+                    return sql;
+                }
+
+                private static int ParseFoldVersion()
+                {
+                    return 1;
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "class" && symbol.Name == "Fixture");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "BuildSql");
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "ParseFoldVersion");
+    }
+
+    [Fact]
     public void Extract_CSharp_CommentedTripleQuotesDoNotHideFollowingMembers()
     {
         var content = "public class FixtureHost\n{\n    // \"\"\" this is only a comment marker\n    public void Run() { }\n}";
