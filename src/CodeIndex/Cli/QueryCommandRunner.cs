@@ -163,6 +163,13 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(exactError);
             return CommandExitCodes.UsageError;
         }
+        if (exact && options.Query is not null && IsBareVerbatimQueryToken(options.Query) && options.CountOnly)
+        {
+            Console.WriteLine(options.Json
+                ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions)
+                : "0");
+            return CommandExitCodes.Success;
+        }
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             WriteUsageError(
@@ -678,9 +685,19 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(exactError);
             return CommandExitCodes.UsageError;
         }
+        var exactBareVerbatimOnly = exact && (
+            (options.Query is not null && IsBareVerbatimQueryToken(options.Query) && options.ExtraNames.Count == 0) ||
+            (options.Query is null && options.ExtraNames.Count > 0 && options.ExtraNames.All(IsBareVerbatimQueryToken)));
         var (symbolQueries, hadExplicitInput) = BuildSymbolQueryList(options);
         if (hadExplicitInput && symbolQueries == null)
         {
+            if (exactBareVerbatimOnly && options.CountOnly)
+            {
+                Console.WriteLine(options.Json
+                    ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions)
+                    : "0");
+                return CommandExitCodes.Success;
+            }
             // Fail closed: an explicit name/query was provided but normalized to empty or a bare
             // verbatim prefix (e.g. `|`, `@`, `--name ""`). Returning null here would broaden into
             // an unfiltered symbol dump. /

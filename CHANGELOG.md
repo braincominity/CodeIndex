@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### Fixed
+- **Exact-name bare verbatim symbols now return zero instead of failing closed** — `symbols --exact-name --count` and `definition --exact-name --count` now treat a bare verbatim token like `@` as an exact empty query and return a zero-result JSON/count payload instead of a usage error, while non-exact bare verbatim inputs still fail closed. Affected: `src/CodeIndex/Cli/QueryCommandRunner.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`.
 - **C# verbatim normalization now stays scoped to C# while SQLite open/backfill validation retry handling remains in place (#651, #954, #962, #971, #972)** — `DbReader` keeps the C# verbatim identifier normalization path limited to C#-flavored exact/name queries, while non-C# queries preserve leading `@` characters. `DbContext` also keeps transient SQLite open retry/backoff behavior for the main connection path and the backfill-fold validation path, with regressions covering CLI, MCP, and connection setup behavior. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/DbContext.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `tests/CodeIndex.Tests/DatabaseTests.cs`, `tests/CodeIndex.Tests/LegacySchemaMigrationTests.cs`. Closes #651, #954, #962, #971, #972.
 
 ### [1.15.3] - 2026-04-25
@@ -929,6 +930,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 修正
+- **exact-name の単独 verbatim シンボルは usage error ではなく 0 件を返すように変更** — `symbols --exact-name --count` と `definition --exact-name --count` では、`@` のような単独 verbatim トークンを exact な空クエリとして扱い、usage error ではなく zero-result の JSON / count を返すようにしました。non-exact の単独 verbatim 入力はこれまでどおり fail-closed です。対象: `src/CodeIndex/Cli/QueryCommandRunner.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`。
 - **C# の verbatim 正規化を C# に限定したまま、SQLite の open / backfill validation の retry/backoff を維持するように変更 (#651, #954, #962, #971, #972)** — `DbReader` は C# 版の exact/name クエリにだけ verbatim 識別子正規化を適用し、それ以外の言語では先頭の `@` を保持するようになりました。`DbContext` も、メイン接続経路と backfill-fold の validation 経路で一時的な SQLite open retry/backoff を維持し、CLI / MCP / 接続初期化の回帰テストを追加しています。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/DbContext.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `tests/CodeIndex.Tests/DatabaseTests.cs`, `tests/CodeIndex.Tests/LegacySchemaMigrationTests.cs`。Closes #651, #954, #962, #971, #972。
 
 ### [1.15.3] - 2026-04-25
