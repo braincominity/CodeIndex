@@ -1,2 +1,34 @@
-# Repository-local Codex config
-project_doc_fallback_filenames = ["CLAUDE.md"]
+# CodeIndex Codex project configuration.
+# Project-local Codex config loads only after the project is trusted.
+
+project_doc_fallback_filenames = ["AGENTS.md", "CLAUDE.md"]
+sandbox_mode = "workspace-write"
+approval_policy = "on-request"
+web_search = "disabled"
+default_permissions = "codeindex_workspace"
+
+[features]
+codex_hooks = true
+
+[sandbox_workspace_write]
+network_access = false
+exclude_slash_tmp = true
+exclude_tmpdir_env_var = true
+
+[permissions.codeindex_workspace.filesystem]
+glob_scan_max_depth = 6
+
+[permissions.codeindex_workspace.filesystem.":project_roots"]
+"." = "write"
+"**/.env" = "none"
+"**/.env.*" = "none"
+"**/*.pem" = "none"
+"**/*.key" = "none"
+"**/id_rsa" = "none"
+"**/id_ed25519" = "none"
+"**/*credentials*" = "none"
+"**/*secret*" = "none"
+"**/*secrets*" = "none"
+
+[permissions.codeindex_workspace.network]
+enabled = false
