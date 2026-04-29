@@ -9,11 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+- **JavaScript/TypeScript export-surface extraction now handles same-line minified re-exports and CommonJS bindings (#903)** — `SymbolExtractor` now keeps barrel re-export module names tied to the current statement start instead of the first `from` on the line, so same-line minified forms like `export*from './a';export{foo as bar}from './b';export*as ns from './c';` preserve both the `import` row and the exported property surface. CommonJS named export bindings now also recover same-line and multiline parenthesized wrappers correctly, and TypeScript generic-arrow bindings keep their function classification when the right-hand side starts on a later line. Added focused regressions for same-line minified re-exports, same-line CommonJS assignments, multiline CommonJS assignments, parenthesized CommonJS wrappers, and TypeScript generic-arrow CommonJS exports. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`. Closes #903.
+
 ### [1.15.3] - 2026-04-25
 
 #### Fixed
 - Fix the missed version update in version.json.
-- **JavaScript/TypeScript export-surface extraction now handles same-line minified re-exports and CommonJS bindings (#903)** — `SymbolExtractor` now keeps barrel re-export module names tied to the current statement start instead of the first `from` on the line, so same-line minified forms like `export*from './a';export{foo as bar}from './b';export*as ns from './c';` preserve both the `import` row and the exported property surface. CommonJS named export bindings now also recover same-line and multiline parenthesized wrappers correctly, and TypeScript generic-arrow bindings keep their function classification when the right-hand side starts on a later line. Added focused regressions for same-line minified re-exports, same-line CommonJS assignments, multiline CommonJS assignments, parenthesized CommonJS wrappers, and TypeScript generic-arrow CommonJS exports. Affected: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`. Closes #903.
 
 ### [1.15.2] - 2026-04-25
 
@@ -926,11 +927,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+- **JavaScript/TypeScript の export-surface 抽出で、同一行の minified re-export と CommonJS binding を正しく拾うよう修正 (#903)** — `SymbolExtractor` が barrel re-export の module 名を行頭の最初の `from` ではなく現在の statement start から復元するようになり、`export*from './a';export{foo as bar}from './b';export*as ns from './c';` のような同一行 minified 形式でも `import` row と exported property surface の両方が残るようになりました。CommonJS の named export binding も、同一行 / 複数行 / parenthesized wrapper を正しく復元できるようになり、右辺が後続行から始まる TypeScript generic-arrow binding も function classification を維持します。same-line minified re-export、same-line CommonJS assignment、multiline CommonJS assignment、parenthesized CommonJS wrapper、TypeScript generic-arrow CommonJS export の focused regression を追加しました。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`。Closes #903。
+
 ### [1.15.3] - 2026-04-25
 
 #### 修正
 - version.jsonのバージョン修正漏れを修正
-- **JavaScript/TypeScript の export-surface 抽出で、同一行の minified re-export と CommonJS binding を正しく拾うよう修正 (#903)** — `SymbolExtractor` が barrel re-export の module 名を行頭の最初の `from` ではなく現在の statement start から復元するようになり、`export*from './a';export{foo as bar}from './b';export*as ns from './c';` のような同一行 minified 形式でも `import` row と exported property surface の両方が残るようになりました。CommonJS の named export binding も、同一行 / 複数行 / parenthesized wrapper を正しく復元できるようになり、右辺が後続行から始まる TypeScript generic-arrow binding も function classification を維持します。same-line minified re-export、same-line CommonJS assignment、multiline CommonJS assignment、parenthesized CommonJS wrapper、TypeScript generic-arrow CommonJS export の focused regression を追加しました。対象: `src/CodeIndex/Indexer/SymbolExtractor.cs`, `tests/CodeIndex.Tests/SymbolExtractorTests.cs`。Closes #903。
 
 ### [1.15.2] - 2026-04-25
 
