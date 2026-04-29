@@ -1286,6 +1286,8 @@ public static class SymbolExtractor
             new("function", new Regex(@"^\s*@keyframes\s+(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.Brace),
             // @font-face / フォントフェイス
             new("function", new Regex(@"^\s*@font-face\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            // Grouping at-rules / grouping at-rule
+            new("namespace", new Regex(@"^\s*@(?<name>layer|container|supports|media)\b[^{]*\{", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.Brace),
             // :root selector / :root セレクタ
             new("class",    new Regex(@"^\s*(?<name>:root)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
             // Standalone attribute selector / 単独属性セレクタ
@@ -1296,6 +1298,8 @@ public static class SymbolExtractor
             new("class",    new Regex(@"^\s*(?<name>\.[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
             // CSS ID selector at top level / トップレベルのIDセレクタ
             new("function", new Regex(@"^\s*(?<name>#[\w-]+)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
+            // Native CSS nesting selectors / ネイティブ CSS nesting セレクタ
+            new("property", new Regex(@"^\s*&(?:(?::(?<name>[\w-]+))|(?:\s*(?:[>+~]\s*)?(?:\.|#)?(?<name>[\w-]+)))(?:(?:::?[\w-]+)|(?:\[[^\]]+\]))*\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
             // CSS custom property declaration / CSS カスタムプロパティ宣言
             new("property", new Regex(@"^\s*(?<name>--[\w-]+)\s*:", RegexOptions.Compiled), BodyStyle.None),
             // SCSS $variable declaration / SCSS 変数宣言

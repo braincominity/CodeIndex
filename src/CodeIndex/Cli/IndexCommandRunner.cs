@@ -927,7 +927,7 @@ public static class IndexCommandRunner
                 var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(absPath, record.Lang));
                 writer.InsertSymbols(symbols);
-                var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols);
+                var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols, record.Path);
                 writer.InsertReferences(references);
                 // Validate content for encoding issues / エンコーディング問題を検証
                 var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);
@@ -1640,7 +1640,7 @@ public static class IndexCommandRunner
                 var symbols = SymbolExtractor.Extract(fileId, record.Lang, content);
                 SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
                 writer.InsertSymbols(symbols);
-                var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols);
+                var references = ReferenceExtractor.Extract(fileId, record.Lang, content, symbols, record.Path);
                 writer.InsertReferences(references);
                 // Validate content for encoding issues / エンコーディング問題を検証
                 var issues = FileIndexer.ValidateContent(record.Path, rawBytes, content);

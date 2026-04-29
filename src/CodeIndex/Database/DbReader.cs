@@ -989,6 +989,10 @@ public partial class DbReader
         var referencesAliasScope = referencesSuffixAlias != null
             ? " AND f.lang = 'csharp' AND r.reference_kind = 'attribute'"
             : string.Empty;
+        var referencesCssScssVariableAlias = ComputeCssScssVariableAlias(query);
+        var referencesCssScssVariableAliasScope = referencesCssScssVariableAlias != null
+            ? " AND f.lang = 'css'"
+            : string.Empty;
         const string sqlLeafReferenceScope = " AND f.lang = 'sql'";
         if (query != null)
         {
@@ -1027,19 +1031,25 @@ public partial class DbReader
             else if (exact && _foldReady)
                 sql += referencesSuffixAlias != null
                     ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{referencesAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafReferenceScope})" : string.Empty)})"
-                    : allowSqlLeafFallback
+                    : referencesCssScssVariableAlias != null
+                        ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryCssScssVariableAlias{referencesCssScssVariableAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafReferenceScope})" : string.Empty)})"
+                        : allowSqlLeafFallback
                         ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafReferenceScope}))"
                         : " AND r.symbol_name_folded = @query";
             else if (exact)
                 sql += referencesSuffixAlias != null
                     ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafReferenceScope})" : string.Empty)})"
-                    : allowSqlLeafFallback
+                    : referencesCssScssVariableAlias != null
+                        ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryCssScssVariableAlias COLLATE NOCASE{referencesCssScssVariableAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafReferenceScope})" : string.Empty)})"
+                        : allowSqlLeafFallback
                         ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafReferenceScope}))"
                         : " AND r.symbol_name = @query COLLATE NOCASE";
             else
                 sql += referencesSuffixAlias != null
                     ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}) OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafReferenceScope}))"
-                    : $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafReferenceScope}))";
+                    : referencesCssScssVariableAlias != null
+                        ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryCssScssVariableAlias COLLATE NOCASE{referencesCssScssVariableAliasScope}) OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafReferenceScope}))"
+                        : $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafReferenceScope}))";
         }
         if (referenceKind != null)
             sql += " AND r.reference_kind = @referenceKind";
@@ -1077,6 +1087,13 @@ public partial class DbReader
                     ? NameFold.Fold(referencesSuffixAlias) ?? referencesSuffixAlias
                     : referencesSuffixAlias;
                 cmd.Parameters.AddWithValue("@queryAttributeAlias", aliasParam);
+            }
+            if (referencesCssScssVariableAlias != null)
+            {
+                var aliasParam = exact && _foldReady
+                    ? NameFold.Fold(referencesCssScssVariableAlias) ?? referencesCssScssVariableAlias
+                    : referencesCssScssVariableAlias;
+                cmd.Parameters.AddWithValue("@queryCssScssVariableAlias", aliasParam);
             }
             cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
             cmd.Parameters.AddWithValue("@rankingQueryPrefix", $"{EscapeLikeQuery(query.Trim())}%");
@@ -4132,6 +4149,19 @@ public partial class DbReader
         if (!query!.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) return null;
         if (query.Length <= suffix.Length) return null;
         return query.Substring(0, query.Length - suffix.Length);
+    }
+
+    // CSS/SCSS convention: Sass variables are stored without the leading `$`, so queries
+    // that keep the sigil should still reach the canonical symbol/reference rows.
+    // CSS/SCSS の規約: Sass 変数は先頭の `$` を外した形で保存されるため、sigil 付きの
+    // クエリでも canonical な symbol/reference 行に到達できるようにする。
+    private static string? ComputeCssScssVariableAlias(string? query)
+    {
+        if (string.IsNullOrEmpty(query) || query[0] != '$')
+            return null;
+        if (query.Length <= 1)
+            return null;
+        return query[1..];
     }
 
     private List<string> ResolveImpactFallbackNames(SymbolResult definition)

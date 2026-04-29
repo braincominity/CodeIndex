@@ -632,7 +632,7 @@ The database reflects the working tree at the time of the last index. After swit
 | JSON | `.json` | -- |
 | TOML | `.toml` | -- |
 | HTML | `.html`, `.htm`, `.xhtml`, `.shtml` | yes |
-| CSS | `.css`, `.scss`, `.less`, `.pcss` | yes |
+| CSS | `.css`, `.scss`, `.less`, `.pcss` | yes (`$variable`, `%placeholder`, `@extend`) |
 | Sass (indented) | `.sass` | -- |
 | Stylus | `.styl` | -- |
 | Vue | `.vue` | -- |
@@ -1608,7 +1608,7 @@ cdidxはプロジェクトディレクトリを走査し、組み込みのスキ
 | JSON | `.json` | -- |
 | TOML | `.toml` | -- |
 | HTML | `.html`, `.htm`, `.xhtml`, `.shtml` | yes |
-| CSS | `.css`, `.scss`, `.less`, `.pcss` | yes |
+| CSS | `.css`, `.scss`, `.less`, `.pcss` | yes (`$variable`, `%placeholder`, `@extend`) |
 | Sass（インデント構文） | `.sass` | -- |
 | Stylus | `.styl` | -- |
 | Vue | `.vue` | -- |
