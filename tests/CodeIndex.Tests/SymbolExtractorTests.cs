@@ -10727,6 +10727,25 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Kotlin_DetectsTypealiasDeclarations()
+    {
+        var content = """
+            typealias Handler = (String) -> Unit
+            internal typealias UserMap = Map<String, User>
+            public typealias Nested<T> = List<Pair<String, T>>
+
+            val type = 1
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Handler" && s.Visibility == null);
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "UserMap" && s.Visibility == "internal");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Nested" && s.Visibility == "public");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "type");
+    }
+
+    [Fact]
     public void Extract_Kotlin_DetectsSecondaryConstructors()
     {
         var content = """
