@@ -85,9 +85,21 @@ internal sealed class RepoMapBuilder
         // ファイル統計を先に取得し、その後にワークスペース鮮度を取得 — 元の順序を
         // 維持し、並行インデックス時にワークスペースのタイムスタンプがスコープ付き
         // タイムスタンプより古くならないようにする。
+        //
+        // Issue #180: wrap the multi-statement map build in one DEFERRED transaction so
+        // the scoped file stats, the workspace freshness, and the entrypoint lookups all
+        // come from the same WAL snapshot. Otherwise a concurrent writer committing
+        // between statements can make `workspace_latest_modified` older than
+        // `latest_modified`, or make entrypoint rows disagree with the file-stats rows
+        // they came from.
+        // Issue #180: map 内の多段 SELECT を 1 つの DEFERRED transaction で囲み、scoped
+        // file stats / workspace freshness / entrypoint 取得が同じ WAL snapshot から返る
+        // ようにする。
+        using var txn = _conn.BeginTransaction(deferred: true);
         var fileStats = GetFileStats(lang, pathPatterns, excludePathPatterns, excludeTests);
+        ApplyJavaModuleGrouping(fileStats, LoadJavaModuleDescriptors());
         var freshness = getFreshness();
-        return new RepoMapResult
+        var result = new RepoMapResult
         {
             FileCount = fileStats.Count,
             TotalLines = fileStats.Sum(file => (long)file.Lines),
@@ -112,7 +124,7 @@ internal sealed class RepoMapBuilder
                 .Take(limit)
                 .ToList(),
             Modules = fileStats
-                .GroupBy(file => GetModuleKey(file.Path))
+                .GroupBy(GetModuleKey)
                 .Select(group => new RepoModuleResult
                 {
                     Module = group.Key,
@@ -162,6 +174,8 @@ internal sealed class RepoMapBuilder
             Entrypoints = GetEntrypoints(fileStats, limit, lang, pathPatterns, excludePathPatterns, excludeTests),
             GraphTableAvailable = _hasReferencesTable,
         };
+        txn.Commit();
+        return result;
     }
 
     private List<RepoFileStat> GetFileStats(string? lang, IReadOnlyList<string>? pathPatterns,
@@ -210,6 +224,51 @@ internal sealed class RepoMapBuilder
         }
 
         return results;
+    }
+
+    private Dictionary<string, string> LoadJavaModuleDescriptors()
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT f.path, s.name
+            FROM files f
+            JOIN symbols s ON s.file_id = f.id
+            WHERE f.lang = 'java'
+              AND (f.path = 'module-info.java' OR f.path LIKE '%/module-info.java')
+              AND s.kind = 'namespace'
+            ORDER BY f.path, s.line
+            """;
+
+        var moduleByDescriptorPath = new Dictionary<string, string>(StringComparer.Ordinal);
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var descriptorPath = reader.GetString(0);
+            if (moduleByDescriptorPath.ContainsKey(descriptorPath))
+                continue;
+
+            var moduleName = reader.GetString(1);
+            if (!string.IsNullOrWhiteSpace(moduleName))
+                moduleByDescriptorPath[descriptorPath] = moduleName;
+        }
+
+        return moduleByDescriptorPath;
+    }
+
+    private static void ApplyJavaModuleGrouping(List<RepoFileStat> fileStats, IReadOnlyDictionary<string, string> moduleByDescriptorPath)
+    {
+        if (moduleByDescriptorPath.Count == 0)
+            return;
+
+        foreach (var file in fileStats)
+        {
+            if (!string.Equals(file.Lang, "java", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var owningModuleName = ResolveOwningJavaModuleName(file.Path, moduleByDescriptorPath);
+            if (!string.IsNullOrWhiteSpace(owningModuleName))
+                file.ModuleName = owningModuleName;
+        }
     }
 
     private List<RepoEntrypointResult> GetEntrypoints(IReadOnlyList<RepoFileStat> fileStats, int limit,
@@ -315,9 +374,14 @@ internal sealed class RepoMapBuilder
         };
     }
 
-    private static string GetModuleKey(string path)
+    private static string GetModuleKey(RepoFileStat file)
     {
-        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (!string.IsNullOrWhiteSpace(file.ModuleName))
+        {
+            return file.ModuleName;
+        }
+
+        var segments = file.Path.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (segments.Length == 0)
             return ".";
         if (segments.Length == 1)
@@ -329,6 +393,36 @@ internal sealed class RepoMapBuilder
             "src" or "app" or "lib" or "tests" or "test" or "docs" or "packages" => segments[0],
             _ => segments[0],
         };
+    }
+
+    private static string? ResolveOwningJavaModuleName(string path, IReadOnlyDictionary<string, string> moduleByDescriptorPath)
+    {
+        var currentDirectory = GetParentDirectoryPath(path) ?? string.Empty;
+        while (true)
+        {
+            var descriptorPath = string.IsNullOrEmpty(currentDirectory)
+                ? "module-info.java"
+                : $"{currentDirectory}/module-info.java";
+            if (moduleByDescriptorPath.TryGetValue(descriptorPath, out var moduleName))
+                return moduleName;
+
+            if (string.IsNullOrEmpty(currentDirectory))
+                return null;
+
+            currentDirectory = GetParentDirectoryPath(currentDirectory) ?? string.Empty;
+        }
+    }
+
+    private static string? GetParentDirectoryPath(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return null;
+
+        var lastSlash = path.LastIndexOf('/');
+        if (lastSlash < 0)
+            return string.Empty;
+
+        return path[..lastSlash];
     }
 
     private static int ScoreEntrypoint(string path, string? lang, string kind, string name)

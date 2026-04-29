@@ -139,6 +139,60 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_PlainPathContainingImmutableSuffix_IndexesSuccessfully()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_plain_path_{Guid.NewGuid():N}?immutable=1");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.True(File.Exists(dbPath));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void Run_PlainPathContainingReadOnlyModeSuffix_IndexesSuccessfully()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_plain_path_{Guid.NewGuid():N}?mode=ro");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('hello')\n");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.True(File.Exists(dbPath));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath))
+                File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_NoOpAgainstSharedExplicitDb_DoesNotRewriteIndexedProjectRoot()
     {
         var projectRootA = CreateTempProject();
@@ -161,6 +215,10 @@ public class IndexCommandRunnerTests
             Assert.True(updateJson.GetProperty("graph_table_available").GetBoolean());
             Assert.True(updateJson.GetProperty("issues_table_available").GetBoolean());
             Assert.True(updateJson.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, updateJson.GetProperty("fold_ready_reason").ValueKind);
+            Assert.Equal(JsonValueKind.Null, updateJson.GetProperty("degraded_reason").ValueKind);
+            Assert.Equal(JsonValueKind.Null, updateJson.GetProperty("recommended_action").ValueKind);
+            Assert.Equal(JsonValueKind.Null, updateJson.GetProperty("alternative_action").ValueKind);
 
             using (var db = new DbContext(dbPath))
             {
@@ -586,6 +644,10 @@ public class IndexCommandRunnerTests
             var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
+            var (_, initialJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.True(initialJson.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, initialJson.GetProperty("fold_ready_reason").ValueKind);
+
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             using (var conn = OpenNonPoolingConnection(dbPath))
             {
@@ -788,6 +850,56 @@ public class IndexCommandRunnerTests
             {
                 Console.SetOut(originalOut);
             }
+        }
+    }
+
+    [Fact]
+    public void Run_ReadOnlyUriDbPath_PrintsActionableErrorInsteadOfCrashing()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "class App {}\n");
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+
+            var (exitCode, stdout, stderr) = RunCliInSubprocess([projectRoot, "--db", readOnlyUri, "--json"], projectRoot);
+
+            using var document = JsonDocument.Parse(stdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains("database must be writable for index", json.GetProperty("message").GetString());
+            Assert.Contains("Point `--db` at a writable filesystem path", json.GetProperty("hint").GetString());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_ReadOnlyUriDbPath_ReturnsDryRunSummary()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "class App {}\n");
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var readOnlyUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--db", readOnlyUri, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("files_total").GetInt32());
+            Assert.Equal(1, json.GetProperty("languages").GetProperty("csharp").GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
         }
     }
 
@@ -1185,6 +1297,27 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_RedirectedOutput_PrintsIndexingBannerOnce()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "util.py"), "def helper():\n    return 1\n");
+
+            var (exitCode, stdout, stderr) = RunAndCaptureStreams([projectRoot]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, CountOccurrences(stdout, "Indexing..."));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_UpdateMode_WithIndexingErrors_PrintsRecoveryWarning()
     {
         var projectRoot = CreateTempProject();
@@ -1202,6 +1335,32 @@ public class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("Some files failed to update", stderr);
             Assert.Contains("rerun `cdidx index", stderr);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_VerboseRedirectedOutput_DoesNotRepeatUpdatingBanner()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } public void Extra() { } }\n");
+            File.SetLastWriteTimeUtc(Path.Combine(projectRoot, "app.cs"), DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, stdout, stderr) = RunAndCaptureStreams([projectRoot, "--files", "app.cs", "--verbose"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, CountOccurrences(stdout, "Updating 1 file(s)..."));
         }
         finally
         {
@@ -2709,6 +2868,10 @@ public class IndexCommandRunnerTests
             var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
+            var (_, initialJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.True(initialJson.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, initialJson.GetProperty("fold_ready_reason").ValueKind);
+
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             using (var conn = OpenNonPoolingConnection(dbPath))
             {
@@ -2913,12 +3076,14 @@ public class IndexCommandRunnerTests
             Assert.Equal("success", json.GetProperty("status").GetString());
             Assert.True(json.GetProperty("graph_table_available").GetBoolean());
             Assert.True(json.GetProperty("issues_table_available").GetBoolean());
+            Assert.True(json.GetProperty("hotspot_family_ready").GetBoolean());
             Assert.True(json.GetProperty("fold_ready").GetBoolean());
 
             var (humanExitCode, output) = RunAndCaptureOutput([projectRoot]);
             Assert.Equal(CommandExitCodes.Success, humanExitCode);
             Assert.Contains("Graph   : ready", output);
             Assert.Contains("Issues  : ready", output);
+            Assert.Contains("Hotspots: ready", output);
             Assert.Contains("Fold    : ready", output);
         }
         finally
@@ -3069,6 +3234,88 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_ReindexesUnchangedSqlFilesWhenSqlGraphContractChanged()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "sql"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "sql", "target.sql"),
+                """
+                CREATE FUNCTION dbo.fn_Target()
+                RETURNS INT
+                AS
+                BEGIN
+                    RETURN 1;
+                END;
+                GO
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "sql", "caller.sql"),
+                """
+                CREATE PROCEDURE dbo.usp_Caller
+                AS
+                BEGIN
+                    SELECT dbo.fn_Target();
+                END;
+                GO
+                """);
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbol_references
+                    SET symbol_name = 'fn_Target',
+                        symbol_name_folded = 'fn_target',
+                        column_number = 1
+                    WHERE symbol_name = 'dbo.fn_Target';
+                    DELETE FROM codeindex_meta WHERE key = 'sql_graph_contract_version';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+            Assert.True(json.GetProperty("sql_graph_contract_ready").GetBoolean());
+
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+
+            using var referenceCmd = verify.CreateCommand();
+            referenceCmd.CommandText = """
+                SELECT symbol_name, column_number
+                FROM symbol_references
+                WHERE container_name = 'dbo.usp_Caller'
+                LIMIT 1
+                """;
+            using var reader = referenceCmd.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal("fn_Target", reader.GetString(0));
+            Assert.NotEqual(1L, reader.GetInt64(1));
+
+            using var contractCmd = verify.CreateCommand();
+            contractCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'sql_graph_contract_version'";
+            Assert.Equal(
+                DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                contractCmd.ExecuteScalar() as string);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_DegradedWarningSummarizesRemainingFoldGap()
     {
         var projectRoot = CreateTempProject();
@@ -3092,10 +3339,93 @@ public class IndexCommandRunnerTests
             var (exitCode, _, errorOutput) = RunCliInSubprocess([projectRoot], projectRoot);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Contains("Index completed with degraded readiness", errorOutput);
+            Assert.Contains("Index completed with fold-only degraded readiness (fold_ready=false).", errorOutput);
+            Assert.Contains("older fold-key version", errorOutput);
+            Assert.Contains("cdidx backfill-fold --db", errorOutput);
+            Assert.Contains("cdidx index", errorOutput);
+            Assert.Contains("--rebuild", errorOutput);
             Assert.Contains("fold_ready=false", errorOutput);
-            Assert.DoesNotContain("graph_table_available=false", errorOutput);
-            Assert.DoesNotContain("issues_table_available=false", errorOutput);
+            Assert.DoesNotContain("Run `cdidx status --db", errorOutput);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_IncrementalJson_ReportsFoldOnlyRemediation()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version'";
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal("incremental", json.GetProperty("mode").GetString());
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal("stale_fold_key_version", json.GetProperty("fold_ready_reason").GetString());
+            Assert.Contains("older fold-key version", json.GetProperty("degraded_reason").GetString());
+            Assert.Contains("cdidx backfill-fold --db", json.GetProperty("recommended_action").GetString());
+            Assert.Contains(dbPath, json.GetProperty("recommended_action").GetString());
+            Assert.Contains("--rebuild", json.GetProperty("alternative_action").GetString());
+            Assert.Contains(dbPath, json.GetProperty("alternative_action").GetString());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateMode_Json_ReportsFoldOnlyRemediation()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "UPDATE codeindex_meta SET value = '0' WHERE key = 'fold_key_version'";
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "app.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal("update", json.GetProperty("mode").GetString());
+            Assert.False(json.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal("stale_fold_key_version", json.GetProperty("fold_ready_reason").GetString());
+            Assert.Contains("older fold-key version", json.GetProperty("degraded_reason").GetString());
+            Assert.Contains("cdidx backfill-fold --db", json.GetProperty("recommended_action").GetString());
+            Assert.Contains(dbPath, json.GetProperty("recommended_action").GetString());
+            Assert.Contains("--rebuild", json.GetProperty("alternative_action").GetString());
+            Assert.Contains(dbPath, json.GetProperty("alternative_action").GetString());
         }
         finally
         {
@@ -3647,7 +3977,7 @@ public class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FullScan_DoesNotRestampHotspotFamilyReadyWhenMarkerFingerprintChanges()
+    public void Run_FullScan_RestampsHotspotFamilyReadyWhenMarkerFingerprintChanges()
     {
         var projectRoot = CreateTempProject();
         try
@@ -3695,8 +4025,10 @@ public class IndexCommandRunnerTests
             Assert.Equal("success", json2.GetProperty("status").GetString());
 
             using var verifyDb = new DbContext(dbPath);
-            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
-            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp")));
+            Assert.Equal(
+                DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+            Assert.False(string.IsNullOrWhiteSpace(verifyDb.GetMetaString(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"))));
         }
         finally
         {
@@ -3767,13 +4099,112 @@ public class IndexCommandRunnerTests
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             using var verifyDb = new DbContext(dbPath);
             Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
-            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("vb")));
 
             var (hotspotsExitCode, hotspotsJson) = RunHotspotsJson(dbPath, "csharp", "function");
             Assert.True(hotspotsExitCode is CommandExitCodes.Success or CommandExitCodes.NotFound);
             Assert.True(hotspotsJson.GetProperty("hotspot_family_ready").GetBoolean());
             if (hotspotsJson.TryGetProperty("degraded", out var degraded))
                 Assert.False(degraded.GetBoolean());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_RestampsHotspotFamilyTrustWhenOnlyMetadataWasCleared()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "App.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part1.cs"), "public partial class Api { public void Run() { } }");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part2.cs"), "public partial class Api { public void Run(int value) { } }");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Caller.cs"), "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); } }");
+
+            var (initialExitCode, initialJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal("success", initialJson.GetProperty("status").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.GetHotspotFamilyVersionMetaKey("csharp"), null);
+                writer.SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"), null);
+            }
+
+            var (rerunExitCode, rerunJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, rerunExitCode);
+            Assert.Equal("success", rerunJson.GetProperty("status").GetString());
+            Assert.True(rerunJson.GetProperty("summary").GetProperty("files_skipped").GetInt32() > 0);
+            Assert.True(rerunJson.GetProperty("hotspot_family_ready").GetBoolean());
+
+            using (var verifyDb = new DbContext(dbPath))
+            {
+                Assert.Equal(
+                    DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+                Assert.False(string.IsNullOrWhiteSpace(verifyDb.GetMetaString(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"))));
+            }
+
+            var (hotspotsExitCode, hotspotsJson) = RunHotspotsJson(dbPath, "csharp", "function");
+            Assert.Equal(CommandExitCodes.Success, hotspotsExitCode);
+            Assert.True(hotspotsJson.GetProperty("hotspot_family_ready").GetBoolean());
+            Assert.Equal(1, hotspotsJson.GetProperty("count").GetInt32());
+            if (hotspotsJson.TryGetProperty("degraded", out var degraded))
+                Assert.False(degraded.GetBoolean());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_Update_WhenHotspotFamilyMetadataCannotBeRestamped_ReportsDegradedReadiness()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            File.WriteAllText(Path.Combine(projectRoot, "App.csproj"), "<Project />");
+            var callerPath = Path.Combine(projectRoot, "src", "Caller.cs");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part1.cs"), "public partial class Api { public void Run() { } }");
+            File.WriteAllText(Path.Combine(projectRoot, "src", "Api.Part2.cs"), "public partial class Api { public void Run(int value) { } }");
+            File.WriteAllText(callerPath, "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); } }");
+
+            var (initialExitCode, initialJson) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal("success", initialJson.GetProperty("status").GetString());
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.GetHotspotFamilyVersionMetaKey("csharp"), null);
+                writer.SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"), null);
+            }
+
+            File.WriteAllText(callerPath, "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); api.Run(); } }");
+            File.SetLastWriteTimeUtc(callerPath, DateTime.UtcNow.AddSeconds(2));
+
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRoot, "--files", "src/Caller.cs", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, updateExitCode);
+            Assert.False(updateJson.GetProperty("hotspot_family_ready").GetBoolean());
+            Assert.Contains("csharp", updateJson.GetProperty("hotspot_family_degraded_reason").GetString());
+
+            File.WriteAllText(callerPath, "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); api.Run(); api.Run(1); } }");
+            File.SetLastWriteTimeUtc(callerPath, DateTime.UtcNow.AddSeconds(4));
+
+            var (subprocessExitCode, _, errorOutput) = RunCliInSubprocess([projectRoot, "--files", "src/Caller.cs"], projectRoot);
+            Assert.Equal(CommandExitCodes.Success, subprocessExitCode);
+            Assert.Contains("Index completed with degraded readiness", errorOutput);
+            Assert.Contains("hotspot_family_ready=false", errorOutput);
         }
         finally
         {
@@ -4460,6 +4891,22 @@ public class IndexCommandRunnerTests
         var projectRoot = Path.Combine(Path.GetTempPath(), $"cdidx_index_runner_{Guid.NewGuid():N}");
         Directory.CreateDirectory(projectRoot);
         return projectRoot;
+    }
+
+    private static int CountOccurrences(string text, string value)
+    {
+        if (string.IsNullOrEmpty(value))
+            throw new ArgumentException("value must be non-empty", nameof(value));
+
+        var count = 0;
+        var index = 0;
+        while ((index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += value.Length;
+        }
+
+        return count;
     }
 
     [UnsupportedOSPlatform("windows")]

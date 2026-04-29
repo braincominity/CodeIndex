@@ -16,7 +16,7 @@ public class SearchResult
     public double Score { get; set; }
 }
 
-public readonly record struct QueryCountResult(int Count, int FileCount);
+public readonly record struct QueryCountResult(int Count, int FileCount, bool IncludesSql = false);
 
 public class SymbolResult
 {
@@ -138,6 +138,8 @@ public class ReferenceResult
     public string ReferenceKind { get; set; } = string.Empty;
     public int Line { get; set; }
     public int Column { get; set; }
+    [JsonIgnore]
+    public string RawContext { get; set; } = string.Empty;
     public string Context { get; set; } = string.Empty;
     public bool ContextTruncated { get; set; }
     public string? ContainerKind { get; set; }
@@ -151,6 +153,16 @@ public class CallerResult
     public string? CallerKind { get; set; }
     public string? CallerName { get; set; }
     public string CalleeName { get; set; } = string.Empty;
+    // Summary preferred reference_kind for the grouped row. Grouped caller rows can
+    // collapse multiple underlying kinds into one label, so JSON/MCP consumers that
+    // need the full picture should read ReferenceKinds + HasMixedReferenceKinds as
+    // well (issue #501). The scalar is kept for back-compat with existing consumers.
+    // グループ化された行は複数の reference_kind を 1 ラベルに畳むため、
+    // JSON/MCP で全体を把握するには ReferenceKinds と HasMixedReferenceKinds を
+    // 併読する（issue #501）。scalar は既存 consumer の後方互換のため残す。
+    public string ReferenceKind { get; set; } = string.Empty;
+    public IReadOnlyList<string> ReferenceKinds { get; set; } = Array.Empty<string>();
+    public bool HasMixedReferenceKinds { get; set; }
     public int FirstLine { get; set; }
     public int ReferenceCount { get; set; }
 }
@@ -163,6 +175,8 @@ public class CalleeResult
     public string? CallerName { get; set; }
     public string CalleeName { get; set; } = string.Empty;
     public string ReferenceKind { get; set; } = string.Empty;
+    public IReadOnlyList<string> ReferenceKinds { get; set; } = Array.Empty<string>();
+    public bool HasMixedReferenceKinds { get; set; }
     public int FirstLine { get; set; }
     public int ReferenceCount { get; set; }
 }
@@ -234,6 +248,20 @@ public class StatusResult
     public bool GraphTableAvailable { get; set; } = true;
     public bool IssuesTableAvailable { get; set; } = true;
     /// <summary>
+    /// True when authoritative cross-file hotspot-family grouping metadata is current for every
+    /// marker-capable language currently indexed in this DB. False means `hotspots` can still
+    /// run, but duplicate-name families may be conservatively degraded until `cdidx index .`
+    /// restamps the hotspot-family metadata.
+    /// 現在 index 済みの marker-capable 言語すべてで authoritative な hotspot-family metadata
+    /// が最新なら true。false の間も `hotspots` は動くが、duplicate-name family は保守的
+    /// fallback に縮退しうるため、`cdidx index .` で metadata を restamp する必要がある。
+    /// </summary>
+    [JsonPropertyName("hotspot_family_ready")]
+    public bool HotspotFamilyReady { get; set; } = true;
+    [JsonPropertyName("hotspot_family_degraded_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? HotspotFamilyDegradedReason { get; set; }
+    /// <summary>
     /// True when C# canonical symbol-name upgrades (for operators, conversion operators,
     /// indexers) have been applied to all indexed C# rows in this DB. False means exact-name
     /// lookup for those C# symbol families may still require an upgrade pass via `cdidx index .`.
@@ -241,6 +269,30 @@ public class StatusResult
     /// </summary>
     [JsonPropertyName("csharp_symbol_name_ready")]
     public bool CSharpSymbolNameReady { get; set; } = true;
+    /// <summary>
+    /// True when every indexed C# class row carries an authoritative `is_metadata_target`
+    /// value stamped under the current `metadata_target_version_csharp` contract. False
+    /// means the `deps` / `impact` metadata-attribute edges fall back to the legacy
+    /// `signature LIKE '%: %'` heuristic (or the `name LIKE '%Attribute'` suffix heuristic
+    /// on truly-legacy DBs missing the `is_metadata_target` column), which silently drops
+    /// impostor classes like `class FooAttribute : BaseService`. Run `cdidx index .` once
+    /// to let the authoritative resolver rewrite the stamp (#435).
+    /// true のとき deps / impact の metadata-attribute edge は persisted な
+    /// `is_metadata_target` 列を使い、false のとき legacy heuristic 経路で縮退する。
+    /// </summary>
+    [JsonPropertyName("csharp_metadata_target_ready")]
+    public bool CSharpMetadataTargetReady { get; set; } = true;
+    /// <summary>
+    /// True when every indexed SQL graph row was written under the current stored call-column /
+    /// qualified-name contract. False means SQL graph/dependency readers may still return false
+    /// negatives until `cdidx index .` rewrites unchanged SQL rows.
+    /// SQL graph 行が current の call-column / qualified-name 契約で書かれていれば true。
+    /// </summary>
+    [JsonPropertyName("sql_graph_contract_ready")]
+    public bool SqlGraphContractReady { get; set; } = true;
+    [JsonPropertyName("sql_graph_contract_degraded_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SqlGraphContractDegradedReason { get; set; }
     /// <summary>
     /// True when every row in symbols / symbol_references has its name_folded column
     /// populated AND the FoldReadyFlag bit is set on the DB. False means `--exact` still
@@ -250,6 +302,18 @@ public class StatusResult
     /// true のとき --exact は Unicode fold 経路、false のとき ASCII NOCASE fallback。
     /// </summary>
     public bool FoldReady { get; set; }
+    [JsonPropertyName("fold_ready_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? FoldReadyReason { get; set; }
+    [JsonPropertyName("degraded_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DegradedReason { get; set; }
+    [JsonPropertyName("recommended_action")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RecommendedAction { get; set; }
+    [JsonPropertyName("alternative_action")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? AlternativeAction { get; set; }
 }
 
 public class RepoMapResult
@@ -348,6 +412,15 @@ public class SymbolAnalysisResult
     /// インデックスに参照テーブルが無いと true / false で区別可能。空が本物かどうか見極める。
     /// </summary>
     public bool GraphTableAvailable { get; set; } = true;
+    /// <summary>
+    /// True when bundled SQL graph-backed reads in this analysis reflect the current
+    /// call-column / qualified-name contract.
+    /// bundle 内の SQL graph 読み取りが current 契約に揃っているかどうか。
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? SqlGraphContractReady { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SqlGraphContractDegradedReason { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ExactZeroHintResult? ExactZeroHint { get; set; }
     /// <summary>
@@ -386,6 +459,7 @@ public class OutlineSymbol
     public int Line { get; set; }
     public int StartLine { get; set; }
     public int EndLine { get; set; }
+    public int Depth { get; set; }
     public int? BodyStartLine { get; set; }
     public int? BodyEndLine { get; set; }
     public string? Signature { get; set; }
@@ -399,6 +473,7 @@ internal sealed class RepoFileStat
 {
     public string Path { get; set; } = string.Empty;
     public string? Lang { get; set; }
+    public string? ModuleName { get; set; }
     public long Size { get; set; }
     public int Lines { get; set; }
     public int SymbolCount { get; set; }

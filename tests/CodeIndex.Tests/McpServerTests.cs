@@ -354,6 +354,33 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
+    public void ToolsList_CallersCalleesAnalyzeSymbolDescriptions_PinCamelCaseMixedKindFields()
+    {
+        // #501 round 2: MCP tool descriptions must advertise the response fields in MCP camelCase
+        // (`referenceKind`, `referenceKinds`, `hasMixedReferenceKinds`) because MCP serializes with
+        // `JsonNamingPolicy.CamelCase`. This test pins those field names so a future edit that
+        // accidentally switches back to CLI snake_case is caught before it reaches MCP consumers.
+        // #501 round 2: MCP は `JsonNamingPolicy.CamelCase` でシリアライズするため、ツール説明も
+        // camelCase（`referenceKind` / `referenceKinds` / `hasMixedReferenceKinds`）で書く必要がある。
+        // 将来の編集で CLI snake_case に戻してしまう silent regression をこのテストで止める。
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var tools = response["result"]!["tools"]!.AsArray();
+        foreach (var name in new[] { "callers", "callees", "analyze_symbol" })
+        {
+            var tool = tools.First(t => t!["name"]!.GetValue<string>() == name)!;
+            var description = tool["description"]!.GetValue<string>();
+
+            Assert.Contains("referenceKind", description);
+            Assert.Contains("referenceKinds", description);
+            Assert.Contains("hasMixedReferenceKinds", description);
+            Assert.DoesNotContain("reference_kinds", description);
+            Assert.DoesNotContain("has_mixed_reference_kinds", description);
+        }
+    }
+
+    [Fact]
     public void ToolsList_ImpactAnalysisDescribesHeuristicFallback()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
@@ -498,6 +525,23 @@ public class McpServerTests : IDisposable
         Assert.Equal("src/app.cs", response["result"]!["structuredContent"]!["results"]![0]!["path"]!.GetValue<string>());
     }
 
+    [Theory]
+    [InlineData("definition")]
+    [InlineData("references")]
+    [InlineData("callers")]
+    [InlineData("callees")]
+    [InlineData("analyze_symbol")]
+    [InlineData("impact_analysis")]
+    public void ToolsCall_BareVerbatimPrefix_IsRejected(string toolName)
+    {
+        var request = JsonNode.Parse($@"{{""jsonrpc"":""2.0"",""id"":1,""method"":""tools/call"",""params"":{{""name"":""{toolName}"",""arguments"":{{""query"":""@""}}}}}}")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("bare verbatim prefixes like `@` are not valid queries", text);
+    }
+
     [Fact]
     public void ToolsCall_Search_SnippetLinesControlsExcerptLength()
     {
@@ -510,13 +554,19 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_Search_MaxLineWidthZeroReturnsError()
+    public void ToolsCall_Search_MaxLineWidthZeroDisablesTruncation()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"App","maxLineWidth":0}}}""")!;
-        var response = _server.HandleMessage(request)!;
+        var longLine = new string('a', 320) + "TARGET" + new string('b', 320);
+        InsertIndexedFile("src/long.cs", "csharp", longLine);
 
-        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
-        Assert.Equal("maxLineWidth must be greater than or equal to 1", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search","arguments":{"query":"TARGET","exact":true,"maxLineWidth":0}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var result = structured["results"]![0]!;
+
+        Assert.Contains("TARGET", result["snippet"]!.GetValue<string>());
+        Assert.DoesNotContain("...(+", result["snippet"]!.GetValue<string>());
+        Assert.True(result["snippet"]!.GetValue<string>().Length > 512);
     }
 
     [Fact]
@@ -666,7 +716,7 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_AnalyzeSymbol_NonExactEnumMemberMarksGraphAsDegraded()
+    public void ToolsCall_AnalyzeSymbol_NonExactEnumMemberStaysGraphSupported()
     {
         InsertIndexedFile("src/colors.cs", "csharp",
             """
@@ -693,11 +743,10 @@ public class McpServerTests : IDisposable
         Assert.Equal("enum", definition["containerKind"]!.GetValue<string>());
         Assert.Equal("Color", definition["containerName"]!.GetValue<string>());
         Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
-        Assert.False(structured["graphSupported"]!.GetValue<bool>());
-        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
-        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
-        Assert.Contains("enum-member access edges are not indexed yet", structured["graphSupportReason"]!.GetValue<string>());
-        Assert.DoesNotContain("not indexed for 'csharp'", structured["graphSupportReason"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.True(structured["graphSupported"]!.GetValue<bool>());
+        Assert.Null(structured["graphDegraded"]);
+        Assert.Null(structured["unsupportedSymbolKind"]);
+        Assert.Equal("Shade", structured["references"]![0]!["containerName"]!.GetValue<string>());
     }
 
     [Fact]
@@ -735,8 +784,8 @@ public class McpServerTests : IDisposable
         Assert.Equal("web/app.js", structured["file"]!["path"]!.GetValue<string>());
         Assert.Equal("javascript", structured["graphLanguage"]!.GetValue<string>());
         Assert.True(structured["graphSupported"]!.GetValue<bool>());
-        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
-        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
+        Assert.Null(structured["graphDegraded"]);
+        Assert.Null(structured["unsupportedSymbolKind"]);
         Assert.Contains("web/app.js", nearbyPaths);
         Assert.DoesNotContain("src/status.cs", nearbyPaths);
         Assert.Contains(structured["nearbySymbols"]!.AsArray(),
@@ -775,9 +824,86 @@ public class McpServerTests : IDisposable
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Changed","lang":"csharp","exact":true}}}""")!;
         var response = _server.HandleMessage(request)!;
 
+        var row = response["result"]!["structuredContent"]!["results"]![0]!;
         Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
-        Assert.Equal("Hook", response["result"]!["structuredContent"]!["results"]![0]!["callerName"]!.GetValue<string>());
-        Assert.Equal("Changed", response["result"]!["structuredContent"]!["results"]![0]!["calleeName"]!.GetValue<string>());
+        Assert.Equal("Hook", row["callerName"]!.GetValue<string>());
+        Assert.Equal("Changed", row["calleeName"]!.GetValue<string>());
+        // #501: MCP wire format exposes referenceKind (preferred summary), referenceKinds (sorted distinct), and hasMixedReferenceKinds
+        // #501: MCP のワイヤ形式は referenceKind（要約）、referenceKinds（ソート済み distinct）、hasMixedReferenceKinds を返す
+        Assert.Equal("subscribe", row["referenceKind"]!.GetValue<string>());
+        Assert.False(row["hasMixedReferenceKinds"]!.GetValue<bool>());
+        var kinds = row["referenceKinds"]!.AsArray().Select(k => k!.GetValue<string>()).ToArray();
+        Assert.Equal(new[] { "subscribe" }, kinds);
+    }
+
+    [Fact]
+    public void ToolsCall_Callers_SurfacesMixedReferenceKindsForCallAndSubscribeContainer()
+    {
+        InsertIndexedFile("src/MixedOwner.cs", "csharp",
+            """
+            using System;
+
+            public class MixedOwner
+            {
+                public event EventHandler? Changed;
+
+                public void SetupAndFire()
+                {
+                    Changed += OnChanged;
+                    Changed(this, EventArgs.Empty);
+                }
+
+                private void OnChanged(object? sender, EventArgs e) { }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Changed","lang":"csharp","exact":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var row = response["result"]!["structuredContent"]!["results"]![0]!;
+        Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
+        Assert.Equal("SetupAndFire", row["callerName"]!.GetValue<string>());
+        Assert.Equal("Changed", row["calleeName"]!.GetValue<string>());
+        Assert.Equal(2, row["referenceCount"]!.GetValue<int>());
+        Assert.True(row["hasMixedReferenceKinds"]!.GetValue<bool>());
+        var kinds = row["referenceKinds"]!.AsArray().Select(k => k!.GetValue<string>()).ToArray();
+        Assert.Equal(new[] { "call", "subscribe" }, kinds);
+        // #501: preferred summary (`instantiate` > `subscribe` > `MIN(call)`) is `subscribe` for the mixed call+subscribe set
+        // #501: 混在時の preferred 要約（`instantiate` > `subscribe` > `MIN(call)`）は `subscribe`
+        Assert.Equal("subscribe", row["referenceKind"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_SurfacesMixedReferenceKindsInBundledCallers()
+    {
+        InsertIndexedFile("src/MixedOwner.cs", "csharp",
+            """
+            using System;
+
+            public class MixedOwner
+            {
+                public event EventHandler? Changed;
+
+                public void SetupAndFire()
+                {
+                    Changed += OnChanged;
+                    Changed(this, EventArgs.Empty);
+                }
+
+                private void OnChanged(object? sender, EventArgs e) { }
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"Changed","lang":"csharp","exact":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var caller = response["result"]!["structuredContent"]!["callers"]![0]!;
+
+        Assert.Equal("SetupAndFire", caller["callerName"]!.GetValue<string>());
+        Assert.Equal("Changed", caller["calleeName"]!.GetValue<string>());
+        Assert.Equal("subscribe", caller["referenceKind"]!.GetValue<string>());
+        Assert.True(caller["hasMixedReferenceKinds"]!.GetValue<bool>());
+        var kinds = caller["referenceKinds"]!.AsArray().Select(k => k!.GetValue<string>()).ToArray();
+        Assert.Equal(new[] { "call", "subscribe" }, kinds);
     }
 
     [Fact]
@@ -810,10 +936,16 @@ public class McpServerTests : IDisposable
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callees","arguments":{"query":"Hook","lang":"csharp","exact":true}}}""")!;
         var response = _server.HandleMessage(request)!;
 
+        var row = response["result"]!["structuredContent"]!["results"]![0]!;
         Assert.Equal(1, response["result"]!["structuredContent"]!["count"]!.GetValue<int>());
-        Assert.Equal("Hook", response["result"]!["structuredContent"]!["results"]![0]!["callerName"]!.GetValue<string>());
-        Assert.Equal("Changed", response["result"]!["structuredContent"]!["results"]![0]!["calleeName"]!.GetValue<string>());
-        Assert.Equal("subscribe", response["result"]!["structuredContent"]!["results"]![0]!["referenceKind"]!.GetValue<string>());
+        Assert.Equal("Hook", row["callerName"]!.GetValue<string>());
+        Assert.Equal("Changed", row["calleeName"]!.GetValue<string>());
+        Assert.Equal("subscribe", row["referenceKind"]!.GetValue<string>());
+        // #501: callees rows stay split per kind so referenceKinds is a single-element array and hasMixedReferenceKinds is false
+        // #501: callees 行は kind 単位で分かれるため referenceKinds は単要素、hasMixedReferenceKinds は false
+        Assert.False(row["hasMixedReferenceKinds"]!.GetValue<bool>());
+        var kinds = row["referenceKinds"]!.AsArray().Select(k => k!.GetValue<string>()).ToArray();
+        Assert.Equal(new[] { "subscribe" }, kinds);
     }
 
     [Fact]
@@ -830,15 +962,19 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_References_MaxLineWidthZeroReturnsError()
+    public void ToolsCall_References_MaxLineWidthZeroDisablesTruncation()
     {
-        InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return Run(user)\n");
+        var longLine = "def login(user, password): return Run(user) # " + new string('x', 700);
+        InsertIndexedFile("src/session.py", "python", longLine);
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"Run","maxLineWidth":0}}}""")!;
         var response = _server.HandleMessage(request)!;
+        var result = response["result"]!["structuredContent"]!["results"]![0]!;
 
-        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
-        Assert.Equal("maxLineWidth must be greater than or equal to 1", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.False(result["contextTruncated"]!.GetValue<bool>());
+        Assert.Contains("Run(user)", result["context"]!.GetValue<string>());
+        Assert.DoesNotContain("...(+", result["context"]!.GetValue<string>());
+        Assert.True(result["context"]!.GetValue<string>().Length > 512);
     }
 
     [Fact]
@@ -869,7 +1005,7 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_References_ExactEnumMember_UsesSymbolKindGapSummary()
+    public void ToolsCall_References_ExactEnumMember_ReturnsIndexedReference()
     {
         InsertIndexedFile("src/colors.cs", "csharp",
             """
@@ -891,12 +1027,12 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
         var structured = response["result"]!["structuredContent"]!;
 
-        Assert.Equal("No references found. C# enum-member access edges are not indexed yet.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
-        Assert.False(structured["graphSupported"]!.GetValue<bool>());
-        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
-        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
-        Assert.Contains("enum-member access edges are not indexed yet", structured["graphSupportReason"]!.GetValue<string>());
-        Assert.DoesNotContain("not indexed for 'csharp'", structured["graphSupportReason"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal("Found 1 references.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
+        Assert.Equal("Shade", structured["results"]![0]!["containerName"]!.GetValue<string>());
+        Assert.True(structured["graphSupported"]!.GetValue<bool>());
+        Assert.Null(structured["graphDegraded"]);
+        Assert.Null(structured["unsupportedSymbolKind"]);
     }
 
     [Fact]
@@ -927,11 +1063,10 @@ public class McpServerTests : IDisposable
         var structured = response["result"]!["structuredContent"]!;
 
         Assert.True(structured["graphSupported"]!.GetValue<bool>());
-        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
-        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
+        Assert.Null(structured["graphDegraded"]);
+        Assert.Null(structured["unsupportedSymbolKind"]);
         Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
-        Assert.Contains("Call-graph extraction is indexed for 'csharp'.", structured["graphSupportReason"]!.GetValue<string>());
-        Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", structured["graphSupportReason"]!.GetValue<string>());
+        Assert.Equal("Use", structured["results"]![0]!["containerName"]!.GetValue<string>());
     }
 
     [Fact]
@@ -958,12 +1093,10 @@ public class McpServerTests : IDisposable
         var structured = response["result"]!["structuredContent"]!;
 
         Assert.Equal(1, structured["count"]!.GetValue<int>());
-        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
-        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
         Assert.Equal("javascript", structured["graphLanguage"]!.GetValue<string>());
         Assert.True(structured["graphSupported"]!.GetValue<bool>());
-        Assert.Contains("Call-graph extraction is indexed for 'javascript'.", structured["graphSupportReason"]!.GetValue<string>());
-        Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", structured["graphSupportReason"]!.GetValue<string>());
+        Assert.Null(structured["graphDegraded"]);
+        Assert.Null(structured["unsupportedSymbolKind"]);
     }
 
     [Fact]
@@ -980,7 +1113,7 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_Callers_ExactEnumMember_ReturnsUnsupportedGraphMetadata()
+    public void ToolsCall_Callers_ExactEnumMember_ReturnsIndexedCaller()
     {
         InsertIndexedFile("src/cases.cs", "csharp",
             """
@@ -1002,13 +1135,13 @@ public class McpServerTests : IDisposable
         var response = _server.HandleMessage(request)!;
         var structured = response["result"]!["structuredContent"]!;
 
-        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.Equal(1, structured["count"]!.GetValue<int>());
         Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
-        Assert.False(structured["graphSupported"]!.GetValue<bool>());
-        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
-        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
-        Assert.Contains("enum-member access edges are not indexed yet", structured["graphSupportReason"]!.GetValue<string>());
-        Assert.Equal("No callers found. C# enum-member access edges are not indexed yet.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.True(structured["graphSupported"]!.GetValue<bool>());
+        Assert.Null(structured["graphDegraded"]);
+        Assert.Null(structured["unsupportedSymbolKind"]);
+        Assert.Equal("Value", structured["results"]![0]!["callerName"]!.GetValue<string>());
+        Assert.Equal("Found 1 callers.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
     [Fact]
@@ -1039,11 +1172,10 @@ public class McpServerTests : IDisposable
         var structured = response["result"]!["structuredContent"]!;
 
         Assert.True(structured["graphSupported"]!.GetValue<bool>());
-        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
-        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
+        Assert.Null(structured["graphDegraded"]);
+        Assert.Null(structured["unsupportedSymbolKind"]);
         Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
-        Assert.Contains("Call-graph extraction is indexed for 'csharp'.", structured["graphSupportReason"]!.GetValue<string>());
-        Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", structured["graphSupportReason"]!.GetValue<string>());
+        Assert.Equal("Use", structured["results"]![0]!["callerName"]!.GetValue<string>());
     }
 
     [Fact]
@@ -1071,7 +1203,7 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_Callees_ExactEnumMember_ReturnsUnsupportedGraphMetadata()
+    public void ToolsCall_Callees_ExactEnumMember_UsesZeroSchema()
     {
         InsertIndexedFile("src/cases.cs", "csharp",
             """
@@ -1095,11 +1227,10 @@ public class McpServerTests : IDisposable
 
         Assert.Equal(0, structured["count"]!.GetValue<int>());
         Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
-        Assert.False(structured["graphSupported"]!.GetValue<bool>());
-        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
-        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
-        Assert.Contains("enum-member access edges are not indexed yet", structured["graphSupportReason"]!.GetValue<string>());
-        Assert.Equal("No callees found. C# enum-member access edges are not indexed yet.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.True(structured["graphSupported"]!.GetValue<bool>());
+        Assert.Null(structured["graphDegraded"]);
+        Assert.Null(structured["unsupportedSymbolKind"]);
+        Assert.Equal("No callees found.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }
 
     [Fact]
@@ -1130,11 +1261,10 @@ public class McpServerTests : IDisposable
         var structured = response["result"]!["structuredContent"]!;
 
         Assert.True(structured["graphSupported"]!.GetValue<bool>());
-        Assert.True(structured["graphDegraded"]!.GetValue<bool>());
-        Assert.Equal("enum_member", structured["unsupportedSymbolKind"]!.GetValue<string>());
+        Assert.Null(structured["graphDegraded"]);
+        Assert.Null(structured["unsupportedSymbolKind"]);
         Assert.Equal("csharp", structured["graphLanguage"]!.GetValue<string>());
-        Assert.Contains("Call-graph extraction is indexed for 'csharp'.", structured["graphSupportReason"]!.GetValue<string>());
-        Assert.Contains("Exact results also include C# enum members whose access edges are not indexed yet.", structured["graphSupportReason"]!.GetValue<string>());
+        Assert.Equal("Next", structured["results"]![0]!["calleeName"]!.GetValue<string>());
     }
 
     [Fact]
@@ -1148,24 +1278,105 @@ public class McpServerTests : IDisposable
         Assert.Contains("not indexed", response["result"]!["structuredContent"]!["graphSupportReason"]!.GetValue<string>());
     }
 
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_StaleSqlGraphContractIncludesDegradedState()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_analyze_symbol_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+            DowngradeSqlGraphContractRows(dbPath);
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"fn_Target","lang":"sql","exact":true}}}""")!;
+            var response = server.HandleMessage(request)!;
+            var structured = response["result"]!["structuredContent"]!;
+
+            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
+            Assert.False(structured["sqlGraphContractReady"]!.GetValue<bool>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sqlGraphContractDegradedReason"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_References_StaleSqlGraphContractIncludesDegradedState()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_references_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+            DowngradeSqlGraphContractRows(dbPath);
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"fn_Target","lang":"sql"}}}""")!;
+            var response = server.HandleMessage(request)!;
+            var structured = response["result"]!["structuredContent"]!;
+
+            Assert.Equal(1, structured["count"]!.GetValue<int>());
+            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
+            Assert.False(structured["sqlGraphContractReady"]!.GetValue<bool>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sqlGraphContractDegradedReason"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Callers_MixedRepoStaleSqlGraphContractDoesNotDegradePureCSharpQuery()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_callers_mixed_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateMixedSqlGraphContractFixtureDb(projectRoot);
+            DowngradeSqlGraphContractRows(dbPath);
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"N","exact":true}}}""")!;
+            var response = server.HandleMessage(request)!;
+            var structured = response["result"]!["structuredContent"]!;
+
+            Assert.Equal(1, structured["count"]!.GetValue<int>());
+            Assert.Null(structured["sql_graph_contract_ready"]);
+            Assert.Null(structured["sqlGraphContractReady"]);
+            Assert.Null(structured["sql_graph_contract_degraded_reason"]);
+            Assert.Null(structured["sqlGraphContractDegradedReason"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("callers", "attribute")]
     [InlineData("callers", "annotation")]
+    [InlineData("callers", "type_reference")]
     [InlineData("callees", "attribute")]
     [InlineData("callees", "annotation")]
-    public void ToolsCall_CallersOrCallees_MetadataKindReturnsToolError(string tool, string kind)
+    [InlineData("callees", "type_reference")]
+    public void ToolsCall_CallersOrCallees_NonCallGraphKindReturnsToolError(string tool, string kind)
     {
-        // issue #293 follow-up: the MCP `callers` / `callees` tools must reject `kind:
-        // attribute` / `kind: annotation` because metadata rows are attributed to the
-        // enclosing body-range symbol (so `callers Obsolete kind=attribute` reports the
-        // enclosing class instead of the annotated method, and file-level targets drop
-        // entirely). AI clients should be redirected to the `references` tool for metadata
-        // enumeration.
-        // issue #293 補足: MCP の `callers` / `callees` ツールは `kind: attribute` /
-        // `kind: annotation` を必ず弾くこと。metadata 行は body-range の外側シンボルに帰属する
+        // issue #293 + issue #444: the MCP `callers` / `callees` tools must reject non-call-graph
+        // kinds. Metadata rows (`attribute` / `annotation`) are attributed to the enclosing
+        // body-range symbol (so `callers Obsolete kind=attribute` reports the enclosing class
+        // instead of the annotated method, and file-level targets drop entirely). `type_reference`
+        // rows are compile-time type mentions (declaration types, generic constraints, `is`/`as`/
+        // `instanceof`, XML-doc `cref`) and not runtime calls. AI clients should be redirected to
+        // the `references` tool for these enumerations.
+        // issue #293 + issue #444 補足: MCP の `callers` / `callees` ツールは非 call-graph な kind を
+        // 必ず弾く。metadata 行 (`attribute` / `annotation`) は body-range の外側シンボルに帰属する
         // ため、`callers Obsolete kind=attribute` は注釈対象のメソッドではなく外側クラスを返し、
-        // file-level target は完全に脱落する。AI クライアントは metadata 列挙のために
-        // `references` ツールに誘導する。
+        // file-level target は完全に脱落する。`type_reference` は宣言型・generic 制約・`is`/`as`/
+        // `instanceof`・XML-doc `cref` といった compile-time な型言及であり実行時呼び出しではない。
+        // AI クライアントは列挙のために `references` ツールに誘導する。
         var requestJson = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\","
             + "\"params\":{\"name\":\"" + tool + "\","
             + "\"arguments\":{\"query\":\"SomeSymbol\",\"kind\":\"" + kind + "\"}}}";
@@ -1176,6 +1387,41 @@ public class McpServerTests : IDisposable
         var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
         Assert.Contains($"'kind: {kind}' is not supported on '{tool}'", text);
         Assert.Contains("'references' tool", text);
+    }
+
+    [Fact]
+    public void ToolsCall_References_AcceptsTypeReferenceKind()
+    {
+        // issue #444: `references` with `kind: "type_reference"` is a legitimate query (the
+        // compile-time type-position edges emitted by ReferenceExtractor for C#/Java base
+        // lists, declaration types, generic constraints, `is`/`as`/`instanceof`, and XML-doc
+        // `cref`). It must succeed and return the expected `reference_kind` in
+        // structuredContent, unlike the rejected `callers`/`callees` tools.
+        // issue #444: MCP `references` の `kind: "type_reference"` は compile-time な型位置エッジ
+        // を列挙する正当なクエリ（C#/Java の継承リスト・宣言型・generic 制約・`is`/`as`/
+        // `instanceof`・XML-doc `cref`）。拒否される `callers` / `callees` とは異なり、成功して
+        // structuredContent に `reference_kind` を返さなければならない。
+        InsertIndexedFile("src/Target.cs", "csharp",
+            """
+            public class TargetBase { }
+            """);
+        InsertIndexedFile("src/Consumer.cs", "csharp",
+            """
+            public class Consumer : TargetBase
+            {
+            }
+            """);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"references","arguments":{"query":"TargetBase","kind":"type_reference","lang":"csharp","exactName":true}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal("type_reference", structured["kind"]!.GetValue<string>());
+        Assert.True(structured["count"]!.GetValue<int>() >= 1);
+        var results = structured["results"]!.AsArray();
+        Assert.Contains(results, r => r!["referenceKind"]!.GetValue<string>() == "type_reference"
+            && r["symbolName"]!.GetValue<string>() == "TargetBase");
     }
 
     [Fact]
@@ -1798,8 +2044,8 @@ public class McpServerTests : IDisposable
 
         Assert.Equal("file_dependency_hints", structured["impact_mode"]!.GetValue<string>());
         Assert.Equal(1, structured["count"]!.GetValue<int>());
-        Assert.Equal(3, structured["file_impacts"]![0]!["referenceCount"]!.GetValue<int>());
-        Assert.Equal("ExecuteFolderDiffAsync", structured["file_impacts"]![0]!["symbols"]!.GetValue<string>());
+        Assert.Equal(4, structured["file_impacts"]![0]!["referenceCount"]!.GetValue<int>());
+        Assert.Equal("ExecuteFolderDiffAsync,FolderDiffService", structured["file_impacts"]![0]!["symbols"]!.GetValue<string>());
     }
 
     [Fact]
@@ -2165,6 +2411,198 @@ public class McpServerTests : IDisposable
         Assert.Contains("public void Run()", response["result"]!["structuredContent"]!["results"]![0]!["content"]!.GetValue<string>());
     }
 
+    [Fact]
+    public void ToolsCall_Definition_DoesNotReportSqlGraphContractDegraded()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_definition_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+            DowngradeSqlGraphContractRows(dbPath);
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var definitionRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"definition","arguments":{"query":"fn_Target","lang":"sql","exact":true}}}""")!;
+            var definitionResponse = server.HandleMessage(definitionRequest)!;
+            var definitionStructured = definitionResponse["result"]!["structuredContent"]!;
+
+            Assert.Equal(1, definitionStructured["count"]!.GetValue<int>());
+            Assert.Null(definitionStructured["sql_graph_contract_ready"]);
+            Assert.Null(definitionStructured["sqlGraphContractReady"]);
+            Assert.Null(definitionStructured["degraded"]);
+            Assert.Null(definitionStructured["sql_graph_contract_degraded_reason"]);
+            Assert.Null(definitionStructured["sqlGraphContractDegradedReason"]);
+
+            var callersRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"callers","arguments":{"query":"dbo.fn_Target","lang":"sql","exact":true}}}""")!;
+            var callersResponse = server.HandleMessage(callersRequest)!;
+            var callersStructured = callersResponse["result"]!["structuredContent"]!;
+
+            Assert.False(callersStructured["sql_graph_contract_ready"]!.GetValue<bool>());
+            Assert.False(callersStructured["sqlGraphContractReady"]!.GetValue<bool>());
+            Assert.NotNull(callersStructured["sql_graph_contract_degraded_reason"]);
+            Assert.NotNull(callersStructured["sqlGraphContractDegradedReason"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_ImpactAnalysis_StaleSqlGraphContractIncludesDegradedState()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_impact_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+            DowngradeSqlGraphContractRows(dbPath);
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"fn_Target","lang":"sql"}}}""")!;
+            var response = server.HandleMessage(request)!;
+            var structured = response["result"]!["structuredContent"]!;
+
+            Assert.Equal(1, structured["count"]!.GetValue<int>());
+            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
+            Assert.False(structured["sqlGraphContractReady"]!.GetValue<bool>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sqlGraphContractDegradedReason"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_AnalyzeSymbol_MixedRepoStaleSqlGraphContractDoesNotDegradePureCSharpBundle()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_analyze_symbol_mixed_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateMixedSqlGraphContractFixtureDb(projectRoot);
+            DowngradeSqlGraphContractRows(dbPath);
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"N","exact":true}}}""")!;
+            var response = server.HandleMessage(request)!;
+            var structured = response["result"]!["structuredContent"]!;
+
+            Assert.Null(structured["sql_graph_contract_ready"]);
+            Assert.Null(structured["sqlGraphContractReady"]);
+            Assert.Null(structured["sql_graph_contract_degraded_reason"]);
+            Assert.Null(structured["sqlGraphContractDegradedReason"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Deps_ZeroResultSqlScopeStillIncludesDegradedState()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_deps_zero_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractZeroResultFixtureDb(projectRoot);
+            DowngradeSqlGraphContractVersion(dbPath);
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"deps","arguments":{}}}""")!;
+            var response = server.HandleMessage(request)!;
+            var structured = response["result"]!["structuredContent"]!;
+
+            Assert.Equal(0, structured["count"]!.GetValue<int>());
+            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
+            Assert.False(structured["sqlGraphContractReady"]!.GetValue<bool>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sqlGraphContractDegradedReason"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Hotspots_ZeroResultSqlScopeStillIncludesDegradedState()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_hotspots_zero_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractZeroResultFixtureDb(projectRoot);
+            DowngradeSqlGraphContractVersion(dbPath);
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{}}}""")!;
+            var response = server.HandleMessage(request)!;
+            var structured = response["result"]!["structuredContent"]!;
+
+            Assert.Equal(0, structured["count"]!.GetValue<int>());
+            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
+            Assert.False(structured["sqlGraphContractReady"]!.GetValue<bool>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sqlGraphContractDegradedReason"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_UnusedSymbols_ZeroResultStaysCleanWhenSqlSymbolsCannotMatchKind()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_unused_zero_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractZeroResultFixtureDb(projectRoot);
+            DowngradeSqlGraphContractVersion(dbPath);
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unused_symbols","arguments":{"kind":"interface"}}}""")!;
+            var response = server.HandleMessage(request)!;
+            var structured = response["result"]!["structuredContent"]!;
+
+            Assert.Equal(0, structured["count"]!.GetValue<int>());
+            Assert.Null(structured["sql_graph_contract_ready"]);
+            Assert.Null(structured["sqlGraphContractReady"]);
+            Assert.Null(structured["sql_graph_contract_degraded_reason"]);
+            Assert.Null(structured["sqlGraphContractDegradedReason"]);
+            Assert.Null(structured["degraded"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_SymbolHotspots_ZeroResultStaysCleanWhenSqlSymbolsCannotMatchKind()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_hotspots_zero_sql_graph_contract");
+        try
+        {
+            var dbPath = CreateSqlGraphContractZeroResultFixtureDb(projectRoot);
+            DowngradeSqlGraphContractVersion(dbPath);
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{"kind":"class"}}}""")!;
+            var response = server.HandleMessage(request)!;
+            var structured = response["result"]!["structuredContent"]!;
+
+            Assert.Equal(0, structured["count"]!.GetValue<int>());
+            Assert.Null(structured["sql_graph_contract_ready"]);
+            Assert.Null(structured["sqlGraphContractReady"]);
+            Assert.Null(structured["sql_graph_contract_degraded_reason"]);
+            Assert.Null(structured["sqlGraphContractDegradedReason"]);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("definition", """{"query":"nonexistent_xyz_123"}""")]
     [InlineData("symbols", """{"query":"nonexistent_xyz_123"}""")]
@@ -2420,15 +2858,17 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_Excerpt_MaxLineWidthZeroReturnsError()
+    public void ToolsCall_Excerpt_MaxLineWidthZeroDisablesTruncation()
     {
-        InsertIndexedFile("dist/data-max-width-zero.txt", "text", new string('a', 320) + "TARGET" + new string('b', 320));
+        var longLine = new string('a', 320) + "TARGET" + new string('b', 320);
+        InsertIndexedFile("dist/data-max-width-zero.txt", "text", longLine);
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"dist/data-max-width-zero.txt","startLine":1,"endLine":1,"maxLineWidth":0}}}""")!;
         var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
 
-        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
-        Assert.Equal("maxLineWidth must be greater than or equal to 1", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.False(structured["contentTruncated"]!.GetValue<bool>());
+        Assert.Equal(longLine, structured["content"]!.GetValue<string>());
     }
 
     [Fact]
@@ -2523,15 +2963,18 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_FindInFile_MaxLineWidthZeroReturnsError()
+    public void ToolsCall_FindInFile_MaxLineWidthZeroDisablesTruncation()
     {
-        InsertIndexedFile("dist/search-max-width-zero.txt", "text", new string('a', 320) + "target" + new string('b', 320));
+        var longLine = new string('a', 320) + "target" + new string('b', 320);
+        InsertIndexedFile("dist/search-max-width-zero.txt", "text", longLine);
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"find_in_file","arguments":{"query":"target","path":"dist/search-max-width-zero.txt","maxLineWidth":0}}}""")!;
         var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var result = structured["results"]![0]!;
 
-        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
-        Assert.Equal("maxLineWidth must be greater than or equal to 1", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.False(result["snippetTruncated"]!.GetValue<bool>());
+        Assert.Equal(longLine, result["snippet"]!.GetValue<string>());
     }
 
     [Fact]
@@ -2605,20 +3048,21 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_AnalyzeSymbol_MaxLineWidthZeroReturnsError()
+    public void ToolsCall_AnalyzeSymbol_ZeroMaxLineWidthDisablesTruncation()
     {
+        var longLine = "const x = 0; " + new string('a', 320) + " target(); " + new string('b', 320);
         InsertIndexedFile("src/analyze-target.js", "javascript",
-            """
-            function target() {
-              return true;
-            }
-            """);
+            "function target() { return true; }\n" + longLine);
 
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"target","maxLineWidth":0}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"analyze_symbol","arguments":{"query":"target","lang":"javascript","maxLineWidth":0}}}""")!;
         var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+        var firstReference = structured["references"]![0]!;
 
-        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
-        Assert.Equal("maxLineWidth must be greater than or equal to 1", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.False(firstReference["contextTruncated"]!.GetValue<bool>());
+        Assert.Contains("target()", firstReference["context"]!.GetValue<string>());
+        Assert.DoesNotContain("...(+", firstReference["context"]!.GetValue<string>());
+        Assert.True(firstReference["context"]!.GetValue<string>().Length > 512);
     }
 
     [Fact]
@@ -2679,6 +3123,116 @@ public class McpServerTests : IDisposable
         Assert.NotNull(response["result"]!["structuredContent"]!["indexedAt"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["latestModified"]);
         Assert.NotNull(response["result"]!["structuredContent"]!["projectRoot"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["hotspot_family_ready"]);
+        Assert.NotNull(response["result"]!["structuredContent"]!["hotspotFamilyReady"]);
+    }
+
+    [Fact]
+    public void ToolsCall_Status_ReportsDegradedHotspotFamilyTrust()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_status_hotspots_family_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+            }
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Api.Part1.cs", "csharp", "public partial class Api { public void Run() { } }");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Api.Part2.cs", "csharp", "public partial class Api { public void Run(int value) { } }");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Caller.cs", "csharp", "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); } }");
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+            }
+
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+            var response = server.HandleMessage(request)!;
+
+            Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.False(structured["hotspot_family_ready"]!.GetValue<bool>());
+            Assert.False(structured["hotspotFamilyReady"]!.GetValue<bool>());
+            Assert.Contains("csharp", structured["hotspot_family_degraded_reason"]!.GetValue<string>());
+            Assert.Contains("csharp", structured["hotspotFamilyDegradedReason"]!.GetValue<string>());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Status_ReportsDegradedSqlGraphContractTrust()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_status_sql_graph_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+            }
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/target.sql",
+                "sql",
+                """
+                CREATE FUNCTION dbo.fn_Target()
+                RETURNS INT
+                AS
+                BEGIN
+                    RETURN 1;
+                END;
+                GO
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/caller.sql",
+                "sql",
+                """
+                CREATE PROCEDURE dbo.usp_Caller
+                AS
+                BEGIN
+                    SELECT dbo.fn_Target();
+                END;
+                GO
+                """);
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+                writer.MarkSqlGraphContractReady();
+
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbol_references
+                    SET symbol_name = 'fn_Target',
+                        symbol_name_folded = 'fn_target',
+                        column_number = 1
+                    WHERE symbol_name = 'dbo.fn_Target';
+                    DELETE FROM codeindex_meta WHERE key = 'sql_graph_contract_version';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"status","arguments":{}}}""")!;
+            var response = server.HandleMessage(request)!;
+
+            Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+            var structured = response["result"]!["structuredContent"]!;
+            Assert.False(structured["sql_graph_contract_ready"]!.GetValue<bool>());
+            Assert.False(structured["sqlGraphContractReady"]!.GetValue<bool>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sql_graph_contract_degraded_reason"]!.GetValue<string>());
+            Assert.Contains("sql_graph_contract_ready=false", structured["sqlGraphContractDegradedReason"]!.GetValue<string>());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+        }
     }
 
     [Fact]
@@ -3456,7 +4010,7 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_Index_DoesNotRestampHotspotFamilyReadyWhenMarkerFingerprintChanges()
+    public void ToolsCall_Index_RestampsHotspotFamilyReadyWhenMarkerFingerprintChanges()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_marker_fingerprint_{Guid.NewGuid():N}");
         Directory.CreateDirectory(fixtureDir);
@@ -3533,8 +4087,10 @@ public class McpServerTests : IDisposable
             Assert.False(secondResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
 
             using var verifyDb = new DbContext(dbPath);
-            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
-            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp")));
+            Assert.Equal(
+                DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+            Assert.False(string.IsNullOrWhiteSpace(verifyDb.GetMetaString(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"))));
         }
         finally
         {
@@ -3599,13 +4155,96 @@ public class McpServerTests : IDisposable
 
             using var verifyDb = new DbContext(dbPath);
             Assert.Equal(DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture), verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
-            Assert.Null(verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("vb")));
 
             var hotspotsRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{"lang":"csharp","kind":"function"}}}""")!;
             var hotspotsResponse = server.HandleMessage(hotspotsRequest)!;
             var structured = hotspotsResponse["result"]!["structuredContent"]!;
             Assert.True(structured["hotspot_family_ready"]!.GetValue<bool>());
             Assert.True(structured["hotspotFamilyReady"]!.GetValue<bool>());
+            if (structured["degraded"] is JsonNode degradedNode)
+                Assert.False(degradedNode.GetValue<bool>());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (File.Exists(dbPath)) File.Delete(dbPath);
+            if (Directory.Exists(fixtureDir))
+                Directory.Delete(fixtureDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ToolsCall_Index_RestampsHotspotFamilyTrustWhenOnlyMetadataWasCleared()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_marker_metadata_only_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var srcDir = Path.Combine(fixtureDir, "src");
+        Directory.CreateDirectory(srcDir);
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_mcp_index_marker_metadata_only_{Guid.NewGuid():N}.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(fixtureDir, "App.csproj"), "<Project />");
+            File.WriteAllText(Path.Combine(srcDir, "Api.Part1.cs"), "public partial class Api { public void Run() { } }");
+            File.WriteAllText(Path.Combine(srcDir, "Api.Part2.cs"), "public partial class Api { public void Run(int value) { } }");
+            File.WriteAllText(Path.Combine(srcDir, "Caller.cs"), "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); } }");
+            var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var firstIndex = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 1,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir
+                    }
+                }
+            };
+            var firstResponse = server.HandleMessage(firstIndex)!;
+            Assert.False(firstResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+
+            using (var db = new DbContext(dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.GetHotspotFamilyVersionMetaKey("csharp"), null);
+                writer.SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"), null);
+            }
+
+            var secondIndex = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 2,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "index",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["path"] = fixtureDir
+                    }
+                }
+            };
+            var secondResponse = server.HandleMessage(secondIndex)!;
+            Assert.False(secondResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+            Assert.True(secondResponse["result"]!["structuredContent"]!["summary"]!["skipped"]!.GetValue<int>() > 0);
+
+            using (var verifyDb = new DbContext(dbPath))
+            {
+                Assert.Equal(
+                    DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    verifyDb.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp")));
+                Assert.False(string.IsNullOrWhiteSpace(verifyDb.GetMetaString(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"))));
+            }
+
+            var hotspotsRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{"lang":"csharp","kind":"function"}}}""")!;
+            var hotspotsResponse = server.HandleMessage(hotspotsRequest)!;
+            var structured = hotspotsResponse["result"]!["structuredContent"]!;
+            Assert.True(structured["hotspot_family_ready"]!.GetValue<bool>());
+            Assert.True(structured["hotspotFamilyReady"]!.GetValue<bool>());
+            Assert.Equal(1, structured["count"]!.GetValue<int>());
             if (structured["degraded"] is JsonNode degradedNode)
                 Assert.False(degradedNode.GetValue<bool>());
         }
@@ -4015,7 +4654,7 @@ public class McpServerTests : IDisposable
     }
 
     [Fact]
-    public void ToolsCall_UnusedSymbols_KeepsCSharpEnumDeclarationsWhileSkippingEnumMembers()
+    public void ToolsCall_UnusedSymbols_IncludesUnusedCSharpEnumMembersWithoutDegradedMetadata()
     {
         InsertIndexedFile("src/cases.cs", "csharp",
             """
@@ -4051,18 +4690,17 @@ public class McpServerTests : IDisposable
             .ToHashSet(StringComparer.Ordinal);
 
         Assert.True(structured["graph_supported"]!.GetValue<bool>());
-        Assert.True(structured["graph_degraded"]!.GetValue<bool>());
-        Assert.Equal("enum_member", structured["unsupported_symbol_kind"]!.GetValue<string>());
-        Assert.Contains("enum members are excluded from unused", structured["graph_support_reason"]!.GetValue<string>());
-        Assert.Contains("Color", names);
+        Assert.Null(structured["graph_degraded"]);
+        Assert.Null(structured["unsupported_symbol_kind"]);
+        Assert.DoesNotContain("Color", names);
         Assert.Contains("TrulyUnused", names);
         Assert.DoesNotContain("Red", names);
-        Assert.DoesNotContain("Blue", names);
-        Assert.DoesNotContain("Green", names);
+        Assert.Contains("Blue", names);
+        Assert.Contains("Green", names);
     }
 
     [Fact]
-    public void ToolsCall_UnusedSymbols_EnumDeclarationsStillReturnDegradedSummary()
+    public void ToolsCall_UnusedSymbols_EnumDeclarationsReturnNormalSummary()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_mcp_unused_enum_gap_summary");
         try
@@ -4108,11 +4746,11 @@ public class McpServerTests : IDisposable
                 .ToHashSet(StringComparer.Ordinal);
 
             Assert.True(structured["count"]!.GetValue<int>() >= 2);
-            Assert.True(structured["graph_degraded"]!.GetValue<bool>());
-            Assert.Equal("enum_member", structured["unsupported_symbol_kind"]!.GetValue<string>());
-            Assert.Contains("enum members are excluded from unused", structured["graph_support_reason"]!.GetValue<string>());
-            Assert.Contains("Color", names);
+            Assert.Null(structured["graph_degraded"]);
+            Assert.Null(structured["unsupported_symbol_kind"]);
+            Assert.DoesNotContain("Color", names);
             Assert.Contains("TrulyUnused", names);
+            Assert.Contains("Green", names);
             Assert.Contains(
                 "Found",
                 response["result"]!["content"]![0]!["text"]!.GetValue<string>());
@@ -5251,6 +5889,124 @@ public class McpServerTests : IDisposable
 
         SqliteConnection.ClearAllPools();
         return dbPath;
+    }
+
+    private static string CreateSqlGraphContractFixtureDb(string projectRoot)
+    {
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/target.sql",
+            "sql",
+            """
+            CREATE FUNCTION dbo.fn_Target()
+            RETURNS INT
+            AS
+            BEGIN
+                RETURN 1;
+            END;
+            GO
+            """);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/caller.sql",
+            "sql",
+            """
+            CREATE PROCEDURE dbo.usp_Caller
+            AS
+            BEGIN
+                SELECT dbo.fn_Target();
+            END;
+            GO
+            """);
+
+        using var db = new DbContext(dbPath);
+        var writer = new DbWriter(db.Connection);
+        writer.MarkGraphReady();
+        writer.MarkSqlGraphContractReady();
+        return dbPath;
+    }
+
+    private static string CreateMixedSqlGraphContractFixtureDb(string projectRoot)
+    {
+        var dbPath = CreateSqlGraphContractFixtureDb(projectRoot);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/mixed.cs",
+            "csharp",
+            """
+            public class MixedCalls
+            {
+                public void N() { }
+
+                public void M()
+                {
+                    N();
+                }
+            }
+            """);
+
+        using var db = new DbContext(dbPath);
+        var writer = new DbWriter(db.Connection);
+        writer.MarkGraphReady();
+        writer.MarkSqlGraphContractReady();
+        return dbPath;
+    }
+
+    private static string CreateSqlGraphContractZeroResultFixtureDb(string projectRoot)
+    {
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/a.cs",
+            "csharp",
+            """
+            public class C
+            {
+                public void M() { }
+            }
+            """);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/b.sql",
+            "sql",
+            """
+            CREATE PROCEDURE dbo.Target
+            AS
+            BEGIN
+                SELECT 1;
+            END;
+            GO
+            """);
+
+        using var db = new DbContext(dbPath);
+        var writer = new DbWriter(db.Connection);
+        writer.MarkGraphReady();
+        writer.MarkSqlGraphContractReady();
+        return dbPath;
+    }
+
+    private static void DowngradeSqlGraphContractRows(string dbPath)
+    {
+        using var db = new DbContext(dbPath);
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = """
+            UPDATE symbol_references
+            SET symbol_name = 'fn_Target',
+                symbol_name_folded = 'fn_target',
+                column_number = 1
+            WHERE symbol_name = 'dbo.fn_Target';
+            DELETE FROM codeindex_meta WHERE key = 'sql_graph_contract_version';
+            """;
+        cmd.ExecuteNonQuery();
+    }
+
+    private static void DowngradeSqlGraphContractVersion(string dbPath)
+    {
+        using var db = new DbContext(dbPath);
+        using var cmd = db.Connection.CreateCommand();
+        cmd.CommandText = "DELETE FROM codeindex_meta WHERE key = 'sql_graph_contract_version';";
+        cmd.ExecuteNonQuery();
     }
 
     public void Dispose()

@@ -16,6 +16,7 @@ permissions:
 
 jobs:
   release:
+    if: github.repository == 'Widthdom/CodeIndex'
     strategy:
       matrix:
         include:
@@ -36,27 +37,69 @@ jobs:
           fetch-depth: 0
           ref: ${{ inputs.tag_name || github.ref }}
 
+      # The release workflow runs the same Windows test suite, so it needs the
+      # same temp-root pinning as .github/workflows/dotnet.yml: even after the
+      # Defender exclusions from #394, temp-heavy fixture I/O stays slower when
+      # Path.GetTempPath()-driven files land under the default user-profile
+      # temp root instead of RUNNER_TEMP. Writing GITHUB_ENV before the later
+      # Defender-exclusion step ensures that verification sees the actual
+      # effective TMP/TEMP/GetTempPath values rather than stale defaults.
+      # release workflow も同じ Windows テストスイートを走らせるため、
+      # .github/workflows/dotnet.yml と同じ temp root 固定が必要になる。
+      # #394 の Defender 除外後でも、Path.GetTempPath() 経由の temp-heavy
+      # fixture が既定の user-profile temp を踏む限り遅さは残るため、
+      # RUNNER_TEMP 側へ寄せる。後続の Defender 除外 step より前に
+      # GITHUB_ENV へ書き込むことで、検証が stale な既定値ではなく実際の
+      # TMP/TEMP/GetTempPath 値を確認できるようにする。
+      - name: Pin Windows TMP/TEMP to runner temp
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tempRoot = Join-Path $env:RUNNER_TEMP "cdidx-temp"
+          New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
+
+          "TMP=$tempRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TEMP=$tempRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          $env:TMP = $tempRoot
+          $env:TEMP = $tempRoot
+          Write-Host "Pinned Windows TMP/TEMP to: $tempRoot"
+          Write-Host ".NET Path.GetTempPath() now resolves to: $([System.IO.Path]::GetTempPath())"
+
       # Same mitigation as .github/workflows/dotnet.yml for issue #394:
-      # Windows Defender real-time scanning of the test suite's temp files
-      # dominates the Windows lane. Exclude workspace plus every candidate
-      # temp root so the release workflow's Windows test step does not pay
-      # that overhead. -ExclusionProcess expects full image paths, so it is
-      # omitted here. $env:TMP and the live [IO.Path]::GetTempPath() value
-      # are included in addition to $env:TEMP / RUNNER_TEMP because .NET's
-      # Path.GetTempPath() consults TMP before TEMP and may resolve to a
-      # path that differs from $env:TEMP in pwsh. Trailing separators are
-      # stripped so the Get-MpPreference -notcontains check matches the
-      # stored form exactly. -ErrorAction Stop plus that final verification
-      # make the step fail loudly instead of silently degrading, and the
-      # final exclusion list is echoed to the log for debuggability.
-      # dotnet.yml と同じ issue #394 対策。release workflow の Windows
-      # test step にも同じ exclusion を適用する。-ExclusionProcess は
-      # フルパス仕様のため使わず、.NET の Path.GetTempPath() が
-      # TMP → TEMP → USERPROFILE の順で参照するため、$env:TMP と実行時の
+      # Windows Defender real-time scanning of every temp file created by the
+      # test suite (temp projects, SQLite DBs, .cdidx directories, synthetic
+      # source files) dominates the Windows lane of this workflow as well.
+      # Excluding the workspace plus the effective temp roots before build/test
+      # prevents silent regression if the runner image or TMP/TEMP wiring
+      # changes again in the future.
+      # We rely on -ExclusionPath only: -ExclusionProcess expects full image
+      # paths, so bare filenames like 'dotnet.exe' would silently fail to take
+      # effect. We include $env:TMP and the live [IO.Path]::GetTempPath() value
+      # in addition to $env:TEMP / RUNNER_TEMP because .NET's Path.GetTempPath()
+      # consults TMP before TEMP and may resolve to a path that differs from
+      # $env:TEMP in pwsh. Paths are trimmed of trailing separators so the
+      # Get-MpPreference -notcontains check matches the stored form exactly.
+      # Every Add-MpPreference call uses -ErrorAction Stop, and a final
+      # Get-MpPreference verification throws if any exclusion did not register
+      # so the step fails loudly instead of degrading silently. The list of
+      # effective exclusions is also echoed to the log so future investigations
+      # of Windows lane variance can see exactly which paths were covered.
+      # release workflow の Windows lane でも、テストスイートが大量に作る
+      # 一時ファイル（temp project / SQLite DB / .cdidx / 合成ソース）を
+      # Windows Defender が都度スキャンする影響は同じく支配的になる。
+      # build/test 前に workspace と実効 temp root 群を除外し、runner image
+      # や TMP/TEMP の配線が今後変わっても silent regression しないようにする。
+      # -ExclusionProcess はフルパスを要求する仕様のため、bare filename では
+      # 黙って no-op になる。ここでは -ExclusionPath だけに寄せる。.NET の
+      # Path.GetTempPath() は TMP → TEMP → USERPROFILE の順で参照し、pwsh の
+      # $env:TEMP と異なるパスへ解決されうるため、$env:TMP と実行時の
       # [IO.Path]::GetTempPath() も追加でカバーする。末尾区切り文字を揃え、
-      # Get-MpPreference -notcontains の照合を保存形式と一致させる。
-      # -ErrorAction Stop と Get-MpPreference 検証で silent degradation を
-      # 防ぎ、最終的な除外対象一覧はログにも出力する。
+      # Get-MpPreference -notcontains の照合を保存形式と完全一致させる。
+      # 各呼び出しを -ErrorAction Stop で明示失敗させ、最後に Get-MpPreference
+      # で登録を検証し、silent degradation を起こさないようにする。最終的に
+      # 適用された除外パス一覧はログにも出力し、今後 Windows lane のばらつき
+      # を調査するときにどのパスが対象になったかを追えるようにする。
       - name: Exclude workspace and temp paths from Windows Defender (Windows only)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -135,6 +178,15 @@ jobs:
         shell: pwsh
         run: Get-ChildItem publish -Filter *.pdb -Recurse | Remove-Item
 
+      - name: Add license and trademark notices to publish output (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: cp LICENSE COMMERCIAL_LICENSE.md TRADEMARKS.md publish/
+
+      - name: Add license and trademark notices to publish output (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Copy-Item LICENSE,COMMERCIAL_LICENSE.md,TRADEMARKS.md publish
+
       - name: Archive release artifacts (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
@@ -156,8 +208,10 @@ jobs:
           path: artifacts/**
 
   create-release:
+    if: github.repository == 'Widthdom/CodeIndex'
     runs-on: ubuntu-latest
     needs: release
+    environment: release-production
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -242,8 +296,8 @@ jobs:
           mkdir -p "$CDIDX_INSTALL_DIR"
           bash install.sh "${TAG_NAME}"
 
-          # All three runtime assets must land next to the binary.
-          for asset in cdidx libe_sqlite3.so version.json; do
+          # Runtime and license/policy assets must land next to the binary.
+          for asset in cdidx libe_sqlite3.so version.json LICENSE COMMERCIAL_LICENSE.md TRADEMARKS.md; do
             test -e "$CDIDX_INSTALL_DIR/$asset" \
               || { echo "Missing $asset in $CDIDX_INSTALL_DIR" >&2; ls -la "$CDIDX_INSTALL_DIR" >&2; exit 1; }
           done
@@ -275,8 +329,10 @@ jobs:
             || { echo "status --json still misclassified as a database error" >&2; cat /tmp/cdidx_json_stderr.txt >&2; exit 1; }
 
   publish-nuget:
+    if: github.repository == 'Widthdom/CodeIndex'
     runs-on: ubuntu-latest
     needs: release
+    environment: nuget-production
     steps:
       - name: Checkout
         uses: actions/checkout@v4

@@ -326,18 +326,25 @@ public partial class DbReader
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         var raw = new List<SearchResult>();
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
+        try
         {
-            raw.Add(new SearchResult
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
             {
-                Path = reader.GetString(0),
-                Lang = GetNullableString(reader, 1),
-                StartLine = reader.GetInt32(2),
-                EndLine = reader.GetInt32(3),
-                Content = reader.GetString(4),
-                Score = reader.GetDouble(5),
-            });
+                raw.Add(new SearchResult
+                {
+                    Path = reader.GetString(0),
+                    Lang = GetNullableString(reader, 1),
+                    StartLine = reader.GetInt32(2),
+                    EndLine = reader.GetInt32(3),
+                    Content = reader.GetString(4),
+                    Score = reader.GetDouble(5),
+                });
+            }
+        }
+        catch (SqliteException ex) when (rawQuery && IsFtsQuerySyntaxError(ex))
+        {
+            throw new FtsQuerySyntaxException(ex.Message, ex);
         }
         return deduplicate ? DeduplicateOverlappingResults(raw) : raw;
     }
@@ -393,38 +400,53 @@ public partial class DbReader
         var keptIntervals = new Dictionary<string, IntervalSet>(StringComparer.Ordinal);
         var count = 0;
         var fileCount = 0;
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
+        try
         {
-            var path = reader.GetString(0);
-            var startLine = reader.GetInt32(1);
-            var endLine = reader.GetInt32(2);
-            if (!deduplicate)
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
             {
-                count++;
-                if (!keptIntervals.ContainsKey(path))
+                var path = reader.GetString(0);
+                var startLine = reader.GetInt32(1);
+                var endLine = reader.GetInt32(2);
+                if (!deduplicate)
                 {
-                    keptIntervals[path] = new IntervalSet();
-                    fileCount++;
+                    count++;
+                    if (!keptIntervals.ContainsKey(path))
+                    {
+                        keptIntervals[path] = new IntervalSet();
+                        fileCount++;
+                    }
+                    continue;
                 }
-                continue;
+
+                if (!keptIntervals.TryGetValue(path, out var intervals))
+                {
+                    intervals = new IntervalSet();
+                    keptIntervals[path] = intervals;
+                }
+
+                if (!intervals.AddIfNoOverlap(startLine, endLine))
+                    continue;
+
+                count++;
+                if (intervals.Count == 1)
+                    fileCount++;
             }
-
-            if (!keptIntervals.TryGetValue(path, out var intervals))
-            {
-                intervals = new IntervalSet();
-                keptIntervals[path] = intervals;
-            }
-
-            if (!intervals.AddIfNoOverlap(startLine, endLine))
-                continue;
-
-            count++;
-            if (intervals.Count == 1)
-                fileCount++;
+        }
+        catch (SqliteException ex) when (rawQuery && IsFtsQuerySyntaxError(ex))
+        {
+            throw new FtsQuerySyntaxException(ex.Message, ex);
         }
 
         return new QueryCountResult(count, fileCount);
+    }
+
+    private static bool IsFtsQuerySyntaxError(SqliteException ex)
+    {
+        var message = ex.Message;
+        return message.Contains("fts5: syntax error", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("unterminated string", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("no such column", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

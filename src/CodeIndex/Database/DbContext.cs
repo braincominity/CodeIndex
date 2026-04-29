@@ -1,3 +1,4 @@
+using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Database;
@@ -22,6 +23,23 @@ public class DbContext : IDisposable
     public bool IsReadOnly => _isReadOnly;
 
     public static bool TryValidateExistingCodeIndexDb(string dbPath, out string message, out bool isNotFound)
+        => TryValidateExistingCodeIndexDb(dbPath, openTarget =>
+        {
+            var builder = new SqliteConnectionStringBuilder
+            {
+                DataSource = openTarget,
+                Mode = SqliteOpenMode.ReadWrite,
+            };
+            return new SqliteConnection(builder.ConnectionString);
+        }, static connection => connection.Open(), static milliseconds => System.Threading.Thread.Sleep(milliseconds), out message, out isNotFound);
+
+    internal static bool TryValidateExistingCodeIndexDb(
+        string dbPath,
+        Func<string, SqliteConnection> createConnection,
+        Action<SqliteConnection> openConnection,
+        Action<int>? sleep,
+        out string message,
+        out bool isNotFound)
     {
         message = string.Empty;
         isNotFound = false;
@@ -57,13 +75,10 @@ public class DbContext : IDisposable
 
         try
         {
-            var builder = new SqliteConnectionStringBuilder
-            {
-                DataSource = openTarget,
-                Mode = SqliteOpenMode.ReadWrite,
-            };
-            using var connection = new SqliteConnection(builder.ConnectionString);
-            connection.Open();
+            using var connection = OpenSqliteConnectionWithRetry(
+                () => createConnection(openTarget),
+                openConnection,
+                sleep);
 
             using var cmd = connection.CreateCommand();
             cmd.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table'";
@@ -112,6 +127,7 @@ public class DbContext : IDisposable
             {
                 _connection = new SqliteConnection($"Data Source={dbPath}");
                 _connection.Open();
+                RegisterConnectionFunctions(_connection);
                 _isReadOnly = true;
                 Execute("PRAGMA busy_timeout=5000");
                 return;
@@ -131,8 +147,11 @@ public class DbContext : IDisposable
 
         try
         {
-            _connection = new SqliteConnection(builder.ConnectionString);
-            _connection.Open();
+            _connection = OpenSqliteConnectionWithRetry(
+                () => new SqliteConnection(builder.ConnectionString),
+                static connection => connection.Open(),
+                static milliseconds => System.Threading.Thread.Sleep(milliseconds));
+            RegisterConnectionFunctions(_connection);
 
             // Enable WAL mode and verify it was applied / WALモードを有効にし適用を確認
             var journalMode = ExecuteScalar("PRAGMA journal_mode=WAL");
@@ -151,6 +170,7 @@ public class DbContext : IDisposable
             // immutable=1 を付けないと SQLite は -shm/-wal を触ろうとして CANTOPEN で落ちることがある。
             _connection?.Dispose();
             _connection = OpenReadOnly(dbPath);
+            RegisterConnectionFunctions(_connection);
             _isReadOnly = true;
         }
 
@@ -172,6 +192,39 @@ public class DbContext : IDisposable
     // read-only FS では -journal / -shm を作れず CANTOPEN(14) を返すことが多い。
     private static bool IsReadOnlyOpenError(SqliteException ex) =>
         ex.SqliteErrorCode is 8 or 14 or 10;
+
+    private static bool IsTransientBusyError(SqliteException ex) =>
+        ex.SqliteErrorCode is 5 or 6;
+
+    internal static SqliteConnection OpenSqliteConnectionWithRetry(
+        Func<SqliteConnection> createConnection,
+        Action<SqliteConnection> openConnection,
+        Action<int>? sleep = null,
+        int maxOpenAttempts = 5)
+    {
+        SqliteConnection? connection = null;
+        for (var attempt = 1; attempt <= maxOpenAttempts; attempt++)
+        {
+            connection?.Dispose();
+            connection = createConnection();
+            try
+            {
+                openConnection(connection);
+                return connection;
+            }
+            catch (SqliteException ex) when (IsTransientBusyError(ex) && attempt < maxOpenAttempts)
+            {
+                sleep?.Invoke(50 * attempt);
+            }
+            catch
+            {
+                connection.Dispose();
+                throw;
+            }
+        }
+
+        throw new InvalidOperationException("Failed to open SQLite connection.");
+    }
 
     // Detect whether a SQLite URI explicitly requests read-only semantics. Only URIs that
     // set `immutable=1` or `mode=ro` take the read-only escape hatch — plain `file:`
@@ -264,6 +317,103 @@ public class DbContext : IDisposable
         }
     }
 
+    internal static void RegisterConnectionFunctions(SqliteConnection connection)
+    {
+        static int? ToNullableInt(long? value)
+            => value is null || value < int.MinValue || value > int.MaxValue ? null : (int)value.Value;
+
+        connection.CreateFunction(
+            "sql_leaf_name",
+            (string? name) => string.IsNullOrWhiteSpace(name) ? null : SqlNameResolver.GetLeafName(name));
+        connection.CreateFunction(
+            "sql_leaf_name_folded",
+            (string? name) =>
+            {
+                if (string.IsNullOrWhiteSpace(name))
+                    return null;
+
+                var leafName = SqlNameResolver.GetLeafName(name);
+                return leafName.Length == 0 ? null : NameFold.Fold(leafName) ?? leafName;
+            });
+        connection.CreateFunction(
+            "sql_normalize_name",
+            (string? name) => string.IsNullOrWhiteSpace(name) ? null : SqlNameResolver.NormalizeQualifiedName(name));
+        connection.CreateFunction(
+            "sql_normalize_name_folded",
+            (string? name) =>
+            {
+                if (string.IsNullOrWhiteSpace(name))
+                    return null;
+
+                var normalizedName = SqlNameResolver.NormalizeQualifiedName(name);
+                return normalizedName.Length == 0 ? null : NameFold.Fold(normalizedName) ?? normalizedName;
+            });
+        connection.CreateFunction(
+            "sql_segment_count",
+            (string? name) => string.IsNullOrWhiteSpace(name) ? (int?)null : SqlNameResolver.GetSegmentCount(name));
+        connection.CreateFunction(
+            "sql_context_has_name",
+            (string? context, string? query) => SqlNameResolver.ContextContainsQualifiedName(context, query) ? 1 : 0);
+        connection.CreateFunction(
+            "sql_context_has_name_folded",
+            (string? context, string? query) => SqlNameResolver.ContextContainsQualifiedNameFolded(context, query) ? 1 : 0);
+        connection.CreateFunction(
+            "sql_context_has_name_at",
+            (string? context, string? query, long? columnNumber) =>
+                SqlNameResolver.ContextContainsQualifiedNameAtColumn(context, query, ToNullableInt(columnNumber)) ? 1 : 0);
+        connection.CreateFunction(
+            "sql_context_has_name_folded_at",
+            (string? context, string? query, long? columnNumber) =>
+                SqlNameResolver.ContextContainsQualifiedNameFoldedAtColumn(context, query, ToNullableInt(columnNumber)) ? 1 : 0);
+        connection.CreateFunction(
+            "sql_context_like_name_at",
+            (string? context, string? query, long? columnNumber) =>
+                SqlNameResolver.ContextContainsQualifiedNameLikeAtColumn(context, query, ToNullableInt(columnNumber)) ? 1 : 0);
+        connection.CreateFunction(
+            "sql_context_like_name_folded_at",
+            (string? context, string? query, long? columnNumber) =>
+                SqlNameResolver.ContextContainsQualifiedNameLikeFoldedAtColumn(context, query, ToNullableInt(columnNumber)) ? 1 : 0);
+        connection.CreateFunction(
+            "sql_resolve_reference_name",
+            (string? symbolName, string? context, string? containerName) =>
+            {
+                var resolved = SqlNameResolver.ResolveReferenceName(symbolName, context, containerName);
+                return resolved.Length == 0 ? null : resolved;
+            });
+        connection.CreateFunction(
+            "sql_resolve_reference_name_folded",
+            (string? symbolName, string? context, string? containerName) =>
+            {
+                var resolved = SqlNameResolver.ResolveReferenceNameFolded(symbolName, context, containerName);
+                return resolved.Length == 0 ? null : resolved;
+            });
+        connection.CreateFunction(
+            "sql_resolve_reference_name_at",
+            (string? symbolName, string? context, string? containerName, long? columnNumber) =>
+            {
+                var resolved = SqlNameResolver.ResolveReferenceNameAtColumn(symbolName, context, containerName, ToNullableInt(columnNumber));
+                return resolved.Length == 0 ? null : resolved;
+            });
+        connection.CreateFunction(
+            "sql_resolve_reference_name_folded_at",
+            (string? symbolName, string? context, string? containerName, long? columnNumber) =>
+            {
+                var resolved = SqlNameResolver.ResolveReferenceNameFoldedAtColumn(symbolName, context, containerName, ToNullableInt(columnNumber));
+                return resolved.Length == 0 ? null : resolved;
+            });
+        connection.CreateFunction(
+            "sql_resolve_reference_segment_count_at",
+            (string? symbolName, string? context, string? containerName, long? columnNumber) => (int?)(
+                SqlNameResolver.ResolveReferenceSegmentCountAtColumn(symbolName, context, containerName, ToNullableInt(columnNumber)) is var segmentCount
+                && segmentCount > 0
+                    ? segmentCount
+                    : null));
+        connection.CreateFunction(
+            "sql_allow_leaf_fallback_at",
+            (string? symbolName, string? context, string? containerName, long? columnNumber) =>
+                SqlNameResolver.AllowLeafFallbackAtColumn(symbolName, context, containerName, ToNullableInt(columnNumber)) ? 1 : 0);
+    }
+
     /// <summary>
     /// Initialize the database schema (tables, indexes, FTS).
     /// データベーススキーマ（テーブル、インデックス、FTS）を初期化する。
@@ -291,9 +441,105 @@ public class DbContext : IDisposable
     public const string HotspotFamilyMarkerFingerprintMetaKey = "hotspot_family_marker_fingerprint";
     public static string GetHotspotFamilyVersionMetaKey(string lang) => $"hotspot_family_version_{lang}";
     public static string GetHotspotFamilyMarkerFingerprintMetaKey(string lang) => $"hotspot_family_marker_fingerprint_{lang}";
-    public const int CSharpSymbolNameContractVersion = 1;
+    public const int CSharpSymbolNameContractVersion = 2;
     public const string CSharpSymbolNameContractVersionMetaKey = "csharp_symbol_name_contract_version";
+    public const int SqlGraphContractVersion = 1;
+    public const string SqlGraphContractVersionMetaKey = "sql_graph_contract_version";
     public const string IndexedProjectRootMetaKey = "indexed_project_root";
+    // Authoritative `symbols.is_metadata_target` flag readiness, per language. Stamped at the
+    // end of a successful index pass once the writer's metadata-target resolver has classified
+    // every class-like row for that language. Readers fall back to the legacy heuristic when
+    // the per-language stamp is absent or its version does not match. Issue #435.
+    // 言語別 metadata-target 列の正式 readiness。index 終端で resolver が当該言語の class-like
+    // 行を全部分類した後にだけ stamp する。stamp が無い・version 不一致の言語については
+    // reader が legacy ヒューリスティックにフォールバックする。Issue #435。
+    // Version 2 (#435 iter 5) made the writer-side resolver import-aware: unqualified base
+    // identifiers now resolve through the deriving file's `using Namespace;` / `using Alias =
+    // FQN;` directives (plus `global using` aggregated across the repo) before falling back
+    // to the BCL `Attribute`-suffix convention. Iter 4 DBs that only resolved through the
+    // deriving class's own scope chain would miss `using A; class FooAttribute : BaseAttr`
+    // where `A.BaseAttr : Attribute` is indexed in a sibling file. Bumping the contract
+    // forces those DBs to degrade to the legacy `signature LIKE '%: %'` reader path until a
+    // reindex republishes `is_metadata_target`.
+    // Version 3 (#435 iter 6) normalizes C# verbatim-identifier `@` prefixes on the writer
+    // side so `using @Foo.@Bar;`, `using @AliasAttr = @Foo.@BaseAttr;`, and `class Foo :
+    // @BaseAttr` resolve identically to their non-verbatim counterparts. Iter-5 DBs stored
+    // the raw `@Foo.@Bar` token in the import map and never matched the qualified index,
+    // leaving `VerbatimImportAttribute : BaseAttr` as `is_metadata_target=0` and dropping
+    // the attribute-consumer edge from `deps` / `impact`. Bumping the contract degrades
+    // iter-5 DBs to the legacy reader path until reindexed.
+    // Version 4 (#435 iter 7) widens the C# namespace / class / struct / interface / enum
+    // declaration regexes to accept verbatim identifiers (`public class @BaseAttr : Attribute`,
+    // `namespace @Foo.@Bar`) and canonicalizes the persisted symbol name so the qualified
+    // index keys off `BaseAttr` / `Foo.Bar` regardless of source syntax. Iter-6 DBs never
+    // indexed verbatim class declarations at all (the extractor regex rejected them), so
+    // every derived `class X : @BaseAttr` stayed `is_metadata_target=0` and dropped the
+    // attribute edge even with iter-6's base-name stripping in place. Iter 7 also teaches
+    // `StripCSharpVerbatimPrefixes` about the `::` boundary so `global::@Foo.@Bar.BaseAttr`
+    // canonicalizes all the way to `global::Foo.Bar.BaseAttr` instead of leaving the first
+    // `@` after `::` intact. Bumping the contract forces iter-6 DBs to degrade to the
+    // legacy reader path until a reindex republishes `is_metadata_target`.
+    // バージョン 2 (#435 iter 5)で resolver が import を考慮するようになった。非修飾な基底は
+    // deriving ファイルの `using Namespace;` / `using Alias = FQN;`（および全ファイル集約の
+    // `global using`）を通して解決してから BCL の `Attribute` サフィックス規約にフォールバック
+    // する。iter 4 の DB は `using A; class FooAttribute : BaseAttr` のような一般的な C# パターンで
+    // 正しく解決できないため、契約バージョンを上げて reader を legacy ヒューリスティックに縮退
+    // させ、再 index で republish されるまで metadata edge を誤って主張させない。
+    // バージョン 3 (#435 iter 6) で書き込み側が C# verbatim 識別子の `@` 先頭を正規化するよう
+    // になった。`using @Foo.@Bar;` / `using @AliasAttr = @Foo.@BaseAttr;` / `class Foo :
+    // @BaseAttr` が非 verbatim 形と同じキーで解決される。iter-5 DB は import map に生の
+    // `@Foo.@Bar` を残していたため qualified 索引に当たらず、`VerbatimImportAttribute :
+    // BaseAttr` が `is_metadata_target=0` となり attribute consumer 側の edge が落ちていた。
+    // 契約バージョンを上げて、再 index 前の iter-5 DB を reader の legacy パスに縮退させる。
+    // バージョン 4 (#435 iter 7) で C# の namespace / class / struct / interface / enum 宣言
+    // 正規表現が verbatim 識別子（`public class @BaseAttr : Attribute` / `namespace
+    // @Foo.@Bar`）を受理するようになり、永続化されるシンボル名も canonical 化される。qualified
+    // 索引は `BaseAttr` / `Foo.Bar` としてキー付けされ、ソース表記に依らない。iter-6 DB は
+    // verbatim class 宣言自体がインデックスされず（extractor の regex が弾いていた）、
+    // `class X : @BaseAttr` のような派生は iter 6 の base 側 `@` 剥がしでも resolve できず
+    // `is_metadata_target=0` のまま attribute edge が落ちていた。iter 7 では
+    // `StripCSharpVerbatimPrefixes` も `::` 境界を処理するよう拡張し、`global::@Foo.@Bar.BaseAttr`
+    // を `global::Foo.Bar.BaseAttr` まで完全に canonical 化する（iter 6 は `::` 直後の `@` を
+    // 残していた）。契約バージョンを上げて iter-6 DB を reader の legacy パスに縮退させ、
+    // 再 index で republish されるまで metadata edge を黙って誤るのを防ぐ。
+    // Version 5 (#435 iter 8) teaches the resolver to expand alias-qualified bases
+    // such as `using Alias = A; class FooAttribute : Alias.MetaBase` into
+    // `A.MetaBase` before the qualified index lookup. Iter-5 only handled
+    // alias-unqualified bases (`class Foo : Alias` where the whole base name is the
+    // alias), and the qualified branch fell straight through to the BCL
+    // `Attribute`-suffix heuristic — which misses any `MetaBase` real attribute in
+    // the alias target namespace unless the derived class happens to be named
+    // `...Attribute`. Iter-7 DBs that indexed without this expansion therefore
+    // dropped every `[FooAttribute]` edge whose declaration used an alias-qualified
+    // base, so the contract is bumped to force a re-index.
+    // バージョン 5 (#435 iter 8) で resolver が alias 修飾された基底を展開するようになった。
+    // `using Alias = A; class FooAttribute : Alias.MetaBase` の場合、qualified 索引を
+    // `A.MetaBase` で引けるようになり、従来は alias 展開が無いまま BCL の `Attribute`
+    // サフィックス規約までフォールバックしていたため、alias target 名前空間に居る本物の
+    // `MetaBase : Attribute` が同 repo にあっても、派生クラス名が `...Attribute` で終わる
+    // 偶然でしか metadata edge を張れなかった。iter-7 DB はこの展開なしで index された
+    // ため alias-qualified 基底の edge が黙って落ちていた。契約バージョンを上げて再 index
+    // を強制する。
+    // Version 6 (#435 iter 9) extends alias-qualified expansion to the `::`
+    // separator. C# accepts both `Alias.X` (member access) and `Alias::X`
+    // (qualified-alias-member, §7.8) for using aliases that name a namespace,
+    // and production code uses the `::` form to disambiguate namespaces from
+    // type names. Iter-8 only split on `.` in the expansion helper, so
+    // `class FooAttribute : Alias::MetaBase` still fell through to the BCL
+    // suffix heuristic and dropped the `[FooAttribute]` edge. Iter-8 DBs that
+    // indexed without this expansion must degrade to the legacy reader path
+    // until a reindex republishes `is_metadata_target` with `::`-aware
+    // resolution.
+    // バージョン 6 (#435 iter 9) で alias 修飾展開が `::` 区切りにも対応した。C# では
+    // using alias が名前空間を指す場合、`Alias.X`（メンバ アクセス）と `Alias::X`
+    // （qualified-alias-member、§7.8）のどちらも許容され、現場コードは名前空間と型
+    // 名を衝突させないために `::` を使うことがある。iter-8 の展開 helper は `.` のみで
+    // 区切っていたため `class FooAttribute : Alias::MetaBase` は BCL サフィックス規約
+    // まで抜け落ち、`[FooAttribute]` の edge が落ちていた。iter-8 DB はこの展開なしで
+    // index されたため、再 index で `::` 対応の resolver が `is_metadata_target` を
+    // republish するまで reader を legacy 経路へ縮退させる。
+    public const int MetadataTargetVersion = 6;
+    public static string GetMetadataTargetVersionMetaKey(string lang) => $"metadata_target_version_{lang}";
 
     public int GetUserVersion()
     {
@@ -380,7 +626,8 @@ public class DbContext : IDisposable
                 container_qualified_name TEXT,
                 family_key      TEXT,
                 visibility      TEXT,
-                return_type     TEXT
+                return_type     TEXT,
+                is_metadata_target INTEGER
             )");
 
         // Indexed references table / 参照インデックステーブル
@@ -432,6 +679,7 @@ public class DbContext : IDisposable
         EnsureColumn("symbols", "family_key", "TEXT");
         EnsureColumn("symbols", "visibility", "TEXT");
         EnsureColumn("symbols", "return_type", "TEXT");
+        EnsureColumn("symbols", "is_metadata_target", "INTEGER");
         // #86: Unicode-aware folded name columns for `--exact` name matching across all
         // `--exact` command variants. Populated by the writer via NameFold.Fold; NULL on
         // legacy rows until a full reindex, in which case the reader falls back to the
@@ -584,6 +832,7 @@ public class DbContext : IDisposable
             EnsureColumn("symbols", "family_key", "TEXT");
             EnsureColumn("symbols", "visibility", "TEXT");
             EnsureColumn("symbols", "return_type", "TEXT");
+            EnsureColumn("symbols", "is_metadata_target", "INTEGER");
             Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_nocase ON symbols(name COLLATE NOCASE)");
             // #86: fold columns must be ensured BEFORE the folded indexes so CREATE INDEX does
             // not fail on legacy DBs where the column did not exist yet.

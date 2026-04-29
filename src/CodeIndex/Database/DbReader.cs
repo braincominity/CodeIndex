@@ -15,6 +15,11 @@ public readonly record struct HotspotFamilySignal(
     bool Relevant,
     string? DegradedReason);
 
+public readonly record struct SqlGraphContractSignal(
+    bool Ready,
+    bool Relevant,
+    string? DegradedReason);
+
 /// <summary>
 /// Handles read/query operations against the database for search, symbols, and files.
 /// 検索・シンボル・ファイル一覧などのDB読み取り操作を担当する。
@@ -22,6 +27,9 @@ public readonly record struct HotspotFamilySignal(
 public partial class DbReader
 {
     private static readonly Regex ImpactSignatureIdentifierRegex = new(@"[\p{L}_][\p{L}\p{Nd}_]*", RegexOptions.Compiled);
+    private static readonly Regex CSharpUsingStaticImportRegex = new(@"^\s*(?:global\s+)?using\s+static\s+(?<target>[^;]+)", RegexOptions.Compiled);
+    private static readonly Regex CSharpUsingAliasImportRegex = new(@"^\s*(?:global\s+)?using\s+(?!static\b)(?<alias>[^\s=;]+)\s*=\s*(?<target>[^;]+)", RegexOptions.Compiled);
+    private static readonly Regex CSharpUsingNamespaceImportRegex = new(@"^\s*(?:global\s+)?using\s+(?!static\b)(?<target>[^;=]+)", RegexOptions.Compiled);
     private readonly SqliteConnection _conn;
     private readonly bool _isReadOnly;
     private readonly HashSet<string> _fileColumns;
@@ -29,6 +37,19 @@ public partial class DbReader
     private readonly HashSet<string> _symbolIndexes;
     private readonly HashSet<string> _referenceIndexes;
     private readonly HashSet<string> _indexedHotspotFamilyLanguages;
+    private readonly Dictionary<string, List<CSharpUsingStaticScope>> _csharpUsingStaticScopesByPath = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<CSharpNamespaceScope>> _csharpNamespaceScopesByPath = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<CSharpContainingTypeScope>> _csharpContainingTypeScopesByPath = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<CSharpUsingNamespaceScope>> _csharpUsingNamespaceScopesByPath = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<CSharpUsingAliasScope>> _csharpUsingAliasScopesByPath = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, HashSet<string>> _csharpConstantPatternContainersByMemberName = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, List<CSharpTypeNamespaceCandidate>> _csharpTypeNamespacesByName = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, List<CSharpContainingTypeCandidate>> _csharpTypeContainingTypesByName = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, HashSet<string>> _csharpInheritedContainingTypesByQualifiedName = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, CSharpContainingTypeScope?> _csharpContainingTypeScopeByQualifiedName = new(StringComparer.Ordinal);
+    private HashSet<string>? _csharpGlobalUsingStaticTargets;
+    private HashSet<string>? _csharpGlobalUsingNamespaces;
+    private Dictionary<string, CSharpUsingAliasScope>? _csharpGlobalUsingAliasesByName;
     internal readonly bool _hasReferencesTable;
     internal readonly bool _hasIssuesTable;
     internal readonly bool _hasChunksTable;
@@ -38,6 +59,16 @@ public partial class DbReader
     // #86: name_folded 列が全行埋まっているか（fold 経路を使えるか）。
     internal readonly bool _foldReady;
     internal readonly bool _csharpSymbolNameContractCurrent;
+    // #435: True when `symbols.is_metadata_target` has been populated for every C# class-like
+    // row by the writer's resolver and the stamp in `codeindex_meta` matches the current
+    // version. Readers that enforce metadata-target eligibility prefer this column over the
+    // legacy `signature LIKE '%: %'` heuristic when the flag is true; otherwise they continue
+    // to fall back to the heuristic so legacy / partial DBs do not silently miss edges.
+    // #435: C# の authoritative `is_metadata_target` が全行 populate されて stamp 一致したときのみ
+    // true。true なら reader は legacy ヒューリスティックではなく列を使う。false の DB では
+    // 従来どおり `signature LIKE '%: %'` にフォールバックする。
+    internal readonly bool _csharpMetadataTargetReady;
+    internal readonly bool _sqlGraphContractCurrent;
     // Tracks which languages have authoritative cross-file hotspot family semantics.
     // Mixed legacy/update states can therefore degrade only the affected language instead of
     // globally disabling families for unrelated marker types.
@@ -69,6 +100,8 @@ public partial class DbReader
     // call-graph (callers/callees/hotspots) に参加する reference kind。`attribute` / `annotation`
     // のようなメタデータ kind は非呼び出しエッジなのでここから除外する (issue #293)。
     internal const string CallGraphReferenceKindsSql = "('call', 'instantiate', 'subscribe')";
+    private const string SyntheticTopLevelCallerName = "<top-level>";
+    private const string SyntheticTopLevelCallerKind = "function";
 
     // Reference kinds that represent compile-time type/member references (e.g. C# `nameof(X)`,
     // `typeof(T)`, Java `T.class`). They are intentionally excluded from default `callers` /
@@ -79,6 +112,16 @@ public partial class DbReader
     // references や `--kind type_reference` 経由では引き続き参照できる。issue #253 参照。
     private const string NonInvocationReferenceKindsExclusion =
         " AND r.reference_kind != 'type_reference'";
+    private const int CSharpUsingStaticReferenceFilterChunkSize = 64;
+    private const int CSharpUsingStaticReferenceFilterMaxRawLimit = 65536;
+    private sealed record CSharpNamespaceScope(string QualifiedName, int ScopeStartLine, int ScopeEndLine);
+    private sealed record CSharpContainingTypeScope(string Path, string Kind, string QualifiedName, string? Visibility, string? Signature, int DeclarationLine, int ScopeStartLine, int ScopeEndLine);
+    private sealed record CSharpUsingStaticScope(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
+    private sealed record CSharpUsingNamespaceScope(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
+    private sealed record CSharpUsingAliasScope(string AliasName, string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine, bool TargetsType);
+    private sealed record CSharpTypeNamespaceCandidate(string QualifiedName, string Path, bool IsFileLocal);
+    private sealed record CSharpContainingTypeCandidate(string QualifiedName, bool AccessibleFromDerivedType);
+    private sealed record SearchReferenceRawRow(string Path, string? Lang, string SymbolName, string ReferenceKind, int Line, int Column, string Context, string? ContainerKind, string? ContainerName);
 
     /// <summary>
     /// Visibility ranking: public symbols first, then protected, internal, private, unknown last.
@@ -134,12 +177,51 @@ public partial class DbReader
     private static string GetPreferredReferenceKindSql(string referenceKindSql)
         => $"CASE WHEN SUM(CASE WHEN {referenceKindSql} = 'instantiate' THEN 1 ELSE 0 END) > 0 THEN 'instantiate' ELSE MIN({referenceKindSql}) END";
 
+    private static string GetGroupedCallerReferenceKindSql(string referenceKindSql)
+        => $"CASE WHEN SUM(CASE WHEN {referenceKindSql} = 'instantiate' THEN 1 ELSE 0 END) > 0 THEN 'instantiate' " +
+           $"WHEN SUM(CASE WHEN {referenceKindSql} = 'subscribe' THEN 1 ELSE 0 END) > 0 THEN 'subscribe' " +
+           $"ELSE MIN({referenceKindSql}) END";
+
     private static string GetPathBucketOrderSql(string pathSql)
         => PathBucketOrder.Replace("f.path", pathSql, StringComparison.Ordinal);
+
+    // Parse a GROUP_CONCAT(DISTINCT reference_kind) string into a sorted, deduplicated
+    // list. Falls back to the primary/summary kind if the aggregate column is null or
+    // empty so downstream consumers always see at least one entry (issue #501).
+    // GROUP_CONCAT(DISTINCT reference_kind) を安定ソート済みの重複排除済みリストに
+    // パースする。aggregate 列が null / 空の場合は代表 kind をフォールバックとして
+    // 返し、消費側が常に 1 要素以上を得られるようにする (issue #501)。
+    private static IReadOnlyList<string> ParseDistinctReferenceKinds(string? aggregate, string primaryKind)
+    {
+        if (string.IsNullOrEmpty(aggregate))
+            return string.IsNullOrEmpty(primaryKind) ? Array.Empty<string>() : new[] { primaryKind };
+        // Fast path: a single-kind row (the overwhelming common case) has no
+        // comma in the aggregate, so skip the SortedSet / split allocation.
+        // Fast path: 単一 kind の行（大多数）では aggregate にカンマが無いため、
+        // SortedSet / split のアロケーションを省略する。
+        if (aggregate.IndexOf(',') < 0)
+        {
+            var only = aggregate.Trim();
+            if (only.Length > 0)
+                return new[] { only };
+            return string.IsNullOrEmpty(primaryKind) ? Array.Empty<string>() : new[] { primaryKind };
+        }
+        var set = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var raw in aggregate.Split(','))
+        {
+            var trimmed = raw.Trim();
+            if (trimmed.Length > 0)
+                set.Add(trimmed);
+        }
+        if (set.Count == 0)
+            return string.IsNullOrEmpty(primaryKind) ? Array.Empty<string>() : new[] { primaryKind };
+        return set.ToArray();
+    }
 
     public DbReader(SqliteConnection connection, bool isReadOnly = false)
     {
         _conn = connection;
+        DbContext.RegisterConnectionFunctions(_conn);
         _isReadOnly = isReadOnly;
         _fileColumns = LoadColumns("files");
         _symbolColumns = LoadColumns("symbols");
@@ -172,6 +254,15 @@ public partial class DbReader
         _csharpSymbolNameContractCurrent = string.Equals(
             TryGetMetaString(_conn, DbContext.CSharpSymbolNameContractVersionMetaKey),
             DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            StringComparison.Ordinal);
+        _csharpMetadataTargetReady = _symbolColumns.Contains("is_metadata_target")
+            && string.Equals(
+                TryGetMetaString(_conn, DbContext.GetMetadataTargetVersionMetaKey("csharp")),
+                DbContext.MetadataTargetVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                StringComparison.Ordinal);
+        _sqlGraphContractCurrent = string.Equals(
+            TryGetMetaString(_conn, DbContext.SqlGraphContractVersionMetaKey),
+            DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
             StringComparison.Ordinal);
         _hotspotFamilyReadyLanguages = LoadHotspotFamilyReadyLanguages(connection);
         // NOTE: row presence is intentionally NOT used as a fallback. A legacy DB or an
@@ -246,6 +337,22 @@ public partial class DbReader
         return TryGetMetaString(conn, "fold_key_fingerprint");
     }
 
+    private string? ResolveFoldReadyReason()
+    {
+        if (_foldReady)
+            return null;
+
+        var storedVersion = ParseFoldVersion(_conn);
+        var storedFingerprint = ParseFoldFingerprint(_conn);
+        if (storedVersion < 0 || string.IsNullOrWhiteSpace(storedFingerprint))
+            return "missing_fold_backfill";
+        if (storedVersion != NameFold.Version)
+            return "stale_fold_key_version";
+        if (!string.Equals(storedFingerprint, NameFold.Fingerprint(), StringComparison.Ordinal))
+            return "stale_fold_key_fingerprint";
+        return "fold_rows_not_restamped";
+    }
+
     private HashSet<string> LoadIndexedHotspotFamilyLanguages()
     {
         var langs = new HashSet<string>(StringComparer.Ordinal);
@@ -314,6 +421,19 @@ public partial class DbReader
         _hasReferencesTable
             ? "(SELECT COUNT(*) FROM symbol_references WHERE file_id = f.id)"
             : "0";
+
+    // C# top-level statements emit reference rows without a container symbol.
+    // Graph readers should surface those rows as a synthetic `<top-level>` caller.
+    // C# の top-level statements は container symbol なしの参照行を出すため、
+    // graph reader では合成 `<top-level>` caller として扱う。
+    private static string BuildCallerContainerPredicate(string fileAlias, string referenceAlias) =>
+        $"({referenceAlias}.container_name IS NOT NULL OR ({fileAlias}.lang = 'csharp' AND {referenceAlias}.container_name IS NULL))";
+
+    private static string BuildCallerKindProjectionSql(string referenceAlias) =>
+        $"CASE WHEN {referenceAlias}.container_name IS NULL THEN '{SyntheticTopLevelCallerKind}' ELSE {referenceAlias}.container_kind END";
+
+    private static string BuildCallerNameProjectionSql(string referenceAlias) =>
+        $"CASE WHEN {referenceAlias}.container_name IS NULL THEN '{SyntheticTopLevelCallerName}' ELSE {referenceAlias}.container_name END";
 
     private bool HasTable(string tableName)
     {
@@ -386,7 +506,24 @@ public partial class DbReader
             ExactIndexAvailable: false,
             HasMissingIndex: false,
             HasMissingTable: false,
-            DegradedReason: "csharp_symbol_name_ready=false (canonical C# operator / conversion operator / indexer names are stale in this DB)");
+            DegradedReason: "csharp_symbol_name_ready=false (canonical C# operator / conversion operator / indexer / verbatim identifier names are stale in this DB)");
+    }
+
+    private ExactQuerySignal? GetSqlGraphContractExactQuerySignal(
+        string? lang = null,
+        IReadOnlyList<string>? pathPatterns = null,
+        IReadOnlyList<string>? excludePathPatterns = null,
+        bool excludeTests = false)
+    {
+        var signal = GetSqlGraphContractSignal(lang, pathPatterns, excludePathPatterns, excludeTests);
+        if (!signal.Relevant || signal.Ready)
+            return null;
+
+        return new(
+            ExactIndexAvailable: false,
+            HasMissingIndex: false,
+            HasMissingTable: false,
+            DegradedReason: signal.DegradedReason);
     }
 
     private bool ScopeMayIncludeCSharpFiles(
@@ -411,6 +548,43 @@ public partial class DbReader
             cmd.Parameters.AddWithValue("@since", since.Value);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         return cmd.ExecuteScalar() != null;
+    }
+
+    private bool ScopeMayIncludeSqlFiles(
+        string? lang,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests)
+    {
+        if (lang != null && !string.Equals(lang, "sql", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        using var cmd = _conn.CreateCommand();
+        var sql = "SELECT 1 FROM files f WHERE f.lang = 'sql'";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += " LIMIT 1";
+
+        cmd.CommandText = sql;
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        return cmd.ExecuteScalar() != null;
+    }
+
+    internal SqlGraphContractSignal GetSqlGraphContractSignal(
+        string? lang = null,
+        IReadOnlyList<string>? pathPatterns = null,
+        IReadOnlyList<string>? excludePathPatterns = null,
+        bool excludeTests = false)
+    {
+        if (!ScopeMayIncludeSqlFiles(lang, pathPatterns, excludePathPatterns, excludeTests))
+            return new SqlGraphContractSignal(Ready: true, Relevant: false, DegradedReason: null);
+
+        if (_sqlGraphContractCurrent)
+            return new SqlGraphContractSignal(Ready: true, Relevant: true, DegradedReason: null);
+
+        return new SqlGraphContractSignal(
+            Ready: false,
+            Relevant: true,
+            DegradedReason: "sql_graph_contract_ready=false (SQL graph rows may still use a stale call-column / qualified-name contract; rerun `cdidx index <projectPath>` before trusting SQL graph/dependency results)");
     }
 
     private static ExactQuerySignal CombineExactSignals(params ExactQuerySignal?[] signals)
@@ -458,34 +632,41 @@ public partial class DbReader
         string? lang = null,
         IReadOnlyList<string>? pathPatterns = null,
         IReadOnlyList<string>? excludePathPatterns = null,
-        bool excludeTests = false)
+        bool excludeTests = false,
+        bool includeSqlGraphContractSignal = true)
         => CombineExactSignals(
             BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
                 _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase"),
-            GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
+            GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
+            includeSqlGraphContractSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null);
 
     public ExactQuerySignal GetCallersExactQuerySignal(
         string? lang = null,
         IReadOnlyList<string>? pathPatterns = null,
         IReadOnlyList<string>? excludePathPatterns = null,
-        bool excludeTests = false)
+        bool excludeTests = false,
+        bool includeSqlGraphContractSignal = true)
         => CombineExactSignals(
             BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
                 _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase"),
-            GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
+            GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
+            includeSqlGraphContractSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null);
 
     public ExactQuerySignal GetCalleesExactQuerySignal(
         string? lang = null,
         IReadOnlyList<string>? pathPatterns = null,
         IReadOnlyList<string>? excludePathPatterns = null,
-        bool excludeTests = false)
+        bool excludeTests = false,
+        bool includeSqlGraphContractSignal = true)
         => CombineExactSignals(
             BuildExactGraphSignal(ContainerNameExactGraphIndexAvailable,
                 _foldReady ? "idx_symbol_refs_container_name_folded" : "idx_symbol_refs_container_nocase"),
-            GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
+            GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
+            includeSqlGraphContractSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null);
 
     public ExactQuerySignal GetAnalyzeSymbolExactQuerySignal(
         bool includeGraphSignal = true,
+        bool includeSqlGraphContractSignal = true,
         string? lang = null,
         IReadOnlyList<string>? pathPatterns = null,
         IReadOnlyList<string>? excludePathPatterns = null,
@@ -493,7 +674,8 @@ public partial class DbReader
     {
         return CombineExactSignals(
             GetDefinitionExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
-            includeGraphSignal ? BuildAnalyzeGraphExactQuerySignal() : null);
+            includeGraphSignal ? BuildAnalyzeGraphExactQuerySignal() : null,
+            includeGraphSignal && includeSqlGraphContractSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null);
     }
 
     internal bool HasGraphApplicableFiles(string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false)
@@ -539,6 +721,15 @@ public partial class DbReader
         return input.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
     }
 
+    internal static bool IsSqlLanguage(string? lang)
+        => string.Equals(lang, "sql", StringComparison.OrdinalIgnoreCase);
+
+    internal static bool ContainsSqlLanguage(IEnumerable<string?> langs)
+        => langs.Any(IsSqlLanguage);
+
+    private static bool AllowSqlLeafFallbackForQuery(string query)
+        => !SqlNameResolver.HasQualifier(query);
+
     private static string BuildGraphSupportedLanguagePredicate(SqliteCommand cmd, string fileAlias, string parameterPrefix)
     {
         var supportedLanguages = ReferenceExtractor.GetSupportedLanguages()
@@ -562,8 +753,41 @@ public partial class DbReader
     {
         using var reader = cmd.ExecuteTrackedReader();
         return reader.TrackedRead()
-            ? new QueryCountResult(reader.GetInt32(0), reader.GetInt32(1))
+            ? new QueryCountResult(
+                reader.GetInt32(0),
+                reader.GetInt32(1),
+                reader.FieldCount > 2 && !reader.IsDBNull(2) && Convert.ToInt32(reader.GetValue(2)) != 0)
             : new QueryCountResult(0, 0);
+    }
+
+    internal bool AnyFilePathHasLanguage(IEnumerable<string> paths, string lang)
+    {
+        var distinctPaths = paths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Distinct(StringComparer.Ordinal)
+            .Take(256)
+            .ToList();
+        if (distinctPaths.Count == 0)
+            return false;
+
+        using var cmd = _conn.CreateCommand();
+        var placeholders = new List<string>(distinctPaths.Count);
+        for (int i = 0; i < distinctPaths.Count; i++)
+        {
+            var parameterName = $"@sqlPath{i}";
+            placeholders.Add(parameterName);
+            cmd.Parameters.AddWithValue(parameterName, distinctPaths[i]);
+        }
+
+        cmd.CommandText = $"""
+            SELECT 1
+            FROM files
+            WHERE lang = @sqlPathLang
+              AND path IN ({string.Join(", ", placeholders)})
+            LIMIT 1
+            """;
+        cmd.Parameters.AddWithValue("@sqlPathLang", lang);
+        return cmd.ExecuteScalar() != null;
     }
 
     /// <summary>
@@ -661,9 +885,73 @@ public partial class DbReader
     /// </summary>
     public List<ReferenceResult> SearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth)
     {
-        if (!_hasReferencesTable) return new List<ReferenceResult>();
         maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidth);
-        using var cmd = _conn.CreateCommand();
+        query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
+        if (!_hasReferencesTable)
+            return new List<ReferenceResult>();
+
+        if (!ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind, exact))
+            return SearchReferencesCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, 0, maxLineWidth);
+
+        var rawLimit = Math.Max(limit, CSharpUsingStaticReferenceFilterChunkSize);
+        var rawOffset = 0;
+        var filtered = new List<ReferenceResult>();
+        while (filtered.Count < limit)
+        {
+            var rawResults = SearchReferencesCore(query, rawLimit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, rawOffset, maxLineWidth);
+            if (rawResults.Count == 0)
+                break;
+
+            foreach (var result in rawResults)
+            {
+                if (ShouldSuppressCSharpUsingStaticConstantPatternReference(result))
+                    continue;
+
+                filtered.Add(result);
+                if (filtered.Count >= limit)
+                    break;
+            }
+
+            if (rawResults.Count < rawLimit)
+                break;
+
+            rawOffset += rawResults.Count;
+            rawLimit = Math.Min(rawLimit * 2, CSharpUsingStaticReferenceFilterMaxRawLimit);
+        }
+
+        return filtered.Count <= limit ? filtered : filtered.Take(limit).ToList();
+    }
+
+    private List<ReferenceResult> SearchReferencesCore(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int offset, int maxLineWidth)
+    {
+        using var cmd = CreateSearchReferencesCommand(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, offset);
+        var results = new List<ReferenceResult>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var row = ReadSearchReferenceRawRow(reader);
+            var clampedContext = LineWidthFormatter.ClampLine(row.Context, maxLineWidth, row.Column, query?.Length ?? 1);
+            results.Add(new ReferenceResult
+            {
+                Path = row.Path,
+                Lang = row.Lang,
+                SymbolName = row.SymbolName,
+                ReferenceKind = row.ReferenceKind,
+                Line = row.Line,
+                Column = row.Column,
+                RawContext = row.Context,
+                Context = clampedContext.Text,
+                ContextTruncated = clampedContext.Truncated,
+                ContainerKind = row.ContainerKind,
+                ContainerName = row.ContainerName,
+            });
+        }
+        return results;
+    }
+
+    private SqliteCommand CreateSearchReferencesCommand(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int offset = 0)
+    {
+        var cmd = _conn.CreateCommand();
         var sql = referenceKind == null
             ? $@"
             WITH logical_references AS (
@@ -688,18 +976,14 @@ public partial class DbReader
             sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
         var referencesSuffixAlias = ComputeCSharpAttributeSuffixAlias(query, lang, referenceKind);
-        // When the alias fires without an explicit `lang` / `--kind` scope we still need
-        // to keep it from bleeding into non-C# rows or non-attribute rows. The SQL guard
-        // clamps the alias disjunct to `f.lang = 'csharp' AND r.reference_kind = 'attribute'`
-        // so unscoped `references FooAttribute` only picks up real C# attribute sites.
-        // alias が `--lang` / `--kind` スコープなしで発火するときも、C# 以外の行や
-        // attribute 以外の行を拾わないように、SQL 側で `f.lang = 'csharp' AND
-        // r.reference_kind = 'attribute'` に限定する。
         var referencesAliasScope = referencesSuffixAlias != null
             ? " AND f.lang = 'csharp' AND r.reference_kind = 'attribute'"
             : string.Empty;
+        const string sqlLeafReferenceScope = " AND f.lang = 'sql'";
         if (query != null)
         {
+            var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
+            var useSqlQualifiedContextMatch = SqlNameResolver.HasQualifier(query);
             // --exact: Unicode-aware equality when FoldReady (#86), else ASCII COLLATE NOCASE.
             // Fold path: r.symbol_name_folded = @qFolded (indexed), query pre-folded in .NET.
             // Fallback: r.symbol_name = @q COLLATE NOCASE (indexed by idx_symbol_refs_name_nocase).
@@ -714,18 +998,38 @@ public partial class DbReader
             // 部分一致モードでは `%FooAttribute%` をそのまま使い、別名側は exact 照合だけを OR
             // することで `FooAuditLog` など無関係な名前を巻き込まないようにする。
             // 別名節は C# の attribute 行に限定し、誤一致を避ける。
-            if (exact && _foldReady)
+            if (useSqlQualifiedContextMatch && exact && _foldReady)
                 sql += referencesSuffixAlias != null
-                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{referencesAliasScope}))"
-                    : " AND r.symbol_name_folded = @query";
+                    ? $" AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{referencesAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query))";
+            else if (useSqlQualifiedContextMatch && exact)
+                sql += referencesSuffixAlias != null
+                    ? $" AND (((f.lang = 'sql') AND sql_context_has_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_has_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE))";
+            else if (useSqlQualifiedContextMatch && _foldReady)
+                sql += referencesSuffixAlias != null
+                    ? $" AND (((f.lang = 'sql') AND sql_context_like_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_like_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+            else if (useSqlQualifiedContextMatch)
+                sql += referencesSuffixAlias != null
+                    ? $" AND (((f.lang = 'sql') AND sql_context_like_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_like_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+            else if (exact && _foldReady)
+                sql += referencesSuffixAlias != null
+                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{referencesAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafReferenceScope})" : string.Empty)})"
+                    : allowSqlLeafFallback
+                        ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafReferenceScope}))"
+                        : " AND r.symbol_name_folded = @query";
             else if (exact)
                 sql += referencesSuffixAlias != null
-                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}))"
-                    : " AND r.symbol_name = @query COLLATE NOCASE";
+                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafReferenceScope})" : string.Empty)})"
+                    : allowSqlLeafFallback
+                        ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafReferenceScope}))"
+                        : " AND r.symbol_name = @query COLLATE NOCASE";
             else
                 sql += referencesSuffixAlias != null
-                    ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}))"
-                    : " AND r.symbol_name LIKE @query ESCAPE '\\'";
+                    ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{referencesAliasScope}) OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafReferenceScope}))"
+                    : $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafReferenceScope}))";
         }
         if (referenceKind != null)
             sql += " AND r.reference_kind = @referenceKind";
@@ -741,7 +1045,7 @@ public partial class DbReader
                    context, container_kind, container_name
             FROM logical_references r";
         }
-        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {(referenceKind == null ? GetPathBucketOrderSql("r.path") : PathBucketOrder)}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, CASE WHEN lower(r.symbol_name) LIKE lower(@rankingQueryPrefix) ESCAPE '\\' THEN 0 ELSE 1 END, {(referenceKind == null ? "r.path" : "f.path")}, r.line LIMIT @limit";
+        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {(referenceKind == null ? GetPathBucketOrderSql("r.path") : PathBucketOrder)}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, CASE WHEN lower(r.symbol_name) LIKE lower(@rankingQueryPrefix) ESCAPE '\\' THEN 0 ELSE 1 END, {(referenceKind == null ? "r.path" : "f.path")}, r.line, r.column_number, r.reference_kind, r.symbol_name LIMIT @limit OFFSET @offset";
 
         cmd.CommandText = sql;
         if (query != null)
@@ -754,15 +1058,10 @@ public partial class DbReader
             else
                 queryParam = query;
             cmd.Parameters.AddWithValue("@query", queryParam);
+            cmd.Parameters.AddWithValue("@aliasQuery", query);
+            cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
             if (referencesSuffixAlias != null)
             {
-                // Exact-match alias value is used both in --exact paths (folded / NOCASE)
-                // and in the substring path (COLLATE NOCASE exact OR to bypass LIKE noise).
-                // In the folded --exact branch the alias is pre-folded; the substring branch
-                // uses the raw stripped form because the OR clause is a literal `=` comparison.
-                // exact 用の別名値は --exact 経路（folded / NOCASE）と部分一致経路（LIKE ノイズを
-                // 避けるための COLLATE NOCASE の等値 OR）の両方で使う。folded 経路だけは事前に
-                // 折りたたみ、部分一致経路は生の stripped 形をそのまま使う。
                 var aliasParam = exact && _foldReady
                     ? NameFold.Fold(referencesSuffixAlias) ?? referencesSuffixAlias
                     : referencesSuffixAlias;
@@ -784,33 +1083,1859 @@ public partial class DbReader
             cmd.Parameters.AddWithValue("@lang", lang);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         cmd.Parameters.AddWithValue("@limit", limit);
+        cmd.Parameters.AddWithValue("@offset", offset);
+        return cmd;
+    }
 
-        var results = new List<ReferenceResult>();
+    private static SearchReferenceRawRow ReadSearchReferenceRawRow(SqliteDataReader reader)
+    {
+        return new SearchReferenceRawRow(
+            reader.GetString(0),
+            GetNullableString(reader, 1),
+            reader.GetString(2),
+            reader.GetString(3),
+            reader.GetInt32(4),
+            reader.GetInt32(5),
+            reader.GetString(6),
+            GetNullableString(reader, 7),
+            GetNullableString(reader, 8));
+    }
+
+    private static bool ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(string? lang, string? referenceKind, bool exact) =>
+        exact
+        &&
+        (lang == null || string.Equals(lang, "csharp", StringComparison.Ordinal))
+        && (referenceKind == null
+            || string.Equals(referenceKind, "type_reference", StringComparison.Ordinal)
+            || string.Equals(referenceKind, "call", StringComparison.Ordinal));
+
+    private bool ShouldSuppressCSharpUsingStaticConstantPatternReference(ReferenceResult result)
+    {
+        var contextForFilter = string.IsNullOrWhiteSpace(result.RawContext)
+            ? result.Context
+            : result.RawContext;
+        return ShouldSuppressCSharpUsingStaticConstantPatternReference(
+            result.Path,
+            result.Lang,
+            result.SymbolName,
+            result.ReferenceKind,
+            result.Line,
+            result.Column,
+            contextForFilter);
+    }
+
+    private bool ShouldSuppressCSharpUsingStaticConstantPatternReference(SearchReferenceRawRow row)
+    {
+        return ShouldSuppressCSharpUsingStaticConstantPatternReference(
+            row.Path,
+            row.Lang,
+            row.SymbolName,
+            row.ReferenceKind,
+            row.Line,
+            row.Column,
+            row.Context);
+    }
+
+    private bool ShouldSuppressCSharpUsingStaticConstantPatternReference(string path, string? lang, string symbolName, string referenceKind, int lineNumber, int columnNumber, string contextForFilter)
+    {
+        if (!string.Equals(lang, "csharp", StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(symbolName)
+            || string.IsNullOrWhiteSpace(contextForFilter)
+            || symbolName.IndexOf('.') >= 0
+            || symbolName.IndexOf(':') >= 0
+            || symbolName.IndexOf('<') >= 0
+            || symbolName.IndexOf('[') >= 0
+            || symbolName.IndexOf(' ') >= 0)
+        {
+            return false;
+        }
+
+        if (HasActiveCSharpUsingTypeAlias(path, lineNumber, symbolName))
+            return false;
+
+        var patternContext = contextForFilter;
+        var patternColumn = columnNumber;
+        if (!TryBuildCSharpUsingStaticPatternContextWindow(
+                path,
+                lineNumber,
+                contextForFilter,
+                columnNumber,
+                symbolName,
+                out patternContext,
+                out patternColumn))
+        {
+            return false;
+        }
+
+        if (ShouldSuppressCSharpQualifiedConstantPatternReference(path, lineNumber, symbolName, patternContext, patternColumn, referenceKind))
+            return true;
+
+        if (!string.Equals(referenceKind, "type_reference", StringComparison.Ordinal))
+            return false;
+
+        var activeTargets = GetActiveCSharpUsingStaticTargets(path, lineNumber);
+        if (activeTargets.Count == 0)
+            return false;
+
+        var matchingContainers = GetCSharpConstantPatternContainersByMemberName(symbolName);
+        if (matchingContainers.Count == 0)
+            return false;
+
+        if (HasScopedCSharpTypeCandidate(path, lineNumber, symbolName))
+            return false;
+
+        foreach (var target in activeTargets)
+        {
+            if (matchingContainers.Contains(target))
+                return true;
+        }
+
+        return false;
+    }
+
+    private bool ShouldSuppressCSharpQualifiedConstantPatternReference(string path, int lineNumber, string symbolName, string patternContext, int patternColumn, string referenceKind)
+    {
+        if (!TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out var qualifier, out var anchorKind))
+            return false;
+
+        // Exact `call` suppression only applies to `case` constant patterns; `is` patterns
+        // keep their preserved call row so qualified `is` expressions remain visible.
+        // exact の `call` 抑制は `case` 定数パターンのみに限定する。`is` パターンは
+        // preserved call row を維持し、qualified な `is` 式を可視のまま残す。
+        if (string.Equals(referenceKind, "call", StringComparison.Ordinal)
+            && !string.Equals(anchorKind, "case", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var matchingContainers = GetCSharpConstantPatternContainersByMemberName(symbolName);
+        if (matchingContainers.Count == 0)
+            return false;
+
+        foreach (var candidate in GetScopedCSharpQualifiedPatternQualifierCandidates(path, lineNumber, qualifier))
+        {
+            if (matchingContainers.Contains(candidate))
+                return true;
+        }
+
+        return false;
+    }
+
+    private bool HasScopedCSharpTypeCandidate(string path, int lineNumber, string symbolName)
+    {
+        if (HasActiveCSharpUsingTypeAlias(path, lineNumber, symbolName))
+            return true;
+
+        var activeAliasReference = ResolveActiveCSharpUsingAliasReference(path, lineNumber, symbolName);
+        if (!string.Equals(activeAliasReference, symbolName, StringComparison.Ordinal)
+            && IsKnownCSharpTypeQualifiedName(activeAliasReference))
+        {
+            return true;
+        }
+
+        var candidateNamespaces = GetCSharpTypeNamespacesByName(symbolName);
+        var candidateContainingTypes = GetCSharpTypeContainingTypesByName(symbolName);
+        if (candidateNamespaces.Count == 0 && candidateContainingTypes.Count == 0)
+            return false;
+
+        var activeNamespaces = GetActiveCSharpTypeNamespaces(path, lineNumber);
+        foreach (var activeNamespace in activeNamespaces)
+        {
+            foreach (var candidateNamespace in candidateNamespaces)
+            {
+                if (!string.Equals(candidateNamespace.QualifiedName, activeNamespace, StringComparison.Ordinal))
+                    continue;
+                if (candidateNamespace.IsFileLocal && !string.Equals(candidateNamespace.Path, path, StringComparison.Ordinal))
+                    continue;
+                return true;
+            }
+        }
+
+        var activeContainingTypeScopes = GetActiveCSharpContainingTypeScopes(path, lineNumber);
+        foreach (var activeContainingTypeScope in activeContainingTypeScopes)
+        {
+            if (candidateContainingTypes.Any(candidate => string.Equals(candidate.QualifiedName, activeContainingTypeScope.QualifiedName, StringComparison.Ordinal)))
+                return true;
+
+            if (!candidateContainingTypes.Any(candidate => candidate.AccessibleFromDerivedType))
+                continue;
+
+            var inheritedContainingTypes = GetInheritedCSharpContainingTypes(activeContainingTypeScope);
+            foreach (var candidate in candidateContainingTypes)
+            {
+                if (!candidate.AccessibleFromDerivedType)
+                    continue;
+                if (!inheritedContainingTypes.Contains(candidate.QualifiedName))
+                    continue;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private HashSet<string> GetActiveCSharpTypeNamespaces(string path, int lineNumber)
+    {
+        if (!_csharpNamespaceScopesByPath.TryGetValue(path, out var namespaceScopes))
+        {
+            namespaceScopes = LoadCSharpNamespaceScopes(path);
+            _csharpNamespaceScopesByPath[path] = namespaceScopes;
+        }
+
+        if (!_csharpUsingNamespaceScopesByPath.TryGetValue(path, out var usingNamespaceScopes))
+        {
+            usingNamespaceScopes = LoadCSharpUsingNamespaceScopes(path);
+            _csharpUsingNamespaceScopesByPath[path] = usingNamespaceScopes;
+        }
+
+        var activeNamespaces = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var scope in namespaceScopes)
+        {
+            if (lineNumber >= scope.ScopeStartLine && lineNumber <= scope.ScopeEndLine)
+                activeNamespaces.Add(scope.QualifiedName);
+        }
+
+        if (activeNamespaces.Count == 0)
+            activeNamespaces.Add(string.Empty);
+
+        foreach (var scope in usingNamespaceScopes)
+        {
+            if (scope.Line > lineNumber)
+                continue;
+            if (lineNumber < scope.ScopeStartLine || lineNumber > scope.ScopeEndLine)
+                continue;
+            activeNamespaces.Add(scope.TargetQualifiedName);
+        }
+
+        foreach (var globalNamespace in GetGlobalCSharpUsingNamespaces())
+            activeNamespaces.Add(globalNamespace);
+
+        return activeNamespaces;
+    }
+
+    private List<CSharpContainingTypeScope> GetActiveCSharpContainingTypeScopes(string path, int lineNumber)
+    {
+        if (!_csharpContainingTypeScopesByPath.TryGetValue(path, out var containingTypeScopes))
+        {
+            containingTypeScopes = LoadCSharpContainingTypeScopes(path);
+            _csharpContainingTypeScopesByPath[path] = containingTypeScopes;
+        }
+
+        var activeContainingTypes = new List<CSharpContainingTypeScope>();
+        foreach (var scope in containingTypeScopes)
+        {
+            if (lineNumber >= scope.ScopeStartLine && lineNumber <= scope.ScopeEndLine)
+                activeContainingTypes.Add(scope);
+        }
+
+        return activeContainingTypes;
+    }
+
+    private HashSet<string> GetInheritedCSharpContainingTypes(CSharpContainingTypeScope containingTypeScope)
+    {
+        if (_csharpInheritedContainingTypesByQualifiedName.TryGetValue(containingTypeScope.QualifiedName, out var cached))
+            return cached;
+
+        var inheritedContainingTypes = new HashSet<string>(StringComparer.Ordinal);
+        var visited = new HashSet<string>(StringComparer.Ordinal)
+        {
+            containingTypeScope.QualifiedName,
+        };
+        CollectInheritedCSharpContainingTypes(containingTypeScope, inheritedContainingTypes, visited);
+        _csharpInheritedContainingTypesByQualifiedName[containingTypeScope.QualifiedName] = inheritedContainingTypes;
+        return inheritedContainingTypes;
+    }
+
+    private void CollectInheritedCSharpContainingTypes(CSharpContainingTypeScope containingTypeScope, HashSet<string> inheritedContainingTypes, HashSet<string> visited)
+    {
+        var directBaseScope = ResolveDirectCSharpBaseContainingTypeScope(containingTypeScope);
+        if (directBaseScope == null || !visited.Add(directBaseScope.QualifiedName))
+            return;
+
+        inheritedContainingTypes.Add(directBaseScope.QualifiedName);
+        CollectInheritedCSharpContainingTypes(directBaseScope, inheritedContainingTypes, visited);
+    }
+
+    private CSharpContainingTypeScope? GetCSharpContainingTypeScope(string qualifiedName)
+    {
+        if (_csharpContainingTypeScopeByQualifiedName.TryGetValue(qualifiedName, out var cached))
+            return cached;
+
+        var lastDot = qualifiedName.LastIndexOf('.');
+        var shortName = lastDot >= 0 ? qualifiedName[(lastDot + 1)..] : qualifiedName;
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT f.path, s.kind, s.name, s.container_name, s.container_qualified_name, s.visibility, s.signature, s.body_start_line, s.body_end_line, s.start_line, s.end_line
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.lang = 'csharp'
+              AND s.name = @symbolName COLLATE NOCASE
+              AND s.kind IN ('class', 'struct', 'interface')";
+        cmd.Parameters.AddWithValue("@symbolName", shortName);
+
+        CSharpContainingTypeScope? resolved = null;
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
-            var column = reader.GetInt32(5);
-            var context = reader.GetString(6);
-            var clampedContext = LineWidthFormatter.ClampLine(context, maxLineWidth, column, query?.Length ?? 1);
-            results.Add(new ReferenceResult
-            {
-                Path = reader.GetString(0),
-                Lang = GetNullableString(reader, 1),
-                SymbolName = reader.GetString(2),
-                ReferenceKind = reader.GetString(3),
-                Line = reader.GetInt32(4),
-                Column = column,
-                Context = clampedContext.Text,
-                ContextTruncated = clampedContext.Truncated,
-                ContainerKind = GetNullableString(reader, 7),
-                ContainerName = GetNullableString(reader, 8),
-            });
+            var scope = CreateCSharpContainingTypeScope(
+                reader.GetString(0),
+                GetNullableString(reader, 1),
+                GetNullableString(reader, 2),
+                GetNullableString(reader, 3),
+                GetNullableString(reader, 4),
+                GetNullableString(reader, 5),
+                GetNullableString(reader, 6),
+                reader.IsDBNull(7) ? null : reader.GetInt32(7),
+                reader.IsDBNull(8) ? null : reader.GetInt32(8),
+                reader.IsDBNull(9) ? null : reader.GetInt32(9),
+                reader.IsDBNull(10) ? null : reader.GetInt32(10));
+            if (scope == null)
+                continue;
+            if (!string.Equals(scope.QualifiedName, qualifiedName, StringComparison.Ordinal))
+                continue;
+            resolved = scope;
+            break;
         }
-        return results;
+
+        _csharpContainingTypeScopeByQualifiedName[qualifiedName] = resolved;
+        return resolved;
+    }
+
+    private bool IsKnownCSharpTypeQualifiedName(string qualifiedName)
+    {
+        var normalizedQualifiedName = NormalizeCSharpAliasTargetForTypeLookup(qualifiedName);
+        if (string.IsNullOrWhiteSpace(normalizedQualifiedName))
+            return false;
+
+        var lastDot = normalizedQualifiedName.LastIndexOf('.');
+        var shortName = lastDot >= 0
+            ? normalizedQualifiedName[(lastDot + 1)..]
+            : normalizedQualifiedName;
+        var containerQualifiedName = lastDot >= 0
+            ? normalizedQualifiedName[..lastDot]
+            : string.Empty;
+
+        var namespaceCandidates = GetCSharpTypeNamespacesByName(shortName);
+        foreach (var candidate in namespaceCandidates)
+        {
+            if (string.Equals(candidate.QualifiedName, containerQualifiedName, StringComparison.Ordinal))
+                return true;
+        }
+
+        var containingTypes = GetCSharpTypeContainingTypesByName(shortName);
+        if (containingTypes.Any(candidate => string.Equals(candidate.QualifiedName, containerQualifiedName, StringComparison.Ordinal)))
+            return true;
+
+        return false;
+    }
+
+    private static string NormalizeCSharpAliasTargetForTypeLookup(string qualifiedName)
+    {
+        if (string.IsNullOrWhiteSpace(qualifiedName))
+            return string.Empty;
+
+        var trimmed = qualifiedName.Trim();
+        var builder = new System.Text.StringBuilder(trimmed.Length);
+        var genericDepth = 0;
+        for (var i = 0; i < trimmed.Length; i++)
+        {
+            var ch = trimmed[i];
+            if (ch == '<')
+            {
+                genericDepth++;
+                continue;
+            }
+
+            if (ch == '>')
+            {
+                if (genericDepth > 0)
+                    genericDepth--;
+                continue;
+            }
+
+            if (genericDepth == 0)
+                builder.Append(ch);
+        }
+
+        var normalized = builder.ToString().Trim();
+        while (normalized.EndsWith("?", StringComparison.Ordinal))
+            normalized = normalized[..^1].TrimEnd();
+        while (normalized.EndsWith("[]", StringComparison.Ordinal))
+            normalized = normalized[..^2].TrimEnd();
+
+        return normalized;
+    }
+
+    private bool HasActiveCSharpUsingTypeAlias(string path, int lineNumber, string symbolName)
+    {
+        if (string.IsNullOrWhiteSpace(path) || string.IsNullOrWhiteSpace(symbolName))
+            return false;
+
+        if (TryResolveActiveCSharpUsingAliasScope(path, lineNumber, symbolName, requireTypeAlias: true, out _))
+            return true;
+
+        if (!_csharpUsingAliasScopesByPath.TryGetValue(path, out var scopes))
+        {
+            scopes = LoadCSharpUsingAliasScopes(path);
+            _csharpUsingAliasScopesByPath[path] = scopes;
+        }
+
+        for (var i = scopes.Count - 1; i >= 0; i--)
+        {
+            var scope = scopes[i];
+            if (!string.Equals(scope.AliasName, symbolName, StringComparison.Ordinal))
+                continue;
+            if (scope.Line > lineNumber)
+                continue;
+            if (lineNumber < scope.ScopeStartLine || lineNumber > scope.ScopeEndLine)
+                continue;
+            if (IsKnownCSharpTypeQualifiedName(scope.TargetQualifiedName))
+                return true;
+
+            var resolvedContainer = ResolveScopedCSharpContainingTypeQualifiedName(path, lineNumber, scope.TargetQualifiedName);
+            if (string.IsNullOrWhiteSpace(resolvedContainer))
+                continue;
+
+            if (IsKnownCSharpTypeQualifiedName(resolvedContainer))
+                return true;
+
+            foreach (var activeNamespace in GetActiveCSharpTypeNamespaces(path, lineNumber))
+            {
+                if (string.IsNullOrWhiteSpace(activeNamespace))
+                    continue;
+
+                var namespacedTarget = CombineDbQualifiedName(activeNamespace, resolvedContainer);
+                if (!string.IsNullOrWhiteSpace(namespacedTarget)
+                    && IsKnownCSharpTypeQualifiedName(namespacedTarget))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private HashSet<string> GetActiveCSharpUsingStaticTargets(string path, int lineNumber)
+    {
+        if (!_csharpUsingStaticScopesByPath.TryGetValue(path, out var scopes))
+        {
+            scopes = LoadCSharpUsingStaticScopes(path);
+            _csharpUsingStaticScopesByPath[path] = scopes;
+        }
+
+        var activeTargets = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var scope in scopes)
+        {
+            if (scope.Line > lineNumber)
+                continue;
+            if (lineNumber < scope.ScopeStartLine || lineNumber > scope.ScopeEndLine)
+                continue;
+            activeTargets.Add(scope.TargetQualifiedName);
+        }
+
+        foreach (var globalTarget in GetGlobalCSharpUsingStaticTargets())
+            activeTargets.Add(globalTarget);
+
+        return activeTargets;
+    }
+
+    private List<CSharpNamespaceScope> LoadCSharpNamespaceScopes(string path)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.line, s.body_start_line, s.body_end_line, s.end_line, s.name, s.signature, f.lines
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.path = @path
+              AND f.lang = 'csharp'
+              AND s.kind = 'namespace'
+            ORDER BY s.line";
+        cmd.Parameters.AddWithValue("@path", path);
+
+        var scopes = new List<CSharpNamespaceScope>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var line = reader.GetInt32(0);
+            var startLine = reader.IsDBNull(1) ? line : reader.GetInt32(1);
+            var endLine = reader.IsDBNull(2)
+                ? (reader.IsDBNull(3) ? line : reader.GetInt32(3))
+                : reader.GetInt32(2);
+            var signature = GetNullableString(reader, 5);
+            if (!string.IsNullOrWhiteSpace(signature)
+                && signature.TrimEnd().EndsWith(';')
+                && !reader.IsDBNull(6))
+            {
+                endLine = Math.Max(endLine, reader.GetInt32(6));
+            }
+
+            if (startLine <= 0 || endLine < startLine)
+                continue;
+
+            var qualifiedName = NormalizeDbCSharpQualifiedName(reader.GetString(4)) ?? string.Empty;
+            scopes.Add(new CSharpNamespaceScope(qualifiedName, startLine, endLine));
+        }
+
+        return scopes;
+    }
+
+    private List<CSharpUsingNamespaceScope> LoadCSharpUsingNamespaceScopes(string path)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.kind, s.line, s.body_start_line, s.body_end_line, s.end_line, s.signature, f.lines
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.path = @path
+              AND f.lang = 'csharp'
+              AND (s.kind = 'import' OR s.kind = 'namespace')
+            ORDER BY s.line";
+        cmd.Parameters.AddWithValue("@path", path);
+
+        var namespaceScopes = new List<(int StartLine, int EndLine)>();
+        var imports = new List<(int Line, string Signature)>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var kind = reader.GetString(0);
+            var line = reader.GetInt32(1);
+            if (kind == "namespace")
+            {
+                var startLine = reader.IsDBNull(2) ? line : reader.GetInt32(2);
+                var endLine = reader.IsDBNull(3)
+                    ? (reader.IsDBNull(4) ? line : reader.GetInt32(4))
+                    : reader.GetInt32(3);
+                var signature = GetNullableString(reader, 5);
+                if (!string.IsNullOrWhiteSpace(signature)
+                    && signature.TrimEnd().EndsWith(';')
+                    && !reader.IsDBNull(6))
+                {
+                    endLine = Math.Max(endLine, reader.GetInt32(6));
+                }
+
+                if (startLine > 0 && endLine >= startLine)
+                    namespaceScopes.Add((startLine, endLine));
+                continue;
+            }
+
+            if (!reader.IsDBNull(5))
+                imports.Add((line, reader.GetString(5)));
+        }
+
+        var scopes = new List<CSharpUsingNamespaceScope>();
+        foreach (var import in imports)
+        {
+            if (!TryParseCSharpUsingNamespaceImport(import.Signature, out var target, out var isGlobal)
+                || isGlobal)
+            {
+                continue;
+            }
+
+            var scopeStartLine = 1;
+            var scopeEndLine = int.MaxValue;
+            var scopeWidth = int.MaxValue;
+            foreach (var (startLine, endLine) in namespaceScopes)
+            {
+                if (import.Line < startLine || import.Line > endLine)
+                    continue;
+
+                var width = endLine - startLine;
+                if (width > scopeWidth)
+                    continue;
+
+                scopeStartLine = startLine;
+                scopeEndLine = endLine;
+                scopeWidth = width;
+            }
+
+            scopes.Add(new CSharpUsingNamespaceScope(target!, import.Line, scopeStartLine, scopeEndLine));
+        }
+
+        return scopes;
+    }
+
+    private List<CSharpContainingTypeScope> LoadCSharpContainingTypeScopes(string path)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.kind, s.name, s.container_name, s.container_qualified_name, s.visibility, s.signature, s.body_start_line, s.body_end_line, s.start_line, s.end_line
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.path = @path
+              AND f.lang = 'csharp'
+              AND s.kind IN ('class', 'struct', 'interface')
+            ORDER BY s.start_line";
+        cmd.Parameters.AddWithValue("@path", path);
+
+        var scopes = new List<CSharpContainingTypeScope>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var scope = CreateCSharpContainingTypeScope(
+                path,
+                GetNullableString(reader, 0),
+                GetNullableString(reader, 1),
+                GetNullableString(reader, 2),
+                GetNullableString(reader, 3),
+                GetNullableString(reader, 4),
+                GetNullableString(reader, 5),
+                reader.IsDBNull(6) ? null : reader.GetInt32(6),
+                reader.IsDBNull(7) ? null : reader.GetInt32(7),
+                reader.IsDBNull(8) ? null : reader.GetInt32(8),
+                reader.IsDBNull(9) ? null : reader.GetInt32(9));
+            if (scope == null)
+                continue;
+
+            scopes.Add(scope);
+            _csharpContainingTypeScopeByQualifiedName.TryAdd(scope.QualifiedName, scope);
+        }
+
+        return scopes;
+    }
+
+    private static CSharpContainingTypeScope? CreateCSharpContainingTypeScope(
+        string path,
+        string? kind,
+        string? name,
+        string? containerName,
+        string? containerQualifiedName,
+        string? visibility,
+        string? signature,
+        int? bodyStartLine,
+        int? bodyEndLine,
+        int? startLine,
+        int? endLine)
+    {
+        if (string.IsNullOrWhiteSpace(kind) || string.IsNullOrWhiteSpace(name))
+            return null;
+
+        var qualifiedName = CombineDbQualifiedName(
+            NormalizeDbCSharpQualifiedName(containerQualifiedName ?? containerName ?? string.Empty),
+            NormalizeDbCSharpQualifiedName(name));
+        if (string.IsNullOrWhiteSpace(qualifiedName))
+            return null;
+
+        var resolvedStartLine = bodyStartLine ?? startLine ?? 0;
+        var resolvedEndLine = bodyEndLine ?? endLine ?? resolvedStartLine;
+        var declarationLine = startLine ?? resolvedStartLine;
+        if (resolvedStartLine <= 0 || resolvedEndLine < resolvedStartLine || declarationLine <= 0)
+            return null;
+
+        return new CSharpContainingTypeScope(path, kind, qualifiedName, visibility, signature, declarationLine, resolvedStartLine, resolvedEndLine);
+    }
+
+    private CSharpContainingTypeScope? ResolveDirectCSharpBaseContainingTypeScope(CSharpContainingTypeScope containingTypeScope)
+    {
+        if (!string.Equals(containingTypeScope.Kind, "class", StringComparison.Ordinal))
+            return null;
+
+        var baseTypeReference = ParseCSharpBaseTypeReference(containingTypeScope.Signature);
+        if (string.IsNullOrWhiteSpace(baseTypeReference))
+            return null;
+
+        var directBaseQualifiedName = ResolveScopedCSharpContainingTypeQualifiedName(
+            containingTypeScope.Path,
+            containingTypeScope.DeclarationLine,
+            baseTypeReference);
+        if (string.IsNullOrWhiteSpace(directBaseQualifiedName))
+            return null;
+
+        var directBaseScope = GetCSharpContainingTypeScope(directBaseQualifiedName);
+        if (directBaseScope == null || !string.Equals(directBaseScope.Kind, "class", StringComparison.Ordinal))
+            return null;
+
+        return directBaseScope;
+    }
+
+    private string? ResolveScopedCSharpContainingTypeQualifiedName(string path, int lineNumber, string typeReference)
+    {
+        var normalizedReference = NormalizeCSharpBaseTypeReference(typeReference);
+        if (string.IsNullOrWhiteSpace(normalizedReference))
+            return null;
+
+        normalizedReference = NormalizeCSharpBaseTypeReference(ResolveActiveCSharpUsingAliasReference(path, lineNumber, normalizedReference));
+        if (string.IsNullOrWhiteSpace(normalizedReference))
+            return null;
+
+        var shortName = GetLastQualifiedSegment(normalizedReference);
+        var candidateContainingTypes = GetCSharpTypeContainingTypesByName(shortName);
+        var candidateNamespaces = GetCSharpTypeNamespacesByName(shortName);
+        if (candidateContainingTypes.Count == 0 && candidateNamespaces.Count == 0)
+            return normalizedReference;
+
+        var lastDot = normalizedReference.LastIndexOf('.');
+        if (lastDot >= 0)
+        {
+            var qualifiedPrefix = NormalizeDbCSharpQualifiedName(normalizedReference[..lastDot]);
+            if (!string.IsNullOrWhiteSpace(qualifiedPrefix))
+            {
+                var exactContainingType = candidateContainingTypes.FirstOrDefault(candidate =>
+                    string.Equals(candidate.QualifiedName, qualifiedPrefix, StringComparison.Ordinal));
+                if (exactContainingType != null)
+                    return CombineDbQualifiedName(qualifiedPrefix, shortName);
+
+                var exactNamespace = candidateNamespaces.FirstOrDefault(candidate =>
+                    string.Equals(candidate.QualifiedName, qualifiedPrefix, StringComparison.Ordinal));
+                if (exactNamespace != null)
+                    return CombineDbQualifiedName(qualifiedPrefix, shortName);
+            }
+        }
+
+        foreach (var activeContainingTypeScope in GetActiveCSharpContainingTypeScopes(path, lineNumber))
+        {
+            var exactContainingType = candidateContainingTypes.FirstOrDefault(candidate =>
+                string.Equals(candidate.QualifiedName, activeContainingTypeScope.QualifiedName, StringComparison.Ordinal));
+            if (exactContainingType != null)
+                return CombineDbQualifiedName(activeContainingTypeScope.QualifiedName, shortName);
+        }
+
+        foreach (var activeNamespace in GetActiveCSharpTypeNamespaces(path, lineNumber))
+        {
+            var exactNamespace = candidateNamespaces.FirstOrDefault(candidate =>
+                string.Equals(candidate.QualifiedName, activeNamespace, StringComparison.Ordinal));
+            if (exactNamespace != null)
+                return CombineDbQualifiedName(activeNamespace, shortName);
+        }
+
+        return normalizedReference;
+    }
+
+    private static string? ParseCSharpBaseTypeReference(string? signature)
+    {
+        if (string.IsNullOrWhiteSpace(signature))
+            return null;
+
+        var text = signature.TrimEnd();
+        if (text.EndsWith("{", StringComparison.Ordinal))
+            text = text[..^1].TrimEnd();
+
+        var colonIndex = FindCSharpBaseListColonIndex(text);
+        if (colonIndex < 0)
+            return null;
+
+        var baseList = text[(colonIndex + 1)..];
+        var whereIndex = baseList.IndexOf(" where ", StringComparison.Ordinal);
+        if (whereIndex >= 0)
+            baseList = baseList[..whereIndex];
+
+        var firstEntry = TakeFirstCSharpBaseListEntry(baseList).Trim();
+        return firstEntry.Length == 0 ? null : firstEntry;
+    }
+
+    private static int FindCSharpBaseListColonIndex(string signature)
+    {
+        var angleDepth = 0;
+        var parenDepth = 0;
+        var squareDepth = 0;
+        for (var i = 0; i < signature.Length; i++)
+        {
+            switch (signature[i])
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0)
+                        squareDepth--;
+                    break;
+                case ':':
+                    if (angleDepth == 0 && parenDepth == 0 && squareDepth == 0)
+                        return i;
+                    break;
+            }
+        }
+
+        return -1;
+    }
+
+    private static string TakeFirstCSharpBaseListEntry(string baseList)
+    {
+        var angleDepth = 0;
+        var parenDepth = 0;
+        var squareDepth = 0;
+        for (var i = 0; i < baseList.Length; i++)
+        {
+            switch (baseList[i])
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case '[':
+                    squareDepth++;
+                    break;
+                case ']':
+                    if (squareDepth > 0)
+                        squareDepth--;
+                    break;
+                case ',':
+                    if (angleDepth == 0 && parenDepth == 0 && squareDepth == 0)
+                        return baseList[..i];
+                    break;
+            }
+        }
+
+        return baseList;
+    }
+
+    private static string NormalizeCSharpBaseTypeReference(string typeReference)
+    {
+        if (string.IsNullOrWhiteSpace(typeReference))
+            return string.Empty;
+
+        var builder = new System.Text.StringBuilder(typeReference.Length);
+        var angleDepth = 0;
+        var parenDepth = 0;
+        var squareDepth = 0;
+        for (var i = 0; i < typeReference.Length; i++)
+        {
+            var ch = typeReference[i];
+            switch (ch)
+            {
+                case '<':
+                    angleDepth++;
+                    continue;
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    continue;
+                case '(':
+                    if (angleDepth == 0 && squareDepth == 0)
+                        return NormalizeDbCSharpQualifiedName(builder.ToString()) ?? string.Empty;
+                    parenDepth++;
+                    continue;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    continue;
+                case '[':
+                    if (angleDepth == 0 && parenDepth == 0)
+                        squareDepth++;
+                    continue;
+                case ']':
+                    if (squareDepth > 0)
+                        squareDepth--;
+                    continue;
+            }
+
+            if (angleDepth == 0 && parenDepth == 0 && squareDepth == 0)
+                builder.Append(ch);
+        }
+
+        return NormalizeDbCSharpQualifiedName(builder.ToString()) ?? string.Empty;
+    }
+
+    private static bool IsNestedCSharpTypeAccessibleFromDerivedType(string? visibility, string? signature)
+    {
+        if (!string.IsNullOrWhiteSpace(visibility))
+            return !string.Equals(visibility, "private", StringComparison.OrdinalIgnoreCase);
+
+        if (string.IsNullOrWhiteSpace(signature))
+            return false;
+
+        var normalizedSignature = signature.TrimStart();
+        return normalizedSignature.StartsWith("public ", StringComparison.Ordinal)
+            || normalizedSignature.StartsWith("protected ", StringComparison.Ordinal)
+            || normalizedSignature.StartsWith("internal ", StringComparison.Ordinal)
+            || normalizedSignature.StartsWith("private protected ", StringComparison.Ordinal)
+            || normalizedSignature.StartsWith("protected internal ", StringComparison.Ordinal);
+    }
+
+    private static string GetLastQualifiedSegment(string qualifiedName)
+    {
+        if (string.IsNullOrWhiteSpace(qualifiedName))
+            return string.Empty;
+
+        var lastDot = qualifiedName.LastIndexOf('.');
+        var lastColon = qualifiedName.LastIndexOf("::", StringComparison.Ordinal);
+        var split = Math.Max(lastDot, lastColon);
+        return split < 0 ? qualifiedName : qualifiedName[(split + (split == lastColon ? 2 : 1))..];
+    }
+
+    private List<CSharpUsingStaticScope> LoadCSharpUsingStaticScopes(string path)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.kind, s.line, s.body_start_line, s.body_end_line, s.end_line, s.signature, f.lines
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.path = @path
+              AND f.lang = 'csharp'
+              AND (s.kind = 'import' OR s.kind = 'namespace')
+            ORDER BY s.line";
+        cmd.Parameters.AddWithValue("@path", path);
+
+        var namespaceScopes = new List<(int StartLine, int EndLine)>();
+        var imports = new List<(int Line, string Signature)>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var kind = reader.GetString(0);
+            var line = reader.GetInt32(1);
+            if (kind == "namespace")
+            {
+                var startLine = reader.IsDBNull(2) ? line : reader.GetInt32(2);
+                var endLine = reader.IsDBNull(3)
+                    ? (reader.IsDBNull(4) ? line : reader.GetInt32(4))
+                    : reader.GetInt32(3);
+                var signature = GetNullableString(reader, 5);
+                if (!string.IsNullOrWhiteSpace(signature)
+                    && signature.TrimEnd().EndsWith(';')
+                    && !reader.IsDBNull(6))
+                {
+                    endLine = Math.Max(endLine, reader.GetInt32(6));
+                }
+
+                if (startLine > 0 && endLine >= startLine)
+                    namespaceScopes.Add((startLine, endLine));
+                continue;
+            }
+
+            if (!reader.IsDBNull(5))
+                imports.Add((line, reader.GetString(5)));
+        }
+
+        var scopes = new List<CSharpUsingStaticScope>();
+        foreach (var import in imports)
+        {
+            if (!TryParseCSharpUsingStaticImport(import.Signature, out var target, out var isGlobal)
+                || isGlobal)
+            {
+                continue;
+            }
+
+            var scopeStartLine = 1;
+            var scopeEndLine = int.MaxValue;
+            var scopeWidth = int.MaxValue;
+            foreach (var (startLine, endLine) in namespaceScopes)
+            {
+                if (import.Line < startLine || import.Line > endLine)
+                    continue;
+
+                var width = endLine - startLine;
+                if (width > scopeWidth)
+                    continue;
+
+                scopeStartLine = startLine;
+                scopeEndLine = endLine;
+                scopeWidth = width;
+            }
+
+            scopes.Add(new CSharpUsingStaticScope(target!, import.Line, scopeStartLine, scopeEndLine));
+        }
+
+        return scopes;
+    }
+
+    private List<CSharpUsingAliasScope> LoadCSharpUsingAliasScopes(string path)
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.kind, s.line, s.body_start_line, s.body_end_line, s.end_line, s.signature, f.lines
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.path = @path
+              AND f.lang = 'csharp'
+              AND (s.kind = 'import' OR s.kind = 'namespace')
+            ORDER BY s.line";
+        cmd.Parameters.AddWithValue("@path", path);
+
+        var namespaceScopes = new List<(int StartLine, int EndLine)>();
+        var imports = new List<(int Line, string Signature)>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var kind = reader.GetString(0);
+            var line = reader.GetInt32(1);
+            if (kind == "namespace")
+            {
+                var startLine = reader.IsDBNull(2) ? line : reader.GetInt32(2);
+                var endLine = reader.IsDBNull(3)
+                    ? (reader.IsDBNull(4) ? line : reader.GetInt32(4))
+                    : reader.GetInt32(3);
+                var signature = GetNullableString(reader, 5);
+                if (!string.IsNullOrWhiteSpace(signature)
+                    && signature.TrimEnd().EndsWith(';')
+                    && !reader.IsDBNull(6))
+                {
+                    endLine = Math.Max(endLine, reader.GetInt32(6));
+                }
+
+                if (startLine > 0 && endLine >= startLine)
+                    namespaceScopes.Add((startLine, endLine));
+                continue;
+            }
+
+            if (!reader.IsDBNull(5))
+                imports.Add((line, reader.GetString(5)));
+        }
+
+        var scopes = new List<CSharpUsingAliasScope>();
+        foreach (var import in imports)
+        {
+            if (!TryParseCSharpUsingAliasImport(import.Signature, out var aliasName, out var targetQualifiedName, out var isGlobal)
+                || isGlobal)
+            {
+                continue;
+            }
+
+            var scopeStartLine = 1;
+            var scopeEndLine = int.MaxValue;
+            var scopeWidth = int.MaxValue;
+            foreach (var (startLine, endLine) in namespaceScopes)
+            {
+                if (import.Line < startLine || import.Line > endLine)
+                    continue;
+
+                var width = endLine - startLine;
+                if (width > scopeWidth)
+                    continue;
+
+                scopeStartLine = startLine;
+                scopeEndLine = endLine;
+                scopeWidth = width;
+            }
+
+            scopes.Add(new CSharpUsingAliasScope(
+                aliasName!,
+                targetQualifiedName!,
+                import.Line,
+                scopeStartLine,
+                scopeEndLine,
+                IsKnownCSharpTypeQualifiedName(targetQualifiedName!)));
+        }
+
+        return scopes;
+    }
+
+    private HashSet<string> GetGlobalCSharpUsingStaticTargets()
+    {
+        if (_csharpGlobalUsingStaticTargets != null)
+            return _csharpGlobalUsingStaticTargets;
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.signature
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.lang = 'csharp'
+              AND s.kind = 'import'";
+
+        var targets = new HashSet<string>(StringComparer.Ordinal);
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            if (reader.IsDBNull(0))
+                continue;
+            if (TryParseCSharpUsingStaticImport(reader.GetString(0), out var target, out var isGlobal)
+                && isGlobal)
+            {
+                targets.Add(target!);
+            }
+        }
+
+        _csharpGlobalUsingStaticTargets = targets;
+        return _csharpGlobalUsingStaticTargets;
+    }
+
+    private Dictionary<string, CSharpUsingAliasScope> GetGlobalCSharpUsingAliasesByName()
+    {
+        if (_csharpGlobalUsingAliasesByName != null)
+            return _csharpGlobalUsingAliasesByName;
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.signature
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.lang = 'csharp'
+              AND s.kind = 'import'";
+
+        var aliases = new Dictionary<string, CSharpUsingAliasScope>(StringComparer.Ordinal);
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            if (reader.IsDBNull(0))
+                continue;
+            if (TryParseCSharpUsingAliasImport(reader.GetString(0), out var aliasName, out var targetQualifiedName, out var isGlobal)
+                && isGlobal)
+            {
+                aliases[aliasName!] = new CSharpUsingAliasScope(
+                    aliasName!,
+                    targetQualifiedName!,
+                    0,
+                    1,
+                    int.MaxValue,
+                    IsKnownCSharpTypeQualifiedName(targetQualifiedName!));
+            }
+        }
+
+        _csharpGlobalUsingAliasesByName = aliases;
+        return _csharpGlobalUsingAliasesByName;
+    }
+
+    private HashSet<string> GetGlobalCSharpUsingNamespaces()
+    {
+        if (_csharpGlobalUsingNamespaces != null)
+            return _csharpGlobalUsingNamespaces;
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.signature
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.lang = 'csharp'
+              AND s.kind = 'import'";
+
+        var namespaces = new HashSet<string>(StringComparer.Ordinal);
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            if (reader.IsDBNull(0))
+                continue;
+            if (TryParseCSharpUsingNamespaceImport(reader.GetString(0), out var target, out var isGlobal)
+                && isGlobal)
+            {
+                namespaces.Add(target!);
+            }
+        }
+
+        _csharpGlobalUsingNamespaces = namespaces;
+        return _csharpGlobalUsingNamespaces;
+    }
+
+    private static bool TryParseCSharpUsingStaticImport(string signature, out string? target, out bool isGlobal)
+    {
+        target = null;
+        isGlobal = false;
+        if (string.IsNullOrWhiteSpace(signature))
+            return false;
+
+        var match = CSharpUsingStaticImportRegex.Match(signature);
+        if (!match.Success)
+            return false;
+
+        target = NormalizeDbCSharpQualifiedName(match.Groups["target"].Value);
+        if (string.IsNullOrWhiteSpace(target))
+            return false;
+
+        isGlobal = signature.TrimStart().StartsWith("global using static ", StringComparison.Ordinal);
+        return true;
+    }
+
+    private static bool TryParseCSharpUsingAliasImport(string signature, out string? aliasName, out string? target, out bool isGlobal)
+    {
+        aliasName = null;
+        target = null;
+        isGlobal = false;
+        if (string.IsNullOrWhiteSpace(signature))
+            return false;
+
+        var match = CSharpUsingAliasImportRegex.Match(signature);
+        if (!match.Success)
+            return false;
+
+        aliasName = match.Groups["alias"].Value.Trim();
+        target = NormalizeDbCSharpQualifiedName(match.Groups["target"].Value);
+        if (string.IsNullOrWhiteSpace(aliasName) || string.IsNullOrWhiteSpace(target))
+            return false;
+
+        isGlobal = signature.TrimStart().StartsWith("global using ", StringComparison.Ordinal);
+        return true;
+    }
+
+    private bool TryResolveActiveCSharpUsingAliasScope(string path, int lineNumber, string aliasReference, bool requireTypeAlias, out CSharpUsingAliasScope? resolvedScope)
+    {
+        resolvedScope = null;
+        if (string.IsNullOrWhiteSpace(aliasReference))
+            return false;
+
+        var normalizedReference = NormalizeDbCSharpQualifiedName(aliasReference);
+        if (string.IsNullOrWhiteSpace(normalizedReference))
+            return false;
+
+        var firstDot = normalizedReference.IndexOf('.');
+        var aliasName = firstDot >= 0
+            ? normalizedReference[..firstDot]
+            : normalizedReference;
+        if (string.IsNullOrWhiteSpace(aliasName))
+            return false;
+
+        if (!_csharpUsingAliasScopesByPath.TryGetValue(path, out var scopes))
+        {
+            scopes = LoadCSharpUsingAliasScopes(path);
+            _csharpUsingAliasScopesByPath[path] = scopes;
+        }
+
+        for (var i = scopes.Count - 1; i >= 0; i--)
+        {
+            var scope = scopes[i];
+            if (!string.Equals(scope.AliasName, aliasName, StringComparison.Ordinal))
+                continue;
+            if (scope.Line > lineNumber)
+                continue;
+            if (lineNumber < scope.ScopeStartLine || lineNumber > scope.ScopeEndLine)
+                continue;
+            if (requireTypeAlias && !scope.TargetsType)
+                return false;
+            resolvedScope = scope;
+            return true;
+        }
+
+        var globalAliases = GetGlobalCSharpUsingAliasesByName();
+        if (!globalAliases.TryGetValue(aliasName, out var globalScope))
+            return false;
+        if (requireTypeAlias && !globalScope.TargetsType)
+            return false;
+
+        resolvedScope = globalScope;
+        return true;
+    }
+
+    private string ResolveActiveCSharpUsingAliasReference(string path, int lineNumber, string typeReference)
+    {
+        var resolvedReference = typeReference;
+        if (string.IsNullOrWhiteSpace(resolvedReference))
+            return string.Empty;
+
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        while (visited.Add(resolvedReference)
+               && TryResolveActiveCSharpUsingAliasScope(path, lineNumber, resolvedReference, requireTypeAlias: false, out var resolvedScope)
+               && resolvedScope != null)
+        {
+            var normalizedReference = NormalizeDbCSharpQualifiedName(resolvedReference);
+            if (string.IsNullOrWhiteSpace(normalizedReference))
+                break;
+
+            var firstDot = normalizedReference.IndexOf('.');
+            var suffix = firstDot >= 0
+                ? NormalizeDbCSharpQualifiedName(normalizedReference[(firstDot + 1)..])
+                : string.Empty;
+            var nextReference = string.IsNullOrWhiteSpace(suffix)
+                ? resolvedScope.TargetQualifiedName
+                : CombineDbQualifiedName(resolvedScope.TargetQualifiedName, suffix);
+            if (string.IsNullOrWhiteSpace(nextReference)
+                || string.Equals(nextReference, resolvedReference, StringComparison.Ordinal))
+            {
+                break;
+            }
+
+            resolvedReference = nextReference;
+        }
+
+        return resolvedReference;
+    }
+
+    private static bool TryParseCSharpUsingNamespaceImport(string signature, out string? target, out bool isGlobal)
+    {
+        target = null;
+        isGlobal = false;
+        if (string.IsNullOrWhiteSpace(signature)
+            || signature.IndexOf('=') >= 0)
+        {
+            return false;
+        }
+
+        var match = CSharpUsingNamespaceImportRegex.Match(signature);
+        if (!match.Success)
+            return false;
+
+        target = NormalizeDbCSharpQualifiedName(match.Groups["target"].Value);
+        if (string.IsNullOrWhiteSpace(target))
+            return false;
+
+        isGlobal = signature.TrimStart().StartsWith("global using ", StringComparison.Ordinal);
+        return true;
+    }
+
+    private static bool IsCSharpUsingStaticConstantPatternContext(string context, string symbolName, int columnNumber)
+    {
+        if (string.IsNullOrWhiteSpace(context))
+            return false;
+
+        if (!TryFindCSharpReferenceTokenStart(context, symbolName, columnNumber, out var symbolColumn))
+            return false;
+
+        var cursor = symbolColumn;
+        cursor = SkipCSharpTriviaBackward(context, cursor);
+        return IsCSharpUsingStaticConstantPatternAnchor(context, ref cursor, out _)
+            || IsCSharpUsingStaticConstantTypeKeywordAnchor(context, ref cursor);
+    }
+
+    private static bool TryExtractQualifiedCSharpPatternQualifier(string context, string symbolName, int columnNumber, out string qualifier, out string anchorKind)
+    {
+        qualifier = string.Empty;
+        anchorKind = string.Empty;
+        if (string.IsNullOrWhiteSpace(context)
+            || string.IsNullOrWhiteSpace(symbolName)
+            || !TryFindCSharpReferenceTokenStart(context, symbolName, columnNumber, out var symbolColumn))
+        {
+            return false;
+        }
+
+        var headCursor = symbolColumn + symbolName.Length;
+        if (!SkipCSharpPatternHeadBackward(context, ref headCursor))
+            return false;
+
+        var fullHead = NormalizeDbCSharpQualifiedName(context[headCursor..(symbolColumn + symbolName.Length)]);
+        if (string.IsNullOrWhiteSpace(fullHead))
+            return false;
+
+        var lastDot = fullHead.LastIndexOf('.');
+        if (lastDot < 0)
+            return false;
+
+        var anchorCursor = headCursor;
+        if (!IsCSharpUsingStaticConstantPatternAnchor(context, ref anchorCursor, out anchorKind))
+            return false;
+
+        qualifier = fullHead[..lastDot];
+        return !string.IsNullOrWhiteSpace(qualifier);
+    }
+
+    private static bool IsCSharpUsingStaticConstantPatternAnchor(string text, ref int cursor, out string anchorKind)
+    {
+        anchorKind = string.Empty;
+        cursor = SkipCSharpTriviaBackward(text, cursor);
+        if (TryConsumeTrailingCSharpToken(text, ref cursor, "not"))
+            cursor = SkipCSharpTriviaBackward(text, cursor);
+
+        while (true)
+        {
+            if (TryConsumeTrailingCSharpToken(text, ref cursor, "case"))
+            {
+                anchorKind = "case";
+                return true;
+            }
+
+            if (TryConsumeTrailingCSharpToken(text, ref cursor, "is"))
+            {
+                anchorKind = "is";
+                return true;
+            }
+
+            if (!TryConsumeTrailingCSharpToken(text, ref cursor, "or")
+                && !TryConsumeTrailingCSharpToken(text, ref cursor, "and"))
+            {
+                return false;
+            }
+
+            cursor = SkipCSharpTriviaBackward(text, cursor);
+            if (!SkipCSharpPatternHeadBackward(text, ref cursor))
+                return false;
+            cursor = SkipCSharpTriviaBackward(text, cursor);
+            if (TryConsumeTrailingCSharpToken(text, ref cursor, "not"))
+                cursor = SkipCSharpTriviaBackward(text, cursor);
+        }
+    }
+
+    private static bool IsCSharpUsingStaticConstantTypeKeywordAnchor(string text, ref int cursor)
+    {
+        cursor = SkipCSharpTriviaBackward(text, cursor);
+        if (cursor <= 0 || text[cursor - 1] != '(')
+            return false;
+
+        cursor--;
+        cursor = SkipCSharpTriviaBackward(text, cursor);
+        return TryConsumeTrailingCSharpToken(text, ref cursor, "typeof")
+            || TryConsumeTrailingCSharpToken(text, ref cursor, "sizeof")
+            || TryConsumeTrailingCSharpToken(text, ref cursor, "default");
+    }
+
+    private bool TryBuildCSharpUsingStaticPatternContextWindow(
+        string path,
+        int lineNumber,
+        string contextForFilter,
+        int columnNumber,
+        string symbolName,
+        out string patternContext,
+        out int patternColumn)
+    {
+        patternContext = contextForFilter;
+        patternColumn = columnNumber;
+        if (!_hasChunksTable
+            || string.IsNullOrWhiteSpace(path)
+            || string.IsNullOrWhiteSpace(symbolName)
+            || string.IsNullOrWhiteSpace(contextForFilter)
+            || lineNumber <= 1
+            || columnNumber <= 0)
+        {
+            return IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn)
+                || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _, out _);
+        }
+
+        if (IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn)
+            || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _, out _))
+        {
+            return true;
+        }
+
+        var maxLookback = lineNumber - 1;
+        var lookback = Math.Min(2, maxLookback);
+        while (true)
+        {
+            var startLine = Math.Max(1, lineNumber - lookback);
+            if (!TryLoadIndexedFileLines(path, out _, out _, out var lineMap, startLine, lineNumber)
+                || !lineMap.TryGetValue(lineNumber, out var currentLine))
+            {
+                return IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn)
+                    || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _, out _);
+            }
+
+            var lines = new List<string>();
+            var prefixLength = 0;
+            for (var absoluteLine = startLine; absoluteLine <= lineNumber; absoluteLine++)
+            {
+                if (!lineMap.TryGetValue(absoluteLine, out var lineText))
+                    continue;
+
+                if (absoluteLine < lineNumber)
+                    prefixLength += lineText.Length + 1;
+                lines.Add(lineText);
+            }
+
+            patternContext = lines.Count <= 1 ? currentLine : string.Join('\n', lines);
+            patternColumn = lines.Count <= 1 ? columnNumber : prefixLength + columnNumber;
+            if (IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn)
+                || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _, out _))
+            {
+                return true;
+            }
+
+            if (startLine == 1 || lookback >= maxLookback)
+                return false;
+
+            lookback = Math.Min(maxLookback, Math.Max(lookback + 1, lookback * 2));
+        }
+    }
+
+    private HashSet<string> GetScopedCSharpQualifiedPatternQualifierCandidates(string path, int lineNumber, string qualifier)
+    {
+        var candidates = new HashSet<string>(StringComparer.Ordinal);
+        var normalizedQualifier = NormalizeDbCSharpQualifiedName(ResolveActiveCSharpUsingAliasReference(path, lineNumber, qualifier));
+        if (string.IsNullOrWhiteSpace(normalizedQualifier))
+            return candidates;
+
+        candidates.Add(normalizedQualifier);
+
+        foreach (var activeNamespace in GetActiveCSharpTypeNamespaces(path, lineNumber))
+        {
+            if (string.IsNullOrWhiteSpace(activeNamespace))
+                continue;
+            candidates.Add(activeNamespace + "." + normalizedQualifier);
+        }
+
+        foreach (var activeContainingTypeScope in GetActiveCSharpContainingTypeScopes(path, lineNumber))
+        {
+            candidates.Add(activeContainingTypeScope.QualifiedName + "." + normalizedQualifier);
+
+            var inheritedContainingTypes = GetInheritedCSharpContainingTypes(activeContainingTypeScope);
+            foreach (var inheritedContainingType in inheritedContainingTypes)
+            {
+                candidates.Add(inheritedContainingType + "." + normalizedQualifier);
+            }
+        }
+
+        return candidates;
+    }
+
+    private static int SkipCSharpTriviaBackward(string text, int cursor)
+    {
+        while (cursor > 0)
+        {
+            if (char.IsWhiteSpace(text[cursor - 1]))
+            {
+                cursor--;
+                continue;
+            }
+
+            if (cursor >= 2
+                && text[cursor - 1] == '/'
+                && text[cursor - 2] == '*')
+            {
+                var commentStart = text.LastIndexOf("/*", cursor - 2, StringComparison.Ordinal);
+                if (commentStart >= 0)
+                {
+                    cursor = commentStart;
+                    continue;
+                }
+            }
+
+            if (TryGetCSharpSingleLineCommentLineStart(text, cursor, out var commentLineStart))
+            {
+                cursor = commentLineStart;
+                continue;
+            }
+
+            break;
+        }
+
+        return cursor;
+    }
+
+    private static bool TryGetCSharpSingleLineCommentLineStart(string text, int cursor, out int commentLineStart)
+    {
+        commentLineStart = -1;
+        if (cursor <= 0)
+            return false;
+
+        var lineStart = text.LastIndexOf('\n', Math.Min(cursor - 1, text.Length - 1));
+        lineStart = lineStart < 0 ? 0 : lineStart + 1;
+
+        var firstNonWhitespace = lineStart;
+        while (firstNonWhitespace < cursor && char.IsWhiteSpace(text[firstNonWhitespace]))
+            firstNonWhitespace++;
+
+        if (firstNonWhitespace + 1 >= cursor
+            || text[firstNonWhitespace] != '/'
+            || text[firstNonWhitespace + 1] != '/')
+        {
+            return false;
+        }
+
+        commentLineStart = lineStart;
+        return true;
+    }
+
+    private static bool SkipCSharpPatternHeadBackward(string text, ref int cursor)
+    {
+        if (!TryConsumeTrailingCSharpIdentifier(text, ref cursor))
+            return false;
+
+        while (true)
+        {
+            cursor = SkipCSharpTriviaBackward(text, cursor);
+            if (cursor >= 2
+                && text[cursor - 2] == ':'
+                && text[cursor - 1] == ':')
+            {
+                cursor -= 2;
+            }
+            else if (cursor > 0 && text[cursor - 1] == '.')
+            {
+                cursor--;
+            }
+            else
+            {
+                break;
+            }
+
+            cursor = SkipCSharpTriviaBackward(text, cursor);
+            if (!TryConsumeTrailingCSharpIdentifier(text, ref cursor))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryConsumeTrailingCSharpIdentifier(string text, ref int cursor)
+    {
+        var end = cursor;
+        while (cursor > 0
+               && (char.IsLetterOrDigit(text[cursor - 1])
+                   || text[cursor - 1] == '_'))
+        {
+            cursor--;
+        }
+
+        if (cursor == end)
+            return false;
+
+        if (cursor > 0 && text[cursor - 1] == '@')
+            cursor--;
+
+        return true;
+    }
+
+    private static bool TryFindCSharpReferenceTokenStart(string text, string token, int preferredColumn, out int matchIndex)
+    {
+        matchIndex = -1;
+        if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(token))
+            return false;
+
+        var preferredIndex = Math.Max(0, preferredColumn - 1);
+        var searchStart = 0;
+        while (searchStart < text.Length)
+        {
+            var candidate = text.IndexOf(token, searchStart, StringComparison.Ordinal);
+            if (candidate < 0)
+                break;
+
+            searchStart = candidate + token.Length;
+            if (!IsCSharpTokenBoundary(text, candidate - 1) || !IsCSharpTokenBoundary(text, candidate + token.Length))
+                continue;
+
+            if (candidate <= preferredIndex)
+            {
+                matchIndex = candidate;
+                continue;
+            }
+
+            if (matchIndex < 0)
+                matchIndex = candidate;
+            break;
+        }
+
+        return matchIndex >= 0;
+    }
+
+    private static bool IsCSharpTokenBoundary(string text, int index)
+    {
+        if (index < 0 || index >= text.Length)
+            return true;
+
+        return !char.IsLetterOrDigit(text[index]) && text[index] != '_';
+    }
+
+    private static bool TryConsumeTrailingCSharpToken(string text, ref int cursor, string token)
+    {
+        var tokenStart = cursor - token.Length;
+        if (tokenStart < 0
+            || !text.AsSpan(tokenStart, token.Length).SequenceEqual(token))
+        {
+            return false;
+        }
+
+        if (tokenStart > 0 && (char.IsLetterOrDigit(text[tokenStart - 1]) || text[tokenStart - 1] == '_'))
+            return false;
+        if (cursor < text.Length && (char.IsLetterOrDigit(text[cursor]) || text[cursor] == '_'))
+            return false;
+
+        cursor = tokenStart;
+        return true;
+    }
+
+    private List<CSharpTypeNamespaceCandidate> GetCSharpTypeNamespacesByName(string symbolName)
+    {
+        if (_csharpTypeNamespacesByName.TryGetValue(symbolName, out var cached))
+            return cached;
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT DISTINCT s.container_kind, s.container_name, s.container_qualified_name, f.path, s.visibility, s.signature
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.lang = 'csharp'
+              AND s.name = @symbolName COLLATE NOCASE
+              AND s.kind IN ('class', 'struct', 'interface', 'enum', 'delegate')";
+        cmd.Parameters.AddWithValue("@symbolName", symbolName);
+
+        var namespaces = new List<CSharpTypeNamespaceCandidate>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var containerKind = GetNullableString(reader, 0);
+            var path = reader.GetString(3);
+            var visibility = GetNullableString(reader, 4);
+            var signature = GetNullableString(reader, 5);
+            var isFileLocal = string.Equals(visibility, "file", StringComparison.OrdinalIgnoreCase)
+                || (!string.IsNullOrWhiteSpace(signature) && signature.Contains("file ", StringComparison.Ordinal));
+            if (string.Equals(containerKind, "namespace", StringComparison.Ordinal))
+            {
+                var qualifiedNamespace = GetNullableString(reader, 2);
+                var fallbackNamespace = GetNullableString(reader, 1);
+                var namespaceName = NormalizeDbCSharpQualifiedName(qualifiedNamespace ?? fallbackNamespace ?? string.Empty)
+                    ?? string.Empty;
+                namespaces.Add(new CSharpTypeNamespaceCandidate(namespaceName, path, isFileLocal));
+                continue;
+            }
+
+            if (containerKind == null)
+                namespaces.Add(new CSharpTypeNamespaceCandidate(string.Empty, path, isFileLocal));
+        }
+
+        _csharpTypeNamespacesByName[symbolName] = namespaces;
+        return namespaces;
+    }
+
+    private List<CSharpContainingTypeCandidate> GetCSharpTypeContainingTypesByName(string symbolName)
+    {
+        if (_csharpTypeContainingTypesByName.TryGetValue(symbolName, out var cached))
+            return cached;
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT DISTINCT s.container_kind, s.container_name, s.container_qualified_name, s.visibility, s.signature
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.lang = 'csharp'
+              AND s.name = @symbolName COLLATE NOCASE
+              AND s.kind IN ('class', 'struct', 'interface', 'enum', 'delegate')";
+        cmd.Parameters.AddWithValue("@symbolName", symbolName);
+
+        var containingTypes = new List<CSharpContainingTypeCandidate>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var containerKind = GetNullableString(reader, 0);
+            if (containerKind is not ("class" or "struct" or "interface"))
+                continue;
+
+            var containerQualifiedName = GetNullableString(reader, 2);
+            var containerName = GetNullableString(reader, 1);
+            var qualifiedContainer = NormalizeDbCSharpQualifiedName(containerQualifiedName ?? containerName ?? string.Empty);
+            if (!string.IsNullOrWhiteSpace(qualifiedContainer))
+            {
+                containingTypes.Add(new CSharpContainingTypeCandidate(
+                    qualifiedContainer,
+                    IsNestedCSharpTypeAccessibleFromDerivedType(GetNullableString(reader, 3), GetNullableString(reader, 4))));
+            }
+        }
+
+        _csharpTypeContainingTypesByName[symbolName] = containingTypes;
+        return containingTypes;
+    }
+
+    private HashSet<string> GetCSharpConstantPatternContainersByMemberName(string symbolName)
+    {
+        if (_csharpConstantPatternContainersByMemberName.TryGetValue(symbolName, out var cached))
+            return cached;
+
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = @"
+            SELECT s.kind, s.container_kind, s.container_name, s.container_qualified_name, s.signature
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.lang = 'csharp'
+              AND s.name = @symbolName COLLATE NOCASE
+              AND s.container_name IS NOT NULL";
+        cmd.Parameters.AddWithValue("@symbolName", symbolName);
+
+        var containers = new HashSet<string>(StringComparer.Ordinal);
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var kind = reader.GetString(0);
+            var containerKind = GetNullableString(reader, 1);
+            var containerName = GetNullableString(reader, 2);
+            if (string.IsNullOrWhiteSpace(containerName))
+                continue;
+
+            var isConstantPatternMember = (kind == "enum" && containerKind == "enum")
+                || (containerKind is "class" or "struct" && !reader.IsDBNull(4) && IsCSharpConstSignature(reader.GetString(4)));
+            if (!isConstantPatternMember)
+                continue;
+
+            var qualifiedContainer = GetNullableString(reader, 3);
+            containers.Add(string.IsNullOrWhiteSpace(qualifiedContainer) ? containerName! : qualifiedContainer!);
+        }
+
+        _csharpConstantPatternContainersByMemberName[symbolName] = containers;
+        return containers;
+    }
+
+    private static bool IsCSharpConstSignature(string signature) =>
+        signature.Contains(" const ", StringComparison.Ordinal)
+        || signature.StartsWith("const ", StringComparison.Ordinal);
+
+    private static string? NormalizeDbCSharpQualifiedName(string candidate)
+    {
+        var trimmed = candidate.Trim();
+        if (trimmed.StartsWith("global::", StringComparison.Ordinal))
+            trimmed = trimmed["global::".Length..];
+        if (string.IsNullOrWhiteSpace(trimmed))
+            return null;
+
+        var segments = trimmed
+            .Split(["::", "."], StringSplitOptions.None)
+            .Select(segment => segment.Trim())
+            .Where(segment => segment.Length > 0)
+            .Select(segment => segment[0] == '@' ? segment[1..] : segment)
+            .ToList();
+        return segments.Count == 0 ? null : string.Join(".", segments);
+    }
+
+    // Query-side mirror of the C# declaration canonicalizer. Users commonly type source
+    // spellings such as `@class` or `Outer.@class`; the DB stores the canonical names
+    // without the verbatim `@`, so query entrypoints normalize to the persisted form first.
+    // The normalization is applied when `--lang` is omitted or explicitly `csharp` because
+    // name-based lookup still needs to treat C# verbatim spellings as canonical symbol names.
+    // Other languages, including SQL, must preserve leading `@` characters.
+    // C# 宣言側 canonicalizer の query 側ミラー。`@class` / `Outer.@class` のような source
+    // spelling を受けても、DB 側の `@` なし canonical 名に合わせてから検索する。
+    // `--lang` 未指定または `csharp` 指定では name-based lookup が verbatim spelling を canonical 名へ寄せる。
+    // それ以外の言語、特に SQL では先頭 `@` を保持する。
+    private static string? NormalizeCSharpVerbatimQuery(string? query, string? lang)
+    {
+        if (!string.IsNullOrWhiteSpace(lang) && !string.Equals(lang, "csharp", StringComparison.OrdinalIgnoreCase))
+            return query;
+        var normalized = query == null ? null : NormalizeDbCSharpQualifiedName(query);
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
+
+    private static string? CombineDbQualifiedName(string? parentQualifiedName, string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return parentQualifiedName;
+        if (string.IsNullOrWhiteSpace(parentQualifiedName))
+            return name;
+        return $"{parentQualifiedName}.{name}";
+    }
+
+    private QueryCountResult CountSearchReferencesTotalWithUsingStaticFilter(string? query, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact)
+    {
+        if (!_hasReferencesTable)
+            return new QueryCountResult(0, 0);
+
+        using var cmd = CreateSearchReferencesCommand(
+            query,
+            int.MaxValue,
+            lang,
+            referenceKind,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            exact);
+        using var reader = cmd.ExecuteTrackedReader();
+
+        int count = 0;
+        bool includesSql = false;
+        var paths = new HashSet<string>(StringComparer.Ordinal);
+        while (reader.TrackedRead())
+        {
+            var row = ReadSearchReferenceRawRow(reader);
+            if (ShouldSuppressCSharpUsingStaticConstantPatternReference(row))
+                continue;
+
+            count++;
+            includesSql |= IsSqlLanguage(row.Lang);
+            paths.Add(row.Path);
+        }
+
+        return new QueryCountResult(count, paths.Count, includesSql);
     }
 
     public int CountSearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
+        query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
+        if (ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind, exact))
+            return SearchReferences(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact).Count;
+
         if (!_hasReferencesTable) return 0;
         using var cmd = _conn.CreateCommand();
 
@@ -825,20 +2950,43 @@ public partial class DbReader
         var countAliasScope = countSuffixAlias != null
             ? " AND f.lang = 'csharp' AND r.reference_kind = 'attribute'"
             : string.Empty;
+        const string sqlLeafCountScope = " AND f.lang = 'sql'";
         if (query != null)
         {
-            if (exact && _foldReady)
+            var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
+            var useSqlQualifiedContextMatch = SqlNameResolver.HasQualifier(query);
+            if (useSqlQualifiedContextMatch && exact && _foldReady)
                 innerSql += countSuffixAlias != null
-                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{countAliasScope}))"
-                    : " AND r.symbol_name_folded = @query";
+                    ? $" AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{countAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query))";
+            else if (useSqlQualifiedContextMatch && exact)
+                innerSql += countSuffixAlias != null
+                    ? $" AND (((f.lang = 'sql') AND sql_context_has_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_has_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE))";
+            else if (useSqlQualifiedContextMatch && _foldReady)
+                innerSql += countSuffixAlias != null
+                    ? $" AND (((f.lang = 'sql') AND sql_context_like_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_like_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+            else if (useSqlQualifiedContextMatch)
+                innerSql += countSuffixAlias != null
+                    ? $" AND (((f.lang = 'sql') AND sql_context_like_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_like_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+            else if (exact && _foldReady)
+                innerSql += countSuffixAlias != null
+                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{countAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafCountScope})" : string.Empty)})"
+                    : allowSqlLeafFallback
+                        ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafCountScope}))"
+                        : " AND r.symbol_name_folded = @query";
             else if (exact)
                 innerSql += countSuffixAlias != null
-                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}))"
-                    : " AND r.symbol_name = @query COLLATE NOCASE";
+                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafCountScope})" : string.Empty)})"
+                    : allowSqlLeafFallback
+                        ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafCountScope}))"
+                        : " AND r.symbol_name = @query COLLATE NOCASE";
             else
                 innerSql += countSuffixAlias != null
-                    ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}))"
-                    : " AND r.symbol_name LIKE @query ESCAPE '\\'";
+                    ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{countAliasScope}) OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafCountScope}))"
+                    : $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafCountScope}))";
         }
         if (referenceKind != null)
             innerSql += " AND r.reference_kind = @referenceKind";
@@ -858,6 +3006,8 @@ public partial class DbReader
                     ? NameFold.Fold(query) ?? query
                     : query;
             cmd.Parameters.AddWithValue("@query", value);
+            cmd.Parameters.AddWithValue("@aliasQuery", query);
+            cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
             if (countSuffixAlias != null)
             {
                 var aliasParam = exact && _foldReady
@@ -879,15 +3029,19 @@ public partial class DbReader
 
     public QueryCountResult CountSearchReferencesTotal(string? query = null, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
+        query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
+        if (ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind, exact))
+            return CountSearchReferencesTotalWithUsingStaticFilter(query, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact);
+
         if (!_hasReferencesTable)
             return new QueryCountResult(0, 0);
 
         using var cmd = _conn.CreateCommand();
 
         var innerSql = @"
-            SELECT path
+            SELECT path, lang
             FROM (
-                SELECT f.path AS path, r.file_id, r.symbol_name, r.line, r.column_number, " + GetLogicalReferenceKindSql("r.reference_kind") + @" AS logical_reference_kind
+                SELECT f.path AS path, f.lang AS lang, r.file_id, r.symbol_name, r.line, r.column_number, " + GetLogicalReferenceKindSql("r.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
                 WHERE 1=1";
@@ -897,20 +3051,43 @@ public partial class DbReader
         var totalAliasScope = totalSuffixAlias != null
             ? " AND f.lang = 'csharp' AND r.reference_kind = 'attribute'"
             : string.Empty;
+        const string sqlLeafTotalScope = " AND f.lang = 'sql'";
         if (query != null)
         {
-            if (exact && _foldReady)
+            var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
+            var useSqlQualifiedContextMatch = SqlNameResolver.HasQualifier(query);
+            if (useSqlQualifiedContextMatch && exact && _foldReady)
                 innerSql += totalSuffixAlias != null
-                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{totalAliasScope}))"
-                    : " AND r.symbol_name_folded = @query";
+                    ? $" AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{totalAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query))";
+            else if (useSqlQualifiedContextMatch && exact)
+                innerSql += totalSuffixAlias != null
+                    ? $" AND (((f.lang = 'sql') AND sql_context_has_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_has_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE))";
+            else if (useSqlQualifiedContextMatch && _foldReady)
+                innerSql += totalSuffixAlias != null
+                    ? $" AND (((f.lang = 'sql') AND sql_context_like_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_like_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+            else if (useSqlQualifiedContextMatch)
+                innerSql += totalSuffixAlias != null
+                    ? $" AND (((f.lang = 'sql') AND sql_context_like_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}))))"
+                    : " AND (((f.lang = 'sql') AND sql_context_like_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+            else if (exact && _foldReady)
+                innerSql += totalSuffixAlias != null
+                    ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @queryAttributeAlias{totalAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafTotalScope})" : string.Empty)})"
+                    : allowSqlLeafFallback
+                        ? $" AND (r.symbol_name_folded = @query OR (r.symbol_name_folded = @aliasQueryLeafFolded{sqlLeafTotalScope}))"
+                        : " AND r.symbol_name_folded = @query";
             else if (exact)
                 innerSql += totalSuffixAlias != null
-                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}))"
-                    : " AND r.symbol_name = @query COLLATE NOCASE";
+                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}){(allowSqlLeafFallback ? $" OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafTotalScope})" : string.Empty)})"
+                    : allowSqlLeafFallback
+                        ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafTotalScope}))"
+                        : " AND r.symbol_name = @query COLLATE NOCASE";
             else
                 innerSql += totalSuffixAlias != null
-                    ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}))"
-                    : " AND r.symbol_name LIKE @query ESCAPE '\\'";
+                    ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryAttributeAlias COLLATE NOCASE{totalAliasScope}) OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafTotalScope}))"
+                    : $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE{sqlLeafTotalScope}))";
         }
         if (referenceKind != null)
             innerSql += " AND r.reference_kind = @referenceKind";
@@ -918,10 +3095,10 @@ public partial class DbReader
             innerSql += " AND f.lang = @lang";
         AppendPathFilters(ref innerSql, pathPatterns, excludePathPatterns, excludeTests);
         if (referenceKind == null)
-            innerSql += $" GROUP BY f.path, r.file_id, r.symbol_name, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
+            innerSql += $" GROUP BY f.path, f.lang, r.file_id, r.symbol_name, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
         innerSql += ")";
 
-        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path) FROM ({innerSql})";
+        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path), MAX(CASE WHEN lang = 'sql' THEN 1 ELSE 0 END) FROM ({innerSql})";
         if (query != null)
         {
             var value = !exact
@@ -930,6 +3107,8 @@ public partial class DbReader
                     ? NameFold.Fold(query) ?? query
                     : query;
             cmd.Parameters.AddWithValue("@query", value);
+            cmd.Parameters.AddWithValue("@aliasQuery", query);
+            cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
             if (totalSuffixAlias != null)
             {
                 var aliasParam = exact && _foldReady
@@ -953,24 +3132,28 @@ public partial class DbReader
     /// </summary>
     public List<CallerResult> GetCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
+        query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
         if (!_hasReferencesTable) return new List<CallerResult>();
         using var cmd = _conn.CreateCommand();
 
         var sql = referenceKind == null
             ? $@"
             WITH logical_references AS (
-                SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.line
+                SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
+                       {GetGroupedCallerReferenceKindSql("r.reference_kind")} AS reference_kind,
+                       r.line
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
-                WHERE r.container_name IS NOT NULL
+                WHERE {BuildCallerContainerPredicate("f", "r")}
                   AND r.reference_kind IN {CallGraphReferenceKindsSql}
                   AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}"
             : @"
-            SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
-                   MIN(r.line) AS first_line, COUNT(*) AS reference_count
+            SELECT f.path, f.lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, r.symbol_name,
+                   r.reference_kind, MIN(r.line) AS first_line, COUNT(*) AS reference_count,
+                   GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
-            WHERE r.container_name IS NOT NULL";
+            WHERE " + BuildCallerContainerPredicate("f", "r");
         if (referenceKind != null)
             sql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
@@ -978,12 +3161,26 @@ public partial class DbReader
             sql += " AND r.reference_kind = @referenceKind";
         else
             sql += NonInvocationReferenceKindsExclusion;
-        if (exact && _foldReady)
-            sql += " AND r.symbol_name_folded = @query";
+        var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
+        var useSqlQualifiedContextMatch = SqlNameResolver.HasQualifier(query);
+        if (useSqlQualifiedContextMatch && exact && _foldReady)
+            sql += " AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query))";
+        else if (useSqlQualifiedContextMatch && exact)
+            sql += " AND (((f.lang = 'sql') AND sql_context_has_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE))";
+        else if (useSqlQualifiedContextMatch && _foldReady)
+            sql += " AND (((f.lang = 'sql') AND sql_context_like_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+        else if (useSqlQualifiedContextMatch)
+            sql += " AND (((f.lang = 'sql') AND sql_context_like_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+        else if (exact && _foldReady)
+            sql += allowSqlLeafFallback
+                ? " AND (r.symbol_name_folded = @query OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))"
+                : " AND r.symbol_name_folded = @query";
         else if (exact)
-            sql += " AND r.symbol_name = @query COLLATE NOCASE";
+            sql += allowSqlLeafFallback
+                ? " AND (r.symbol_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
+                : " AND r.symbol_name = @query COLLATE NOCASE";
         else
-            sql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+            sql += " AND (r.symbol_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
@@ -992,8 +3189,10 @@ public partial class DbReader
             sql += @"
                 GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number
             )
-            SELECT path, lang, container_kind, container_name, symbol_name,
-                   MIN(line) AS first_line, COUNT(*) AS reference_count
+            SELECT path, lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, symbol_name,
+                   " + GetGroupedCallerReferenceKindSql("r.reference_kind") + @" AS reference_kind,
+                   MIN(line) AS first_line, COUNT(*) AS reference_count,
+                   GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds
             FROM logical_references r
             GROUP BY path, lang, container_kind, container_name, symbol_name";
         }
@@ -1012,6 +3211,8 @@ public partial class DbReader
         else
             callersQueryParam = query;
         cmd.Parameters.AddWithValue("@query", callersQueryParam);
+        cmd.Parameters.AddWithValue("@aliasQuery", query);
+        cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
         cmd.Parameters.AddWithValue("@preferExactCase", exact ? 1 : 0);
         cmd.Parameters.AddWithValue("@rawQuery", exact ? query : string.Empty);
         cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
@@ -1026,6 +3227,8 @@ public partial class DbReader
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
+            var primaryKind = reader.GetString(5);
+            var kinds = ParseDistinctReferenceKinds(GetNullableString(reader, 8), primaryKind);
             results.Add(new CallerResult
             {
                 Path = reader.GetString(0),
@@ -1033,8 +3236,11 @@ public partial class DbReader
                 CallerKind = GetNullableString(reader, 2),
                 CallerName = GetNullableString(reader, 3),
                 CalleeName = reader.GetString(4),
-                FirstLine = reader.GetInt32(5),
-                ReferenceCount = reader.GetInt32(6),
+                ReferenceKind = primaryKind,
+                ReferenceKinds = kinds,
+                HasMixedReferenceKinds = kinds.Count > 1,
+                FirstLine = reader.GetInt32(6),
+                ReferenceCount = reader.GetInt32(7),
             });
         }
         return results;
@@ -1042,6 +3248,7 @@ public partial class DbReader
 
     public int CountCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
+        query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
         if (!_hasReferencesTable) return 0;
         using var cmd = _conn.CreateCommand();
         var groupedSql = @"
@@ -1051,19 +3258,33 @@ public partial class DbReader
                        r.container_name AS container_name, r.symbol_name AS symbol_name
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
-            WHERE r.container_name IS NOT NULL";
+            WHERE " + BuildCallerContainerPredicate("f", "r");
         groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
         if (referenceKind != null)
             groupedSql += " AND r.reference_kind = @referenceKind";
         else
             groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
-        if (exact && _foldReady)
-            groupedSql += " AND r.symbol_name_folded = @query";
+        var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
+        var useSqlQualifiedContextMatch = SqlNameResolver.HasQualifier(query);
+        if (useSqlQualifiedContextMatch && exact && _foldReady)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query))";
+        else if (useSqlQualifiedContextMatch && exact)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_context_has_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE))";
+        else if (useSqlQualifiedContextMatch && _foldReady)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_context_like_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+        else if (useSqlQualifiedContextMatch)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_context_like_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+        else if (exact && _foldReady)
+            groupedSql += allowSqlLeafFallback
+                ? " AND (r.symbol_name_folded = @query OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))"
+                : " AND r.symbol_name_folded = @query";
         else if (exact)
-            groupedSql += " AND r.symbol_name = @query COLLATE NOCASE";
+            groupedSql += allowSqlLeafFallback
+                ? " AND (r.symbol_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
+                : " AND r.symbol_name = @query COLLATE NOCASE";
         else
-            groupedSql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+            groupedSql += " AND (r.symbol_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
         if (lang != null)
             groupedSql += " AND f.lang = @lang";
         AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
@@ -1078,6 +3299,8 @@ public partial class DbReader
                 ? NameFold.Fold(query) ?? query
                 : query;
         cmd.Parameters.AddWithValue("@query", value);
+        cmd.Parameters.AddWithValue("@aliasQuery", query);
+        cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
@@ -1096,25 +3319,39 @@ public partial class DbReader
 
         using var cmd = _conn.CreateCommand();
         var groupedSql = @"
-            SELECT path
+            SELECT path, lang
             FROM (
                 SELECT f.path AS path, f.lang AS lang, r.container_kind AS container_kind,
                        r.container_name AS container_name, r.symbol_name AS symbol_name
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
-                WHERE r.container_name IS NOT NULL";
+                WHERE " + BuildCallerContainerPredicate("f", "r");
         groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
         if (referenceKind != null)
             groupedSql += " AND r.reference_kind = @referenceKind";
         else
             groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
-        if (exact && _foldReady)
-            groupedSql += " AND r.symbol_name_folded = @query";
+        var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
+        var useSqlQualifiedContextMatch = SqlNameResolver.HasQualifier(query);
+        if (useSqlQualifiedContextMatch && exact && _foldReady)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @query))";
+        else if (useSqlQualifiedContextMatch && exact)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_context_has_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE))";
+        else if (useSqlQualifiedContextMatch && _foldReady)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_context_like_name_folded_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+        else if (useSqlQualifiedContextMatch)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_context_like_name_at(r.context, @aliasQuery, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\'))";
+        else if (exact && _foldReady)
+            groupedSql += allowSqlLeafFallback
+                ? " AND (r.symbol_name_folded = @query OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))"
+                : " AND r.symbol_name_folded = @query";
         else if (exact)
-            groupedSql += " AND r.symbol_name = @query COLLATE NOCASE";
+            groupedSql += allowSqlLeafFallback
+                ? " AND (r.symbol_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
+                : " AND r.symbol_name = @query COLLATE NOCASE";
         else
-            groupedSql += " AND r.symbol_name LIKE @query ESCAPE '\\'";
+            groupedSql += " AND (r.symbol_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
         if (lang != null)
             groupedSql += " AND f.lang = @lang";
         AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
@@ -1122,13 +3359,15 @@ public partial class DbReader
             groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
         groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name";
 
-        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path) FROM ({groupedSql})";
+        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path), MAX(CASE WHEN lang = 'sql' THEN 1 ELSE 0 END) FROM ({groupedSql})";
         var value = !exact
             ? $"%{EscapeLikeQuery(query)}%"
             : _foldReady
                 ? NameFold.Fold(query) ?? query
                 : query;
         cmd.Parameters.AddWithValue("@query", value);
+        cmd.Parameters.AddWithValue("@aliasQuery", query);
+        cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
@@ -1144,6 +3383,7 @@ public partial class DbReader
     /// </summary>
     public List<CalleeResult> GetCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
+        query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
         if (!_hasReferencesTable) return new List<CalleeResult>();
         using var cmd = _conn.CreateCommand();
 
@@ -1160,7 +3400,8 @@ public partial class DbReader
                   AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}"
             : @"
             SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
-                   r.reference_kind, MIN(r.line) AS first_line, COUNT(*) AS reference_count
+                   r.reference_kind, MIN(r.line) AS first_line, COUNT(*) AS reference_count,
+                   GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
             WHERE r.container_name IS NOT NULL";
@@ -1171,12 +3412,22 @@ public partial class DbReader
             sql += " AND r.reference_kind = @referenceKind";
         else
             sql += NonInvocationReferenceKindsExclusion;
-        if (exact && _foldReady)
-            sql += " AND r.container_name_folded = @query";
+        var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
+        var useSqlQualifiedContainerMatch = SqlNameResolver.HasQualifier(query);
+        if (exact && useSqlQualifiedContainerMatch && _foldReady)
+            sql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name_folded(r.container_name) = @aliasQueryNormalizedFolded) OR ((f.lang != 'sql') AND r.container_name_folded = @query))";
+        else if (exact && useSqlQualifiedContainerMatch)
+            sql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name(r.container_name) = @aliasQueryNormalized COLLATE NOCASE) OR ((f.lang != 'sql') AND r.container_name = @query COLLATE NOCASE))";
+        else if (exact && _foldReady)
+            sql += allowSqlLeafFallback
+                ? " AND (r.container_name_folded = @query OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))"
+                : " AND r.container_name_folded = @query";
         else if (exact)
-            sql += " AND r.container_name = @query COLLATE NOCASE";
+            sql += allowSqlLeafFallback
+                ? " AND (r.container_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
+                : " AND r.container_name = @query COLLATE NOCASE";
         else
-            sql += " AND r.container_name LIKE @query ESCAPE '\\'";
+            sql += " AND (r.container_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))";
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
@@ -1186,7 +3437,8 @@ public partial class DbReader
                 GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number
             )
             SELECT path, lang, container_kind, container_name, symbol_name,
-                   reference_kind, MIN(line) AS first_line, COUNT(*) AS reference_count
+                   reference_kind, MIN(line) AS first_line, COUNT(*) AS reference_count,
+                   GROUP_CONCAT(DISTINCT reference_kind) AS reference_kinds
             FROM logical_references r
             GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind";
         }
@@ -1205,6 +3457,11 @@ public partial class DbReader
         else
             calleesQueryParam = query;
         cmd.Parameters.AddWithValue("@query", calleesQueryParam);
+        cmd.Parameters.AddWithValue("@aliasQuery", query);
+        cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
+        cmd.Parameters.AddWithValue("@aliasQueryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
+        cmd.Parameters.AddWithValue("@aliasQueryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
+        cmd.Parameters.AddWithValue("@aliasQuerySegmentCount", SqlNameResolver.GetSegmentCount(query));
         cmd.Parameters.AddWithValue("@preferExactCase", exact ? 1 : 0);
         cmd.Parameters.AddWithValue("@rawQuery", exact ? query : string.Empty);
         cmd.Parameters.AddWithValue("@rankingQuery", query.Trim());
@@ -1219,6 +3476,8 @@ public partial class DbReader
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
+            var primaryKind = reader.GetString(5);
+            var kinds = ParseDistinctReferenceKinds(GetNullableString(reader, 8), primaryKind);
             results.Add(new CalleeResult
             {
                 Path = reader.GetString(0),
@@ -1226,7 +3485,9 @@ public partial class DbReader
                 CallerKind = GetNullableString(reader, 2),
                 CallerName = GetNullableString(reader, 3),
                 CalleeName = reader.GetString(4),
-                ReferenceKind = reader.GetString(5),
+                ReferenceKind = primaryKind,
+                ReferenceKinds = kinds,
+                HasMixedReferenceKinds = kinds.Count > 1,
                 FirstLine = reader.GetInt32(6),
                 ReferenceCount = reader.GetInt32(7),
             });
@@ -1236,6 +3497,7 @@ public partial class DbReader
 
     public int CountCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
+        query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
         if (!_hasReferencesTable) return 0;
         using var cmd = _conn.CreateCommand();
         var groupedSql = @"
@@ -1255,12 +3517,22 @@ public partial class DbReader
             groupedSql += " AND r.reference_kind = @referenceKind";
         else
             groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
-        if (exact && _foldReady)
-            groupedSql += " AND r.container_name_folded = @query";
+        var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
+        var useSqlQualifiedContainerMatch = SqlNameResolver.HasQualifier(query);
+        if (exact && useSqlQualifiedContainerMatch && _foldReady)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name_folded(r.container_name) = @aliasQueryNormalizedFolded) OR ((f.lang != 'sql') AND r.container_name_folded = @query))";
+        else if (exact && useSqlQualifiedContainerMatch)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name(r.container_name) = @aliasQueryNormalized COLLATE NOCASE) OR ((f.lang != 'sql') AND r.container_name = @query COLLATE NOCASE))";
+        else if (exact && _foldReady)
+            groupedSql += allowSqlLeafFallback
+                ? " AND (r.container_name_folded = @query OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))"
+                : " AND r.container_name_folded = @query";
         else if (exact)
-            groupedSql += " AND r.container_name = @query COLLATE NOCASE";
+            groupedSql += allowSqlLeafFallback
+                ? " AND (r.container_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
+                : " AND r.container_name = @query COLLATE NOCASE";
         else
-            groupedSql += " AND r.container_name LIKE @query ESCAPE '\\'";
+            groupedSql += " AND (r.container_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))";
         if (lang != null)
             groupedSql += " AND f.lang = @lang";
         AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
@@ -1275,6 +3547,11 @@ public partial class DbReader
                 ? NameFold.Fold(query) ?? query
                 : query;
         cmd.Parameters.AddWithValue("@query", value);
+        cmd.Parameters.AddWithValue("@aliasQuery", query);
+        cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
+        cmd.Parameters.AddWithValue("@aliasQueryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
+        cmd.Parameters.AddWithValue("@aliasQueryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
+        cmd.Parameters.AddWithValue("@aliasQuerySegmentCount", SqlNameResolver.GetSegmentCount(query));
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
@@ -1293,7 +3570,7 @@ public partial class DbReader
 
         using var cmd = _conn.CreateCommand();
         var groupedSql = @"
-            SELECT path
+            SELECT path, lang
             FROM (
                 SELECT f.path AS path, f.lang AS lang, r.container_kind AS container_kind,
                        r.container_name AS container_name, r.symbol_name AS symbol_name,
@@ -1309,12 +3586,22 @@ public partial class DbReader
             groupedSql += " AND r.reference_kind = @referenceKind";
         else
             groupedSql += $" AND r.reference_kind IN {CallGraphReferenceKindsSql}";
-        if (exact && _foldReady)
-            groupedSql += " AND r.container_name_folded = @query";
+        var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
+        var useSqlQualifiedContainerMatch = SqlNameResolver.HasQualifier(query);
+        if (exact && useSqlQualifiedContainerMatch && _foldReady)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name_folded(r.container_name) = @aliasQueryNormalizedFolded) OR ((f.lang != 'sql') AND r.container_name_folded = @query))";
+        else if (exact && useSqlQualifiedContainerMatch)
+            groupedSql += " AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name(r.container_name) = @aliasQueryNormalized COLLATE NOCASE) OR ((f.lang != 'sql') AND r.container_name = @query COLLATE NOCASE))";
+        else if (exact && _foldReady)
+            groupedSql += allowSqlLeafFallback
+                ? " AND (r.container_name_folded = @query OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))"
+                : " AND r.container_name_folded = @query";
         else if (exact)
-            groupedSql += " AND r.container_name = @query COLLATE NOCASE";
+            groupedSql += allowSqlLeafFallback
+                ? " AND (r.container_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
+                : " AND r.container_name = @query COLLATE NOCASE";
         else
-            groupedSql += " AND r.container_name LIKE @query ESCAPE '\\'";
+            groupedSql += " AND (r.container_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))";
         if (lang != null)
             groupedSql += " AND f.lang = @lang";
         AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
@@ -1322,13 +3609,18 @@ public partial class DbReader
             groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {GetLogicalReferenceKindSql("r.reference_kind")}";
         groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind";
 
-        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path) FROM ({groupedSql})";
+        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path), MAX(CASE WHEN lang = 'sql' THEN 1 ELSE 0 END) FROM ({groupedSql})";
         var value = !exact
             ? $"%{EscapeLikeQuery(query)}%"
             : _foldReady
                 ? NameFold.Fold(query) ?? query
                 : query;
         cmd.Parameters.AddWithValue("@query", value);
+        cmd.Parameters.AddWithValue("@aliasQuery", query);
+        cmd.Parameters.AddWithValue("@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
+        cmd.Parameters.AddWithValue("@aliasQueryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
+        cmd.Parameters.AddWithValue("@aliasQueryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
+        cmd.Parameters.AddWithValue("@aliasQuerySegmentCount", SqlNameResolver.GetSegmentCount(query));
         if (referenceKind != null)
             cmd.Parameters.AddWithValue("@referenceKind", referenceKind);
         if (lang != null)
@@ -1348,23 +3640,45 @@ public partial class DbReader
     /// </summary>
     private string ResolveSymbolName(string symbolName, string? lang)
     {
+        var normalizedSymbolName = NormalizeCSharpVerbatimQuery(symbolName, lang) ?? symbolName;
         // Exact lookup mirrors the leaf `--exact` readers: folded equality when FoldReady,
         // ASCII `COLLATE NOCASE` fallback on legacy / partial-backfill DBs.
         // No path/test filters — definitions outside caller scope must still be found.
         // Only considers graph-supported languages to avoid resolving to unsupported ones.
         // FoldReady なら folded equality、legacy DB では ASCII `COLLATE NOCASE` にフォールバック。
+        var normalizedName = SqlNameResolver.NormalizeQualifiedName(normalizedSymbolName);
+        var leafName = SqlNameResolver.GetLeafName(normalizedSymbolName);
+        var segmentCount = SqlNameResolver.GetSegmentCount(normalizedSymbolName);
+        var allowLeafFallback = !SqlNameResolver.HasQualifier(normalizedSymbolName);
         using var cmd = _conn.CreateCommand();
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "resolveLang");
         var nameCondition = _foldReady
-            ? "s.name_folded = @nameFolded"
-            : "s.name = @name COLLATE NOCASE";
+            ? allowLeafFallback
+                ? "(s.name_folded = @nameFolded OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @segmentCount AND sql_normalize_name_folded(s.name) = @normalizedNameFolded) OR sql_leaf_name_folded(s.name) = @leafNameFolded)))"
+                : "(s.name_folded = @nameFolded OR (f.lang = 'sql' AND sql_segment_count(s.name) = @segmentCount AND sql_normalize_name_folded(s.name) = @normalizedNameFolded))"
+            : allowLeafFallback
+                ? "(s.name = @name COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @segmentCount AND sql_normalize_name(s.name) = @normalizedName COLLATE NOCASE) OR sql_leaf_name(s.name) = @leafName COLLATE NOCASE)))"
+                : "(s.name = @name COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @segmentCount AND sql_normalize_name(s.name) = @normalizedName COLLATE NOCASE))";
         cmd.CommandText = @"SELECT s.name FROM symbols s JOIN files f ON s.file_id = f.id
                             WHERE " + nameCondition + @"
                               AND " + supportedLangFilter + @"
-                            ORDER BY CASE WHEN s.name = @name THEN 0 ELSE 1 END LIMIT 1";
-        cmd.Parameters.AddWithValue("@name", symbolName);
+                            ORDER BY CASE
+                                         WHEN s.name = @name THEN 0
+                                         WHEN f.lang = 'sql' AND sql_segment_count(s.name) = @segmentCount AND sql_normalize_name(s.name) = @normalizedName THEN 1
+                                         WHEN f.lang = 'sql' AND sql_segment_count(s.name) = @segmentCount AND sql_normalize_name_folded(s.name) = @normalizedNameFolded THEN 2
+                                         WHEN @allowLeafFallback = 1 AND f.lang = 'sql' AND sql_leaf_name(s.name) = @leafName THEN 3
+                                         WHEN @allowLeafFallback = 1 AND f.lang = 'sql' AND sql_leaf_name_folded(s.name) = @leafNameFolded THEN 4
+                                         ELSE 5
+                                     END LIMIT 1";
+        cmd.Parameters.AddWithValue("@name", normalizedSymbolName);
+        cmd.Parameters.AddWithValue("@normalizedName", normalizedName);
+        cmd.Parameters.AddWithValue("@normalizedNameFolded", NameFold.Fold(normalizedName) ?? normalizedName);
+        cmd.Parameters.AddWithValue("@leafName", leafName);
+        cmd.Parameters.AddWithValue("@leafNameFolded", NameFold.Fold(leafName) ?? leafName);
+        cmd.Parameters.AddWithValue("@segmentCount", segmentCount);
+        cmd.Parameters.AddWithValue("@allowLeafFallback", allowLeafFallback ? 1 : 0);
         if (_foldReady)
-            cmd.Parameters.AddWithValue("@nameFolded", NameFold.Fold(symbolName) ?? symbolName);
+            cmd.Parameters.AddWithValue("@nameFolded", NameFold.Fold(normalizedSymbolName) ?? normalizedSymbolName);
         using var reader = cmd.ExecuteTrackedReader();
         return reader.TrackedRead() ? reader.GetString(0) : symbolName;
     }
@@ -1389,11 +3703,18 @@ public partial class DbReader
         // caller rows whose stored callee casing differs from the resolved definition.
         // caller 側も leaf `--exact` と同じく FoldReady なら folded equality、legacy DB では
         // `COLLATE NOCASE` fallback。definition と caller 行の casing 差もここで吸収する。
+        var allowSqlLeafFallback = !SqlNameResolver.HasQualifier(symbolName);
         var nameCondition = _foldReady
-            ? @"
-              AND r.symbol_name_folded = @symbolNameFolded"
-            : @"
-              AND r.symbol_name = @symbolName COLLATE NOCASE";
+            ? allowSqlLeafFallback
+                ? @"
+              AND (r.symbol_name_folded = @symbolNameFolded OR (f.lang = 'sql' AND r.symbol_name_folded = @symbolNameLeafFolded))"
+                : @"
+              AND (((f.lang = 'sql') AND sql_context_has_name_folded_at(r.context, @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name_folded = @symbolNameFolded))"
+            : allowSqlLeafFallback
+                ? @"
+              AND (r.symbol_name = @symbolName COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@symbolName) COLLATE NOCASE))"
+                : @"
+              AND (((f.lang = 'sql') AND sql_context_has_name_at(r.context, @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @symbolName COLLATE NOCASE))";
 
         // impact BFS must share the call-graph contract with `callers`/`callees`/`hotspots`,
         // so event subscriptions (`Click += OnClick`) also participate in the transitive
@@ -1401,12 +3722,13 @@ public partial class DbReader
         // impact の BFS は `callers`/`callees`/`hotspots` と同じ call-graph 契約を共有し、
         // `subscribe` エッジ（`Click += OnClick` 等）も推移 caller に含める。`attribute` /
         // `annotation` のような metadata エッジは引き続き除外する。
+        var callerContainerPredicate = BuildCallerContainerPredicate("f", "r");
         var sql = $@"
             WITH logical_references AS (
                 SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.line
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
-                WHERE r.container_name IS NOT NULL
+                WHERE {callerContainerPredicate}
                   AND r.reference_kind IN {CallGraphReferenceKindsSql}
                   AND {supportedLangFilter}
                   {nameCondition}";
@@ -1416,7 +3738,7 @@ public partial class DbReader
         sql += @"
                 GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number
             )
-            SELECT path, lang, container_kind, container_name, symbol_name,
+            SELECT path, lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, symbol_name,
                    MIN(line) AS first_line, COUNT(*) AS reference_count
             FROM logical_references r
             GROUP BY path, lang, container_kind, container_name, symbol_name";
@@ -1424,6 +3746,7 @@ public partial class DbReader
 
         cmd.CommandText = sql;
         cmd.Parameters.AddWithValue("@symbolName", symbolName);
+        cmd.Parameters.AddWithValue("@symbolNameLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(symbolName)) ?? SqlNameResolver.GetLeafName(symbolName));
         if (_foldReady)
             cmd.Parameters.AddWithValue("@symbolNameFolded", NameFold.Fold(symbolName) ?? symbolName);
         if (lang != null)
@@ -1505,7 +3828,7 @@ public partial class DbReader
                         break;
                     }
 
-                    var callerName = caller.CallerName ?? "<top-level>";
+                    var callerName = caller.CallerName ?? SyntheticTopLevelCallerName;
                     var key = $"{caller.Path}:{callerName}";
 
                     if (!visited.Add(key))
@@ -1523,7 +3846,9 @@ public partial class DbReader
                         ReferenceCount = caller.ReferenceCount,
                     });
 
-                    if (caller.CallerName != null && depth + 1 < maxDepth)
+                    if (caller.CallerName != null
+                        && caller.CallerName != SyntheticTopLevelCallerName
+                        && depth + 1 < maxDepth)
                         queue.Enqueue((caller.CallerName, depth + 1));
                 }
 
@@ -1651,11 +3976,19 @@ public partial class DbReader
 
     private List<SymbolResult> ResolveImpactDefinitions(string resolvedName, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
+        var normalizedName = SqlNameResolver.NormalizeQualifiedName(resolvedName);
+        var leafName = SqlNameResolver.GetLeafName(resolvedName);
+        var segmentCount = SqlNameResolver.GetSegmentCount(resolvedName);
+        var allowLeafFallback = !SqlNameResolver.HasQualifier(resolvedName);
         using var cmd = _conn.CreateCommand();
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "impactDefLang");
         var nameCondition = _foldReady
-            ? "s.name_folded = @resolvedNameFolded"
-            : "s.name = @resolvedName COLLATE NOCASE";
+            ? allowLeafFallback
+                ? "(s.name_folded = @resolvedNameFolded OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name_folded(s.name) = @resolvedNameNormalizedFolded) OR sql_leaf_name_folded(s.name) = @resolvedNameLeafFolded)))"
+                : "(s.name_folded = @resolvedNameFolded OR (f.lang = 'sql' AND sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name_folded(s.name) = @resolvedNameNormalizedFolded))"
+            : allowLeafFallback
+                ? "(s.name = @resolvedName COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name(s.name) = @resolvedNameNormalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @resolvedNameLeaf COLLATE NOCASE)))"
+                : "(s.name = @resolvedName COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name(s.name) = @resolvedNameNormalized COLLATE NOCASE))";
         var sql = $@"
             SELECT f.path, f.lang, s.kind, s.name, s.line,
                    {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
@@ -1675,10 +4008,23 @@ public partial class DbReader
         if (lang != null)
             sql += " AND f.lang = @lang";
         AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $" ORDER BY CASE WHEN s.name = @resolvedName THEN 0 ELSE 1 END, {PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line LIMIT @limit";
+        sql += @" ORDER BY CASE
+                     WHEN s.name = @resolvedName THEN 0
+                     WHEN f.lang = 'sql' AND sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name(s.name) = @resolvedNameNormalized THEN 1
+                     WHEN f.lang = 'sql' AND sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name_folded(s.name) = @resolvedNameNormalizedFolded THEN 2
+                     WHEN @allowLeafFallback = 1 AND f.lang = 'sql' AND sql_leaf_name(s.name) = @resolvedNameLeaf THEN 3
+                     WHEN @allowLeafFallback = 1 AND f.lang = 'sql' AND sql_leaf_name_folded(s.name) = @resolvedNameLeafFolded THEN 4
+                     ELSE 5
+                   END, " + $"{PathBucketOrder}, {VisibilityOrder}, s.name, f.path, s.line LIMIT @limit";
 
         cmd.CommandText = sql;
         cmd.Parameters.AddWithValue("@resolvedName", resolvedName);
+        cmd.Parameters.AddWithValue("@resolvedNameNormalized", normalizedName);
+        cmd.Parameters.AddWithValue("@resolvedNameNormalizedFolded", NameFold.Fold(normalizedName) ?? normalizedName);
+        cmd.Parameters.AddWithValue("@resolvedNameLeaf", leafName);
+        cmd.Parameters.AddWithValue("@resolvedNameLeafFolded", NameFold.Fold(leafName) ?? leafName);
+        cmd.Parameters.AddWithValue("@resolvedNameSegmentCount", segmentCount);
+        cmd.Parameters.AddWithValue("@allowLeafFallback", allowLeafFallback ? 1 : 0);
         if (_foldReady)
             cmd.Parameters.AddWithValue("@resolvedNameFolded", NameFold.Fold(resolvedName) ?? resolvedName);
         if (lang != null)
@@ -2034,7 +4380,18 @@ public partial class DbReader
         cmd.CommandText = sql;
         cmd.Parameters.AddWithValue("@metadataAmbigName", definition.Name);
         var count = Convert.ToInt32(cmd.ExecuteScalar() ?? 0);
-        return count <= 1;
+        // Require exactly one authoritative metadata target named `definition.Name`.
+        // `count == 0` is also unsafe for the bypass — if no class-like symbol with
+        // that name is a valid metadata target, then a `[Foo]` reference cannot
+        // resolve to the passed-in definition either. `count <= 1` would let the
+        // bypass fire with zero candidates and falsely attribute `[Foo]` sites to a
+        // non-attribute definition (e.g. `class FooAttribute : BaseService` post
+        // #435 iter 4 scope-aware resolver). Issue #435 codex review iter 4.
+        // 1 件厳密一致のみ unambiguous とみなす。count=0 はメタデータターゲットが
+        // 一つも無い状態であり、`[Foo]` が passed-in 定義へ解決する根拠も無いため
+        // bypass は発動させない。`<= 1` だと #435 iter 4 のスコープ対応で非属性
+        // 派生になったクラスに `[Foo]` 参照を誤帰属させる。
+        return count == 1;
     }
 
     private bool SourceFileHasStructuredTypeEvidence(long fileId, string typeName)
@@ -2454,6 +4811,19 @@ public partial class DbReader
     /// </summary>
     public StatusResult GetStatus()
     {
+        // Issue #180: wrap the multi-statement status read in one DEFERRED transaction so
+        // every COUNT(*) / freshness / readiness query resolves against the same WAL
+        // snapshot. Without this, a concurrent writer that commits between the first and
+        // last statement can expose wildly inconsistent counts (e.g. `refs: 0` against a
+        // steady-state 44k while an incremental update is mid-flight). DEFERRED avoids
+        // acquiring a write lock — the transaction grabs a SHARED lock on the first SELECT
+        // and holds one consistent snapshot until Commit releases it.
+        // Issue #180: 複数 SELECT を 1 つの DEFERRED transaction で囲み、全 COUNT(*) /
+        // freshness / readiness クエリを同じ WAL snapshot で解決する。これが無いと、
+        // 並行 writer が途中で commit した際に「refs: 0 なのに files=836」のような不整合
+        // が見える。DEFERRED は最初の SELECT で SHARED lock を取るのみで write lock を
+        // 握らないため、別 writer を阻害しない。
+        using var txn = _conn.BeginTransaction(deferred: true);
         var files = ExecuteScalar("SELECT COUNT(*) FROM files");
         var chunks = ExecuteScalar("SELECT COUNT(*) FROM chunks");
         var symbols = ExecuteScalar("SELECT COUNT(*) FROM symbols");
@@ -2461,16 +4831,36 @@ public partial class DbReader
         var freshness = GetWorkspaceFreshness();
         var hasCSharpFiles = ScopeMayIncludeCSharpFiles("csharp", pathPatterns: null, excludePathPatterns: null, excludeTests: false, since: null);
         var csharpSymbolNameReady = !hasCSharpFiles || _csharpSymbolNameContractCurrent;
+        // #435 codex review iter 3: mirror `csharp_symbol_name_ready` — the readiness flag
+        // only applies when the workspace actually contains C# files, and the column +
+        // stamp must match the current contract for the resolver edges to be trusted.
+        // This surfaces the same flag we already emit from the CLI `index` JSON so that
+        // `status --json` and MCP `status` expose a consistent trust signal (README /
+        // CLAUDE.md contract).
+        // #435 codex review iter 3: `csharp_symbol_name_ready` と同じ条件で expose する。
+        // C# ファイルが 0 なら ready=true、そうでなければ列 + stamp の一致を要求する。
+        var csharpMetadataTargetReady = !hasCSharpFiles || _csharpMetadataTargetReady;
+        var sqlGraphContractSignal = GetSqlGraphContractSignal(lang: null);
+        var hotspotFamilySignal = GetHotspotFamilySignal(lang: null);
+        var foldReadyReason = ResolveFoldReadyReason();
 
         // Language breakdown / 言語別内訳
+        // Scope the reader in an inner block so it releases its statement handle before
+        // we Commit() the enclosing txn — `SqliteTransaction.Commit()` fails if any
+        // reader on the same connection is still open.
+        // reader を内側ブロックに閉じ込め、txn.Commit() の前に statement handle を
+        // 解放する。SqliteTransaction.Commit() は同じ connection 上で開いている reader
+        // があると失敗する。
         var langs = new Dictionary<string, long>();
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "SELECT lang, COUNT(*) FROM files WHERE lang IS NOT NULL GROUP BY lang ORDER BY COUNT(*) DESC";
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
-            langs[reader.GetString(0)] = reader.GetInt64(1);
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "SELECT lang, COUNT(*) FROM files WHERE lang IS NOT NULL GROUP BY lang ORDER BY COUNT(*) DESC";
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+                langs[reader.GetString(0)] = reader.GetInt64(1);
+        }
 
-        return new StatusResult
+        var result = new StatusResult
         {
             Files = files,
             Chunks = chunks,
@@ -2481,9 +4871,19 @@ public partial class DbReader
             Languages = langs,
             GraphTableAvailable = _hasReferencesTable,
             IssuesTableAvailable = _hasIssuesTable,
+            HotspotFamilyReady = hotspotFamilySignal.Ready,
+            HotspotFamilyDegradedReason = hotspotFamilySignal.DegradedReason,
             CSharpSymbolNameReady = csharpSymbolNameReady,
+            CSharpMetadataTargetReady = csharpMetadataTargetReady,
+            SqlGraphContractReady = sqlGraphContractSignal.Ready,
+            SqlGraphContractDegradedReason = sqlGraphContractSignal.DegradedReason,
             FoldReady = _foldReady,
+            FoldReadyReason = foldReadyReason,
         };
+        // Commit the read-only snapshot explicitly so the SHARED lock is released promptly.
+        // read-only なので rollback でも同じだが、明示 commit して SHARED lock を早期解放する。
+        txn.Commit();
+        return result;
     }
 
     /// <summary>
@@ -2563,7 +4963,7 @@ public partial class DbReader
         return columns;
     }
 
-    private string GetSymbolColumnSql(string columnName, string? fallbackSql = null)
+    private string GetSymbolColumnSql(string columnName, string? fallbackSql = null, string symbolAlias = "s")
     {
         if (_symbolColumns.Contains(columnName))
         {
@@ -2572,8 +4972,8 @@ public partial class DbReader
             // 古いバイナリがカラムだけ追加して既存行を NULL のまま残しているケースに備え、
             // fallback と COALESCE してレガシーインデックスでクラッシュしないようにする。
             return fallbackSql != null
-                ? $"COALESCE(s.{columnName}, {fallbackSql})"
-                : $"s.{columnName}";
+                ? $"COALESCE({symbolAlias}.{columnName}, {fallbackSql})"
+                : $"{symbolAlias}.{columnName}";
         }
 
         return fallbackSql ?? "NULL";
@@ -2649,9 +5049,32 @@ public partial class DbReader
         // NULL signature は C# 命名規約 `name LIKE '%Attribute'` に縮退 — 従来の
         // 無条件許容より厳密で、legacy-migration DB で任意の NULL-signature class が
         // metadata target 扱いされるのを防ぐ。signature 列欠落 DB も同じ命名規約を使う。
-        var csharpClause = _symbolColumns.Contains("signature")
-            ? $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND ((s.signature IS NOT NULL AND s.signature LIKE '%: %') OR (s.signature IS NULL AND s.name LIKE '%Attribute')))"
-            : $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND s.name LIKE '%Attribute')";
+        // Authoritative column takes precedence once the writer's resolver has stamped the
+        // current `metadata_target_version_csharp` version. Drops the `: %` heuristic for C#
+        // so non-attribute classes like `class MyAuditAttribute : BaseService` no longer fake
+        // ambiguity against a sibling real `class MyAuditAttribute : Attribute`. Issue #435.
+        // writer の resolver が current version を stamp 済みの DB では authoritative 列を優先し、
+        // `class MyAuditAttribute : BaseService` のような非 Attribute 派生を ambiguity から除外する。
+        // Three-way branch keyed off the `is_metadata_target` column presence, not
+        // `signature`. Branch (2) (legacy heuristic) must only fire when both the new
+        // column and the old signature column are present — a DB missing
+        // `is_metadata_target` entirely is truly ancient and must degrade to branch (3).
+        // Issue #435 codex review.
+        // 3 way 分岐は `is_metadata_target` 列の有無で切り替え、`signature` の有無では判定しない。
+        // `is_metadata_target` 列すらない DB は真に古い legacy なので命名規約 fallback (branch 3) に落とす。
+        string csharpClause;
+        if (_csharpMetadataTargetReady)
+        {
+            csharpClause = $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND s.is_metadata_target = 1)";
+        }
+        else if (_symbolColumns.Contains("is_metadata_target") && _symbolColumns.Contains("signature"))
+        {
+            csharpClause = $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND ((s.signature IS NOT NULL AND s.signature LIKE '%: %') OR (s.signature IS NULL AND s.name LIKE '%Attribute')))";
+        }
+        else
+        {
+            csharpClause = $"({fileAlias}.lang = 'csharp' AND s.kind = 'class' AND s.name LIKE '%Attribute')";
+        }
         // JS / TS clause — decorators target runtime entities (classes and factory
         // functions). TS `interface` is a type-only construct that cannot be a
         // decorator target, so excluding it avoids false ambiguity against a
@@ -2665,6 +5088,37 @@ public partial class DbReader
         var otherClause = $"({fileAlias}.lang NOT IN ('csharp','javascript','typescript') AND s.kind IN ('class','struct','interface'))";
         return $"({csharpClause} OR {jsClause} OR {otherClause})";
     }
+
+    // `deps` keeps persisted SQL symbol names qualified (`dbo.fn_X`) but must
+    // still join bare SQL reference rows (`fn_X`) back to that definition.
+    // Normalize dependency target keys to logical qualified names for SQL while leaving
+    // other languages on the stored symbol name. SQL reference rows can still fall back to
+    // leaf-only matching at join time when the source site itself is unqualified.
+    // SQL の依存 target key は qualified 名 (`dbo.fn_X`) に正規化し、他言語は保存名のまま。
+    // SQL の source 側が unqualified (`fn_X`) の場合だけ join 時に leaf fallback を許可する。
+    private static string BuildLogicalDependencySymbolNameExpr(string fileAlias, string symbolNameExpr)
+        => $"CASE WHEN {fileAlias}.lang = 'sql' THEN sql_normalize_name({symbolNameExpr}) ELSE {symbolNameExpr} END";
+
+    private static string BuildLogicalDependencySymbolSegmentCountExpr(string fileAlias, string symbolNameExpr)
+        => $"CASE WHEN {fileAlias}.lang = 'sql' THEN sql_segment_count({symbolNameExpr}) ELSE 1 END";
+
+    private static string BuildLogicalReferenceNameExpr(string langExpr, string symbolNameExpr, string contextExpr, string containerNameExpr, string columnNumberExpr)
+        => $@"CASE
+                WHEN {langExpr} = 'sql' THEN sql_resolve_reference_name_at({symbolNameExpr}, {contextExpr}, {containerNameExpr}, {columnNumberExpr})
+                ELSE {symbolNameExpr}
+            END";
+
+    private static string BuildLogicalReferenceSegmentCountExpr(string langExpr, string symbolNameExpr, string contextExpr, string containerNameExpr, string columnNumberExpr)
+        => $@"CASE
+                WHEN {langExpr} = 'sql' THEN sql_resolve_reference_segment_count_at({symbolNameExpr}, {contextExpr}, {containerNameExpr}, {columnNumberExpr})
+                ELSE 1
+            END";
+
+    private static string BuildLogicalReferenceLeafFallbackAllowedExpr(string langExpr, string symbolNameExpr, string contextExpr, string containerNameExpr, string columnNumberExpr)
+        => $@"CASE
+                WHEN {langExpr} = 'sql' THEN sql_allow_leaf_fallback_at({symbolNameExpr}, {contextExpr}, {containerNameExpr}, {columnNumberExpr})
+                ELSE 0
+            END";
 
     /// <summary>
     /// Compute file-level dependency edges: which files reference symbols defined in which other files.
@@ -2682,12 +5136,40 @@ public partial class DbReader
         // per-reference × per-symbol の膨張を防ぐ。
         var sourceFilterAlias = "src";
         var targetFilterAlias = "dst";
+        var targetLogicalSymbolNameExpr = BuildLogicalDependencySymbolNameExpr("dst", "s.name");
+        var targetLogicalSymbolSegmentCountExpr = BuildLogicalDependencySymbolSegmentCountExpr("dst", "s.name");
+        var sqlDependencyTargetMatchExpr = @"(
+                    (tf.target_lang != 'sql' AND tf.symbol_name = snc.symbol_name)
+                 OR (tf.target_lang = 'sql' AND (
+                        (tf.symbol_segment_count = snc.symbol_segment_count AND tf.symbol_name = snc.symbol_name COLLATE NOCASE)
+                     OR (sql_segment_count(snc.raw_symbol_name) = 1
+                         AND snc.allow_leaf_fallback = 1
+                         AND tf.symbol_segment_count > 1
+                         AND sql_leaf_name(tf.symbol_name) = snc.raw_symbol_name COLLATE NOCASE
+                         AND NOT EXISTS (
+                                SELECT 1
+                                FROM target_files tf_exact
+                                WHERE tf_exact.target_lang = tf.target_lang
+                                  AND tf_exact.symbol_segment_count = 1
+                                  AND tf_exact.symbol_name = snc.symbol_name COLLATE NOCASE
+                            )
+                         AND NOT EXISTS (
+                                SELECT 1
+                                FROM target_files tf_resolved
+                                WHERE tf_resolved.target_lang = tf.target_lang
+                                  AND tf_resolved.symbol_segment_count = snc.symbol_segment_count
+                                  AND tf_resolved.symbol_name = snc.symbol_name COLLATE NOCASE
+                            ))
+                 ))
+                )";
         var sql = @"
             WITH logical_references_primary AS (
                 SELECT src.id AS source_file_id,
                        src.path AS source_path,
                        src.lang AS source_lang,
                        r.symbol_name,
+                       r.context,
+                       r.container_name,
                        r.line,
                        r.column_number,
                        " + GetLogicalReferenceKindSql("r.reference_kind") + @" AS logical_reference_kind
@@ -2727,10 +5209,15 @@ public partial class DbReader
         if (!reverse && excludeTests)
             sql += $" AND NOT {TestPathCondition.Replace("f.path", $"{sourceFilterAlias}.path")}";
         sql += @"
-                GROUP BY src.id, src.path, src.lang, r.symbol_name, r.line, r.column_number, logical_reference_kind
+                GROUP BY src.id, src.path, src.lang, r.symbol_name, r.context, r.container_name, r.line, r.column_number, logical_reference_kind
             ),
             logical_references AS (
-                SELECT source_file_id, source_path, source_lang, symbol_name, line, column_number, logical_reference_kind,
+                SELECT source_file_id, source_path, source_lang,
+                       " + BuildLogicalReferenceNameExpr("source_lang", "symbol_name", "context", "container_name", "column_number") + @" AS symbol_name,
+                       " + BuildLogicalReferenceSegmentCountExpr("source_lang", "symbol_name", "context", "container_name", "column_number") + @" AS symbol_segment_count,
+                       " + BuildLogicalReferenceLeafFallbackAllowedExpr("source_lang", "symbol_name", "context", "container_name", "column_number") + @" AS allow_leaf_fallback,
+                       symbol_name AS raw_symbol_name,
+                       line, column_number, logical_reference_kind,
                        0 AS is_attribute_alias,
                        CASE WHEN logical_reference_kind IN ('attribute', 'annotation') THEN 1 ELSE 0 END AS is_metadata
                 FROM logical_references_primary
@@ -2747,6 +5234,9 @@ public partial class DbReader
                 -- 偶然 'FooAttribute' という名前を持つ関数やプロパティへの誤ったエッジを防ぐ。
                 SELECT source_file_id, source_path, source_lang,
                        symbol_name || 'Attribute' AS symbol_name,
+                       1 AS symbol_segment_count,
+                       0 AS allow_leaf_fallback,
+                       symbol_name || 'Attribute' AS raw_symbol_name,
                        line, column_number, logical_reference_kind,
                        1 AS is_attribute_alias,
                        1 AS is_metadata
@@ -2768,11 +5258,14 @@ public partial class DbReader
                        source_path,
                        source_lang,
                        symbol_name,
+                       symbol_segment_count,
+                       allow_leaf_fallback,
+                       raw_symbol_name,
                        is_attribute_alias,
                        is_metadata,
                        COUNT(*) AS ref_count
                 FROM logical_references
-                GROUP BY source_file_id, source_path, source_lang, symbol_name, is_attribute_alias, is_metadata
+                GROUP BY source_file_id, source_path, source_lang, symbol_name, symbol_segment_count, allow_leaf_fallback, raw_symbol_name, is_attribute_alias, is_metadata
             ),
             target_files AS (
                 -- Collapse per-symbol rows to one per (target_path, target_lang, symbol_name)
@@ -2800,7 +5293,8 @@ public partial class DbReader
                 -- legacy DB では filter を無効化し class-like 全体に戻る。
                 SELECT dst.path AS target_path,
                        dst.lang AS target_lang,
-                       s.name AS symbol_name,
+                       " + targetLogicalSymbolNameExpr + @" AS symbol_name,
+                       " + targetLogicalSymbolSegmentCountExpr + @" AS symbol_segment_count,
                        MAX(CASE WHEN s.kind IN ('class','struct','interface') THEN 1 ELSE 0 END) AS has_class_like_kind,
                        MAX(CASE WHEN " + BuildMetadataTargetKindExpr("dst") + @"
                                 THEN 1 ELSE 0 END) AS has_metadata_target_kind
@@ -2825,7 +5319,7 @@ public partial class DbReader
         if (reverse && excludeTests)
             sql += $" AND NOT {TestPathCondition.Replace("f.path", $"{targetFilterAlias}.path")}";
         sql += @"
-                GROUP BY dst.path, dst.lang, s.name
+                GROUP BY dst.path, dst.lang, " + targetLogicalSymbolNameExpr + @", " + targetLogicalSymbolSegmentCountExpr + @"
             ),
             metadata_raw_suppression AS (
                 -- When a raw C# attribute reference '[Foo]' (stored as symbol_name='Foo',
@@ -2842,6 +5336,7 @@ public partial class DbReader
                 JOIN target_files tf_alias
                   ON tf_alias.target_lang = lrp.source_lang
                  AND tf_alias.symbol_name = lrp.symbol_name || 'Attribute'
+                 AND tf_alias.symbol_segment_count = 1
                  AND tf_alias.has_metadata_target_kind = 1
                 WHERE lrp.source_lang = 'csharp'
                   AND lrp.logical_reference_kind = 'attribute'
@@ -2868,6 +5363,7 @@ public partial class DbReader
                 -- 当たらないため、lang / path / graph-supported スコープはそのまま継承。
                 SELECT tf.target_lang,
                        tf.symbol_name,
+                       tf.symbol_segment_count,
                        COUNT(*) AS class_like_target_count
                 FROM target_files tf
                 JOIN files dst
@@ -2875,7 +5371,8 @@ public partial class DbReader
                  AND dst.lang = tf.target_lang
                 JOIN symbols s
                   ON s.file_id = dst.id
-                 AND s.name = tf.symbol_name
+                 AND " + targetLogicalSymbolNameExpr + @" = tf.symbol_name
+                 AND " + targetLogicalSymbolSegmentCountExpr + @" = tf.symbol_segment_count
                  -- Same language-aware metadata-eligibility filter as
                  -- target_files: C# restricts to `class` with inheritance
                  -- clause (interface/struct cannot be attribute targets);
@@ -2887,16 +5384,16 @@ public partial class DbReader
                  -- それ以外は class-like 全体を候補にする。
                  AND " + BuildMetadataTargetKindExpr("dst") + @"
                 WHERE tf.has_metadata_target_kind = 1
-                GROUP BY tf.target_lang, tf.symbol_name
+                GROUP BY tf.target_lang, tf.symbol_name, tf.symbol_segment_count
             ),
             edges AS (
                 SELECT snc.source_path,
                        tf.target_path,
-                       snc.symbol_name,
+                       tf.symbol_name,
                        snc.ref_count
                 FROM source_name_counts snc
                 JOIN target_files tf
-                  ON tf.symbol_name = snc.symbol_name
+                  ON " + sqlDependencyTargetMatchExpr + @"
                  AND tf.target_lang = snc.source_lang
                 LEFT JOIN metadata_raw_suppression mrs
                   ON mrs.source_file_id = snc.source_file_id
@@ -2904,6 +5401,7 @@ public partial class DbReader
                 LEFT JOIN target_ambiguity ta
                   ON ta.target_lang = snc.source_lang
                  AND ta.symbol_name = snc.symbol_name
+                 AND ta.symbol_segment_count = snc.symbol_segment_count
                 WHERE snc.source_path != tf.target_path
                   -- All metadata references ([Foo] / @Foo) and their synthetic C#
                   -- suffix aliases must only match class-like target kinds; otherwise
@@ -3006,6 +5504,30 @@ public partial class DbReader
             for (int i = 0; i < excludePathPatterns.Count; i++)
                 cmd.Parameters.AddWithValue($"@excludePathPattern{i}", $"%{EscapeLikeQuery(excludePathPatterns[i])}%");
         }
+    }
+
+    internal static string BuildPathFiltersSql(string fileAlias, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    {
+        var sql = string.Empty;
+        if (pathPatterns != null && pathPatterns.Count > 0)
+        {
+            // Multiple --path values are OR'd together / 複数の --path 値は OR で結合する
+            var ors = new List<string>(pathPatterns.Count);
+            for (int i = 0; i < pathPatterns.Count; i++)
+                ors.Add($"{fileAlias}.path LIKE @pathPattern{i} ESCAPE '\\'");
+            sql += " AND (" + string.Join(" OR ", ors) + ")";
+        }
+
+        if (excludePathPatterns != null)
+        {
+            for (int i = 0; i < excludePathPatterns.Count; i++)
+                sql += $" AND {fileAlias}.path NOT LIKE @excludePathPattern{i} ESCAPE '\\'";
+        }
+
+        if (excludeTests)
+            sql += $" AND NOT {TestPathCondition.Replace("f.path", $"{fileAlias}.path")}";
+
+        return sql;
     }
 
     internal static DateTime? GetNullableDateTime(SqliteDataReader reader, int ordinal)
