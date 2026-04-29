@@ -9862,6 +9862,47 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_ObjC_DetectsInterfacesPropertiesMethodsAndImports()
+    {
+        var content = """
+            #import <Foundation/Foundation.h>
+
+            @interface Dog : NSObject
+            @property (nonatomic, strong) NSString *name;
+            @property (nonatomic, assign) NSInteger age;
+            - (void)bark;
+            - (NSString *)greet:(NSString *)greeting withName:(NSString *)name;
+            + (instancetype)dogWithName:(NSString *)name;
+            @end
+
+            @protocol Animal <NSObject>
+            - (void)move;
+            @optional
+            - (NSString *)describe;
+            @end
+
+            @implementation Dog
+            - (void)bark {
+                NSLog(@"Woof!");
+            }
+            @end
+            """;
+        var symbols = SymbolExtractor.Extract(1, "objc", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Dog");
+        Assert.Equal(2, symbols.Count(s => s.Kind == "class" && s.Name == "Dog"));
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Animal");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "age");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "bark");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "greet");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "dogWithName");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "move");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "describe");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Foundation/Foundation.h");
+    }
+
+    [Fact]
     public void Extract_Ruby_DetectsAttrAndRailsDSL()
     {
         var content = "class User < ActiveRecord::Base\n  attr_accessor :name\n  attr_reader :email\n  has_many :posts\n  belongs_to :company\n  scope :active\n\n  def initialize(name)\n    @name = name\n  end\nend";
@@ -10724,6 +10765,25 @@ public class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "process");
+    }
+
+    [Fact]
+    public void Extract_Kotlin_DetectsTypealiasDeclarations()
+    {
+        var content = """
+            typealias Handler = (String) -> Unit
+            internal typealias UserMap = Map<String, User>
+            public typealias Nested<T> = List<Pair<String, T>>
+
+            val type = 1
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Handler" && s.Visibility == null);
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "UserMap" && s.Visibility == "internal");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Nested" && s.Visibility == "public");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "type");
     }
 
     [Fact]
