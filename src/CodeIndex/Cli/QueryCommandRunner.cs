@@ -1840,7 +1840,7 @@ public static class QueryCommandRunner
                 }
                 else if (!options.Json)
                 {
-                    Console.Error.WriteLine("No impact found.");
+                    Console.Error.WriteLine($"No impact found for '{analysis.Query}'.");
                     WriteImpactResolutionHint(analysis);
                     WriteGraphSupportHint(options.Lang);
                     WriteDegradedGraphZeroResult(reader, "callers", json: false, graphAvailable: reader._hasReferencesTable, jsonOptions);
