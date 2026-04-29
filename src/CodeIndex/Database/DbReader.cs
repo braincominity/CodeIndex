@@ -918,7 +918,7 @@ public partial class DbReader
                     break;
             }
 
-            if (rawResults.Count < rawLimit)
+            if (rawResults.Count < rawLimit || filtered.Count >= limit)
                 break;
 
             rawOffset += rawResults.Count;
@@ -955,7 +955,7 @@ public partial class DbReader
         return results;
     }
 
-    private SqliteCommand CreateSearchReferencesCommand(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int offset = 0)
+    private SqliteCommand CreateSearchReferencesCommand(string? query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, int offset = 0, bool includeOrdering = true)
     {
         var cmd = _conn.CreateCommand();
         var referenceLineJoin = ReferenceLineJoinSql("r");
@@ -1055,7 +1055,8 @@ public partial class DbReader
                    context, container_kind, container_name
             FROM logical_references r";
         }
-        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {(referenceKind == null ? GetPathBucketOrderSql("r.path") : PathBucketOrder)}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, CASE WHEN lower(r.symbol_name) LIKE lower(@rankingQueryPrefix) ESCAPE '\\' THEN 0 ELSE 1 END, {(referenceKind == null ? "r.path" : "f.path")}, r.line, r.column_number, r.reference_kind, r.symbol_name LIMIT @limit OFFSET @offset";
+        if (includeOrdering)
+            sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {(referenceKind == null ? GetPathBucketOrderSql("r.path") : PathBucketOrder)}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, CASE WHEN lower(r.symbol_name) LIKE lower(@rankingQueryPrefix) ESCAPE '\\' THEN 0 ELSE 1 END, {(referenceKind == null ? "r.path" : "f.path")}, r.line, r.column_number, r.reference_kind, r.symbol_name LIMIT @limit OFFSET @offset";
 
         cmd.CommandText = sql;
         if (query != null)
@@ -1092,8 +1093,11 @@ public partial class DbReader
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
-        cmd.Parameters.AddWithValue("@limit", limit);
-        cmd.Parameters.AddWithValue("@offset", offset);
+        if (includeOrdering)
+        {
+            cmd.Parameters.AddWithValue("@limit", limit);
+            cmd.Parameters.AddWithValue("@offset", offset);
+        }
         return cmd;
     }
 
@@ -2926,7 +2930,8 @@ public partial class DbReader
             pathPatterns,
             excludePathPatterns,
             excludeTests,
-            exact);
+            exact,
+            includeOrdering: false);
         using var reader = cmd.ExecuteTrackedReader();
 
         int count = 0;
