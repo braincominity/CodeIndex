@@ -25315,6 +25315,58 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSymbols_PreservesCommonJsMultilineBraceBodyRanges()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_commonjs_multiline_body_ranges");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/repro.js",
+                "javascript",
+                """
+                module.exports.foo = function ()
+                {
+                  return 1;
+                };
+                module.exports.bar = () =>
+                {
+                  return 2;
+                };
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "javascript"],
+                _jsonOptions));
+
+            var symbols = stdout
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(line => JsonDocument.Parse(line).RootElement)
+                .ToList();
+            var foo = Assert.Single(symbols, symbol => symbol.GetProperty("name").GetString() == "foo");
+            var bar = Assert.Single(symbols, symbol => symbol.GetProperty("name").GetString() == "bar");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("function", foo.GetProperty("kind").GetString());
+            Assert.Equal(1, foo.GetProperty("start_line").GetInt32());
+            Assert.Equal(4, foo.GetProperty("end_line").GetInt32());
+            Assert.Equal(2, foo.GetProperty("body_start_line").GetInt32());
+            Assert.Equal(4, foo.GetProperty("body_end_line").GetInt32());
+            Assert.Equal("function", bar.GetProperty("kind").GetString());
+            Assert.Equal(5, bar.GetProperty("start_line").GetInt32());
+            Assert.Equal(8, bar.GetProperty("end_line").GetInt32());
+            Assert.Equal(6, bar.GetProperty("body_start_line").GetInt32());
+            Assert.Equal(8, bar.GetProperty("body_end_line").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSymbols_EmitsLangHintForUnknownLang()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_lang_hint");
