@@ -221,6 +221,13 @@ public static class ReferenceExtractor
     // 平坦な `<[^>\n]+>` では末尾 `>>` を釣り合わせられないため、depth-aware な fallback scanner
     // で補完する。issue #263 参照。
     private static readonly Regex CallRegex = new($@"(?<![\w$])(?<name>{CSharpIdentifierPattern})(?:\?\.)?(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
+    // JSX / TSX component element open tags. Capitalized tag names are treated as component
+    // call sites, while lowercase intrinsic HTML tags stay excluded by design.
+    // JSX / TSX の component open tag。大文字始まりの tag 名だけを component 呼び出しとして扱い、
+    // 小文字始まりの intrinsic HTML tag は意図的に除外する。
+    private static readonly Regex JsxElementOpenRegex = new(
+        @"<(?<name>[A-Z][\w$]*(?:\.[A-Za-z_$][\w$]*)*)",
+        RegexOptions.Compiled);
     // PowerShell cmdlet / function calls are statement-start or pipeline-stage forms such as
     // `Get-ChildItem -Path .`, `Write-Host "x"`, and `$items | ForEach-Object { ... }`.
     // The shared CallRegex only sees parenthesized calls and would split hyphenated cmdlets
@@ -745,12 +752,18 @@ public static class ReferenceExtractor
     /// Extract indexed references for supported languages.
     /// 対応言語向けにインデックス化する参照を抽出する。
     /// </summary>
-    public static List<ReferenceRecord> Extract(long fileId, string? lang, string content, IReadOnlyList<SymbolRecord> symbols)
+    public static List<ReferenceRecord> Extract(
+        long fileId,
+        string? lang,
+        string content,
+        IReadOnlyList<SymbolRecord> symbols,
+        string? path = null)
     {
         if (!SupportsLanguage(lang))
             return [];
 
         var language = lang!;
+        var isJsxFile = IsJsxFilePath(path);
 
         // Null / empty fast path — keep the direct-call null-safe contract that
         // FileIndexer.StripLineLeadingBom's IsNullOrEmpty check used to provide
@@ -1001,6 +1014,7 @@ public static class ReferenceExtractor
                 }
                 csharpInDelimitedDocComment = nextCsharpDelimitedDocComment;
             }
+
             if (string.IsNullOrWhiteSpace(preparedLine))
             {
                 if (language == "csharp"
@@ -1101,6 +1115,43 @@ public static class ReferenceExtractor
                 }
 
                 return container;
+            }
+
+            if (isJsxFile && (language is "javascript" or "typescript"))
+            {
+                foreach (Match match in JsxElementOpenRegex.Matches(preparedLine))
+                {
+                    var fullName = match.Groups["name"].Value;
+                    var nameIndex = match.Groups["name"].Index;
+                    var jsxContainer = ResolveContainerForCall(nameIndex);
+                    var firstDotIndex = fullName.IndexOf('.');
+
+                    AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        firstDotIndex < 0 ? fullName : fullName[..firstDotIndex],
+                        nameIndex,
+                        "call",
+                        context,
+                        lineNumber,
+                        jsxContainer);
+
+                    var dotIndex = fullName.LastIndexOf('.');
+                    if (dotIndex > 0 && dotIndex + 1 < fullName.Length)
+                    {
+                        AddReference(
+                            references,
+                            seen,
+                            fileId,
+                            fullName[(dotIndex + 1)..],
+                            nameIndex + dotIndex + 1,
+                            "call",
+                            context,
+                            lineNumber,
+                            jsxContainer);
+                    }
+                }
             }
 
             if (language == "csharp")
@@ -2035,6 +2086,16 @@ public static class ReferenceExtractor
             ContainerKind = container?.Kind,
             ContainerName = container?.Name,
         });
+    }
+
+    private static bool IsJsxFilePath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+
+        var extension = Path.GetExtension(path);
+        return string.Equals(extension, ".jsx", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(extension, ".tsx", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void NormalizeSqlIdentifier(
