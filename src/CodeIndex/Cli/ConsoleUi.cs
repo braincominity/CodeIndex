@@ -183,6 +183,9 @@ public static class ConsoleUi
     /// </summary>
     public static void PrintProgress(int current, int total)
     {
+        if (total <= 0)
+            return;
+
         // Update every 50 files or at completion / 50ファイルごと、または完了時に更新
         if (current % 50 != 0 && current != total)
             return;

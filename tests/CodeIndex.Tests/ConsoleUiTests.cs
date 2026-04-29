@@ -114,6 +114,31 @@ public class ConsoleUiTests
     }
 
     [Fact]
+    public void PrintProgress_InitialRender_ShowsZeroPercent()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            using var writer = new StringWriter();
+            try
+            {
+                Console.SetOut(writer);
+
+                ConsoleUi.PrintProgress(0, 10);
+
+                var output = writer.ToString();
+
+                Assert.Contains("0.0%", output);
+                Assert.Contains("[0/10]", output);
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+        }
+    }
+
+    [Fact]
     public void PrintLicenseSummary_DescribesFslAndCommercialRestriction()
     {
         lock (TestConsoleLock.Gate)

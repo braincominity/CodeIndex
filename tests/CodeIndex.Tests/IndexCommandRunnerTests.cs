@@ -1310,6 +1310,7 @@ public class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal(1, CountOccurrences(stdout, "Indexing..."));
+            Assert.Contains("0.0%", stdout);
         }
         finally
         {
