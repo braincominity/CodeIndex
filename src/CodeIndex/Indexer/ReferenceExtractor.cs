@@ -9361,10 +9361,10 @@ public static class ReferenceExtractor
 
                     var closeLength = CountCharacterRun(line, closeCandidateIndex, '"');
                     if (closeLength >= rawStringDelimiterLength
-                        && line[closeCandidateIndex..].Trim().Length == closeLength)
+                        && closeLength > 0)
                     {
-                        index = line.Length;
                         rawStringDelimiterLength = 0;
+                        index = closeCandidateIndex + closeLength;
                         continue;
                     }
 
@@ -9759,11 +9759,16 @@ public static class ReferenceExtractor
 
                 if (rawStringDelimiterLength > 0)
                 {
-                    var closeLength = CountCharacterRun(line, index, '"');
-                    if (closeLength >= rawStringDelimiterLength)
+                    var closeCandidateIndex = index;
+                    while (closeCandidateIndex < line.Length && char.IsWhiteSpace(line[closeCandidateIndex]))
+                        closeCandidateIndex++;
+
+                    var closeLength = CountCharacterRun(line, closeCandidateIndex, '"');
+                    if (closeLength >= rawStringDelimiterLength
+                        && closeLength > 0)
                     {
-                        index += closeLength;
                         rawStringDelimiterLength = 0;
+                        index = closeCandidateIndex + closeLength;
                         continue;
                     }
 

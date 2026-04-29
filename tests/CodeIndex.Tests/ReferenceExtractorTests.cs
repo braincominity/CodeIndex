@@ -744,6 +744,39 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpRawStringCloseWithSemicolon_DoesNotMaskFollowingComment()
+    {
+        // Regression for issue #988: a raw string close line with a trailing semicolon
+        // must still end raw-string tracking so the following comment line is not
+        // treated as part of the raw-string body.
+        // issue #988 回帰: 末尾にセミコロンが付く raw string の閉じ行でも raw-string tracking を
+        // 終了し、その次のコメント行が raw-string 本体として扱われないこと。
+        var lines = new[]
+        {
+            "public class Demo",
+            "{",
+            "    public string Raw() => \"\"\"",
+            "        ignored content",
+            "        \"\"\";   ",
+            "",
+            "    /// <summary><see cref=\"Helper\"/></summary>",
+            "    public void Run() { }",
+            "}",
+        };
+
+        var buildMethod = typeof(ReferenceExtractor).GetMethod(
+            "BuildCSharpMultilineStringContentLines",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(buildMethod);
+
+        var insideStringContent = (bool[])buildMethod!.Invoke(null, new object[] { lines })!;
+
+        Assert.True(insideStringContent[3]);
+        Assert.True(insideStringContent[4]);
+        Assert.False(insideStringContent[6]);
+    }
+
+    [Fact]
     public void Extract_CsharpKeywords_NotExtractedAsReferences()
     {
         // LINQ and C# contextual keywords should be ignored
