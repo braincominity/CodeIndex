@@ -5963,6 +5963,32 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void AnalyzeImpact_CSharpVerbatimQueryKeepsOriginalInputOnMiss()
+    {
+        // issue #960: verbatim C# queries should normalize for lookup when a match
+        // exists, but a miss must keep the original spelling in the resolved name
+        // so impact output does not claim a canonical name the user never asked for.
+        // issue #960: C# の verbatim クエリは一致時のみ lookup 用に正規化し、miss
+        // したときは resolved name に元の spelling を残して、ユーザーが指定していない
+        // canonical 名を `impact` 出力に出さないこと。
+        InsertIndexedFile("src/Verbatim.cs", "csharp",
+            """
+            public class @class
+            {
+            }
+            """);
+
+        var hit = _reader.AnalyzeImpact("@class", maxDepth: 1, limit: 10, lang: "csharp");
+        Assert.Equal("class", hit.ResolvedName);
+        Assert.Equal(1, hit.DefinitionCount);
+
+        var miss = _reader.AnalyzeImpact("@missing", maxDepth: 1, limit: 10, lang: "csharp");
+        Assert.Equal("@missing", miss.ResolvedName);
+        Assert.Equal(0, miss.DefinitionCount);
+        Assert.Equal("no_matching_definition", miss.ZeroResultReason);
+    }
+
+    [Fact]
     public void GetFileDependencyHints_MetadataBypassAmbiguityGuard_CountsSameFileDuplicateDefinitions()
     {
         // issue #293 follow-up: the `impact` metadata bypass ambiguity guard must

@@ -31,6 +31,14 @@ public static class ReferenceExtractor
         "zig", "css"
     ];
 
+    private static readonly Regex ScssVariableReferenceRegex = new(
+        @"(?<![\w$])\$(?<name>[A-Za-z_][\w-]*)",
+        RegexOptions.Compiled);
+
+    private static readonly Regex ScssExtendReferenceRegex = new(
+        @"@extend\s+(?<name>[%.][A-Za-z_][\w-]*)",
+        RegexOptions.Compiled);
+
     private static readonly HashSet<string> SharedIgnoredCallNames = new(StringComparer.Ordinal)
     {
         // Control flow / 制御フロー
@@ -233,6 +241,13 @@ public static class ReferenceExtractor
     // 平坦な `<[^>\n]+>` では末尾 `>>` を釣り合わせられないため、depth-aware な fallback scanner
     // で補完する。issue #263 参照。
     private static readonly Regex CallRegex = new($@"(?<![\w$])(?<name>{CSharpIdentifierPattern})(?:\?\.)?(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
+    // JSX / TSX component element open tags. Capitalized tag names are treated as component
+    // call sites, while lowercase intrinsic HTML tags stay excluded by design.
+    // JSX / TSX の component open tag。大文字始まりの tag 名だけを component 呼び出しとして扱い、
+    // 小文字始まりの intrinsic HTML tag は意図的に除外する。
+    private static readonly Regex JsxElementOpenRegex = new(
+        @"<(?<name>[A-Z][\w$]*(?:\.[A-Za-z_$][\w$]*)*)",
+        RegexOptions.Compiled);
     // Swift / Kotlin trailing-lambda calls such as `items.forEach { ... }`, `list.filter { ... }`,
     // and `animate { ... } completion: { ... }` do not have a trailing `(`, so the shared CallRegex
     // cannot see them. Emit the same `call` edge for these trailing-block forms so the call graph
@@ -766,12 +781,18 @@ public static class ReferenceExtractor
     /// Extract indexed references for supported languages.
     /// 対応言語向けにインデックス化する参照を抽出する。
     /// </summary>
-    public static List<ReferenceRecord> Extract(long fileId, string? lang, string content, IReadOnlyList<SymbolRecord> symbols)
+    public static List<ReferenceRecord> Extract(
+        long fileId,
+        string? lang,
+        string content,
+        IReadOnlyList<SymbolRecord> symbols,
+        string? path = null)
     {
         if (!SupportsLanguage(lang))
             return [];
 
         var language = lang!;
+        var isJsxFile = IsJsxFilePath(path);
 
         // Null / empty fast path — keep the direct-call null-safe contract that
         // FileIndexer.StripLineLeadingBom's IsNullOrEmpty check used to provide
@@ -1022,6 +1043,7 @@ public static class ReferenceExtractor
                 }
                 csharpInDelimitedDocComment = nextCsharpDelimitedDocComment;
             }
+
             if (string.IsNullOrWhiteSpace(preparedLine))
             {
                 if (language == "csharp"
@@ -1122,6 +1144,43 @@ public static class ReferenceExtractor
                 }
 
                 return container;
+            }
+
+            if (isJsxFile && (language is "javascript" or "typescript"))
+            {
+                foreach (Match match in JsxElementOpenRegex.Matches(preparedLine))
+                {
+                    var fullName = match.Groups["name"].Value;
+                    var nameIndex = match.Groups["name"].Index;
+                    var jsxContainer = ResolveContainerForCall(nameIndex);
+                    var firstDotIndex = fullName.IndexOf('.');
+
+                    AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        firstDotIndex < 0 ? fullName : fullName[..firstDotIndex],
+                        nameIndex,
+                        "call",
+                        context,
+                        lineNumber,
+                        jsxContainer);
+
+                    var dotIndex = fullName.LastIndexOf('.');
+                    if (dotIndex > 0 && dotIndex + 1 < fullName.Length)
+                    {
+                        AddReference(
+                            references,
+                            seen,
+                            fileId,
+                            fullName[(dotIndex + 1)..],
+                            nameIndex + dotIndex + 1,
+                            "call",
+                            context,
+                            lineNumber,
+                            jsxContainer);
+                    }
+                }
             }
 
             if (language == "csharp")
@@ -1644,6 +1703,18 @@ public static class ReferenceExtractor
                 }
             }
 
+            if (language == "css")
+            {
+                EmitCssScssReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
+            }
+
             // C# / Java parenless initializers: `new T { ... }` / `new T<U> { ... }` /
             // `new T[] { ... }` etc. CallRegex requires a trailing `(`, so these forms slip
             // through and the type is otherwise never recorded as instantiated. Emit an
@@ -1758,6 +1829,18 @@ public static class ReferenceExtractor
                         }
                     }
                 }
+            }
+
+            if (language == "css")
+            {
+                EmitCssScssReferences(
+                    preparedLine,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
             }
 
             // JavaScript / TypeScript zero-arg constructor calls may omit `()`: `new Foo;`.
@@ -2133,6 +2216,16 @@ public static class ReferenceExtractor
             fileId,
             definitionNames,
             container);
+    }
+
+    private static bool IsJsxFilePath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+
+        var extension = Path.GetExtension(path);
+        return string.Equals(extension, ".jsx", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(extension, ".tsx", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void EmitCssAnimationShorthandReferences(
@@ -6580,6 +6673,72 @@ public static class ReferenceExtractor
         !string.IsNullOrEmpty(identifier) && identifier[0] == '@'
             ? identifier[1..]
             : identifier;
+
+    private static void EmitCssScssReferences(
+        string preparedLine,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        SymbolRecord? container)
+    {
+        foreach (Match match in ScssVariableReferenceRegex.Matches(preparedLine))
+        {
+            var nameGroup = match.Groups["name"];
+            if (ShouldSkipScssVariableReference(preparedLine, nameGroup.Index))
+                continue;
+
+            AddReference(
+                references,
+                seen,
+                fileId,
+                nameGroup.Value,
+                nameGroup.Index,
+                "call",
+                context,
+                lineNumber,
+                container);
+        }
+
+        foreach (Match match in ScssExtendReferenceRegex.Matches(preparedLine))
+        {
+            var nameGroup = match.Groups["name"];
+            AddReference(
+                references,
+                seen,
+                fileId,
+                nameGroup.Value,
+                nameGroup.Index,
+                "call",
+                context,
+                lineNumber,
+                container);
+        }
+    }
+
+    private static bool ShouldSkipScssVariableReference(string preparedLine, int variableIndex)
+    {
+        var trimmed = preparedLine.TrimStart();
+        if (trimmed.StartsWith("$", StringComparison.Ordinal))
+        {
+            var declarationColonIndex = preparedLine.IndexOf(':', variableIndex);
+            if (declarationColonIndex >= 0)
+                return true;
+        }
+
+        if (trimmed.StartsWith("@mixin", StringComparison.Ordinal)
+            || trimmed.StartsWith("@function", StringComparison.Ordinal))
+        {
+            var braceIndex = preparedLine.IndexOf('{');
+            if (braceIndex < 0)
+                return true;
+            if (variableIndex < braceIndex)
+                return true;
+        }
+
+        return false;
+    }
 
     private static string NormalizeCSharpQualifiedSegments(
         string preparedLine,
