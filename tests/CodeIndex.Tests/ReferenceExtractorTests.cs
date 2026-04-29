@@ -9737,6 +9737,41 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpSwitchExpressionPositionalPatterns_DoNotEmitPhantomCalls()
+    {
+        // issue #968: switch-expression arm heads such as `Point(var x, var y) => 1`
+        // are pattern heads, not calls, so they must keep the real type reference only.
+        // issue #968: `Point(var x, var y) => 1` のような switch 式 arm head は
+        // pattern head であり call ではないため、本物の type reference だけを残す。
+        const string content = """
+            namespace Probe;
+
+            class Point
+            {
+                public int X { get; }
+                public int Y { get; }
+            }
+
+            class Demo
+            {
+                int Match(object value) => value switch
+                {
+                    Point(var x, var y) => 1,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Single(pointRefs);
+        Assert.Equal("Match", pointRefs[0].ContainerName);
+        Assert.DoesNotContain(references, r => r.SymbolName == "Point" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_CsharpCaseLogicalAndNegatedTypePatterns_CaptureTypeReferences()
     {
         // issues #668/#670: logical/negated type patterns must keep the left-hand type

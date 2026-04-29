@@ -5243,9 +5243,55 @@ public static class ReferenceExtractor
             if (string.IsNullOrWhiteSpace(previousLine))
                 continue;
 
-            return LineEndsWithCSharpToken(previousLine, "case")
+            if (LineEndsWithCSharpToken(previousLine, "case")
                 || LineEndsWithCSharpToken(previousLine, "is")
-                || LineEndsWithCSharpToken(previousLine, "not");
+                || LineEndsWithCSharpToken(previousLine, "not"))
+            {
+                return true;
+            }
+
+            break;
+        }
+
+        // Switch-expression arms (`Point(...) => ...`) do not have a `case` / `is` anchor,
+        // so the same positional pattern suppression has to look for the trailing arrow.
+        if (IsCSharpSwitchExpressionPatternHead(preparedLine, nameIndex))
+            return true;
+
+        return false;
+    }
+
+    private static bool IsCSharpSwitchExpressionPatternHead(string preparedLine, int nameIndex)
+    {
+        var cursor = nameIndex;
+        while (cursor < preparedLine.Length && IsCSharpIdentifierPart(preparedLine[cursor]))
+            cursor++;
+
+        cursor = SkipCSharpTriviaForward(preparedLine, cursor);
+
+        var openParenIndex = preparedLine.IndexOf('(', cursor);
+        if (openParenIndex < 0)
+            return false;
+
+        var parenDepth = 0;
+        for (var i = openParenIndex; i < preparedLine.Length; i++)
+        {
+            switch (preparedLine[i])
+            {
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    parenDepth--;
+                    if (parenDepth == 0)
+                    {
+                        var afterClose = SkipCSharpTriviaForward(preparedLine, i + 1);
+                        return afterClose + 1 < preparedLine.Length
+                            && preparedLine[afterClose] == '='
+                            && preparedLine[afterClose + 1] == '>';
+                    }
+                    break;
+            }
         }
 
         return false;
