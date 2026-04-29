@@ -10745,6 +10745,49 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Kotlin_DetectsInheritanceModifierFunctions()
+    {
+        var content = """
+            package demo
+
+            abstract class Base {
+                abstract fun required(): Int
+                open fun extensible(): String = "base"
+                protected open fun scoped(): Int = 1
+                internal abstract fun hidden(): Boolean
+            }
+
+            class Derived : Base() {
+                override fun required(): Int = 42
+                override fun extensible(): String = "child"
+                final override fun scoped(): Int = 99
+                override fun hidden(): Boolean = false
+                public override fun toString(): String = "Derived"
+                override suspend fun maybeAsync(): Int = 0
+
+                final fun cannotOverride() {}
+                private final fun noOverride() {}
+                fun normal() {}
+                suspend fun suspended() {}
+                inline fun inlined() {}
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "required");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "extensible");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "scoped");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "hidden");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "toString");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "maybeAsync");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "cannotOverride");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "noOverride");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "normal");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "suspended");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "inlined");
+    }
+
+    [Fact]
     public void Extract_Kotlin_DetectsEnumEntries()
     {
         var content = """
