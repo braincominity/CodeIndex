@@ -821,6 +821,87 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_HocBindingPatternRejectsOperatorAfterStyledTemplate()
+    {
+        // `styled.div\`color: red\` + theme` is theme composition, not a styled
+        // binding — even though the tag-head backtick is present, the depth-0
+        // `+` operator after the closing backtick indicates the right-hand side
+        // is a binary expression. The gate must walk past the template body and
+        // still reject on the post-template operator. Closes #240 follow-up
+        // (codex review #13 High blocker).
+        // `styled.div\`color: red\` + theme` はテーマ合成式であって styled 束縛では
+        // ない — tag head の backtick が存在しても、closing backtick 後の depth 0
+        // `+` 演算子により右辺が二項式になっている。ゲートはテンプレート本体を
+        // 読み飛ばした後でも post-template operator を検出して除外する必要がある。
+        // Closes #240 follow-up（codex レビュー #13 High blocker）。
+        var content = """
+            const NotStyledPlusTheme = styled.div`color: red` + theme;
+            const NotStyledCallPlusTheme = styled(Component)`color: blue` + theme;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "NotStyledPlusTheme");
+        Assert.DoesNotContain(symbols, s => s.Name == "NotStyledCallPlusTheme");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_HocBindingPatternRejectsOperatorAfterStyledTemplate()
+    {
+        // TypeScript counterpart for the post-template operator reject —
+        // including a typed-annotation variant. Closes #240 follow-up
+        // (codex review #13 High blocker).
+        // TypeScript 側の post-template 演算子除外（型注釈付き変種を含む）。
+        // Closes #240 follow-up（codex レビュー #13 High blocker）。
+        var content = """
+            const NotStyledPlusTheme = styled.div`color: red` + theme;
+            const NotStyledCallPlusTheme = styled(Component)`color: blue` + theme;
+            const AnnotatedNotStyledPlusTheme: StyledComponent<'div'> = styled.div`color: red` + theme;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "NotStyledPlusTheme");
+        Assert.DoesNotContain(symbols, s => s.Name == "NotStyledCallPlusTheme");
+        Assert.DoesNotContain(symbols, s => s.Name == "AnnotatedNotStyledPlusTheme");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_HocBindingPatternAcceptsLongAttrsChainBeforeTemplate()
+    {
+        // Prettier-formatted `.attrs((props) => ({ ... }))` argument objects can
+        // span more than ten lines before the backtick is reached. The gate's
+        // lookahead window must be large enough so the trailing tagged template
+        // is still recognized and the styled binding is kept. Closes #240
+        // follow-up (codex review #13 Medium blocker).
+        // Prettier 整形の `.attrs((props) => ({ ... }))` 引数オブジェクトは
+        // バッククォート到達まで 10 行を超えることがある。lookahead window が
+        // 十分広くないと末尾の tagged template を見落とし styled 束縛が落ちる。
+        // Closes #240 follow-up（codex レビュー #13 Medium blocker）。
+        var content = """
+            const Tall = styled.div.attrs((props) => ({
+              field1: props.value1,
+              field2: props.value2,
+              field3: props.value3,
+              field4: props.value4,
+              field5: props.value5,
+              field6: props.value6,
+              field7: props.value7,
+              field8: props.value8,
+              field9: props.value9,
+              field10: props.value10,
+            }))`
+              color: red;
+              padding: 8px;
+            `;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Tall");
+    }
+
+    [Fact]
     public void Extract_TypeScript_HocBindingPatternAcceptsCallbackPropInsideFunctionTypeGeneric()
     {
         // Inline function-type generic arguments whose parameter object literal
