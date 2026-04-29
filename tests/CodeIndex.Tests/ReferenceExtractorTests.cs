@@ -759,9 +759,10 @@ public class ReferenceExtractorTests
     public void Extract_CsharpMultiLineVerbatimString_DoesNotLeakPhantomCallReferences()
     {
         // Regression for issue #288: call-looking identifiers inside a multi-line
-        // @"..." verbatim string body must not be captured as references.
-        // issue #288 回帰: 複数行 @"..." 逐語文字列の本体にある呼び出しらしい識別子は
-        // 参照として抽出してはならない。
+        // @"..." verbatim string body must not be captured as references, including
+        // constructor-style initializer text that would otherwise look like instantiate.
+        // issue #288 回帰: 複数行 @"..." 逐語文字列の本体にある呼び出しらしい識別子や
+        // instantiate っぽい構文は参照として抽出してはならない。
         const string content = """
             public class FixtureHost
             {
@@ -769,6 +770,7 @@ public class ReferenceExtractorTests
                 {
                     var legacy = @"
                         SELECT * FROM t
+                        new Widget { X = 1 };
                         WHERE x = BadCall()
                     ";
                     RealCall();
@@ -776,6 +778,7 @@ public class ReferenceExtractorTests
 
                 private void RealCall() { }
                 private void BadCall() { }
+                private sealed class Widget { public int X { get; set; } }
             }
             """;
 
@@ -783,6 +786,7 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         Assert.DoesNotContain(references, reference => reference.SymbolName == "BadCall");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Widget");
         Assert.Contains(references, reference => reference.SymbolName == "RealCall" && reference.ContainerName == "M");
     }
 
@@ -876,6 +880,7 @@ public class ReferenceExtractorTests
 
                     var legacy = @"
                         SELECT * FROM t
+                        new Widget { X = 1 }
                         WHERE x = BadCall()
                     ";
 
@@ -887,6 +892,7 @@ public class ReferenceExtractorTests
                 private string AnotherCall(string s) => s;
                 private int PhantomCall(int x) => x;
                 private void BadCall() { }
+                private sealed class Widget { public int X { get; set; } }
             }
             """";
 
@@ -897,6 +903,7 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference => reference.SymbolName == "AnotherCall");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "PhantomCall");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "BadCall");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Widget");
         Assert.Contains(references, reference => reference.SymbolName == "RealCall" && reference.ContainerName == "M");
     }
 
