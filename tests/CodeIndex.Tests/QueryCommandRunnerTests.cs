@@ -365,6 +365,79 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_RawFtsSyntaxErrorsAreReportedAsUsageErrors()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_syntax_error");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/demo.cs", "csharp", "class Demo {}\n");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["title:foo", "--db", dbPath, "--fts", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("Error: FTS5 query syntax:", stderr);
+            Assert.Contains("raw FTS5 syntax", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_UsesNestedSymbolDepthInHumanOutput()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_depth");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/deep.cs",
+                "csharp",
+                """
+                namespace OuterNs
+                {
+                    namespace InnerNs
+                    {
+                        public class OuterClass
+                        {
+                            public class NestedClass
+                            {
+                                public class DeeplyNested
+                                {
+                                    public void Method() { }
+                                }
+                            }
+                        }
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/deep.cs", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var outerIndex = stdout.IndexOf("public class OuterClass", StringComparison.Ordinal);
+            var nestedIndex = stdout.IndexOf("public class NestedClass", StringComparison.Ordinal);
+            var deepIndex = stdout.IndexOf("public class DeeplyNested", StringComparison.Ordinal);
+
+            Assert.True(outerIndex >= 0);
+            Assert.True(nestedIndex > outerIndex);
+            Assert.True(deepIndex > nestedIndex);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_RejectsMissingMaxLineWidthValue()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_missing_max_line_width");
@@ -1211,15 +1284,17 @@ public class QueryCommandRunnerTests
         }
     }
 
-    // Regression lock for #184 follow-up: `--focus-column` and `--max-line-width` are
-    // positive-integer options. Zero, negative, and non-numeric values must fail closed with
-    // UsageError and the "requires a positive integer" error message. Earlier tests only
-    // covered the missing-value case (which now short-circuits before TryParsePositiveInt),
-    // leaving the positive-integer contract uncovered for these two options specifically.
-    // #184 のフォローアップ回帰ロック: `--focus-column` と `--max-line-width` は正の整数オプション。
-    // 0・負数・非数値は UsageError と "requires a positive integer" メッセージで fail-close する。
-    // 以前のテストは値欠如（今は TryParsePositiveInt 前に短絡する）しかカバーしていなかったため、
-    // この 2 つのオプション固有の正の整数契約を明示的にロックする。
+    // Regression lock for #184 follow-up: `--focus-column` requires a positive integer,
+    // while `--max-line-width` accepts non-negative integers so `0` can disable truncation.
+    // Zero, negative, and non-numeric values must fail closed with UsageError and the
+    // corresponding validation message. Earlier tests only covered the missing-value case
+    // (which now short-circuits before TryParsePositiveInt), leaving these option-specific
+    // numeric contracts uncovered.
+    // #184 のフォローアップ回帰ロック: `--focus-column` は正の整数を要求し、
+    // `--max-line-width` は切り詰め解除のため 0 を許容する非負整数。0・負数・非数値は
+    // UsageError と対応する validation message で fail-close する。以前のテストは値欠如
+    // （今は TryParsePositiveInt 前に短絡する）しかカバーしていなかったため、
+    // これらのオプション固有の数値契約を明示的にロックする。
     [Theory]
     [InlineData("0")]
     [InlineData("abc")]
