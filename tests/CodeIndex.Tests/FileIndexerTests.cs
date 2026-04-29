@@ -300,6 +300,11 @@ public class FileIndexerTests
         Assert.Equal("cython", map[".pxd"]);
         Assert.Equal("python", map[".py"]);
         Assert.Equal("python", map[".pyi"]);
+
+        // Objective-C lives in its own bucket so `.m` / `.mm` are indexed instead of being skipped.
+        // Objective-C は独立バケットにし、`.m` / `.mm` をスキップせずに index する。
+        Assert.Equal("objc", map[".m"]);
+        Assert.Equal("objc", map[".mm"]);
     }
 
     [Fact]

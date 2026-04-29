@@ -108,6 +108,8 @@ public class FileIndexer
         [".cs"]     = "csharp",
         [".cshtml"] = "csharp",  // Razor (ASP.NET MVC/Pages) / Razor テンプレート
         [".razor"]  = "csharp",  // Blazor component / Blazor コンポーネント
+        [".m"]      = "objc",
+        [".mm"]     = "objc",
         [".php"]    = "php",
         [".sh"]     = "shell",
         [".sql"]    = "sql",
