@@ -2457,6 +2457,76 @@ internal static class StructuralLineMasker
         return p;
     }
 
+    // Mask a single-line Swift extended raw string `<N>#"..."<N>#` while preserving
+    // any matching `\<N>#(...)` interpolation hole bodies so real call edges inside
+    // the holes still reach the reference graph. Returns the position immediately
+    // after the closing delimiter (or end of line if the source is malformed).
+    // Callers must have already verified that `line[startIndex .. startIndex + hashCount]`
+    // is `<N>#"`. Closes #1001.
+    // Swift の単行 `<N>#"..."<N>#` 拡張 raw 文字列をマスクしつつ、内側の hash 数一致 `\<N>#(...)`
+    // 補間ホール本文だけは残し、ホール内の本物の call が reference graph に届くようにする。
+    private static int MaskSwiftSingleLineRawString(string line, int startIndex, int hashCount, char[] masked)
+    {
+        // Mask leading `<N>#"` (hashCount + 1 chars).
+        ReplaceWithSpaces(masked, startIndex, hashCount + 1);
+        var q = startIndex + hashCount + 1;
+        while (q < line.Length)
+        {
+            // Closing `"<N>#` with matching hash count.
+            // 一致 hash 数の閉じ `"<N>#`。
+            if (line[q] == '"' && HasHashRun(line, q + 1, hashCount))
+            {
+                ReplaceWithSpaces(masked, q, 1 + hashCount);
+                return q + 1 + hashCount;
+            }
+            // Interpolation hole opener `\<N>#(` with matching hash run. Mask the
+            // `\<N>#(` opener but preserve the body until the matching `)` so the
+            // real call inside the hole survives masking.
+            // 一致 hash 数の補間ホール `\<N>#(`。`\<N>#(` 自体はマスクし、本文は本物の
+            // call を残すために保存し、対応する `)` で閉じる。
+            if (line[q] == '\\'
+                && HasHashRun(line, q + 1, hashCount)
+                && q + 1 + hashCount < line.Length
+                && line[q + 1 + hashCount] == '(')
+            {
+                ReplaceWithSpaces(masked, q, 2 + hashCount);
+                q += 2 + hashCount;
+                var holeDepth = 0;
+                while (q < line.Length)
+                {
+                    if (line[q] == '"' || line[q] == '\'')
+                    {
+                        q = SkipJsSingleLineString(line, q);
+                        continue;
+                    }
+                    if (line[q] == '(')
+                    {
+                        holeDepth++;
+                        q++;
+                        continue;
+                    }
+                    if (line[q] == ')')
+                    {
+                        if (holeDepth == 0)
+                        {
+                            masked[q] = ' ';
+                            q++;
+                            break;
+                        }
+                        holeDepth--;
+                        q++;
+                        continue;
+                    }
+                    q++;
+                }
+                continue;
+            }
+            masked[q] = ' ';
+            q++;
+        }
+        return q;
+    }
+
     private static int SkipJsSingleLineString(string line, int startIndex)
     {
         var quote = line[startIndex];
@@ -2864,12 +2934,19 @@ internal static class StructuralLineMasker
         var nestedHoleParenDepth = -1;
         // Defensive depth tracking for triple-quoted literals opened 3+ levels deep
         // (i.e. inside the nested triple's own `\(...)` hole). >0 = current 3+ deep
-        // body. While >0, every char is masked and `"""` (with optional matching
-        // hash run) toggles depth so phantom calls cannot leak. Real calls 4+ levels
-        // deep are not preserved — full stack tracking would be needed for that —
-        // but masking soundness is.
-        // 3 段以上のネスト triple に対する防御的な深さ追跡。> 0 の間は本文をマスク。
+        // body. While >0, every char is masked and the close requires the same
+        // hash count as the deep open so phantom calls cannot leak even when the
+        // deep triple is hash-delimited (`#"""..."""#` etc.). Closes #1000 — the
+        // earlier version only matched plain `"""` for the close and could exit
+        // the deep state at the wrong delimiter when the deep triple was raw.
+        // Real calls 4+ levels deep are not preserved — full stack tracking would
+        // be needed for that — but masking soundness is.
+        // 3 段以上のネスト triple に対する防御的な深さ追跡。
         var deepNestedTripleDepth = 0;
+        // Hash count required at the deep triple's matching close. 0 for plain
+        // `"""..."""`, N for hash-delimited `<N>#"""..."""<N>#` deep opens.
+        // 深い triple の閉じに必要な hash 個数。
+        var deepNestedTripleHashCount = 0;
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -2926,14 +3003,20 @@ internal static class StructuralLineMasker
                                 if (deepNestedTripleDepth > 0)
                                 {
                                     // 3+ level deep triple body: mask through to the
-                                    // matching close so phantom calls cannot leak.
-                                    // 3 段以上深い triple 本文: 一致する閉じまでマスク。
+                                    // matching close. The close requires the same hash
+                                    // count as the deep open (closes #1000) so a deep
+                                    // raw triple `<N>#"""..."""<N>#` only exits on its
+                                    // matching `"""<N>#` and not on a stray bare `"""`.
+                                    // 3 段以上深い triple 本文: 一致する hash 数の閉じまでマスク。
                                     if (pos + 2 < line.Length
-                                        && line[pos] == '"' && line[pos + 1] == '"' && line[pos + 2] == '"')
+                                        && line[pos] == '"' && line[pos + 1] == '"' && line[pos + 2] == '"'
+                                        && HasHashRun(line, pos + 3, deepNestedTripleHashCount))
                                     {
-                                        ReplaceWithSpaces(masked, pos, 3);
-                                        pos += 3;
+                                        ReplaceWithSpaces(masked, pos, 3 + deepNestedTripleHashCount);
+                                        pos += 3 + deepNestedTripleHashCount;
                                         deepNestedTripleDepth--;
+                                        if (deepNestedTripleDepth == 0)
+                                            deepNestedTripleHashCount = 0;
                                         continue;
                                     }
                                     masked[pos] = ' ';
@@ -2969,27 +3052,20 @@ internal static class StructuralLineMasker
                                     ReplaceWithSpaces(masked, pos, deepHashes + 3);
                                     pos += deepHashes + 3;
                                     deepNestedTripleDepth = 1;
+                                    deepNestedTripleHashCount = deepHashes;
                                     continue;
                                 }
                                 // Single-line `#"..."#` raw string inside the inner hole.
-                                // 単行 `#"..."#` 拡張 raw 文字列。
+                                // Preserve any matching `\#(...)` interpolation hole bodies
+                                // so real call edges inside the raw string still reach the
+                                // reference graph. Closes #1001.
+                                // 単行 `#"..."#` 拡張 raw 文字列。内側の `\#(...)` ホール本文は
+                                // 残し、本物の call を reference graph に届ける。
                                 if (deepHashes > 0
                                     && pos + deepHashes < line.Length
                                     && line[pos + deepHashes] == '"')
                                 {
-                                    var q = pos + deepHashes + 1;
-                                    while (q < line.Length)
-                                    {
-                                        if (line[q] == '"' && HasHashRun(line, q + 1, deepHashes))
-                                        {
-                                            q += 1 + deepHashes;
-                                            break;
-                                        }
-                                        q++;
-                                    }
-                                    var span = Math.Min(q, line.Length) - pos;
-                                    ReplaceWithSpaces(masked, pos, span);
-                                    pos += span;
+                                    pos = MaskSwiftSingleLineRawString(line, pos, deepHashes, masked);
                                     continue;
                                 }
                                 if (line[pos] == '"' || line[pos] == '\'')
@@ -3037,6 +3113,7 @@ internal static class StructuralLineMasker
                                 nestedTripleHashCount = -1;
                                 nestedHoleParenDepth = -1;
                                 deepNestedTripleDepth = 0;
+                                deepNestedTripleHashCount = 0;
                                 continue;
                             }
                             if (line[pos] == '\\'
@@ -3094,31 +3171,21 @@ internal static class StructuralLineMasker
                             continue;
                         }
 
-                        // Single-line `#"..."#` extended raw string inside the outer hole.
-                        // The body may contain unescaped `"`, `(`, and `)`, so the generic
-                        // single-line skipper would stop at the first `"` and leave the
-                        // remainder visible — breaking the outer hole's paren counting.
-                        // Mask through to the matching `"<hashes>` close.
+                        // Single-line `#"..."#` extended raw string inside the outer
+                        // hole. The body may contain unescaped `"`, `(`, and `)`, so
+                        // the generic single-line skipper would stop at the first `"`
+                        // and leave the remainder visible — breaking the outer hole's
+                        // paren counting. Use the shared raw-string helper to mask
+                        // through to the matching `"<hashes>` close while preserving
+                        // any `\<hashes>(...)` interpolation hole bodies. Closes #1001.
                         // ホール内の単行 `#"..."#` 拡張 raw 文字列。body に `"` / `(` / `)`
-                        // を含むため通常スキッパーは早すぎて止まる。`"<hashes>` クローザまで
-                        // マスクして outer hole の paren 数え上げが崩れないようにする。
+                        // を含むため通常スキッパーは早すぎて止まる。共有ヘルパーで
+                        // `"<hashes>` クローザまでマスクし、`\<hashes>(...)` ホール本文は残す。
                         if (holeNestedHashes > 0
                             && pos + holeNestedHashes < line.Length
                             && line[pos + holeNestedHashes] == '"')
                         {
-                            var q = pos + holeNestedHashes + 1;
-                            while (q < line.Length)
-                            {
-                                if (line[q] == '"' && HasHashRun(line, q + 1, holeNestedHashes))
-                                {
-                                    q += 1 + holeNestedHashes;
-                                    break;
-                                }
-                                q++;
-                            }
-                            var span = Math.Min(q, line.Length) - pos;
-                            ReplaceWithSpaces(masked, pos, span);
-                            pos += span;
+                            pos = MaskSwiftSingleLineRawString(line, pos, holeNestedHashes, masked);
                             continue;
                         }
 
@@ -3170,6 +3237,7 @@ internal static class StructuralLineMasker
                         nestedTripleHashCount = -1;
                         nestedHoleParenDepth = -1;
                         deepNestedTripleDepth = 0;
+                        deepNestedTripleHashCount = 0;
                         continue;
                     }
 
@@ -3239,31 +3307,18 @@ internal static class StructuralLineMasker
                     continue;
                 }
 
-                // Single-line extended raw string `#"..."#` with matching `#` run. The
-                // body may contain unescaped `"`, so the generic single-quote skipper
-                // would stop too early. Swift single-line strings cannot cross a physical
-                // newline, so we just scan to the matching `"<hashes>` on this line and
-                // fall back to end-of-line if the source is malformed.
-                // 単行の `#"..."#` 拡張 raw 文字列。body に `"` を含めるため通常の単行
-                // スキッパーでは早すぎて止まる。Swift の単行文字列は物理改行を越えないため、
-                // この行内で `"<hashes>` を探す。構文誤りなら行末まで詰める。
+                // Single-line extended raw string `#"..."#` with matching `#` run.
+                // The body may contain unescaped `"`, so the generic single-quote
+                // skipper would stop too early. Use the shared helper to mask through
+                // to the matching `"<hashes>` close while preserving any matching
+                // `\<hashes>(...)` interpolation hole bodies (closes #1001).
+                // 単行の `#"..."#` 拡張 raw 文字列。共有ヘルパーで `"<hashes>` まで
+                // マスクし、内側の `\<hashes>(...)` ホール本文は残す。
                 if (leadingHashes > 0
                     && pos + leadingHashes < line.Length
                     && line[pos + leadingHashes] == '"')
                 {
-                    var q = pos + leadingHashes + 1;
-                    while (q < line.Length)
-                    {
-                        if (line[q] == '"' && HasHashRun(line, q + 1, leadingHashes))
-                        {
-                            q += 1 + leadingHashes;
-                            break;
-                        }
-                        q++;
-                    }
-                    var span = Math.Min(q, line.Length) - pos;
-                    ReplaceWithSpaces(masked, pos, span);
-                    pos += span;
+                    pos = MaskSwiftSingleLineRawString(line, pos, leadingHashes, masked);
                     continue;
                 }
 

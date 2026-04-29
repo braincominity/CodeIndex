@@ -15893,4 +15893,90 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "other" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "realSwiftCall" && r.ReferenceKind == "call");
     }
+
+    [Fact]
+    public void Extract_SwiftSingleLineRawString_HashCountedInterpolationHole_PreservesRealCalls()
+    {
+        // Regression for issue #1001: a single-line `#"..."#` Swift extended raw
+        // string (whether at the source root or inside a `\(...)` outer hole) must
+        // preserve any matching `\#(...)` interpolation hole bodies so real call
+        // edges inside the raw string still reach the reference graph. Mismatched
+        // backslash forms (e.g. `\(...)` inside a hash-1 raw string) stay literal
+        // text and are masked along with the rest of the body.
+        // issue #1001 回帰: 単行 `#"..."#` raw 文字列内の hash 数一致 `\#(...)` ホール本文は
+        // 残し、本物の call を reference graph に届けること。
+        const string content = """"
+            import Foundation
+
+            class Demo {
+                func m() {
+                    let outer = """
+                        in-hole-real:    \( wrap(#"foo \#(realInHoleCall()) bar"#) )
+                        in-hole-literal: \( other(#"baz \(notARealCall()) end"#) )
+                        """
+                    let topLevel = #"prefix \#(realTopLevelCall()) suffix"#
+                    realSwiftCall()
+                }
+
+                func wrap(_ x: String) -> String { x }
+                func other(_ x: String) -> String { x }
+                func realInHoleCall() -> Int { 0 }
+                func realTopLevelCall() -> Int { 0 }
+                func notARealCall() -> Int { 0 }
+                func realSwiftCall() {}
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "realInHoleCall" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realTopLevelCall" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "notARealCall" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "other" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realSwiftCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SwiftDeepHashDelimitedTriple_RequiresMatchingHashCloseToExitDeepMask()
+    {
+        // Regression for issue #1000: when a Swift triple-quoted literal opens
+        // 3+ levels deep with a leading hash run (`#"""..."""#` etc.) inside the
+        // nested triple's own `\(...)` hole, the deep-mask close path must require
+        // the same hash count. Otherwise a stray bare `"""` inside the deep body
+        // could exit the deep mask early and let later phantom calls leak.
+        // issue #1000 回帰: 3 段以上深い hash-delimited Swift triple は同じ hash 数の
+        // 閉じでのみ deep mask を抜け、bare `"""` で早抜けして phantom が漏れないこと。
+        const string content = """"
+            import Foundation
+
+            class Demo {
+                func m() {
+                    let sql = """
+                        outer: \( wrap("""
+                            inner: \( helper(#"""
+                                phantom-bare-close: """
+                                phantom-call: swiftDeepHashPhantom(99)
+                                """#) )
+                            """) )
+                        """
+                    realSwiftCall()
+                }
+
+                func wrap(_ x: String) -> String { x }
+                func helper(_ x: String) -> String { x }
+                func realSwiftCall() {}
+                func swiftDeepHashPhantom(_ x: Int) -> Int { x }
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "swiftDeepHashPhantom" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "helper" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realSwiftCall" && r.ReferenceKind == "call");
+    }
 }
