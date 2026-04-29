@@ -22238,6 +22238,48 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunImpact_CSharpVerbatimQueryMissKeepsOriginalInputInJsonAndHumanOutput()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_verbatim_miss");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Verbatim.cs", "csharp",
+                """
+                public class @class
+                {
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (jsonExitCode, jsonStdout, jsonStderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["@missing", "--db", dbPath, "--lang", "csharp", "--json"],
+                _jsonOptions));
+
+            using var jsonDocument = ParseJsonOutput(jsonStdout);
+            var json = jsonDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.NotFound, jsonExitCode);
+            Assert.Equal(string.Empty, jsonStderr);
+            Assert.Equal("@missing", json.GetProperty("query").GetString());
+            Assert.Equal("@missing", json.GetProperty("resolved_name").GetString());
+            Assert.Equal("no_matching_definition", json.GetProperty("zero_result_reason").GetString());
+
+            var (humanExitCode, humanStdout, humanStderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["@missing", "--db", dbPath, "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, humanExitCode);
+            Assert.Equal(string.Empty, humanStdout);
+            Assert.Contains("No impact found for '@missing'.", humanStderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunHotspots_GroupByNameJson_CollapsesDuplicateDefinitionSites()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_hotspots_group_json");
