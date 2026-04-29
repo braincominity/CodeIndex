@@ -9,10 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Fixed
+- **C# verbatim normalization now stays scoped to C# while SQLite open/backfill validation retry handling remains in place (#651, #954, #962, #971, #972)** — `DbReader` keeps the C# verbatim identifier normalization path limited to C#-flavored exact/name queries, while non-C# queries preserve leading `@` characters. `DbContext` also keeps transient SQLite open retry/backoff behavior for the main connection path and the backfill-fold validation path, with regressions covering CLI, MCP, and connection setup behavior. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/DbContext.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `tests/CodeIndex.Tests/DatabaseTests.cs`, `tests/CodeIndex.Tests/LegacySchemaMigrationTests.cs`. Closes #651, #954, #962, #971, #972.
+
 ### [1.15.3] - 2026-04-25
 
 #### Fixed
-- **C# verbatim normalization now stays scoped to C# while SQLite open/backfill validation retry handling remains in place (#651, #954, #962, #971, #972)** — `DbReader` keeps the C# verbatim identifier normalization path limited to C#-flavored exact/name queries, while non-C# queries preserve leading `@` characters. `DbContext` also keeps transient SQLite open retry/backoff behavior for the main connection path and the backfill-fold validation path, with regressions covering CLI, MCP, and connection setup behavior. Affected: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/DbContext.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `tests/CodeIndex.Tests/DatabaseTests.cs`, `tests/CodeIndex.Tests/LegacySchemaMigrationTests.cs`. Closes #651, #954, #962, #971, #972.
 - Fix the missed version update in version.json.
 
 ### [1.15.2] - 2026-04-25
@@ -925,6 +927,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 修正
+- **C# の verbatim 正規化を C# に限定したまま、SQLite の open / backfill validation の retry/backoff を維持するように変更 (#651, #954, #962, #971, #972)** — `DbReader` は C# 版の exact/name クエリにだけ verbatim 識別子正規化を適用し、それ以外の言語では先頭の `@` を保持するようになりました。`DbContext` も、メイン接続経路と backfill-fold の validation 経路で一時的な SQLite open retry/backoff を維持し、CLI / MCP / 接続初期化の回帰テストを追加しています。対象: `src/CodeIndex/Database/DbReader.cs`, `src/CodeIndex/Database/DbContext.cs`, `src/CodeIndex/Cli/QueryCommandRunner.cs`, `src/CodeIndex/Mcp/McpToolHandlers.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`, `tests/CodeIndex.Tests/McpServerTests.cs`, `tests/CodeIndex.Tests/DatabaseTests.cs`, `tests/CodeIndex.Tests/LegacySchemaMigrationTests.cs`。Closes #651, #954, #962, #971, #972。
 
 ### [1.15.3] - 2026-04-25
 
