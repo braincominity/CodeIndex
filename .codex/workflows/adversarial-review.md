@@ -31,7 +31,7 @@ Do not report nitpicks, style preferences, or speculative concerns unless they c
 
 ## Output Language
 
-Output review results in Japanese unless the user requests otherwise.
+Output review results in English unless the user requests otherwise.
 
 ## Required Output Format
 
@@ -46,7 +46,7 @@ If problems are found, include each finding with:
 If no blocking or actionable problems are found, say exactly:
 
 ```text
-blocking/actionableな指摘はありません。
+No blocking/actionable issues found.
 ```
 
 ## Review Discipline
