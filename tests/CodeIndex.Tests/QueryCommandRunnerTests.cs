@@ -13106,7 +13106,7 @@ public class QueryCommandRunnerTests
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json"]);
-            var (primaryExitCode, primaryStdout, primaryStderr) = RunBuiltCli(["references", "primary", "--db", dbPath, "--json", "--lang", "css", "--exact-name"]);
+            var (primaryExitCode, primaryStdout, primaryStderr) = RunBuiltCli(["references", "$primary", "--db", dbPath, "--json", "--lang", "css", "--exact-name"]);
             var (spacingExitCode, spacingStdout, spacingStderr) = RunBuiltCli(["references", "spacing-base", "--db", dbPath, "--json", "--lang", "css", "--exact-name"]);
             var (buttonExitCode, buttonStdout, buttonStderr) = RunBuiltCli(["references", "%button-base", "--db", dbPath, "--json", "--lang", "css", "--exact-name"]);
             var (radiusExitCode, radiusStdout, radiusStderr) = RunBuiltCli(["references", "radius", "--db", dbPath, "--json", "--lang", "css", "--exact-name"]);
