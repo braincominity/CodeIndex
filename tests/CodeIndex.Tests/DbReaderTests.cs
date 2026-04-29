@@ -3744,6 +3744,9 @@ public class DbReaderTests : IDisposable
         Assert.Equal(1, _reader.CountCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
         Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountCallersTotal("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
 
+        Assert.Equal("dbo.fn_Target", SqlNameResolver.ResolveReferenceNameAtColumn("fn_Target", "EXEC dbo.fn_Target;", "dbo.Caller", 1));
+        Assert.False(SqlNameResolver.AllowLeafFallbackAtColumn("fn_Target", "EXEC dbo.fn_Target;", "dbo.Caller", 1));
+
         var impact = _reader.AnalyzeImpact("dbo.fn_Target", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_schema_scoped"]);
         Assert.Equal("dbo.Caller", Assert.Single(impact.Callers).CallerName);
 
