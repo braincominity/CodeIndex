@@ -5255,13 +5255,13 @@ public static class ReferenceExtractor
 
         // Switch-expression arms (`Point(...) => ...`) do not have a `case` / `is` anchor,
         // so the same positional pattern suppression has to look for the trailing arrow.
-        if (IsCSharpSwitchExpressionPatternHead(preparedLine, nameIndex))
+        if (IsCSharpSwitchExpressionPatternHead(preparedLines, lineIndex, preparedLine, nameIndex))
             return true;
 
         return false;
     }
 
-    private static bool IsCSharpSwitchExpressionPatternHead(string preparedLine, int nameIndex)
+    private static bool IsCSharpSwitchExpressionPatternHead(string[] preparedLines, int lineIndex, string preparedLine, int nameIndex)
     {
         var cursor = nameIndex;
         while (cursor < preparedLine.Length && IsCSharpIdentifierPart(preparedLine[cursor]))
@@ -5286,9 +5286,26 @@ public static class ReferenceExtractor
                     if (parenDepth == 0)
                     {
                         var afterClose = SkipCSharpTriviaForward(preparedLine, i + 1);
-                        return afterClose + 1 < preparedLine.Length
+                        if (afterClose + 1 < preparedLine.Length
                             && preparedLine[afterClose] == '='
-                            && preparedLine[afterClose + 1] == '>';
+                            && preparedLine[afterClose + 1] == '>')
+                        {
+                            return true;
+                        }
+
+                        for (var next = lineIndex + 1; next < preparedLines.Length; next++)
+                        {
+                            var nextLine = preparedLines[next];
+                            if (string.IsNullOrWhiteSpace(nextLine))
+                                continue;
+
+                            var nextCursor = SkipCSharpTriviaForward(nextLine, 0);
+                            return nextCursor + 1 < nextLine.Length
+                                && nextLine[nextCursor] == '='
+                                && nextLine[nextCursor + 1] == '>';
+                        }
+
+                        return false;
                     }
                     break;
             }

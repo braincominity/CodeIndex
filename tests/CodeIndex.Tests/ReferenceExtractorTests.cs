@@ -9757,6 +9757,8 @@ public class ReferenceExtractorTests
                 int Match(object value) => value switch
                 {
                     Point(var x, var y) => 1,
+                    Point(var c, var d)
+                        => 2,
                     _ => 0,
                 };
             }
@@ -9766,8 +9768,8 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
-        Assert.Single(pointRefs);
-        Assert.Equal("Match", pointRefs[0].ContainerName);
+        Assert.Equal(2, pointRefs.Count);
+        Assert.All(pointRefs, r => Assert.Equal("Match", r.ContainerName));
         Assert.DoesNotContain(references, r => r.SymbolName == "Point" && r.ReferenceKind == "call");
     }
 
