@@ -5165,7 +5165,7 @@ public static class SymbolExtractor
         List<JavaScriptClassScanTarget> objectLiteralTargets)
     {
         var sanitizedLines = BuildJavaScriptTypeScriptSanitizedLines(lines);
-        ExtractJavaScriptTypeScriptReExportSymbols(fileId, lines, sanitizedLines, symbols);
+        ExtractJavaScriptTypeScriptReExportSymbols(fileId, lang, lines, sanitizedLines, symbols);
         ExtractJavaScriptTypeScriptCommonJsNamedExportAssignments(fileId, lang, lines, sanitizedLines, symbols, privateScopeColumns);
         ExtractJavaScriptTypeScriptExportedObjectLiteralProperties(fileId, lines, sanitizedLines, symbols, objectLiteralTargets);
     }
@@ -5184,19 +5184,126 @@ public static class SymbolExtractor
         return sanitizedLines;
     }
 
-    private static void ExtractJavaScriptTypeScriptReExportSymbols(long fileId, string[] rawLines, string[] sanitizedLines, List<SymbolRecord> symbols)
+    private static void ExtractJavaScriptTypeScriptReExportSymbols(long fileId, string lang, string[] rawLines, string[] sanitizedLines, List<SymbolRecord> symbols)
     {
         for (int i = 0; i < sanitizedLines.Length; i++)
         {
-            var trimmedSanitizedLine = sanitizedLines[i].Trim();
-            if (trimmedSanitizedLine.Length == 0)
-                continue;
-
-            if (TryCollectJavaScriptTypeScriptStarReExportClause(rawLines, sanitizedLines, i, out var starEndLineIndex, out var starClause, out var starSignature, out var starStartColumn))
+            var line = sanitizedLines[i];
+            var statementStart = FindNextJavaScriptTypeScriptStatementStart(line, 0);
+            while (statementStart >= 0)
             {
-                var starMatch = JavaScriptTypeScriptStarReExportRegex.Match(starClause);
-                if (starMatch.Success
-                    && TryExtractJavaScriptTypeScriptReExportModuleName(rawLines, sanitizedLines, i, starEndLineIndex, waitForClosedSpecifierList: false, out var moduleName))
+                if (TryCollectJavaScriptTypeScriptStarReExportClause(
+                        lang,
+                        rawLines,
+                        sanitizedLines,
+                        i,
+                        statementStart,
+                        out var starEndLineIndex,
+                        out var starEndColumn,
+                        out var starClause,
+                        out var starSignature,
+                        out var starStartColumn))
+                {
+                    var starMatch = JavaScriptTypeScriptStarReExportRegex.Match(starClause);
+                    if (starMatch.Success)
+                    {
+                        if (TryExtractJavaScriptTypeScriptReExportModuleName(
+                                rawLines,
+                                sanitizedLines,
+                                i,
+                                starEndLineIndex,
+                                starStartColumn,
+                                waitForClosedSpecifierList: false,
+                                out var moduleName))
+                        {
+                            AddSymbolRecord(
+                                symbols,
+                                cssSeenSymbols: null,
+                                i + 1,
+                                new SymbolRecord
+                                {
+                                    FileId = fileId,
+                                    Kind = "import",
+                                    Name = moduleName,
+                                    Line = i + 1,
+                                    StartLine = i + 1,
+                                    StartColumn = starStartColumn,
+                                    EndLine = starEndLineIndex + 1,
+                                    Signature = starSignature,
+                                    Visibility = "export",
+                                },
+                                rawLines[i]);
+                        }
+
+                        var namespaceName = starMatch.Groups["namespace"].Value;
+                        if (namespaceName.Length > 0)
+                        {
+                            AddSymbolRecord(
+                                symbols,
+                                cssSeenSymbols: null,
+                                i + 1,
+                                new SymbolRecord
+                                {
+                                    FileId = fileId,
+                                    Kind = "property",
+                                    Name = namespaceName,
+                                    Line = i + 1,
+                                    StartLine = i + 1,
+                                    StartColumn = starStartColumn,
+                                    EndLine = starEndLineIndex + 1,
+                                    Signature = starSignature,
+                                    Visibility = "export",
+                                },
+                                rawLines[i]);
+                        }
+                    }
+
+                    if (starEndLineIndex > i)
+                    {
+                        i = starEndLineIndex;
+                        statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLines[i], starEndColumn + 1);
+                    }
+                    else
+                    {
+                        statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLines[i], starEndColumn + 1);
+                    }
+
+                    continue;
+                }
+
+                if (!TryCollectJavaScriptTypeScriptNamedReExportClause(
+                        lang,
+                        rawLines,
+                        sanitizedLines,
+                        i,
+                        statementStart,
+                        out var endLineIndex,
+                        out var endColumn,
+                        out var clause,
+                        out var signatureText,
+                        out var startColumnText))
+                {
+                    statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLines[i], statementStart + 1);
+                    continue;
+                }
+
+                var namedMatch = JavaScriptTypeScriptNamedReExportRegex.Match(clause);
+                if (!namedMatch.Success)
+                {
+                    if (endLineIndex > i)
+                        i = endLineIndex;
+                    statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLines[i], endColumn + 1);
+                    continue;
+                }
+
+                if (TryExtractJavaScriptTypeScriptReExportModuleName(
+                        rawLines,
+                        sanitizedLines,
+                        i,
+                        endLineIndex,
+                        startColumnText,
+                        waitForClosedSpecifierList: true,
+                        out var namedModuleName))
                 {
                     AddSymbolRecord(
                         symbols,
@@ -5206,121 +5313,75 @@ public static class SymbolExtractor
                         {
                             FileId = fileId,
                             Kind = "import",
-                            Name = moduleName,
+                            Name = namedModuleName,
                             Line = i + 1,
                             StartLine = i + 1,
-                            StartColumn = starStartColumn,
-                            EndLine = starEndLineIndex + 1,
-                            Signature = starSignature,
+                            StartColumn = startColumnText,
+                            EndLine = endLineIndex + 1,
+                            Signature = signatureText,
                             Visibility = "export",
                         },
                         rawLines[i]);
-
-                    var namespaceName = starMatch.Groups["namespace"].Value;
-                    if (namespaceName.Length > 0)
-                    {
-                        AddSymbolRecord(
-                            symbols,
-                            cssSeenSymbols: null,
-                            i + 1,
-                            new SymbolRecord
-                            {
-                                FileId = fileId,
-                                Kind = "property",
-                                Name = namespaceName,
-                                Line = i + 1,
-                                StartLine = i + 1,
-                                StartColumn = starStartColumn,
-                                EndLine = starEndLineIndex + 1,
-                                Signature = starSignature,
-                                Visibility = "export",
-                            },
-                            rawLines[i]);
-                    }
                 }
 
-                i = starEndLineIndex;
-                continue;
-            }
-
-            if (!TryCollectJavaScriptTypeScriptNamedReExportClause(rawLines, sanitizedLines, i, out var endLineIndex, out var clause, out var signatureText, out var startColumnText))
-                continue;
-
-            var namedMatch = JavaScriptTypeScriptNamedReExportRegex.Match(clause);
-            if (!namedMatch.Success)
-            {
-                i = endLineIndex;
-                continue;
-            }
-
-            if (!TryExtractJavaScriptTypeScriptReExportModuleName(rawLines, sanitizedLines, i, endLineIndex, waitForClosedSpecifierList: true, out var namedModuleName))
-            {
-                i = endLineIndex;
-                continue;
-            }
-
-            AddSymbolRecord(
-                symbols,
-                cssSeenSymbols: null,
-                i + 1,
-                new SymbolRecord
+                foreach (var exportedName in ParseJavaScriptTypeScriptReExportedNames(namedMatch.Groups["specifiers"].Value))
                 {
-                    FileId = fileId,
-                    Kind = "import",
-                    Name = namedModuleName,
-                    Line = i + 1,
-                    StartLine = i + 1,
-                    StartColumn = startColumnText,
-                    EndLine = endLineIndex + 1,
-                    Signature = signatureText,
-                    Visibility = "export",
-                },
-                rawLines[i]);
+                    AddSymbolRecord(
+                        symbols,
+                        cssSeenSymbols: null,
+                        i + 1,
+                        new SymbolRecord
+                        {
+                            FileId = fileId,
+                            Kind = "property",
+                            Name = exportedName,
+                            Line = i + 1,
+                            StartLine = i + 1,
+                            StartColumn = startColumnText,
+                            EndLine = endLineIndex + 1,
+                            Signature = signatureText,
+                            Visibility = "export",
+                        },
+                        rawLines[i]);
+                }
 
-            foreach (var exportedName in ParseJavaScriptTypeScriptReExportedNames(namedMatch.Groups["specifiers"].Value))
-            {
-                AddSymbolRecord(
-                    symbols,
-                    cssSeenSymbols: null,
-                    i + 1,
-                    new SymbolRecord
-                    {
-                        FileId = fileId,
-                        Kind = "property",
-                        Name = exportedName,
-                        Line = i + 1,
-                        StartLine = i + 1,
-                        StartColumn = startColumnText,
-                        EndLine = endLineIndex + 1,
-                        Signature = signatureText,
-                        Visibility = "export",
-                    },
-                    rawLines[i]);
+                if (endLineIndex > i)
+                    i = endLineIndex;
+                statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLines[i], endColumn + 1);
             }
-
-            i = endLineIndex;
         }
     }
 
     private static bool TryCollectJavaScriptTypeScriptStarReExportClause(
+        string lang,
         string[] rawLines,
         string[] sanitizedLines,
         int startLineIndex,
+        int startColumn,
         out int endLineIndex,
+        out int endColumn,
         out string clause,
         out string signature,
-        out int startColumn)
+        out int startColumnText)
     {
         endLineIndex = startLineIndex;
+        endColumn = -1;
         clause = string.Empty;
         signature = string.Empty;
 
         var startLine = sanitizedLines[startLineIndex];
-        var trimmedStartLine = startLine.TrimStart();
+        if (startColumn < 0 || startColumn >= startLine.Length)
+        {
+            startColumnText = -1;
+            return false;
+        }
+
+        var startLineSlice = startLine[startColumn..];
+        var trimmedStartLine = startLineSlice.TrimStart();
         if (trimmedStartLine.Length == 0
             || !trimmedStartLine.StartsWith("export", StringComparison.Ordinal))
         {
-            startColumn = -1;
+            startColumnText = -1;
             return false;
         }
 
@@ -5328,34 +5389,44 @@ public static class SymbolExtractor
         var starRemainder = SkipJavaScriptTypeScriptTypeOnlyExportModifier(exportRemainder);
         if (starRemainder.Length > 0 && starRemainder[0] != '*')
         {
-            startColumn = -1;
+            startColumnText = -1;
             return false;
         }
 
-        startColumn = Math.Max(0, startLine.IndexOf("export", StringComparison.Ordinal));
+        startColumnText = startColumn + startLineSlice.IndexOf("export", StringComparison.Ordinal);
 
         var clauseBuilder = new System.Text.StringBuilder();
         var signatureBuilder = new System.Text.StringBuilder();
 
         for (int lineIndex = startLineIndex; lineIndex < sanitizedLines.Length; lineIndex++)
         {
-            var sanitizedLine = sanitizedLines[lineIndex].Trim();
-            if (sanitizedLine.Length > 0)
+            var sanitizedLine = sanitizedLines[lineIndex];
+            var rawLine = rawLines[lineIndex];
+            var lineStartColumn = lineIndex == startLineIndex ? startColumnText : 0;
+            var lineEndColumn = FindJavaScriptTypeScriptSameLineStatementEndColumn(sanitizedLine, lineStartColumn, lang);
+            var lineEndExclusive = lineEndColumn >= lineStartColumn
+                ? lineEndColumn + 1
+                : sanitizedLine.Length;
+
+            var sanitizedSlice = sanitizedLine[lineStartColumn..lineEndExclusive].Trim();
+            if (sanitizedSlice.Length > 0)
             {
                 if (clauseBuilder.Length > 0)
                     clauseBuilder.Append(' ');
-                clauseBuilder.Append(sanitizedLine);
+                clauseBuilder.Append(sanitizedSlice);
             }
 
-            var rawLine = rawLines[lineIndex].Trim();
-            if (rawLine.Length > 0)
+            var rawSlice = rawLine[lineStartColumn..Math.Min(rawLine.Length, lineEndExclusive)].Trim();
+            if (rawSlice.Length > 0)
             {
                 if (signatureBuilder.Length > 0)
                     signatureBuilder.Append(' ');
-                signatureBuilder.Append(rawLine);
+                signatureBuilder.Append(rawSlice);
             }
 
             endLineIndex = lineIndex;
+            endColumn = lineEndColumn >= lineStartColumn ? lineEndColumn : sanitizedLine.Length - 1;
+
             clause = clauseBuilder.ToString().Trim();
             if (!clause.StartsWith("export", StringComparison.Ordinal))
                 break;
@@ -5364,47 +5435,54 @@ public static class SymbolExtractor
             if (clauseRemainder.Length == 0 || clauseRemainder[0] != '*')
                 break;
 
-            if (!ContainsJavaScriptTypeScriptKeyword(clause, "from"))
-                continue;
-
             if (JavaScriptTypeScriptStarReExportRegex.IsMatch(clause))
             {
                 signature = signatureBuilder.ToString().Trim();
                 return true;
             }
 
-            if (HasPendingJavaScriptTypeScriptImportAttributes(clause))
-                continue;
-
-            break;
+            if (lineEndColumn >= lineStartColumn)
+                break;
         }
 
         endLineIndex = startLineIndex;
+        endColumn = -1;
         clause = string.Empty;
         signature = string.Empty;
-        startColumn = -1;
+        startColumnText = -1;
         return false;
     }
 
     private static bool TryCollectJavaScriptTypeScriptNamedReExportClause(
+        string lang,
         string[] rawLines,
         string[] sanitizedLines,
         int startLineIndex,
+        int startColumn,
         out int endLineIndex,
+        out int endColumn,
         out string clause,
         out string signature,
-        out int startColumn)
+        out int startColumnText)
     {
         endLineIndex = startLineIndex;
+        endColumn = -1;
         clause = string.Empty;
         signature = string.Empty;
 
         var startLine = sanitizedLines[startLineIndex];
-        var trimmedStartLine = startLine.TrimStart();
+        if (startColumn < 0 || startColumn >= startLine.Length)
+        {
+            startColumnText = -1;
+            return false;
+        }
+
+        var startLineSlice = startLine[startColumn..];
+        var trimmedStartLine = startLineSlice.TrimStart();
         if (trimmedStartLine.Length == 0
             || !trimmedStartLine.StartsWith("export", StringComparison.Ordinal))
         {
-            startColumn = -1;
+            startColumnText = -1;
             return false;
         }
 
@@ -5420,75 +5498,67 @@ public static class SymbolExtractor
                 var typeRemainder = exportRemainder["type".Length..].TrimStart();
                 if (typeRemainder.Length > 0 && typeRemainder[0] != '{')
                 {
-                    startColumn = -1;
+                    startColumnText = -1;
                     return false;
                 }
             }
             else
             {
-                startColumn = -1;
+                startColumnText = -1;
                 return false;
             }
         }
 
-        startColumn = Math.Max(0, startLine.IndexOf("export", StringComparison.Ordinal));
+        startColumnText = startColumn + startLineSlice.IndexOf("export", StringComparison.Ordinal);
 
         var clauseBuilder = new System.Text.StringBuilder();
         var signatureBuilder = new System.Text.StringBuilder();
-        var braceDepth = 0;
-        var sawOpeningBrace = false;
 
         for (int lineIndex = startLineIndex; lineIndex < sanitizedLines.Length; lineIndex++)
         {
-            var sanitizedLine = sanitizedLines[lineIndex].Trim();
-            if (sanitizedLine.Length > 0)
+            var sanitizedLine = sanitizedLines[lineIndex];
+            var rawLine = rawLines[lineIndex];
+            var lineStartColumn = lineIndex == startLineIndex ? startColumnText : 0;
+            var lineEndColumn = FindJavaScriptTypeScriptSameLineStatementEndColumn(sanitizedLine, lineStartColumn, lang);
+            var lineEndExclusive = lineEndColumn >= lineStartColumn
+                ? lineEndColumn + 1
+                : sanitizedLine.Length;
+
+            var sanitizedSlice = sanitizedLine[lineStartColumn..lineEndExclusive].Trim();
+            if (sanitizedSlice.Length > 0)
             {
                 if (clauseBuilder.Length > 0)
                     clauseBuilder.Append(' ');
-                clauseBuilder.Append(sanitizedLine);
+                clauseBuilder.Append(sanitizedSlice);
             }
 
-            var rawLine = rawLines[lineIndex].Trim();
-            if (rawLine.Length > 0)
+            var rawSlice = rawLine[lineStartColumn..Math.Min(rawLine.Length, lineEndExclusive)].Trim();
+            if (rawSlice.Length > 0)
             {
                 if (signatureBuilder.Length > 0)
                     signatureBuilder.Append(' ');
-                signatureBuilder.Append(rawLine);
-            }
-
-            foreach (var ch in sanitizedLines[lineIndex])
-            {
-                if (ch == '{')
-                {
-                    braceDepth++;
-                    sawOpeningBrace = true;
-                }
-                else if (ch == '}' && braceDepth > 0)
-                {
-                    braceDepth--;
-                }
+                signatureBuilder.Append(rawSlice);
             }
 
             endLineIndex = lineIndex;
-            if (!sawOpeningBrace || braceDepth != 0)
-                continue;
+            endColumn = lineEndColumn >= lineStartColumn ? lineEndColumn : sanitizedLine.Length - 1;
 
             clause = clauseBuilder.ToString().Trim();
-            signature = signatureBuilder.ToString().Trim();
             if (JavaScriptTypeScriptNamedReExportRegex.IsMatch(clause))
+            {
+                signature = signatureBuilder.ToString().Trim();
                 return true;
+            }
 
-            if (HasPendingJavaScriptTypeScriptImportAttributes(clause))
-                continue;
-
-            if (ContainsJavaScriptTypeScriptKeyword(clause, "from"))
+            if (lineEndColumn >= lineStartColumn)
                 break;
         }
 
         endLineIndex = startLineIndex;
+        endColumn = -1;
         clause = string.Empty;
         signature = string.Empty;
-        startColumn = -1;
+        startColumnText = -1;
         return false;
     }
 
@@ -5503,81 +5573,119 @@ public static class SymbolExtractor
         for (int i = 0; i < sanitizedLines.Length; i++)
         {
             var sanitizedLine = sanitizedLines[i];
-            var match = JavaScriptTypeScriptCommonJsNamedExportAssignmentRegex.Match(sanitizedLine);
-            if (!match.Success)
-                continue;
-
-            if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, i, match.Index, sanitizedLine, includeBlockScope: false)
-                || IsJavaScriptTypeScriptMatchInNamespaceScope(privateScopeColumns, i, match.Index, sanitizedLine))
+            var statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, 0);
+            while (statementStart >= 0)
             {
-                continue;
-            }
-
-            var name = match.Groups["name"].Value;
-            if (!TryCollectJavaScriptTypeScriptAssignedRhs(
-                    rawLines,
-                    sanitizedLines,
-                    i,
-                    match.Groups["rhs"].Index,
-                    out var rhs,
-                    out var rhsStartLineIndex,
-                    out var rhsStartColumn,
-                    out var signature))
-            {
-                continue;
-            }
-
-            var classificationRhs = StartsJavaScriptTypeScriptPotentialGenericArrowAssignmentValue(rhs)
-                ? CollectJavaScriptTypeScriptAssignedRhsHeader(sanitizedLines, rhsStartLineIndex, rhsStartColumn)
-                : rhs;
-
-            if (classificationRhs.Length == 0
-                || StartsJavaScriptTypeScriptClassAssignmentValue(classificationRhs))
-            {
-                continue;
-            }
-
-            var kind = StartsJavaScriptTypeScriptFunctionAssignmentValue(classificationRhs)
-                ? "function"
-                : "property";
-
-            int? bodyStartLine = null;
-            int? bodyEndLine = null;
-            if (kind == "function")
-            {
-                if (TryFindJavaScriptTypeScriptAssignedFunctionBodyOpenBrace(
-                        rawLines,
-                        rhsStartLineIndex,
-                        rhsStartColumn,
-                        lang,
-                        out var openBraceLineIndex,
-                        out var openBraceColumn))
+                var statementSlice = sanitizedLine[statementStart..];
+                var match = JavaScriptTypeScriptCommonJsNamedExportAssignmentRegex.Match(statementSlice);
+                if (!match.Success)
                 {
-                    var (_, resolvedBodyStartLine, resolvedBodyEndLine) = ResolveRange(rawLines, openBraceLineIndex, BodyStyle.Brace, lang, openBraceColumn);
-                    bodyStartLine = resolvedBodyStartLine;
-                    bodyEndLine = resolvedBodyEndLine;
+                    statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, statementStart + 1);
+                    continue;
                 }
-            }
 
-            AddSymbolRecord(
-                symbols,
-                cssSeenSymbols: null,
-                i + 1,
-                new SymbolRecord
+                var absoluteMatchIndex = statementStart + match.Index;
+                if (IsJavaScriptTypeScriptMatchInPrivateScope(privateScopeColumns, i, absoluteMatchIndex, sanitizedLine, includeBlockScope: false)
+                    || IsJavaScriptTypeScriptMatchInNamespaceScope(privateScopeColumns, i, absoluteMatchIndex, sanitizedLine))
                 {
-                    FileId = fileId,
-                    Kind = kind,
-                    Name = name,
-                    Line = i + 1,
-                    StartLine = i + 1,
-                    StartColumn = match.Index,
-                    EndLine = Math.Max(i + 1, bodyEndLine ?? (i + 1)),
-                    BodyStartLine = bodyStartLine,
-                    BodyEndLine = bodyEndLine,
-                    Signature = signature,
-                    Visibility = "export",
-                },
-                rawLines[i]);
+                    statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, statementStart + 1);
+                    continue;
+                }
+
+                var name = match.Groups["name"].Value;
+                if (!TryCollectJavaScriptTypeScriptAssignedRhs(
+                        rawLines,
+                        sanitizedLines,
+                        i,
+                        absoluteMatchIndex,
+                        statementStart + match.Groups["rhs"].Index,
+                        lang,
+                        out var rhs,
+                        out var rhsStartLineIndex,
+                        out var rhsStartColumn,
+                        out var rhsEndLineIndex,
+                        out var rhsEndColumn,
+                        out var signature))
+                {
+                    statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLine, statementStart + 1);
+                    continue;
+                }
+
+                var classificationRhs = StartsJavaScriptTypeScriptPotentialGenericArrowAssignmentValue(rhs)
+                    ? CollectJavaScriptTypeScriptAssignedRhsHeader(sanitizedLines, rhsStartLineIndex, rhsStartColumn)
+                    : rhs;
+
+                if (!StartsJavaScriptTypeScriptFunctionAssignmentValue(classificationRhs)
+                    && TryFindJavaScriptTypeScriptAssignedRhsStart(
+                             sanitizedLines,
+                             i,
+                             statementStart + match.Groups["rhs"].Index,
+                             out var fallbackRhsStartLineIndex,
+                             out var fallbackRhsStartColumn))
+                {
+                    var fallbackClassificationRhs = CollectJavaScriptTypeScriptAssignedRhsHeader(
+                        sanitizedLines,
+                        fallbackRhsStartLineIndex,
+                        fallbackRhsStartColumn);
+                    if (StartsJavaScriptTypeScriptFunctionAssignmentValue(fallbackClassificationRhs))
+                        classificationRhs = fallbackClassificationRhs;
+                }
+
+                if (classificationRhs.Length == 0
+                    || StartsJavaScriptTypeScriptClassAssignmentValue(classificationRhs))
+                {
+                    if (rhsEndLineIndex > i)
+                        i = rhsEndLineIndex;
+                    statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLines[i], rhsEndColumn + 1);
+                    continue;
+                }
+
+                var kind = StartsJavaScriptTypeScriptFunctionAssignmentValue(classificationRhs)
+                    ? "function"
+                    : "property";
+
+                int? bodyStartLine = null;
+                int? bodyEndLine = null;
+                if (kind == "function")
+                {
+                    if (TryFindJavaScriptTypeScriptAssignedFunctionBodyOpenBrace(
+                            rawLines,
+                            rhsStartLineIndex,
+                            rhsStartColumn,
+                            lang,
+                            out var openBraceLineIndex,
+                            out var openBraceColumn))
+                    {
+                        var (_, resolvedBodyStartLine, resolvedBodyEndLine) = ResolveRange(rawLines, openBraceLineIndex, BodyStyle.Brace, lang, openBraceColumn);
+                        bodyStartLine = resolvedBodyStartLine;
+                        bodyEndLine = resolvedBodyEndLine;
+                    }
+                }
+
+                AddSymbolRecord(
+                    symbols,
+                    cssSeenSymbols: null,
+                    i + 1,
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = kind,
+                        Name = name,
+                        Line = i + 1,
+                        StartLine = i + 1,
+                        StartColumn = absoluteMatchIndex,
+                        EndLine = Math.Max(i + 1, bodyEndLine ?? (i + 1)),
+                        BodyStartLine = bodyStartLine,
+                        BodyEndLine = bodyEndLine,
+                        Signature = signature,
+                        Visibility = "export",
+                    },
+                    rawLines[i]);
+
+                if (rhsEndLineIndex > i)
+                    i = rhsEndLineIndex;
+                statementStart = FindNextJavaScriptTypeScriptStatementStart(sanitizedLines[i], rhsEndColumn + 1);
+            }
         }
     }
 
@@ -5987,20 +6095,29 @@ public static class SymbolExtractor
         string[] rawLines,
         string[] sanitizedLines,
         int assignmentLineIndex,
+        int assignmentStartColumn,
         int sameLineRhsColumn,
+        string lang,
         out string rhs,
         out int rhsStartLineIndex,
         out int rhsStartColumn,
+        out int rhsEndLineIndex,
+        out int rhsEndColumn,
         out string signature)
     {
         rhs = string.Empty;
         rhsStartLineIndex = assignmentLineIndex;
         rhsStartColumn = sameLineRhsColumn;
+        rhsEndLineIndex = assignmentLineIndex;
+        rhsEndColumn = -1;
         signature = string.Empty;
+
+        var rhsBuilder = new System.Text.StringBuilder();
+        var signatureBuilder = new System.Text.StringBuilder();
+        var pendingWrapperParenClose = false;
 
         for (int lineIndex = assignmentLineIndex; lineIndex < sanitizedLines.Length; lineIndex++)
         {
-            var sanitizedLine = sanitizedLines[lineIndex];
             var column = lineIndex == assignmentLineIndex
                 ? Math.Max(0, sameLineRhsColumn)
                 : 0;
@@ -6008,34 +6125,76 @@ public static class SymbolExtractor
             if (!TryAdvanceJavaScriptTypeScriptAssignedRhsCursor(sanitizedLines, ref lineIndex, ref column))
                 continue;
 
+            var sanitizedLine = sanitizedLines[lineIndex];
             while (sanitizedLines[lineIndex][column] == '('
                 && HasOnlyJavaScriptTypeScriptAssignedRhsWrapperParensToLineEnd(sanitizedLines[lineIndex], column))
             {
                 column++;
+                pendingWrapperParenClose = true;
                 if (!TryAdvanceJavaScriptTypeScriptAssignedRhsCursor(sanitizedLines, ref lineIndex, ref column))
                     return false;
             }
 
-            rhs = sanitizedLines[lineIndex][column..].TrimEnd();
-            rhsStartLineIndex = lineIndex;
-            rhsStartColumn = column;
-
-            var signatureBuilder = new System.Text.StringBuilder();
-            for (int signatureLineIndex = assignmentLineIndex; signatureLineIndex <= lineIndex; signatureLineIndex++)
+            if (pendingWrapperParenClose && column < sanitizedLine.Length && sanitizedLine[column] == ')')
             {
-                var rawLine = rawLines[signatureLineIndex].Trim();
-                if (rawLine.Length == 0)
-                    continue;
-
-                if (signatureBuilder.Length > 0)
-                    signatureBuilder.Append(' ');
-                signatureBuilder.Append(rawLine);
+                column++;
+                pendingWrapperParenClose = false;
             }
 
-            signature = signatureBuilder.ToString();
+            var statementEndColumn = FindJavaScriptTypeScriptSameLineStatementEndColumn(sanitizedLine, column, lang);
+            var sliceEndExclusive = statementEndColumn >= column
+                ? statementEndColumn + 1
+                : sanitizedLine.Length;
+
+            var rhsStartSliceColumn = Math.Min(column, sanitizedLine.Length);
+            var statementSliceEndColumn = Math.Min(sliceEndExclusive, sanitizedLine.Length);
+            var rhsSlice = rhsStartSliceColumn < statementSliceEndColumn
+                ? sanitizedLine[rhsStartSliceColumn..statementSliceEndColumn].TrimEnd()
+                : string.Empty;
+            if (rhsSlice.Length > 0)
+            {
+                if (rhsBuilder.Length == 0)
+                {
+                    rhsStartLineIndex = lineIndex;
+                    rhsStartColumn = rhsStartSliceColumn;
+                }
+
+                if (rhsBuilder.Length > 0)
+                    rhsBuilder.Append(' ');
+                rhsBuilder.Append(rhsSlice);
+            }
+
+            var signatureSlice = lineIndex == assignmentLineIndex
+                ? rawLines[lineIndex][Math.Min(assignmentStartColumn, rawLines[lineIndex].Length)..Math.Min(rawLines[lineIndex].Length, statementSliceEndColumn)].Trim()
+                : rawLines[lineIndex].Trim();
+            if (signatureSlice.Length > 0)
+            {
+                if (signatureBuilder.Length > 0)
+                    signatureBuilder.Append(' ');
+                signatureBuilder.Append(signatureSlice);
+            }
+
+            if (statementEndColumn >= column)
+            {
+                rhsEndLineIndex = lineIndex;
+                rhsEndColumn = statementEndColumn;
+                rhs = rhsBuilder.ToString().Trim();
+                signature = signatureBuilder.ToString().Trim();
+                return true;
+            }
+        }
+
+        if (rhsBuilder.Length > 0)
+        {
+            rhs = rhsBuilder.ToString().Trim();
+            signature = signatureBuilder.ToString().Trim();
+            rhsEndLineIndex = Math.Max(assignmentLineIndex, sanitizedLines.Length - 1);
+            rhsEndColumn = sanitizedLines[rhsEndLineIndex].Length - 1;
             return true;
         }
 
+        rhs = string.Empty;
+        signature = string.Empty;
         return false;
     }
 
@@ -6054,6 +6213,49 @@ public static class SymbolExtractor
             column = 0;
         }
 
+        return false;
+    }
+
+    private static bool TryFindJavaScriptTypeScriptAssignedRhsStart(
+        string[] sanitizedLines,
+        int assignmentLineIndex,
+        int sameLineRhsColumn,
+        out int startLineIndex,
+        out int startColumn)
+    {
+        for (int lineIndex = assignmentLineIndex; lineIndex < sanitizedLines.Length; lineIndex++)
+        {
+            var sanitizedLine = sanitizedLines[lineIndex];
+            var column = lineIndex == assignmentLineIndex
+                ? Math.Max(0, sameLineRhsColumn)
+                : 0;
+
+            while (column < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[column]))
+                column++;
+
+            if (column >= sanitizedLine.Length)
+                continue;
+
+            if (sanitizedLine[column] == '('
+                && HasOnlyJavaScriptTypeScriptAssignedRhsWrapperParensToLineEnd(sanitizedLine, column))
+            {
+                continue;
+            }
+
+            if (sanitizedLine[column] == ')')
+            {
+                var remainder = sanitizedLine[column..].Trim();
+                if (remainder.Length == 0 || remainder == ")" || remainder == ");")
+                    continue;
+            }
+
+            startLineIndex = lineIndex;
+            startColumn = column;
+            return true;
+        }
+
+        startLineIndex = assignmentLineIndex;
+        startColumn = sameLineRhsColumn;
         return false;
     }
 
@@ -6279,6 +6481,7 @@ public static class SymbolExtractor
         string[] sanitizedLines,
         int startLineIndex,
         int endLineIndex,
+        int startColumn,
         bool waitForClosedSpecifierList,
         out string moduleName)
     {
@@ -6289,7 +6492,8 @@ public static class SymbolExtractor
         for (int lineIndex = startLineIndex; lineIndex <= endLineIndex; lineIndex++)
         {
             var sanitizedLine = sanitizedLines[lineIndex];
-            for (int column = 0; column < sanitizedLine.Length; column++)
+            var column = lineIndex == startLineIndex ? Math.Max(0, startColumn) : 0;
+            for (; column < sanitizedLine.Length; column++)
             {
                 var ch = sanitizedLine[column];
                 if (waitForClosedSpecifierList)
@@ -10581,6 +10785,61 @@ public static class SymbolExtractor
                 continue;
 
             return column;
+        }
+
+        return -1;
+    }
+
+    private static int FindJavaScriptTypeScriptSameLineStatementEndColumn(string line, int startColumn, string? lang)
+    {
+        var sanitizedLine = LexJavaScriptLine(line, new JavaScriptLexState()).SanitizedLine;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var angleDepth = 0;
+
+        for (int column = Math.Max(0, startColumn); column < sanitizedLine.Length; column++)
+        {
+            var ch = sanitizedLine[column];
+            if (char.IsWhiteSpace(ch))
+                continue;
+
+            switch (ch)
+            {
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0)
+                        braceDepth--;
+                    break;
+                case '<':
+                    if (lang == "typescript" && parenDepth == 0 && bracketDepth == 0)
+                        angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    break;
+                case ';':
+                    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && angleDepth == 0)
+                        return column;
+                    break;
+            }
         }
 
         return -1;
