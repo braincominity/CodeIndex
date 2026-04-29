@@ -3744,6 +3744,9 @@ public class DbReaderTests : IDisposable
         Assert.Equal(1, _reader.CountCallers("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
         Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountCallersTotal("dbo.fn_Target", lang: "sql", exact: true, pathPatterns: ["sql_schema_scoped"]));
 
+        Assert.Equal("dbo.fn_Target", SqlNameResolver.ResolveReferenceNameAtColumn("fn_Target", "EXEC dbo.fn_Target;", "dbo.Caller", 1));
+        Assert.False(SqlNameResolver.AllowLeafFallbackAtColumn("fn_Target", "EXEC dbo.fn_Target;", "dbo.Caller", 1));
+
         var impact = _reader.AnalyzeImpact("dbo.fn_Target", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_schema_scoped"]);
         Assert.Equal("dbo.Caller", Assert.Single(impact.Callers).CallerName);
 
@@ -5957,6 +5960,32 @@ public class DbReaderTests : IDisposable
         var result = _reader.AnalyzeImpact("MyAuditAttribute", maxDepth: 3, limit: 20, lang: "csharp");
 
         Assert.Contains(result.FileImpacts, f => f.SourcePath == "src/Svc.cs" && f.TargetPath == "src/MyAuditAttribute.cs");
+    }
+
+    [Fact]
+    public void AnalyzeImpact_CSharpVerbatimQueryKeepsOriginalInputOnMiss()
+    {
+        // issue #960: verbatim C# queries should normalize for lookup when a match
+        // exists, but a miss must keep the original spelling in the resolved name
+        // so impact output does not claim a canonical name the user never asked for.
+        // issue #960: C# の verbatim クエリは一致時のみ lookup 用に正規化し、miss
+        // したときは resolved name に元の spelling を残して、ユーザーが指定していない
+        // canonical 名を `impact` 出力に出さないこと。
+        InsertIndexedFile("src/Verbatim.cs", "csharp",
+            """
+            public class @class
+            {
+            }
+            """);
+
+        var hit = _reader.AnalyzeImpact("@class", maxDepth: 1, limit: 10, lang: "csharp");
+        Assert.Equal("class", hit.ResolvedName);
+        Assert.Equal(1, hit.DefinitionCount);
+
+        var miss = _reader.AnalyzeImpact("@missing", maxDepth: 1, limit: 10, lang: "csharp");
+        Assert.Equal("@missing", miss.ResolvedName);
+        Assert.Equal(0, miss.DefinitionCount);
+        Assert.Equal("no_matching_definition", miss.ZeroResultReason);
     }
 
     [Fact]

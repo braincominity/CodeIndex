@@ -174,6 +174,15 @@ internal static class SqlNameResolver
             return false;
         }
 
+        if (leafName.Length > 0
+            && !string.IsNullOrWhiteSpace(context)
+            && EnumerateQualifiedNames(context).Any(candidate =>
+                HasQualifier(candidate)
+                && string.Equals(GetLeafName(candidate), leafName, StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
         return !IsQuotedSingleIdentifierWithDots(containerName);
     }
 
