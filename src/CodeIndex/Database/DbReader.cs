@@ -2840,12 +2840,13 @@ public partial class DbReader
     // Query-side mirror of the C# declaration canonicalizer. Users commonly type source
     // spellings such as `@class` or `Outer.@class`; the DB stores the canonical names
     // without the verbatim `@`, so query entrypoints normalize to the persisted form first.
+    // The normalization is applied even when `--lang` is omitted because name-based lookup
+    // still needs to treat C# verbatim spellings as canonical symbol names.
     // C# 宣言側 canonicalizer の query 側ミラー。`@class` / `Outer.@class` のような source
     // spelling を受けても、DB 側の `@` なし canonical 名に合わせてから検索する。
+    // `--lang` 未指定でも name-based lookup では verbatim spelling を canonical 名へ寄せる。
     private static string? NormalizeCSharpVerbatimQuery(string? query, string? lang)
     {
-        if (lang != null && !string.Equals(lang, "csharp", StringComparison.OrdinalIgnoreCase))
-            return query;
         var normalized = query == null ? null : NormalizeDbCSharpQualifiedName(query);
         return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }

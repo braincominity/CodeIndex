@@ -163,7 +163,7 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(exactError);
             return CommandExitCodes.UsageError;
         }
-        if (exact && options.Query is not null && IsBareVerbatimQueryToken(options.Query) && options.CountOnly)
+        if (exact && options.Query is not null && IsBareVerbatimQueryToken(options.Query) && options.CountOnly && string.Equals(options.Lang, "csharp", StringComparison.OrdinalIgnoreCase))
         {
             Console.WriteLine(options.Json
                 ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions)
@@ -685,7 +685,7 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(exactError);
             return CommandExitCodes.UsageError;
         }
-        var exactBareVerbatimOnly = exact && (
+        var exactBareVerbatimOnly = exact && string.Equals(options.Lang, "csharp", StringComparison.OrdinalIgnoreCase) && (
             (options.Query is not null && IsBareVerbatimQueryToken(options.Query) && options.ExtraNames.Count == 0) ||
             (options.Query is null && options.ExtraNames.Count > 0 && options.ExtraNames.All(IsBareVerbatimQueryToken)));
         var (symbolQueries, hadExplicitInput) = BuildSymbolQueryList(options);
