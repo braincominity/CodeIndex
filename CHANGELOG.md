@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### Fixed
+- **Java generic bounds now surface real bound references, and real short type names no longer get suppressed by generic-parameter spelling heuristics (#642, #644)** — `ReferenceExtractor` now indexes Java type-parameter bounds such as `class Demo<T extends Root & Bound>` and `<U extends Wrapper<Root>>`, keeping the bound types visible as `type_reference` edges. At the same time, the old spelling-based generic-parameter filter no longer hides real short names like `X` or `TResult`, so C# declaration positions keep surfacing genuine type names instead of dropping them as presumed generic parameters. Added focused regressions for Java generic bounds, Java nested generic bounds, and short C# type names. Affected: `src/CodeIndex/Indexer/ReferenceExtractor.cs`, `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`.
 - **C# `using static` の同名型パターン回帰を修正 (#685, #691)** — `using static` で import された enum/const 名と同じ短名を持つ real type を、`value is Red` や `case Red =>` のような pattern 位置で取り違えないようにする regression を追加し、top-level と nested の両方で `references` / `inspect` / `impact` が genuine type dependency を落とさないようにしました。Affects: `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`.
 
 ### [1.16.0] - 2026-04-30
@@ -973,6 +974,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### [Unreleased]
 
 #### 修正
+- **Java の generic bounds が実際の bound 参照を出力し、generic-parameter の綴りだけで実名の短い型名を抑制しなくなりました (#642, #644)** — `ReferenceExtractor` が `class Demo<T extends Root & Bound>` や `<U extends Wrapper<Root>>` のような Java の type-parameter bounds を `type_reference` として索引し、bound 側の型を可視化するようになりました。同時に、綴りベースの generic-parameter フィルタを廃止し、`X` や `TResult` のような実在の短い型名が generic parameter と誤認されて落ちることを防ぎます。Java の generic bounds と短い C# 型名の回帰テストを追加しました。対象: `src/CodeIndex/Indexer/ReferenceExtractor.cs`、`tests/CodeIndex.Tests/ReferenceExtractorTests.cs`。
 - **C# の `using static` 同名型パターン回帰を修正 (#685, #691)** — `using static` で import された enum/const 名と同じ短名を持つ real type を、`value is Red` や `case Red =>` のような pattern 位置で取り違えないようにする regression を追加し、top-level と nested の両方で `references` / `inspect` / `impact` が genuine type dependency を落とさないようにしました。対象: `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`、`tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`.
 
 ### [1.16.0] - 2026-04-30
