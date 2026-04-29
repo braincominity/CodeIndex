@@ -233,6 +233,17 @@ public static class ReferenceExtractor
     // 平坦な `<[^>\n]+>` では末尾 `>>` を釣り合わせられないため、depth-aware な fallback scanner
     // で補完する。issue #263 参照。
     private static readonly Regex CallRegex = new($@"(?<![\w$])(?<name>{CSharpIdentifierPattern})(?:\?\.)?(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
+    // PowerShell cmdlet / function calls are statement-start or pipeline-stage forms such as
+    // `Get-ChildItem -Path .`, `Write-Host "x"`, and `$items | ForEach-Object { ... }`.
+    // The shared CallRegex only sees parenthesized calls and would split hyphenated cmdlets
+    // after the hyphen, so PowerShell uses a dedicated pass. See issue #281.
+    // PowerShell の cmdlet / function 呼び出しは `Get-ChildItem -Path .` や
+    // `Write-Host "x"`、`$items | ForEach-Object { ... }` のような statement-start / pipeline 形。
+    // 共有 CallRegex は `(` 付きしか見えず、ハイフン入り cmdlet も hyphen の後ろで分断するため、
+    // PowerShell は専用パスを使う。issue #281 参照。
+    private static readonly Regex PowerShellCallRegex = new(
+        @"(?:^|[|;&{=]\s*)\s*(?<name>[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z][A-Za-z0-9]*)+)\b",
+        RegexOptions.Compiled | RegexOptions.Multiline);
     // SQL stored-procedure call without parentheses: T-SQL `EXEC` / `EXECUTE` and MySQL / MariaDB `CALL`.
     // The shared CallRegex requires a trailing `(`, which misses the dominant real-world form such as
     // `EXEC dbo.sp_Target;`, `EXEC dbo.sp_Target @x = 1, @y = 2;`, `CALL sp_Helper;`, and the bracketed
@@ -1827,24 +1838,36 @@ public static class ReferenceExtractor
             }
 
             var matchedCallIndices = new HashSet<int>();
-            foreach (Match match in CallRegex.Matches(preparedLine))
+            if (language is "powershell")
             {
-                var name = match.Groups["name"].Value;
-                var callIndex = match.Groups["name"].Index;
-                if (sqlSuppressedCallIndices != null && sqlSuppressedCallIndices.Contains(callIndex))
-                    continue;
-                matchedCallIndices.Add(callIndex);
-                AddCallLikeReference(name, callIndex);
+                foreach (Match match in PowerShellCallRegex.Matches(preparedLine))
+                {
+                    var name = match.Groups["name"].Value;
+                    var callIndex = match.Groups["name"].Index;
+                    AddCallLikeReference(name, callIndex);
+                }
             }
+            else
+            {
+                foreach (Match match in CallRegex.Matches(preparedLine))
+                {
+                    var name = match.Groups["name"].Value;
+                    var callIndex = match.Groups["name"].Index;
+                    if (sqlSuppressedCallIndices != null && sqlSuppressedCallIndices.Contains(callIndex))
+                        continue;
+                    matchedCallIndices.Add(callIndex);
+                    AddCallLikeReference(name, callIndex);
+                }
 
-            // The flat CallRegex misses nested generic tails like `>>(` because `<[^>\n]+>`
-            // stops at the first `>`. Add a depth-aware fallback so `Foo<Bar<int>>()` and
-            // `new Dict<K, List<V>>()` still emit call/instantiate rows. See issue #263.
-            // 平坦な CallRegex は `<[^>\n]+>` が最初の `>` で止まるため `>>(` 形を取りこぼす。
-            // depth-aware な fallback を足し、`Foo<Bar<int>>()` や `new Dict<K, List<V>>()` でも
-            // `call` / `instantiate` を発行する。issue #263 参照。
-            foreach (var candidate in EnumerateNestedGenericCallCandidates(preparedLine, matchedCallIndices))
-                AddCallLikeReference(candidate.Name, candidate.NameIndex);
+                // The flat CallRegex misses nested generic tails like `>>(` because `<[^>\n]+>`
+                // stops at the first `>`. Add a depth-aware fallback so `Foo<Bar<int>>()` and
+                // `new Dict<K, List<V>>()` still emit call/instantiate rows. See issue #263.
+                // 平坦な CallRegex は `<[^>\n]+>` が最初の `>` で止まるため `>>(` 形を取りこぼす。
+                // depth-aware な fallback を足し、`Foo<Bar<int>>()` や `new Dict<K, List<V>>()` でも
+                // `call` / `instantiate` を発行する。issue #263 参照。
+                foreach (var candidate in EnumerateNestedGenericCallCandidates(preparedLine, matchedCallIndices))
+                    AddCallLikeReference(candidate.Name, candidate.NameIndex);
+            }
 
             // Qualified C# enum-member access such as `Nested.A` or `Outer.First.None` is not
             // a method call, but downstream symbol workflows (`references`, `callers`,
