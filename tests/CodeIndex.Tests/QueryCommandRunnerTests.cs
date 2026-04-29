@@ -365,6 +365,79 @@ public class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_RawFtsSyntaxErrorsAreReportedAsUsageErrors()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_raw_fts_syntax_error");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/demo.cs", "csharp", "class Demo {}\n");
+
+            var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["title:foo", "--db", dbPath, "--fts", "--count"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("Error: FTS5 query syntax:", stderr);
+            Assert.Contains("raw FTS5 syntax", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunOutline_UsesNestedSymbolDepthInHumanOutput()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_depth");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/deep.cs",
+                "csharp",
+                """
+                namespace OuterNs
+                {
+                    namespace InnerNs
+                    {
+                        public class OuterClass
+                        {
+                            public class NestedClass
+                            {
+                                public class DeeplyNested
+                                {
+                                    public void Method() { }
+                                }
+                            }
+                        }
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["src/deep.cs", "--db", dbPath],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var outerIndex = stdout.IndexOf("public class OuterClass", StringComparison.Ordinal);
+            var nestedIndex = stdout.IndexOf("public class NestedClass", StringComparison.Ordinal);
+            var deepIndex = stdout.IndexOf("public class DeeplyNested", StringComparison.Ordinal);
+
+            Assert.True(outerIndex >= 0);
+            Assert.True(nestedIndex > outerIndex);
+            Assert.True(deepIndex > nestedIndex);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_RejectsMissingMaxLineWidthValue()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_missing_max_line_width");
@@ -1211,15 +1284,17 @@ public class QueryCommandRunnerTests
         }
     }
 
-    // Regression lock for #184 follow-up: `--focus-column` and `--max-line-width` are
-    // positive-integer options. Zero, negative, and non-numeric values must fail closed with
-    // UsageError and the "requires a positive integer" error message. Earlier tests only
-    // covered the missing-value case (which now short-circuits before TryParsePositiveInt),
-    // leaving the positive-integer contract uncovered for these two options specifically.
-    // #184 のフォローアップ回帰ロック: `--focus-column` と `--max-line-width` は正の整数オプション。
-    // 0・負数・非数値は UsageError と "requires a positive integer" メッセージで fail-close する。
-    // 以前のテストは値欠如（今は TryParsePositiveInt 前に短絡する）しかカバーしていなかったため、
-    // この 2 つのオプション固有の正の整数契約を明示的にロックする。
+    // Regression lock for #184 follow-up: `--focus-column` requires a positive integer,
+    // while `--max-line-width` accepts non-negative integers so `0` can disable truncation.
+    // Zero, negative, and non-numeric values must fail closed with UsageError and the
+    // corresponding validation message. Earlier tests only covered the missing-value case
+    // (which now short-circuits before TryParsePositiveInt), leaving these option-specific
+    // numeric contracts uncovered.
+    // #184 のフォローアップ回帰ロック: `--focus-column` は正の整数を要求し、
+    // `--max-line-width` は切り詰め解除のため 0 を許容する非負整数。0・負数・非数値は
+    // UsageError と対応する validation message で fail-close する。以前のテストは値欠如
+    // （今は TryParsePositiveInt 前に短絡する）しかカバーしていなかったため、
+    // これらのオプション固有の数値契約を明示的にロックする。
     [Theory]
     [InlineData("0")]
     [InlineData("abc")]
@@ -1444,6 +1519,54 @@ public class QueryCommandRunnerTests
             var (exit, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(["--name", "", "--db", dbPath], _jsonOptions));
             Assert.Equal(1, exit);
             Assert.Contains("--name requires a value", stderr);
+
+            var (definitionExit, definitionStdout, definitionStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["@", "--db", dbPath, "--count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, definitionExit);
+            Assert.Contains("bare verbatim prefixes", definitionStderr);
+            Assert.Equal(string.Empty, definitionStdout);
+
+            var (referencesExit, referencesStdout, referencesStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["@", "--db", dbPath, "--count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, referencesExit);
+            Assert.Contains("bare verbatim prefixes", referencesStderr);
+            Assert.Equal(string.Empty, referencesStdout);
+
+            var (callersExit, callersStdout, callersStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["@", "--db", dbPath, "--count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, callersExit);
+            Assert.Contains("bare verbatim prefixes", callersStderr);
+            Assert.Equal(string.Empty, callersStdout);
+
+            var (calleesExit, calleesStdout, calleesStderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                ["@", "--db", dbPath, "--count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, calleesExit);
+            Assert.Contains("bare verbatim prefixes", calleesStderr);
+            Assert.Equal(string.Empty, calleesStdout);
+
+            var (impactExit, impactStdout, impactStderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["@", "--db", dbPath, "--count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, impactExit);
+            Assert.Contains("bare verbatim prefixes", impactStderr);
+            Assert.Equal(string.Empty, impactStdout);
+
+            var (inspectExit, inspectStdout, inspectStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["@", "--db", dbPath, "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, inspectExit);
+            Assert.Contains("bare verbatim prefixes", inspectStderr);
+            Assert.Equal(string.Empty, inspectStdout);
         }
         finally
         {
@@ -4073,6 +4196,102 @@ public class QueryCommandRunnerTests
             Assert.Equal(exact.Result, alias.Result);
             Assert.Equal(exact.Stdout, alias.Stdout);
             Assert.Equal(exact.Stderr, alias.Stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_And_Definition_NormalizeCSharpVerbatimIdentifiers()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_csharp_verbatim_query_normalization");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/verbatim.cs",
+                "csharp",
+                """
+                public class @class
+                {
+                    public int @int() => 0;
+                    public void @caller() => @int();
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--name", "@int", "--exact-name", "--count"],
+                _jsonOptions));
+            var (invalidVerbatimExitCode, invalidVerbatimStdout, invalidVerbatimStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--name", "@", "--exact-name", "--count"],
+                _jsonOptions));
+            var (definitionExitCode, definitionStdout, definitionStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["@class", "--db", dbPath, "--json", "--exact-name", "--count"],
+                _jsonOptions));
+            var (referencesExitCode, referencesStdout, referencesStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["@int", "--db", dbPath, "--json", "--exact-name", "--count"],
+                _jsonOptions));
+            var (callersExitCode, callersStdout, callersStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["@int", "--db", dbPath, "--json", "--exact-name"],
+                _jsonOptions));
+            var (calleesExitCode, calleesStdout, calleesStderr) = CaptureConsole(() => QueryCommandRunner.RunCallees(
+                ["@caller", "--db", dbPath, "--json", "--exact-name"],
+                _jsonOptions));
+            var (impactExitCode, impactStdout, impactStderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["@int", "--db", dbPath, "--json"],
+                _jsonOptions));
+            var (inspectExitCode, inspectStdout, inspectStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
+                ["@class", "--db", dbPath, "--json", "--exact"],
+                _jsonOptions));
+
+            using var symbolsDocument = ParseJsonOutput(symbolsStdout);
+            using var definitionDocument = ParseJsonOutput(definitionStdout);
+            using var referencesDocument = ParseJsonOutput(referencesStdout);
+            using var callersDocument = ParseJsonOutput(callersStdout);
+            using var calleesDocument = ParseJsonOutput(calleesStdout);
+            using var inspectDocument = ParseJsonOutput(inspectStdout);
+
+            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+            Assert.Equal(string.Empty, symbolsStderr);
+            Assert.Equal(1, symbolsDocument.RootElement.GetProperty("count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.UsageError, invalidVerbatimExitCode);
+            Assert.Contains("empty after normalization", invalidVerbatimStderr, StringComparison.Ordinal);
+
+            Assert.Equal(CommandExitCodes.Success, definitionExitCode);
+            Assert.Equal(string.Empty, definitionStderr);
+            Assert.Equal(1, definitionDocument.RootElement.GetProperty("count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.Success, referencesExitCode);
+            Assert.Equal(string.Empty, referencesStderr);
+            Assert.True(referencesDocument.RootElement.GetProperty("count").GetInt32() > 0);
+
+            Assert.Equal(CommandExitCodes.Success, callersExitCode);
+            Assert.Equal(string.Empty, callersStderr);
+            Assert.Equal("caller", callersDocument.RootElement.GetProperty("caller_name").GetString());
+            Assert.Equal("int", callersDocument.RootElement.GetProperty("callee_name").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, calleesExitCode);
+            Assert.Equal(string.Empty, calleesStderr);
+            Assert.Equal("caller", calleesDocument.RootElement.GetProperty("caller_name").GetString());
+            Assert.Equal("int", calleesDocument.RootElement.GetProperty("callee_name").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, impactExitCode);
+            Assert.Equal(string.Empty, impactStderr);
+            Assert.NotEmpty(impactStdout);
+
+            using var impactDocument = ParseJsonOutput(impactStdout);
+
+            Assert.NotEqual("none", impactDocument.RootElement.GetProperty("impact_mode").GetString());
+            Assert.True(impactDocument.RootElement.GetProperty("count").GetInt32() > 0);
+
+            Assert.Equal(CommandExitCodes.Success, inspectExitCode);
+            Assert.Equal(string.Empty, inspectStderr);
+            Assert.Single(inspectDocument.RootElement.GetProperty("definitions").EnumerateArray());
         }
         finally
         {
@@ -8721,8 +8940,96 @@ public class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("Hook", json.GetProperty("caller_name").GetString());
             Assert.Equal("Changed", json.GetProperty("callee_name").GetString());
-            Assert.False(json.TryGetProperty("reference_kind", out _));
+            // #501: the scalar `reference_kind` is retained for back-compat, and for
+            // single-kind rows it matches the only kind in `reference_kinds`.
+            // #501: scalar な `reference_kind` は後方互換のため残しており、single-kind
+            // 行では `reference_kinds` の唯一の kind と一致する。
+            Assert.Equal("subscribe", json.GetProperty("reference_kind").GetString());
             Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
+            // #501: every grouped caller row carries `reference_kinds` +
+            // `has_mixed_reference_kinds`, even when the row is single-kind, so AI
+            // clients never have to guess whether the field was omitted vs empty.
+            // #501: グループ化された caller 行は single-kind でも必ず `reference_kinds` /
+            // `has_mixed_reference_kinds` を返すため、AI クライアントは「未出力」と
+            // 「空配列」を判別せずに済む。
+            var kinds = json.GetProperty("reference_kinds").EnumerateArray().Select(k => k.GetString()).ToArray();
+            Assert.Equal(new[] { "subscribe" }, kinds);
+            Assert.False(json.GetProperty("has_mixed_reference_kinds").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCallers_SurfacesMixedReferenceKindsWhenContainerMixesCallAndSubscribe()
+    {
+        // #501: a single container that reaches the same callee via both `call` and
+        // `subscribe` must not collapse to a lone summary label. The grouped row
+        // must expose every distinct kind in JSON (`reference_kinds` /
+        // `has_mixed_reference_kinds`) and the human renderer must join them with
+        // `+` so operators see the mixed semantics at a glance.
+        // #501: 同一コンテナが同じ callee に対して `call` と `subscribe` の両方を持つ場合、
+        // グループ化された caller 行は要約ラベル 1 つに潰さず、JSON では `reference_kinds`
+        // と `has_mixed_reference_kinds` で distinct kind をすべて返し、人間向け出力は
+        // `+` で連結して混在していることが一目で分かるようにする。
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_callers_mixed_kind");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/MixedOwner.cs", "csharp",
+                """
+                using System;
+
+                public class MixedOwner
+                {
+                    public event EventHandler? Changed;
+
+                    public void SetupAndFire()
+                    {
+                        Changed += OnChanged;
+                        Changed(this, EventArgs.Empty);
+                    }
+
+                    private void OnChanged(object? sender, EventArgs e) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (jsonExitCode, jsonStdout, jsonStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Changed", "--db", dbPath, "--json", "--lang", "csharp", "--exact"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(jsonStdout);
+            var json = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, jsonExitCode);
+            Assert.Equal(string.Empty, jsonStderr);
+            Assert.Equal("SetupAndFire", json.GetProperty("caller_name").GetString());
+            Assert.Equal("Changed", json.GetProperty("callee_name").GetString());
+            Assert.Equal(2, json.GetProperty("reference_count").GetInt32());
+            Assert.True(json.GetProperty("has_mixed_reference_kinds").GetBoolean());
+            var kinds = json.GetProperty("reference_kinds").EnumerateArray().Select(k => k.GetString()).ToArray();
+            Assert.Equal(new[] { "call", "subscribe" }, kinds);
+            // #501: the scalar `reference_kind` is kept for back-compat and reports the
+            // preferred summary kind (`instantiate` > `subscribe` > `MIN(call)`);
+            // callers who need the full picture read `reference_kinds` +
+            // `has_mixed_reference_kinds` instead.
+            // #501: scalar `reference_kind` は後方互換で残し、preferred 順
+            // （`instantiate` > `subscribe` > `MIN(call)`）の要約 kind を返す。混在時の
+            // 全容は `reference_kinds` / `has_mixed_reference_kinds` を参照する。
+            Assert.Equal("subscribe", json.GetProperty("reference_kind").GetString());
+
+            var (humanExitCode, humanStdout, humanStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["Changed", "--db", dbPath, "--lang", "csharp", "--exact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Contains("call+subscribe", humanStdout);
+            Assert.Contains("SetupAndFire", humanStdout);
+            Assert.Contains("-> Changed (2 refs)", humanStdout);
+            Assert.Contains("(1 callers in 1 files)", humanStderr);
         }
         finally
         {
@@ -26674,6 +26981,61 @@ public class QueryCommandRunnerTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSymbols_SqlExactNamePreservesLeadingAt()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_query_runner_sql_verbatim_{Guid.NewGuid():N}.db");
+        try
+        {
+            using (var db = new DbContext(dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/proc.sql",
+                    Lang = "sql",
+                    Size = 64,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 1, 1),
+                    Checksum = Guid.NewGuid().ToString("N"),
+                });
+                writer.InsertChunks([new ChunkRecord
+                {
+                    FileId = fileId,
+                    ChunkIndex = 0,
+                    StartLine = 1,
+                    EndLine = 1,
+                    Content = "DECLARE @count int = 1;",
+                }]);
+                writer.InsertSymbols([new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "variable",
+                    Name = "@count",
+                    Line = 1,
+                    StartLine = 1,
+                    EndLine = 1,
+                }]);
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["--db", dbPath, "--json", "--lang", "sql", "--name", "@count", "--exact-name", "--count"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(stdout);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(1, document.RootElement.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            try { File.Delete(dbPath); } catch { }
         }
     }
 }

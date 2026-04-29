@@ -185,6 +185,39 @@ public partial class DbReader
     private static string GetPathBucketOrderSql(string pathSql)
         => PathBucketOrder.Replace("f.path", pathSql, StringComparison.Ordinal);
 
+    // Parse a GROUP_CONCAT(DISTINCT reference_kind) string into a sorted, deduplicated
+    // list. Falls back to the primary/summary kind if the aggregate column is null or
+    // empty so downstream consumers always see at least one entry (issue #501).
+    // GROUP_CONCAT(DISTINCT reference_kind) を安定ソート済みの重複排除済みリストに
+    // パースする。aggregate 列が null / 空の場合は代表 kind をフォールバックとして
+    // 返し、消費側が常に 1 要素以上を得られるようにする (issue #501)。
+    private static IReadOnlyList<string> ParseDistinctReferenceKinds(string? aggregate, string primaryKind)
+    {
+        if (string.IsNullOrEmpty(aggregate))
+            return string.IsNullOrEmpty(primaryKind) ? Array.Empty<string>() : new[] { primaryKind };
+        // Fast path: a single-kind row (the overwhelming common case) has no
+        // comma in the aggregate, so skip the SortedSet / split allocation.
+        // Fast path: 単一 kind の行（大多数）では aggregate にカンマが無いため、
+        // SortedSet / split のアロケーションを省略する。
+        if (aggregate.IndexOf(',') < 0)
+        {
+            var only = aggregate.Trim();
+            if (only.Length > 0)
+                return new[] { only };
+            return string.IsNullOrEmpty(primaryKind) ? Array.Empty<string>() : new[] { primaryKind };
+        }
+        var set = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var raw in aggregate.Split(','))
+        {
+            var trimmed = raw.Trim();
+            if (trimmed.Length > 0)
+                set.Add(trimmed);
+        }
+        if (set.Count == 0)
+            return string.IsNullOrEmpty(primaryKind) ? Array.Empty<string>() : new[] { primaryKind };
+        return set.ToArray();
+    }
+
     public DbReader(SqliteConnection connection, bool isReadOnly = false)
     {
         _conn = connection;
@@ -853,6 +886,7 @@ public partial class DbReader
     public List<ReferenceResult> SearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth)
     {
         maxLineWidth = LineWidthFormatter.ClampMaxLineWidth(maxLineWidth);
+        query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
         if (!_hasReferencesTable)
             return new List<ReferenceResult>();
 
@@ -2836,6 +2870,24 @@ public partial class DbReader
         return segments.Count == 0 ? null : string.Join(".", segments);
     }
 
+    // Query-side mirror of the C# declaration canonicalizer. Users commonly type source
+    // spellings such as `@class` or `Outer.@class`; the DB stores the canonical names
+    // without the verbatim `@`, so query entrypoints normalize to the persisted form first.
+    // The normalization is applied when `--lang` is omitted or explicitly `csharp` because
+    // name-based lookup still needs to treat C# verbatim spellings as canonical symbol names.
+    // Other languages, including SQL, must preserve leading `@` characters.
+    // C# 宣言側 canonicalizer の query 側ミラー。`@class` / `Outer.@class` のような source
+    // spelling を受けても、DB 側の `@` なし canonical 名に合わせてから検索する。
+    // `--lang` 未指定または `csharp` 指定では name-based lookup が verbatim spelling を canonical 名へ寄せる。
+    // それ以外の言語、特に SQL では先頭 `@` を保持する。
+    private static string? NormalizeCSharpVerbatimQuery(string? query, string? lang)
+    {
+        if (!string.IsNullOrWhiteSpace(lang) && !string.Equals(lang, "csharp", StringComparison.OrdinalIgnoreCase))
+            return query;
+        var normalized = query == null ? null : NormalizeDbCSharpQualifiedName(query);
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
+
     private static string? CombineDbQualifiedName(string? parentQualifiedName, string? name)
     {
         if (string.IsNullOrWhiteSpace(name))
@@ -2880,6 +2932,7 @@ public partial class DbReader
 
     public int CountSearchReferences(string? query = null, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
+        query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
         if (ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind, exact))
             return SearchReferences(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact).Count;
 
@@ -2976,6 +3029,7 @@ public partial class DbReader
 
     public QueryCountResult CountSearchReferencesTotal(string? query = null, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
+        query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
         if (ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(lang, referenceKind, exact))
             return CountSearchReferencesTotalWithUsingStaticFilter(query, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact);
 
@@ -3078,6 +3132,7 @@ public partial class DbReader
     /// </summary>
     public List<CallerResult> GetCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
+        query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
         if (!_hasReferencesTable) return new List<CallerResult>();
         using var cmd = _conn.CreateCommand();
 
@@ -3094,7 +3149,8 @@ public partial class DbReader
                   AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}"
             : @"
             SELECT f.path, f.lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, r.symbol_name,
-                   r.reference_kind, MIN(r.line) AS first_line, COUNT(*) AS reference_count
+                   r.reference_kind, MIN(r.line) AS first_line, COUNT(*) AS reference_count,
+                   GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
             WHERE " + BuildCallerContainerPredicate("f", "r");
@@ -3135,7 +3191,8 @@ public partial class DbReader
             )
             SELECT path, lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, symbol_name,
                    " + GetGroupedCallerReferenceKindSql("r.reference_kind") + @" AS reference_kind,
-                   MIN(line) AS first_line, COUNT(*) AS reference_count
+                   MIN(line) AS first_line, COUNT(*) AS reference_count,
+                   GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds
             FROM logical_references r
             GROUP BY path, lang, container_kind, container_name, symbol_name";
         }
@@ -3170,6 +3227,8 @@ public partial class DbReader
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
+            var primaryKind = reader.GetString(5);
+            var kinds = ParseDistinctReferenceKinds(GetNullableString(reader, 8), primaryKind);
             results.Add(new CallerResult
             {
                 Path = reader.GetString(0),
@@ -3177,7 +3236,9 @@ public partial class DbReader
                 CallerKind = GetNullableString(reader, 2),
                 CallerName = GetNullableString(reader, 3),
                 CalleeName = reader.GetString(4),
-                ReferenceKind = reader.GetString(5),
+                ReferenceKind = primaryKind,
+                ReferenceKinds = kinds,
+                HasMixedReferenceKinds = kinds.Count > 1,
                 FirstLine = reader.GetInt32(6),
                 ReferenceCount = reader.GetInt32(7),
             });
@@ -3187,6 +3248,7 @@ public partial class DbReader
 
     public int CountCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
+        query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
         if (!_hasReferencesTable) return 0;
         using var cmd = _conn.CreateCommand();
         var groupedSql = @"
@@ -3321,6 +3383,7 @@ public partial class DbReader
     /// </summary>
     public List<CalleeResult> GetCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
+        query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
         if (!_hasReferencesTable) return new List<CalleeResult>();
         using var cmd = _conn.CreateCommand();
 
@@ -3337,7 +3400,8 @@ public partial class DbReader
                   AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}"
             : @"
             SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
-                   r.reference_kind, MIN(r.line) AS first_line, COUNT(*) AS reference_count
+                   r.reference_kind, MIN(r.line) AS first_line, COUNT(*) AS reference_count,
+                   GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
             WHERE r.container_name IS NOT NULL";
@@ -3373,7 +3437,8 @@ public partial class DbReader
                 GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number
             )
             SELECT path, lang, container_kind, container_name, symbol_name,
-                   reference_kind, MIN(line) AS first_line, COUNT(*) AS reference_count
+                   reference_kind, MIN(line) AS first_line, COUNT(*) AS reference_count,
+                   GROUP_CONCAT(DISTINCT reference_kind) AS reference_kinds
             FROM logical_references r
             GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind";
         }
@@ -3411,6 +3476,8 @@ public partial class DbReader
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
+            var primaryKind = reader.GetString(5);
+            var kinds = ParseDistinctReferenceKinds(GetNullableString(reader, 8), primaryKind);
             results.Add(new CalleeResult
             {
                 Path = reader.GetString(0),
@@ -3418,7 +3485,9 @@ public partial class DbReader
                 CallerKind = GetNullableString(reader, 2),
                 CallerName = GetNullableString(reader, 3),
                 CalleeName = reader.GetString(4),
-                ReferenceKind = reader.GetString(5),
+                ReferenceKind = primaryKind,
+                ReferenceKinds = kinds,
+                HasMixedReferenceKinds = kinds.Count > 1,
                 FirstLine = reader.GetInt32(6),
                 ReferenceCount = reader.GetInt32(7),
             });
@@ -3428,6 +3497,7 @@ public partial class DbReader
 
     public int CountCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false)
     {
+        query = NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty;
         if (!_hasReferencesTable) return 0;
         using var cmd = _conn.CreateCommand();
         var groupedSql = @"
@@ -3570,15 +3640,16 @@ public partial class DbReader
     /// </summary>
     private string ResolveSymbolName(string symbolName, string? lang)
     {
+        var normalizedSymbolName = NormalizeCSharpVerbatimQuery(symbolName, lang) ?? symbolName;
         // Exact lookup mirrors the leaf `--exact` readers: folded equality when FoldReady,
         // ASCII `COLLATE NOCASE` fallback on legacy / partial-backfill DBs.
         // No path/test filters — definitions outside caller scope must still be found.
         // Only considers graph-supported languages to avoid resolving to unsupported ones.
         // FoldReady なら folded equality、legacy DB では ASCII `COLLATE NOCASE` にフォールバック。
-        var normalizedName = SqlNameResolver.NormalizeQualifiedName(symbolName);
-        var leafName = SqlNameResolver.GetLeafName(symbolName);
-        var segmentCount = SqlNameResolver.GetSegmentCount(symbolName);
-        var allowLeafFallback = !SqlNameResolver.HasQualifier(symbolName);
+        var normalizedName = SqlNameResolver.NormalizeQualifiedName(normalizedSymbolName);
+        var leafName = SqlNameResolver.GetLeafName(normalizedSymbolName);
+        var segmentCount = SqlNameResolver.GetSegmentCount(normalizedSymbolName);
+        var allowLeafFallback = !SqlNameResolver.HasQualifier(normalizedSymbolName);
         using var cmd = _conn.CreateCommand();
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "resolveLang");
         var nameCondition = _foldReady
@@ -3599,7 +3670,7 @@ public partial class DbReader
                                          WHEN @allowLeafFallback = 1 AND f.lang = 'sql' AND sql_leaf_name_folded(s.name) = @leafNameFolded THEN 4
                                          ELSE 5
                                      END LIMIT 1";
-        cmd.Parameters.AddWithValue("@name", symbolName);
+        cmd.Parameters.AddWithValue("@name", normalizedSymbolName);
         cmd.Parameters.AddWithValue("@normalizedName", normalizedName);
         cmd.Parameters.AddWithValue("@normalizedNameFolded", NameFold.Fold(normalizedName) ?? normalizedName);
         cmd.Parameters.AddWithValue("@leafName", leafName);
@@ -3607,7 +3678,7 @@ public partial class DbReader
         cmd.Parameters.AddWithValue("@segmentCount", segmentCount);
         cmd.Parameters.AddWithValue("@allowLeafFallback", allowLeafFallback ? 1 : 0);
         if (_foldReady)
-            cmd.Parameters.AddWithValue("@nameFolded", NameFold.Fold(symbolName) ?? symbolName);
+            cmd.Parameters.AddWithValue("@nameFolded", NameFold.Fold(normalizedSymbolName) ?? normalizedSymbolName);
         using var reader = cmd.ExecuteTrackedReader();
         return reader.TrackedRead() ? reader.GetString(0) : symbolName;
     }
@@ -4740,6 +4811,19 @@ public partial class DbReader
     /// </summary>
     public StatusResult GetStatus()
     {
+        // Issue #180: wrap the multi-statement status read in one DEFERRED transaction so
+        // every COUNT(*) / freshness / readiness query resolves against the same WAL
+        // snapshot. Without this, a concurrent writer that commits between the first and
+        // last statement can expose wildly inconsistent counts (e.g. `refs: 0` against a
+        // steady-state 44k while an incremental update is mid-flight). DEFERRED avoids
+        // acquiring a write lock — the transaction grabs a SHARED lock on the first SELECT
+        // and holds one consistent snapshot until Commit releases it.
+        // Issue #180: 複数 SELECT を 1 つの DEFERRED transaction で囲み、全 COUNT(*) /
+        // freshness / readiness クエリを同じ WAL snapshot で解決する。これが無いと、
+        // 並行 writer が途中で commit した際に「refs: 0 なのに files=836」のような不整合
+        // が見える。DEFERRED は最初の SELECT で SHARED lock を取るのみで write lock を
+        // 握らないため、別 writer を阻害しない。
+        using var txn = _conn.BeginTransaction(deferred: true);
         var files = ExecuteScalar("SELECT COUNT(*) FROM files");
         var chunks = ExecuteScalar("SELECT COUNT(*) FROM chunks");
         var symbols = ExecuteScalar("SELECT COUNT(*) FROM symbols");
@@ -4761,14 +4845,22 @@ public partial class DbReader
         var foldReadyReason = ResolveFoldReadyReason();
 
         // Language breakdown / 言語別内訳
+        // Scope the reader in an inner block so it releases its statement handle before
+        // we Commit() the enclosing txn — `SqliteTransaction.Commit()` fails if any
+        // reader on the same connection is still open.
+        // reader を内側ブロックに閉じ込め、txn.Commit() の前に statement handle を
+        // 解放する。SqliteTransaction.Commit() は同じ connection 上で開いている reader
+        // があると失敗する。
         var langs = new Dictionary<string, long>();
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "SELECT lang, COUNT(*) FROM files WHERE lang IS NOT NULL GROUP BY lang ORDER BY COUNT(*) DESC";
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
-            langs[reader.GetString(0)] = reader.GetInt64(1);
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "SELECT lang, COUNT(*) FROM files WHERE lang IS NOT NULL GROUP BY lang ORDER BY COUNT(*) DESC";
+            using var reader = cmd.ExecuteTrackedReader();
+            while (reader.TrackedRead())
+                langs[reader.GetString(0)] = reader.GetInt64(1);
+        }
 
-        return new StatusResult
+        var result = new StatusResult
         {
             Files = files,
             Chunks = chunks,
@@ -4788,6 +4880,10 @@ public partial class DbReader
             FoldReady = _foldReady,
             FoldReadyReason = foldReadyReason,
         };
+        // Commit the read-only snapshot explicitly so the SHARED lock is released promptly.
+        // read-only なので rollback でも同じだが、明示 commit して SHARED lock を早期解放する。
+        txn.Commit();
+        return result;
     }
 
     /// <summary>

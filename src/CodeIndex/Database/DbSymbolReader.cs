@@ -89,17 +89,19 @@ public partial class DbReader
     /// </summary>
     public List<SymbolResult> SearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
-        return SearchSymbols(query == null ? null : new[] { query }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact);
+        var normalizedQuery = NormalizeCSharpVerbatimQuery(query, lang) ?? query;
+        return SearchSymbols(normalizedQuery == null ? null : new[] { normalizedQuery }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact);
     }
 
     public int CountSearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
-        return CountSearchSymbols(query == null ? null : new[] { query }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact);
+        var normalizedQuery = NormalizeCSharpVerbatimQuery(query, lang) ?? query;
+        return CountSearchSymbols(normalizedQuery == null ? null : new[] { normalizedQuery }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact);
     }
 
     public bool AnySearchSymbols(IReadOnlyList<string>? queries, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
-        var validQueries = queries?.Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        var validQueries = queries?.Select(query => NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
         if (validQueries == null || validQueries.Count == 0)
             return CountSearchSymbols(validQueries, 1, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact) > 0;
 
@@ -114,7 +116,7 @@ public partial class DbReader
 
     public int CountSearchSymbols(IReadOnlyList<string>? queries, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
-        var validQueries = queries?.Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        var validQueries = queries?.Select(query => NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
         if (validQueries != null && validQueries.Count > 1)
             return SearchSymbols(validQueries, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact).Count;
 
@@ -195,7 +197,7 @@ public partial class DbReader
                 JOIN files f ON s.file_id = f.id
                 WHERE 1=1";
 
-        var effectiveQueries = queries?.Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        var effectiveQueries = queries?.Select(query => NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
         if (effectiveQueries != null && effectiveQueries.Count > 0)
         {
             var orClauses = exact
@@ -270,12 +272,12 @@ public partial class DbReader
         // public `limit` contract stays "Max total results", not per-name.
         // 複数名指定: 名前ごとに独立検索して候補プールを確保した上で、round-robin で統合し、
         // 最終的に全体で `limit` 件に収める。`limit` は従来どおり「合計の上限」。
-        var validQueries = queries?.Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
+        var validQueries = queries?.Select(query => NormalizeCSharpVerbatimQuery(query, lang) ?? query ?? string.Empty).Where(q => !string.IsNullOrEmpty(q)).Distinct().ToList();
         if (validQueries != null && validQueries.Count > 1)
         {
             var perName = new List<List<SymbolResult>>(validQueries.Count);
             foreach (var q in validQueries)
-                perName.Add(SearchSymbols(new[] { q }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact));
+                perName.Add(SearchSymbols(new[] { q! }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact));
 
             var seen = new HashSet<(string Path, int Line, string Name, string Kind)>();
             var merged = new List<SymbolResult>();
@@ -475,6 +477,7 @@ public partial class DbReader
 
     public QueryCountResult CountDefinitionsTotal(string query, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false)
     {
+        var normalizedQuery = NormalizeCSharpVerbatimQuery(query, lang) ?? query;
         using var cmd = _conn.CreateCommand();
 
         var sql = $@"
@@ -485,9 +488,9 @@ public partial class DbReader
                 JOIN files f ON s.file_id = f.id
                 WHERE 1=1";
 
-        if (!string.IsNullOrWhiteSpace(query))
+        if (!string.IsNullOrWhiteSpace(normalizedQuery))
         {
-            var allowLeafFallback = !SqlNameResolver.HasQualifier(query);
+            var allowLeafFallback = !SqlNameResolver.HasQualifier(normalizedQuery);
             sql += exact
                 ? _foldReady
                     ? allowLeafFallback
@@ -516,20 +519,20 @@ public partial class DbReader
             )";
 
         cmd.CommandText = sql;
-        if (!string.IsNullOrWhiteSpace(query))
+        if (!string.IsNullOrWhiteSpace(normalizedQuery))
         {
             var paramValue = !exact
-                ? $"%{EscapeLikeQuery(query)}%"
+                ? $"%{EscapeLikeQuery(normalizedQuery)}%"
                 : _foldReady
-                    ? NameFold.Fold(query) ?? query
-                    : query;
+                    ? NameFold.Fold(normalizedQuery) ?? normalizedQuery
+                    : normalizedQuery;
             cmd.Parameters.AddWithValue("@query", paramValue);
-            cmd.Parameters.AddWithValue("@queryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
-            cmd.Parameters.AddWithValue("@queryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
-            cmd.Parameters.AddWithValue("@queryLeaf", SqlNameResolver.GetLeafName(query));
-            cmd.Parameters.AddWithValue("@queryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
-            cmd.Parameters.AddWithValue("@querySegmentCount", SqlNameResolver.GetSegmentCount(query));
-            cmd.Parameters.AddWithValue("@queryNormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(query))}%");
+            cmd.Parameters.AddWithValue("@queryNormalized", SqlNameResolver.NormalizeQualifiedName(normalizedQuery));
+            cmd.Parameters.AddWithValue("@queryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(normalizedQuery)) ?? SqlNameResolver.NormalizeQualifiedName(normalizedQuery));
+            cmd.Parameters.AddWithValue("@queryLeaf", SqlNameResolver.GetLeafName(normalizedQuery));
+            cmd.Parameters.AddWithValue("@queryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(normalizedQuery)) ?? SqlNameResolver.GetLeafName(normalizedQuery));
+            cmd.Parameters.AddWithValue("@querySegmentCount", SqlNameResolver.GetSegmentCount(normalizedQuery));
+            cmd.Parameters.AddWithValue("@queryNormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(normalizedQuery))}%");
         }
         if (kind != null)
             cmd.Parameters.AddWithValue("@kind", kind);
@@ -615,13 +618,24 @@ public partial class DbReader
     /// </summary>
     public SymbolAnalysisResult AnalyzeSymbol(string query, int limit = 10, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth)
     {
+        var normalizedQuery = NormalizeCSharpVerbatimQuery(query, lang) ?? query;
         // Propagate `exact` to every bundled sub-query so the one-round-trip AI workflow
         // (`inspect` / MCP `analyze_symbol`) keeps the same precision contract as the leaf
         // commands. Without this, `inspect Run --exact` would still pull RunAsync/RunImpact
         // into references / callers / callees. See codex review of #83.
         // `exact` は bundle 内のすべての sub-query に伝播させ、leaf コマンドと precision を揃える。
+        //
+        // Issue #180: wrap the multi-statement bundle in one DEFERRED transaction so every
+        // sub-query (definitions / file metadata / freshness / references / callers /
+        // callees / nearby symbols) resolves against the same WAL snapshot. Without this,
+        // a concurrent writer mid-indexing can make the bundle report callers for an old
+        // symbol layout alongside a file row that already reflects the new one.
+        // Issue #180: bundle 内の全 sub-query を 1 つの DEFERRED transaction でまとめ、
+        // definitions / file / freshness / references / callers / callees / nearby symbols
+        // が同じ WAL snapshot を参照するようにする。
+        using var txn = _conn.BeginTransaction(deferred: true);
         var definitionLimit = Math.Min(limit, 5);
-        var definitions = GetDefinitions(query, definitionLimit, kind: null, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since: null, exact);
+        var definitions = GetDefinitions(normalizedQuery, definitionLimit, kind: null, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since: null, exact);
         DefinitionResult? primaryDefinition = definitions
             .FirstOrDefault(definition => ReferenceExtractor.SupportsLanguage(definition.Lang) == true && !IsCSharpEnumMemberDefinition(definition))
             ?? definitions.FirstOrDefault(definition => ReferenceExtractor.SupportsLanguage(definition.Lang) == true)
@@ -634,7 +648,7 @@ public partial class DbReader
         var graphLanguage = lang ?? file?.Lang;
         const bool hasUnsupportedEnumMember = false;
         var hasSupportedGraphDefinition = exact
-            ? HasExactGraphSupportedDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests)
+            ? HasExactGraphSupportedDefinition(normalizedQuery, lang, pathPatterns, excludePathPatterns, excludeTests)
             : definitions.Any(definition => ReferenceExtractor.SupportsSymbolGraph(definition.Lang, definition.Kind, definition.ContainerKind) == true);
         var baseGraphSupported = graphLanguage == null
             ? (bool?)null
@@ -646,9 +660,9 @@ public partial class DbReader
             hasUnsupportedEnumMember,
             hasSupportedGraphDefinition);
         var unsupportedSymbolKind = hasUnsupportedEnumMember ? "enum_member" : null;
-        var references = SearchReferences(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact, maxLineWidth);
-        var callers = GetCallers(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
-        var callees = GetCallees(query, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
+        var references = SearchReferences(normalizedQuery, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact, maxLineWidth);
+        var callers = GetCallers(normalizedQuery, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
+        var callees = GetCallees(normalizedQuery, limit, lang, null, pathPatterns, excludePathPatterns, excludeTests, exact);
         var sqlGraphRelevant = IsSqlLanguage(lang)
             || IsSqlLanguage(graphLanguage)
             || ContainsSqlLanguage(definitions.Select(definition => definition.Lang))
@@ -665,7 +679,7 @@ public partial class DbReader
                 excludeTests: excludeTests)
             : (ExactQuerySignal?)null;
         var relaxedSymbols = exact && definitions.Count == 0 && references.Count == 0 && callers.Count == 0 && callees.Count == 0
-            ? SearchSymbols(query, Math.Max(limit, 5), kind: null, lang, pathPatterns, excludePathPatterns, excludeTests, since: null, exact: false)
+            ? SearchSymbols(normalizedQuery, Math.Max(limit, 5), kind: null, lang, pathPatterns, excludePathPatterns, excludeTests, since: null, exact: false)
             : null;
         var exactZeroHint = exact && definitions.Count == 0 && references.Count == 0 && callers.Count == 0 && callees.Count == 0
             ? ExactZeroHintResult.FromRelaxedMatches(
@@ -676,7 +690,7 @@ public partial class DbReader
             ? GetNearbySymbols(primaryDefinition.Path, primaryDefinition.StartLine, Math.Min(limit, 10), primaryDefinition.Name, primaryDefinition.StartLine)
             : [];
 
-        return new SymbolAnalysisResult
+        var result = new SymbolAnalysisResult
         {
             Query = query,
             File = file,
@@ -699,6 +713,8 @@ public partial class DbReader
             ExactHasMissingTable = exactSignal?.HasMissingTable,
             DegradedReason = exactSignal?.DegradedReason,
         };
+        txn.Commit();
+        return result;
     }
 
     public HashSet<string> GetUnsupportedExactGraphSymbolKinds(
@@ -708,8 +724,9 @@ public partial class DbReader
         IReadOnlyList<string>? excludePathPatterns,
         bool excludeTests)
     {
+        var normalizedQuery = NormalizeCSharpVerbatimQuery(query, lang) ?? query;
         var kinds = new HashSet<string>(StringComparer.Ordinal);
-        if (HasExactUnsupportedCSharpEnumMember(query, lang, pathPatterns, excludePathPatterns, excludeTests))
+        if (HasExactUnsupportedCSharpEnumMember(normalizedQuery, lang, pathPatterns, excludePathPatterns, excludeTests))
             kinds.Add("enum_member");
         return kinds;
     }
@@ -721,6 +738,7 @@ public partial class DbReader
         IReadOnlyList<string>? excludePathPatterns,
         bool excludeTests)
     {
+        var normalizedQuery = NormalizeCSharpVerbatimQuery(query, lang) ?? query;
         return false;
     }
 
@@ -731,7 +749,8 @@ public partial class DbReader
         IReadOnlyList<string>? excludePathPatterns,
         bool excludeTests)
     {
-        return GetExactGraphSupportedDefinitionLanguage(query, lang, pathPatterns, excludePathPatterns, excludeTests) != null;
+        var normalizedQuery = NormalizeCSharpVerbatimQuery(query, lang) ?? query;
+        return GetExactGraphSupportedDefinitionLanguage(normalizedQuery, lang, pathPatterns, excludePathPatterns, excludeTests) != null;
     }
 
     public string? GetExactGraphSupportedDefinitionLanguage(
@@ -741,8 +760,9 @@ public partial class DbReader
         IReadOnlyList<string>? excludePathPatterns,
         bool excludeTests)
     {
-        return TryGetExactGraphSupportedDefinitionLanguage(query, lang, pathPatterns, excludePathPatterns, excludeTests, preferNonEnumMember: true)
-            ?? TryGetExactGraphSupportedDefinitionLanguage(query, lang, pathPatterns, excludePathPatterns, excludeTests, preferNonEnumMember: false);
+        var normalizedQuery = NormalizeCSharpVerbatimQuery(query, lang) ?? query;
+        return TryGetExactGraphSupportedDefinitionLanguage(normalizedQuery, lang, pathPatterns, excludePathPatterns, excludeTests, preferNonEnumMember: true)
+            ?? TryGetExactGraphSupportedDefinitionLanguage(normalizedQuery, lang, pathPatterns, excludePathPatterns, excludeTests, preferNonEnumMember: false);
     }
 
     private string? TryGetExactGraphSupportedDefinitionLanguage(
@@ -753,9 +773,10 @@ public partial class DbReader
         bool excludeTests,
         bool preferNonEnumMember)
     {
+        var normalizedQuery = NormalizeCSharpVerbatimQuery(query, lang) ?? query;
         using var cmd = _conn.CreateCommand();
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "supportedGraphLang");
-        var allowLeafFallback = !SqlNameResolver.HasQualifier(query);
+        var allowLeafFallback = !SqlNameResolver.HasQualifier(normalizedQuery);
         var nameCondition = _foldReady
             ? allowLeafFallback
                 ? "(s.name_folded = @queryFolded OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name_folded(s.name) = @queryNormalizedFolded) OR sql_leaf_name_folded(s.name) = @queryLeafFolded)))"
@@ -804,9 +825,10 @@ public partial class DbReader
         string extraConditionSql,
         SqliteCommand? command = null)
     {
+        var normalizedQuery = NormalizeCSharpVerbatimQuery(query, lang) ?? query;
         using var ownedCommand = command == null ? _conn.CreateCommand() : null;
         var cmd = command ?? ownedCommand!;
-        var allowLeafFallback = !SqlNameResolver.HasQualifier(query);
+        var allowLeafFallback = !SqlNameResolver.HasQualifier(normalizedQuery);
         var nameCondition = _foldReady
             ? allowLeafFallback
                 ? "(s.name_folded = @queryFolded OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @querySegmentCount AND sql_normalize_name_folded(s.name) = @queryNormalizedFolded) OR sql_leaf_name_folded(s.name) = @queryLeafFolded)))"
@@ -827,13 +849,13 @@ public partial class DbReader
         sql += " LIMIT 1";
 
         cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("@queryRaw", query);
-        cmd.Parameters.AddWithValue("@queryFolded", NameFold.Fold(query) ?? query);
-        cmd.Parameters.AddWithValue("@queryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
-        cmd.Parameters.AddWithValue("@queryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
-        cmd.Parameters.AddWithValue("@queryLeaf", SqlNameResolver.GetLeafName(query));
-        cmd.Parameters.AddWithValue("@queryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
-        cmd.Parameters.AddWithValue("@querySegmentCount", SqlNameResolver.GetSegmentCount(query));
+        cmd.Parameters.AddWithValue("@queryRaw", normalizedQuery);
+        cmd.Parameters.AddWithValue("@queryFolded", NameFold.Fold(normalizedQuery) ?? normalizedQuery);
+        cmd.Parameters.AddWithValue("@queryNormalized", SqlNameResolver.NormalizeQualifiedName(normalizedQuery));
+        cmd.Parameters.AddWithValue("@queryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(normalizedQuery)) ?? SqlNameResolver.NormalizeQualifiedName(normalizedQuery));
+        cmd.Parameters.AddWithValue("@queryLeaf", SqlNameResolver.GetLeafName(normalizedQuery));
+        cmd.Parameters.AddWithValue("@queryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(normalizedQuery)) ?? SqlNameResolver.GetLeafName(normalizedQuery));
+        cmd.Parameters.AddWithValue("@querySegmentCount", SqlNameResolver.GetSegmentCount(normalizedQuery));
         if (lang != null)
             cmd.Parameters.AddWithValue("@lang", lang);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);

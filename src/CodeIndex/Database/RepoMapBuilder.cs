@@ -85,10 +85,21 @@ internal sealed class RepoMapBuilder
         // ファイル統計を先に取得し、その後にワークスペース鮮度を取得 — 元の順序を
         // 維持し、並行インデックス時にワークスペースのタイムスタンプがスコープ付き
         // タイムスタンプより古くならないようにする。
+        //
+        // Issue #180: wrap the multi-statement map build in one DEFERRED transaction so
+        // the scoped file stats, the workspace freshness, and the entrypoint lookups all
+        // come from the same WAL snapshot. Otherwise a concurrent writer committing
+        // between statements can make `workspace_latest_modified` older than
+        // `latest_modified`, or make entrypoint rows disagree with the file-stats rows
+        // they came from.
+        // Issue #180: map 内の多段 SELECT を 1 つの DEFERRED transaction で囲み、scoped
+        // file stats / workspace freshness / entrypoint 取得が同じ WAL snapshot から返る
+        // ようにする。
+        using var txn = _conn.BeginTransaction(deferred: true);
         var fileStats = GetFileStats(lang, pathPatterns, excludePathPatterns, excludeTests);
         ApplyJavaModuleGrouping(fileStats, LoadJavaModuleDescriptors());
         var freshness = getFreshness();
-        return new RepoMapResult
+        var result = new RepoMapResult
         {
             FileCount = fileStats.Count,
             TotalLines = fileStats.Sum(file => (long)file.Lines),
@@ -163,6 +174,8 @@ internal sealed class RepoMapBuilder
             Entrypoints = GetEntrypoints(fileStats, limit, lang, pathPatterns, excludePathPatterns, excludeTests),
             GraphTableAvailable = _hasReferencesTable,
         };
+        txn.Commit();
+        return result;
     }
 
     private List<RepoFileStat> GetFileStats(string? lang, IReadOnlyList<string>? pathPatterns,

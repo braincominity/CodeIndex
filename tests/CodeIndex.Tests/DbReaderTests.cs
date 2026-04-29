@@ -137,6 +137,44 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetOutline_PreservesNestedSymbolDepths()
+    {
+        InsertIndexedFile(
+            "src/deep.cs",
+            "csharp",
+            """
+            namespace OuterNs
+            {
+                namespace InnerNs
+                {
+                    public class OuterClass
+                    {
+                        public class NestedClass
+                        {
+                            public class DeeplyNested
+                            {
+                                public void Method() { }
+                            }
+                        }
+                    }
+                }
+            }
+            """);
+
+        var outline = _reader.GetOutline("src/deep.cs");
+
+        Assert.NotNull(outline);
+        var outer = Assert.Single(outline!.Symbols.Where(symbol => symbol.Name == "OuterClass"));
+        var nested = Assert.Single(outline.Symbols.Where(symbol => symbol.Name == "NestedClass"));
+        var deep = Assert.Single(outline.Symbols.Where(symbol => symbol.Name == "DeeplyNested"));
+        var method = Assert.Single(outline.Symbols.Where(symbol => symbol.Name == "Method"));
+
+        Assert.True(nested.Depth > outer.Depth);
+        Assert.True(deep.Depth > nested.Depth);
+        Assert.True(method.Depth > deep.Depth);
+    }
+
+    [Fact]
     public void Search_PrefersSourceFilesOverTests()
     {
         var testFileId = _writer.UpsertFile(new FileRecord
@@ -6827,6 +6865,89 @@ public class DbReaderTests : IDisposable
         Assert.Equal("Hook", bundledCallee.CallerName);
         Assert.Equal("Changed", bundledCallee.CalleeName);
         Assert.Equal("subscribe", bundledCallee.ReferenceKind);
+    }
+
+    [Fact]
+    public void GetCallers_ExposesDistinctReferenceKindsForMixedGroups()
+    {
+        // Regression for #501: when a single container reaches the same callee via
+        // multiple reference kinds (e.g. `call` + `subscribe`), the grouped caller row
+        // must still surface the distinct kinds via `reference_kinds` /
+        // `has_mixed_reference_kinds` so AI clients do not trust a misleading single
+        // summary label. `callees` rows split by kind, so their metadata stays
+        // single-kind even when the underlying container is mixed.
+        // #501 リグレッション: 同じコンテナが同一 callee に対して複数の reference kind
+        // (`call` + `subscribe` など) を持つとき、グループ化された caller 行でも
+        // `reference_kinds` / `has_mixed_reference_kinds` で distinct kind を返し、
+        // 要約ラベル 1 つに騙されないようにすること。`callees` 側は元々 kind ごとに
+        // 行が分かれるため、基盤が混在でも各行は単一 kind のまま。
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/mixed_kind_caller.cs",
+            Lang = "csharp",
+            Size = 256,
+            Lines = 12,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks([
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 12,
+                Content = "public class MixedOwner { public void Setup() { Changed += Handler; Changed(); } }\n",
+            }
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Changed",
+                ReferenceKind = "subscribe",
+                Line = 1,
+                Column = 41,
+                Context = "Changed += Handler;",
+                ContainerKind = "function",
+                ContainerName = "Setup",
+            },
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Changed",
+                ReferenceKind = "call",
+                Line = 1,
+                Column = 62,
+                Context = "Changed();",
+                ContainerKind = "function",
+                ContainerName = "Setup",
+            },
+        ]);
+
+        var caller = Assert.Single(_reader.GetCallers("Changed", lang: "csharp", exact: true, pathPatterns: ["mixed_kind_caller"]));
+        Assert.Equal("Setup", caller.CallerName);
+        Assert.Equal("Changed", caller.CalleeName);
+        Assert.Equal(2, caller.ReferenceCount);
+        Assert.True(caller.HasMixedReferenceKinds);
+        Assert.Equal(new[] { "call", "subscribe" }, caller.ReferenceKinds);
+        // `subscribe` takes priority over `call` in the preferred-kind summary, matching
+        // GetGroupedCallerReferenceKindSql's ordering.
+        // 要約 kind は GetGroupedCallerReferenceKindSql の優先順位に従い `subscribe`。
+        Assert.Equal("subscribe", caller.ReferenceKind);
+
+        // `callees` rows are already split per kind, so each grouped row stays
+        // single-kind with `has_mixed_reference_kinds = false`.
+        // `callees` 行は元から kind ごとに分かれるため、各行は single-kind のまま。
+        var callees = _reader.GetCallees("Setup", lang: "csharp", exact: true, pathPatterns: ["mixed_kind_caller"])
+            .OrderBy(c => c.ReferenceKind, StringComparer.Ordinal)
+            .ToList();
+        Assert.Equal(2, callees.Count);
+        Assert.Equal("call", callees[0].ReferenceKind);
+        Assert.False(callees[0].HasMixedReferenceKinds);
+        Assert.Equal(new[] { "call" }, callees[0].ReferenceKinds);
+        Assert.Equal("subscribe", callees[1].ReferenceKind);
+        Assert.False(callees[1].HasMixedReferenceKinds);
+        Assert.Equal(new[] { "subscribe" }, callees[1].ReferenceKinds);
     }
 
     [Fact]

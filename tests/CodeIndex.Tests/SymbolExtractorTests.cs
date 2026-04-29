@@ -60,6 +60,877 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_DetectsHocWrappedComponentBindings()
+    {
+        // HOC-wrapped / call-result / tagged-template component bindings must not be
+        // silently dropped — every PascalCase `const Name = <non-arrow RHS>` shape
+        // should produce a `function` symbol so that `definition`, `callers`,
+        // `inspect`, and default exports can resolve the name. Closes #240.
+        // React.memo / React.forwardRef / React.lazy / connect(...)(...) /
+        // styled.div`...` / withAuth(Home) のような HOC ラップと呼び出し結果・
+        // タグ付きテンプレート代入の束縛が漏れないことを確認する。どの PascalCase
+        // 名 `const Name = <非 arrow の RHS>` も `function` シンボルになることで、
+        // `definition` / `callers` / `inspect` と default export が名前解決できる。
+        // Closes #240.
+        var content = """
+            import React from 'react';
+
+            const Box = React.forwardRef(function Box(props, ref) {
+                return React.createElement('div', { ref }, props.children);
+            });
+
+            const Expensive = React.memo(function Expensive({ data }) {
+                return React.createElement('div', null, data);
+            });
+
+            const Wrapped = React.memo(() => React.createElement('div', null, 'arrow'));
+
+            const Lazy = React.lazy(() => import('./X'));
+
+            const Connected = connect(mapState)(MyComponent);
+
+            const Styled = styled.div`color: red`;
+
+            const WithAuth = withAuthentication(Home);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Box");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Expensive");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Wrapped");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Lazy");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Connected");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Styled");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "WithAuth");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_HocBindingPatternSkipsLowercaseBindings()
+    {
+        // Lowercase names are NOT captured by the HOC/call-result binding row so
+        // ordinary non-component constants (`const count = 5;`, `const total = sum(a, b);`)
+        // do not gain phantom `function` rows. The capitalization gate also keeps
+        // every non-arrow ordinary constant out of the symbol table; only the
+        // PascalCase shape — which matches the React / component naming
+        // convention — is surfaced. Closes #240.
+        // 小文字始まり名は HOC / 呼び出し結果束縛パターンで取り込まれない。通常の
+        // 非コンポーネント定数（`const count = 5;`、`const total = sum(a, b);`）に
+        // 架空の `function` 行が生えないことを確認する。大文字始まりのゲートにより、
+        // React / コンポーネント命名規則に沿う PascalCase 形だけがシンボルテーブル
+        // に出る。Closes #240.
+        var content = """
+            const count = 5;
+            const total = sum(a, b);
+            const config = loadConfig();
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "count");
+        Assert.DoesNotContain(symbols, s => s.Name == "total");
+        Assert.DoesNotContain(symbols, s => s.Name == "config");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_HocBindingPatternDoesNotShadowCapitalizedArrow()
+    {
+        // A capitalized arrow-function binding (`const Foo = () => <div/>`) still
+        // matches the pre-existing arrow pattern, which runs FIRST and sets the
+        // same-line stop flag. The new HOC row must not produce a second,
+        // BodyStyle.None duplicate for the same symbol — the arrow row already
+        // captures the function with a brace body range. Closes #240.
+        // 大文字始まりの arrow 関数束縛（`const Foo = () => <div/>`）は既存 arrow
+        // パターンに先行一致し、同一行の stop flag が立つ。今回の HOC 行で重複
+        // シンボル（BodyStyle.None の `function Foo`）を追加で生やしてはいけない —
+        // arrow 行がすでに本体範囲つきで捕捉している。Closes #240.
+        var content = """
+            const Foo = () => {
+                return 1;
+            };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        // Assert.Single already guarantees no duplicate was emitted by the new HOC
+        // row on the same line — the arrow row still wins via stopAfterFirstPatternMatch.
+        // Assert.Single で、新 HOC 行が同一行に重複シンボルを生やしていないことを保証する。
+        // arrow 行が stopAfterFirstPatternMatch で先勝ちしている。
+        var foo = Assert.Single(symbols.Where(s => s.Name == "Foo"));
+        Assert.Equal("function", foo.Kind);
+        // Arrow pattern uses BodyStyle.Brace, so EndLine is advanced past StartLine
+        // when the body spans multiple lines. The HOC row (BodyStyle.None) would
+        // leave EndLine equal to StartLine; a strictly greater end line proves the
+        // arrow row won.
+        // arrow パターンは BodyStyle.Brace なので、本体が複数行の場合 EndLine は
+        // StartLine より後まで伸びる。HOC 行（BodyStyle.None）は EndLine を
+        // StartLine のまま残すため、StartLine より大きい EndLine は arrow 行が
+        // 勝ったことの証拠になる。
+        Assert.True(foo.EndLine > foo.StartLine);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_DetectsHocWrappedComponentBindingsWithTypeAnnotation()
+    {
+        // TypeScript HOC bindings frequently carry an explicit type annotation
+        // between the name and `=`; the TypeScript row's optional `:` branch
+        // must consume the annotation so the name is still captured. Closes #240.
+        // TypeScript の HOC 束縛では名前と `=` の間に型注釈が入ることが多い。
+        // TypeScript 行のオプションの `:` 分岐が型注釈を消費し、名前が正しく
+        // 取得できることを確認する。Closes #240.
+        var content = """
+            import React from 'react';
+
+            const Connected: React.ComponentType<Props> = connect(mapState)(MyComponent);
+
+            const Styled: StyledComponent<'div', Theme> = styled.div`color: red`;
+
+            const Callback: (x: number) => number = (x) => x + 1;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Connected");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Styled");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Callback");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_HocBindingPatternAcceptsGenericTypeArgumentsOnReactHoc()
+    {
+        // TypeScript HOCs very frequently carry type arguments directly on the
+        // HOC call itself — `React.forwardRef<HTMLDivElement, Props>(...)`,
+        // `React.memo<Props>(...)`, `React.lazy<typeof X>(...)`, and the same
+        // shape on bare `forwardRef<T>(...)` / `memo<T>(...)` / `lazy<T>(...)` /
+        // `connect<State, Dispatch>(...)` / `observer<Props>(...)` / any
+        // `with<Pascal><T>(...)` call. The narrow HOC allowlist must still
+        // accept them; the earlier revision dropped every generic shape because
+        // the `<...>` tokens pushed the `(` away from the HOC name. Closes #240.
+        // TypeScript の HOC には HOC 呼び出し自身に型引数が付く形が非常に多い
+        // — `React.forwardRef<HTMLDivElement, Props>(...)`、`React.memo<Props>(...)`、
+        // `React.lazy<typeof X>(...)`、素の `forwardRef<T>(...)` /
+        // `memo<T>(...)` / `lazy<T>(...)` / `connect<State, Dispatch>(...)` /
+        // `observer<Props>(...)` / `with<Pascal><T>(...)` のいずれも同じ形。
+        // narrow な HOC allowlist でこの形を落としてはいけない。以前のリビジョンは
+        // `<...>` トークンが `(` を HOC 名から離してしまい、generic 形が全部
+        // 落ちていた。Closes #240.
+        var content = """
+            import React from 'react';
+
+            const Box = React.forwardRef<HTMLDivElement, Props>((props, ref) => <div ref={ref} />);
+            const MemoBox = React.memo<Props>(Box);
+            const LazyBox = React.lazy<typeof Box>(() => import('./Box'));
+
+            const BareBox = forwardRef<HTMLDivElement, Props>((props, ref) => <div ref={ref} />);
+            const BareMemo = memo<Props>(BareBox);
+            const BareLazy = lazy<typeof BareBox>(() => import('./BareBox'));
+
+            const ConnectedGeneric = connect<State, Dispatch>(mapState, mapDispatch)(MyComponent);
+            const Observed = observer<Props>(MyComponent);
+            const WithAuthGeneric = withAuthentication<Props>(Home);
+
+            const NestedMemo = React.memo<Map<string, Props>>(Box);
+            const FunctionTypeMemo = React.memo<(props: Props) => JSX.Element>(Box);
+            const DeepNestedMemo = React.memo<Record<string, Map<string, Props>>>(Box);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Box");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MemoBox");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "LazyBox");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "BareBox");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "BareMemo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "BareLazy");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "ConnectedGeneric");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Observed");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "WithAuthGeneric");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "NestedMemo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "FunctionTypeMemo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "DeepNestedMemo");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_HocBindingPatternSkipsPascalCaseNonHocConstants()
+    {
+        // PascalCase bindings whose RHS is NOT a known HOC prefix must not be
+        // silently promoted to `function` symbols — that would create phantom
+        // symbol rows and pollute `definition`, `symbols`, and `inspect` output.
+        // The narrow HOC-prefix gate (React.memo/React.forwardRef/React.lazy
+        // only — bare `React.` is NOT accepted — styled/connect/memo/forwardRef/
+        // lazy/observer/with<Pascal>) intentionally rejects ordinary constants,
+        // ALL_CAPS config values, and arbitrary call results. Closes #240.
+        // RHS が既知の HOC プレフィックスでない PascalCase / ALL_CAPS 束縛は
+        // `function` シンボルに昇格させてはいけない — 架空のシンボル行が出ると
+        // `definition` / `symbols` / `inspect` が汚染される。狭い HOC プレフィックス
+        // ゲート（`React.memo` / `React.forwardRef` / `React.lazy` のみで、素の
+        // `React.` は受け付けない。`styled` / `connect` / `memo` / `forwardRef` /
+        // `lazy` / `observer` / `with<Pascal>`）で通常定数、ALL_CAPS 設定値、任意の
+        // 呼び出し結果を意図的に弾く。Closes #240.
+        var content = """
+            const Config = loadConfig();
+            const ENV = process.env.NODE_ENV;
+            const API = 'https://example.com';
+            const Total = sum(a, b);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "Config");
+        Assert.DoesNotContain(symbols, s => s.Name == "ENV");
+        Assert.DoesNotContain(symbols, s => s.Name == "API");
+        Assert.DoesNotContain(symbols, s => s.Name == "Total");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_HocBindingPatternDoesNotCollideWithClassExpressionBinding()
+    {
+        // `const Widget = class extends React.Component {}` is a class-expression
+        // binding. It must produce a single `class Widget` symbol (from the
+        // synthetic class-expression pass), NOT both `function Widget` (from the
+        // HOC row) and `class Widget`. The narrow HOC-prefix regex excludes
+        // `= class` so the two passes do not collide. Closes #240.
+        // `const Widget = class extends React.Component {}` はクラス式束縛。
+        // `class Widget`（class expression 合成パス由来）だけが出るべきで、
+        // `function Widget`（HOC 行由来）と `class Widget` が二重に出てはいけない。
+        // 狭い HOC プレフィックス正規表現は `= class` を受け付けないため、2 つの
+        // パスが衝突しない。Closes #240.
+        var content = """
+            const Widget = class extends React.Component {
+                render() { return null; }
+            };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        var widgetSymbols = symbols.Where(s => s.Name == "Widget").ToList();
+        Assert.Single(widgetSymbols);
+        Assert.Equal("class", widgetSymbols[0].Kind);
+    }
+
+    [Fact]
+    public void Extract_TypeScript_TypedArrowBindingPreservesBraceBody()
+    {
+        // A TypeScript arrow-function binding with an explicit function-type
+        // annotation (`const Callback: (x: number) => number = (x) => {...}`)
+        // must match the arrow row (BodyStyle.Brace) and keep its multi-line
+        // body range, even though the type annotation itself contains `=>`.
+        // The HOC row with BodyStyle.None must NOT shadow it. Closes #240.
+        // 関数型注釈付き TypeScript arrow 束縛（`const Callback: (x: number) =>
+        // number = (x) => {...}`）は arrow 行（BodyStyle.Brace）に一致し、型注釈に
+        // `=>` が含まれていても複数行の本体範囲が維持される必要がある。
+        // BodyStyle.None の HOC 行で上書きされてはいけない。Closes #240.
+        var content = """
+            const Callback: (x: number) => number = (x) => {
+                return x + 1;
+            };
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        var callback = Assert.Single(symbols.Where(s => s.Name == "Callback"));
+        Assert.Equal("function", callback.Kind);
+        // Arrow row (BodyStyle.Brace) pushes EndLine past StartLine for a multi-line body.
+        // HOC row (BodyStyle.None) would leave EndLine==StartLine.
+        // arrow 行は複数行本体で EndLine を StartLine より後ろへ伸ばす。HOC 行
+        // （BodyStyle.None）なら EndLine は StartLine のまま残るため、これで
+        // arrow 行が勝ったことを確認できる。
+        Assert.True(callback.EndLine > callback.StartLine);
+    }
+
+    [Fact]
+    public void Extract_JavaScript_HocBindingPatternSkipsNonHocReactApiCalls()
+    {
+        // `React.` on the RHS is not a HOC marker on its own — only
+        // `React.memo(` / `React.forwardRef(` / `React.lazy(` are real HOCs.
+        // Other React APIs (`React.createContext(...)`, hooks like
+        // `React.useCallback(...)` / `React.useMemo(...)`, `React.createRef(...)`)
+        // return plain values and must NOT produce phantom `function` symbols.
+        // Pins the strict allowlist on both JS and TS sides. Closes #240.
+        // RHS の `React.` だけでは HOC ではない — 真の HOC は
+        // `React.memo(` / `React.forwardRef(` / `React.lazy(` のみ。それ以外の
+        // React API（`React.createContext(...)`、`React.useCallback(...)` / `React.useMemo(...)`
+        // などの hooks、`React.createRef(...)`）は素の値を返すだけで、phantom
+        // `function` シンボルを生やしてはいけない。JS / TS の両行で厳格な allowlist を
+        // pin する。Closes #240.
+        var jsContent = """
+            const Theme = React.createContext(null);
+            const Stable = React.useCallback(() => 1, []);
+            const Derived = React.useMemo(() => compute(), [dep]);
+            const Ref = React.createRef();
+            """;
+
+        var jsSymbols = SymbolExtractor.Extract(1, "javascript", jsContent);
+
+        Assert.DoesNotContain(jsSymbols, s => s.Name == "Theme");
+        Assert.DoesNotContain(jsSymbols, s => s.Name == "Stable");
+        Assert.DoesNotContain(jsSymbols, s => s.Name == "Derived");
+        Assert.DoesNotContain(jsSymbols, s => s.Name == "Ref");
+
+        var tsContent = """
+            const Theme = React.createContext<string | null>(null);
+            const Stable = React.useCallback(() => 1, []);
+            const Derived: number = React.useMemo(() => compute(), [dep]);
+            const Ref = React.createRef<HTMLDivElement>();
+            """;
+
+        var tsSymbols = SymbolExtractor.Extract(2, "typescript", tsContent);
+
+        Assert.DoesNotContain(tsSymbols, s => s.Name == "Theme");
+        Assert.DoesNotContain(tsSymbols, s => s.Name == "Stable");
+        Assert.DoesNotContain(tsSymbols, s => s.Name == "Derived");
+        Assert.DoesNotContain(tsSymbols, s => s.Name == "Ref");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_HocBindingPatternDoesNotMatchComparisonShape()
+    {
+        // In JavaScript, `const Result = memo < Props > (Component);` is a chained
+        // comparison / call expression — NOT a HOC binding with generic type
+        // arguments. The TypeScript HOC row intentionally accepts an optional
+        // `<TypeArgs>` token between the HOC call name and `(`, but the
+        // JavaScript row must not, because JS has no generic syntax. A regex
+        // that shares the generic token between the two rows would produce
+        // phantom `function Result` on pure-JS comparison shapes. Pins the
+        // asymmetry so `memo < Props >` / `forwardRef < Props >` /
+        // `lazy < typeof X >` / `connect < State, Dispatch >` / `observer < Props >` /
+        // `withAuth < Props >` in a JS source stay 0-symbol. Closes #240.
+        // JavaScript では `const Result = memo < Props > (Component);` は generic 付きの
+        // HOC 束縛ではなく、比較・呼び出しの連鎖式である。TypeScript 行は HOC 呼び出し名と
+        // `(` の間に `<TypeArgs>` を意図的に受け入れるが、JavaScript 行は受け入れては
+        // いけない。JS に generic 構文は無いため、両行で同じ regex を共有すると純粋な
+        // JS の比較式から phantom な `function Result` が生えてしまう。非対称性を pin し、
+        // JS ソース上の `memo < Props >` / `forwardRef < Props >` /
+        // `lazy < typeof X >` / `connect < State, Dispatch >` / `observer < Props >` /
+        // `withAuth < Props >` が 0 シンボルのままであることを保証する。Closes #240.
+        var content = """
+            const Result = memo < Props > (Component);
+            const Forwarded = forwardRef < Props > (Component);
+            const Lazied = lazy < typeof Component > (Component);
+            const Connected = connect < State, Dispatch > (Component);
+            const Observed = observer < Props > (Component);
+            const WithAuth = withAuthentication < Props > (Home);
+            const ReactMemoed = React.memo < Props > (Component);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "Result");
+        Assert.DoesNotContain(symbols, s => s.Name == "Forwarded");
+        Assert.DoesNotContain(symbols, s => s.Name == "Lazied");
+        Assert.DoesNotContain(symbols, s => s.Name == "Connected");
+        Assert.DoesNotContain(symbols, s => s.Name == "Observed");
+        Assert.DoesNotContain(symbols, s => s.Name == "WithAuth");
+        Assert.DoesNotContain(symbols, s => s.Name == "ReactMemoed");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_HocBindingPatternRequiresTaggedTemplateForStyled()
+    {
+        // The `styled` HOC branch must require a tagged-template backtick on the same
+        // line. `const StyledFactory = styled.div;` (factory capture) and
+        // `const StyledFactoryCall = styled(Component);` (plain function call) are
+        // NOT component bindings — no component is produced on that line — and must
+        // stay 0-symbol. Only the tagged-template forms
+        // (`styled.div\`...\``, `styled(Component)\`...\``) create a real styled
+        // component binding and must still match. Closes #240.
+        // `styled` HOC 分岐はタグ付きテンプレートのバッククォートを同一行で必須にする。
+        // `const StyledFactory = styled.div;`（factory 捕捉）や
+        // `const StyledFactoryCall = styled(Component);`（素の関数呼び出し）はその行で
+        // コンポーネントを生成しないため、0 シンボルのままであるべき。
+        // タグ付きテンプレート形（`styled.div\`...\``、`styled(Component)\`...\``）のみが
+        // 実体のある styled コンポーネント束縛となり、引き続きマッチする。Closes #240.
+        var content = """
+            const StyledFactory = styled.div;
+            const StyledFactoryCall = styled(Component);
+            const RealStyled = styled.div`color: red;`;
+            const WrappedStyled = styled(Component)`color: blue;`;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "StyledFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "StyledFactoryCall");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "RealStyled");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "WrappedStyled");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_HocBindingPatternRequiresTaggedTemplateForStyled()
+    {
+        // Same tagged-template requirement on the TypeScript side — the factory
+        // capture and plain call shapes must not produce phantom bindings even in
+        // TS sources, while real tagged templates (including ones with generic
+        // type arguments on `styled.div<Props>\`...\``) still match. Closes #240.
+        // TypeScript 側でも同じタグ付きテンプレート要件を適用する — factory 捕捉や素の
+        // 関数呼び出し形は TS ソース上でも phantom 束縛を生やさず、タグ付きテンプレート
+        // （generic 型引数を伴う `styled.div<Props>\`...\`` も含む）のみが引き続き
+        // マッチする。Closes #240.
+        var content = """
+            const StyledFactory = styled.div;
+            const StyledFactoryCall = styled(Component);
+            const RealStyled = styled.div`color: red;`;
+            const TypedStyled = styled.div<Props>`color: blue;`;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "StyledFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "StyledFactoryCall");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "RealStyled");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "TypedStyled");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_HocBindingPatternRejectsSameLineMultiStatementStyledFactory()
+    {
+        // A factory-capture or plain-call `styled` binding placed on the same
+        // source line as an UNRELATED tagged template (a separate statement after
+        // `;`) must still be rejected. The gate scans only between the match end
+        // and the next `;`, so the backtick in `const note = \`...\`;` does not
+        // re-open the gate for `const StyledFactory = styled.div;` earlier on the
+        // same line. Closes #240 follow-up (codex review #7 blocker).
+        // factory 捕捉 / 素の呼び出し形の `styled` 束縛と、無関係なタグ付きテンプレート
+        // （`;` で区切られた別の文）が同じ行に置かれたケースでも除外は働かなければ
+        // ならない。ゲートは match 終端から次の `;` までしか見ないので、行後半の
+        // `const note = \`...\`;` が行前半の `const StyledFactory = styled.div;` の
+        // ゲートを誤って解除しない。Closes #240 follow-up（codex レビュー #7 の
+        // blocker 対応）。
+        var content = """
+            const StyledFactory = styled.div; const note = `not a component`;
+            const StyledFactoryCall = styled(Component); const later = `still not a component`;
+            const RealStyled = styled.div`color: red;`;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "StyledFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "StyledFactoryCall");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "RealStyled");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_HocBindingPatternRejectsSameLineMultiStatementStyledFactory()
+    {
+        // Same statement-local gate applies on TypeScript input: a backtick from
+        // an unrelated later statement on the same line must not keep a
+        // factory-capture / plain-call styled binding alive. Closes #240
+        // follow-up (codex review #7 blocker).
+        // TypeScript 側でも同じ statement-local ゲートが必要。同じ行上の無関係な
+        // タグ付きテンプレートによるバッククォートが、前方の factory 捕捉 / 素の
+        // 呼び出し形 styled 束縛を生かしてはいけない。Closes #240 follow-up
+        // （codex レビュー #7 の blocker 対応）。
+        var content = """
+            const StyledFactory = styled.div; const note = `not a component`;
+            const StyledFactoryCall = styled(Component); const later = `still not a component`;
+            const TypedStyled = styled.div<Props>`color: blue;`;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "StyledFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "StyledFactoryCall");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "TypedStyled");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_HocBindingPatternIgnoresStyledBacktickInCommentsAndStrings()
+    {
+        // The statement-local styled-factory gate must understand line comments,
+        // block comments, and plain string literals when looking for a backtick
+        // or `;`. A backtick or `;` that lives only inside a comment or string
+        // must not steer the gate's accept/reject decision. Four failure shapes
+        // are pinned:
+        //   (a) `// \`...\`` — backtick inside a line comment must not accept
+        //       a factory-capture binding.
+        //   (b) `/* \`...\` */` — backtick inside a block comment must not
+        //       accept a factory-capture binding.
+        //   (c) `+ "\`"` — backtick inside a plain string literal must not
+        //       accept a non-template binding.
+        //   (d) `/* ; */ \`color:red\`;` — `;` inside a block comment must not
+        //       fence a real subsequent backtick off from a real tagged
+        //       template on the same statement.
+        // Closes #240 follow-up (codex review #8 blocker).
+        // 文ローカルの styled factory ゲートは、バッククォートや `;` を探索する際に行コメント /
+        // ブロックコメント / 通常文字列リテラルを構文として認識する必要がある。コメントや文字列
+        // 内のバッククォート・`;` がゲートの判定を誤らせてはならない。(a) 行コメント内の
+        // バッククォートで factory 捕捉が維持されない、(b) ブロックコメント内のバッククォートで
+        // 維持されない、(c) 文字列リテラル内のバッククォートで維持されない、(d) ブロックコメント
+        // 内の `;` によって同一文の本物のバッククォートが文終端で遮られない、の 4 形を pin する。
+        // Closes #240 follow-up（codex レビュー #8 の blocker 対応）。
+        var content = """
+            const LineCommentFactory = styled.div // `not a template`
+            const BlockCommentFactory = styled.div /* `not a template` */;
+            const StringLiteralFactory = styled.div + "`";
+            const RealStyledAfterBlock = styled.div /* ; */ `color:red`;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "LineCommentFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "BlockCommentFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "StringLiteralFactory");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "RealStyledAfterBlock");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_HocBindingPatternIgnoresStyledBacktickInCommentsAndStrings()
+    {
+        // Same comment / string awareness on the TypeScript side. Closes #240
+        // follow-up (codex review #8 blocker).
+        // TypeScript 側でも同じコメント / 文字列対応が必要。Closes #240 follow-up
+        // （codex レビュー #8 の blocker 対応）。
+        var content = """
+            const LineCommentFactory = styled.div // `not a template`
+            const BlockCommentFactory = styled.div /* `not a template` */;
+            const StringLiteralFactory = styled.div + "`";
+            const RealStyledAfterBlock = styled.div<Props> /* ; */ `color:red`;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "LineCommentFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "BlockCommentFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "StringLiteralFactory");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "RealStyledAfterBlock");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_HocBindingPatternAcceptsMultiLineTaggedTemplateContinuation()
+    {
+        // Prettier / dprint style often places the tagged-template backtick on the
+        // line after `styled.div` / `styled(Component)`. The statement-local gate
+        // must walk across raw lines within a bounded lookahead window so these
+        // bindings still register as function symbols. Implicit ASI must still
+        // terminate the scan: `const X = styled.div\nconst Y = 5;` stays rejected
+        // because the continuation line begins with a `const` statement starter.
+        // Closes #240 follow-up (codex review #9 blocker, upstream issue #901).
+        // Prettier / dprint の整形では `styled.div` / `styled(Component)` の次行に
+        // タグ付きテンプレートのバッククォートを置くことが多い。文ローカルのゲートは
+        // 所定の行数まで改行をまたいで走査し、これらの束縛を function シンボルとして
+        // 維持しなければならない。同時に暗黙 ASI による終端は守る必要があり、
+        // `const X = styled.div\nconst Y = 5;` は継続行が `const` の文頭キーワードで
+        // 始まるため引き続き除外される。Closes #240 follow-up（codex レビュー #9 の
+        // blocker 対応、上流 issue #901）。
+        var content = """
+            const MultiLineMember = styled.div
+              `color: red;`;
+            const MultiLineCall = styled(Component)
+              `color: blue;`;
+            const AsiRejectedMember = styled.div
+            const AsiFollower = 5;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MultiLineMember");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MultiLineCall");
+        Assert.DoesNotContain(symbols, s => s.Name == "AsiRejectedMember");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_HocBindingPatternAcceptsMultiLineTaggedTemplateContinuation()
+    {
+        // Same multi-line continuation support on the TypeScript side. The
+        // TS HOC row uses the same `styled[.(\`]` branch as JavaScript (no
+        // generic suffix on `styled` itself), so the shapes that need to be
+        // pinned mirror the JavaScript test. TypeScript-specific binding
+        // forms such as an optional `: ComponentType<Props>` type annotation
+        // between the name and `=` are also exercised so the gate does not
+        // get confused by an identifier that carries a type annotation.
+        // Closes #240 follow-up (codex review #9 blocker, upstream issue #901).
+        // TypeScript 側でも同じ複数行継続対応が必要。TS の HOC 行は `styled`
+        // 自体に generic 接尾辞を載せない `styled[.(\`]` 分岐を JS と共有するため、
+        // pin すべき形も JS テストとミラーする。加えて TS 特有の型注釈付き束縛
+        // （`const Foo: ComponentType<Props> = styled.div\n\`...\``）も通過
+        // させ、ゲートが型注釈付き識別子で混乱しないことを確認する。
+        // Closes #240 follow-up（codex レビュー #9 の blocker 対応、上流 issue #901）。
+        var content = """
+            const MultiLineMember = styled.div
+              `color: red;`;
+            const MultiLineCall = styled(Component)
+              `color: blue;`;
+            const MultiLineAnnotated: ComponentType<Props> = styled.div
+              `color: green;`;
+            const AsiRejectedMember = styled.div
+            const AsiFollower: number = 5;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MultiLineMember");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MultiLineCall");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "MultiLineAnnotated");
+        Assert.DoesNotContain(symbols, s => s.Name == "AsiRejectedMember");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_HocBindingPatternRejectsExpressionStatementWithBacktickOnNextStatement()
+    {
+        // ASI inserts a `;` between `styled.div` and the next line's expression
+        // statement when that statement begins with an identifier / `await` /
+        // other non-continuation token. The gate must inspect the first
+        // meaningful character of each continuation line: only a backtick
+        // (template itself) or `.` (member chain) may continue the expression.
+        // `<` is intentionally not whitelisted because `<Foo>...` at statement
+        // start is a JSX element (or TS cast), not a tagged-template generic
+        // continuation. Closes #240 follow-up (codex review #10 and #11
+        // blockers).
+        // ASI は `styled.div` の次行が識別子始まり・`await` 始まり等の非継続トークンで
+        // 始まる式文のとき、暗黙の `;` を挿入する。ゲートは継続行の最初の実トークンを
+        // 見て判定する必要がある — バッククォート（テンプレート自体）か `.`（メンバー
+        // チェーン）のみが式を継続可能で、それ以外は新しい文として走査を打ち切る。
+        // `<` は JSX 要素 / TS キャストの開始にもなるため意図的に許可しない。
+        // Closes #240 follow-up（codex レビュー #10 と #11 の blocker 対応）。
+        var content = """
+            const IdentifierStartFactory = styled.div
+            foo(`not a template`)
+            const AwaitStartFactory = styled.div
+            await foo(`not a template`)
+            const CallExprFactory = styled(Component)
+            foo(`not a template`)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "IdentifierStartFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "AwaitStartFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "CallExprFactory");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_HocBindingPatternRejectsExpressionStatementWithBacktickOnNextStatement()
+    {
+        // Same ASI-aware continuation rule on the TypeScript side. Closes #240
+        // follow-up (codex review #10 blocker, upstream issue #910).
+        // TypeScript 側でも同じ ASI 対応の継続ルールが必要。Closes #240 follow-up
+        // （codex レビュー #10 の blocker 対応、上流 issue #910）。
+        var content = """
+            const IdentifierStartFactory = styled.div
+            foo(`not a template`)
+            const AwaitStartFactory = styled.div
+            await foo(`not a template`)
+            const CallExprFactory = styled(Component)
+            foo(`not a template`)
+            const AnnotatedIdentifierStart: StyledComponent<'div'> = styled.div
+            foo(`not a template`)
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "IdentifierStartFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "AwaitStartFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "CallExprFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "AnnotatedIdentifierStart");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_HocBindingPatternRejectsJsxElementOnNextStatement()
+    {
+        // A `<Foo>...` continuation is a JSX element (standalone expression
+        // statement) — NOT a tagged-template generic — so the styled-factory
+        // candidate on the previous line must be rejected even though the
+        // JSX element contains a backtick-delimited child. Closes #240
+        // follow-up (codex review #11 blocker).
+        // 継続行の先頭が `<Foo>...` の場合は JSX 要素（独立した式文）であり
+        // tagged-template の generic 継続ではない。JSX 要素の子がバッククォートを
+        // 含んでも、前行の styled factory 候補は不採用にする必要がある。
+        // Closes #240 follow-up（codex レビュー #11 の blocker 対応）。
+        var content = """
+            const JsxElementFactory = styled.div
+            <Foo>{`not a template`}</Foo>
+            const JsxFragmentFactory = styled(Component)
+            <><span>{`also not`}</span></>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "JsxElementFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "JsxFragmentFactory");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_HocBindingPatternRejectsJsxElementOnNextStatement()
+    {
+        // Same JSX-on-next-statement rejection on the TypeScript/TSX side —
+        // `<Foo>...` can also be a TS type cast, and in either reading it is
+        // still a new statement inserted by ASI, not a continuation of the
+        // preceding styled expression. Closes #240 follow-up (codex review
+        // #11 blocker).
+        // TypeScript/TSX 側でも同様に `<Foo>...` は JSX 要素か TS キャストであり、
+        // どちらの解釈でも ASI で挿入された新しい文であって先行式の継続ではない。
+        // Closes #240 follow-up（codex レビュー #11 の blocker 対応）。
+        var content = """
+            const JsxElementFactory = styled.div
+            <Foo>{`not a template`}</Foo>
+            const AnnotatedJsxFactory: StyledComponent<'div'> = styled.div
+            <Bar>{`also not`}</Bar>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "JsxElementFactory");
+        Assert.DoesNotContain(symbols, s => s.Name == "AnnotatedJsxFactory");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_HocBindingPatternRejectsOperatorBetweenStyledAndTemplate()
+    {
+        // `styled.div + \`...\`` and `styled(Component) + \`...\`` are NOT
+        // tagged-template bindings — the `+` operator at depth 0 between the
+        // styled expression and the backtick breaks the tag-head continuation
+        // chain. Closes #240 follow-up (codex review #12 blocker). Without the
+        // depth-0 operator reject, the gate would happily walk past `+` to
+        // the first backtick and accept the candidate as a phantom
+        // `function NotStyled` symbol.
+        // `styled.div + \`...\`` や `styled(Component) + \`...\`` は tagged-template
+        // 束縛ではない — depth 0 の `+` 演算子が styled 式とバッククォートの間に
+        // 入ることで tag-head 継続チェーンが切れる。Closes #240 follow-up
+        // （codex レビュー #12 の blocker 対応）。depth-0 演算子除外がないと、ゲートが
+        // `+` を跨いで最初のバッククォートに到達し phantom `function NotStyled` を
+        // 出してしまう。
+        var content = """
+            const NotStyledMember = styled.div + `not a styled template`;
+            const NotStyledCall = styled(Component) + `also not`;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "NotStyledMember");
+        Assert.DoesNotContain(symbols, s => s.Name == "NotStyledCall");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_HocBindingPatternRejectsOperatorBetweenStyledAndTemplate()
+    {
+        // TypeScript counterpart for the depth-0 operator reject — including
+        // a typed-annotation variant — must still drop these phantom bindings.
+        // Closes #240 follow-up (codex review #12 blocker).
+        // TypeScript 側の depth-0 演算子除外（型注釈付きの変種を含む）。
+        // Closes #240 follow-up（codex レビュー #12 の blocker 対応）。
+        var content = """
+            const NotStyledMember = styled.div + `not a styled template`;
+            const NotStyledCall = styled(Component) + `also not`;
+            const AnnotatedNotStyled: StyledComponent<'div'> = styled.div + `still not`;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "NotStyledMember");
+        Assert.DoesNotContain(symbols, s => s.Name == "NotStyledCall");
+        Assert.DoesNotContain(symbols, s => s.Name == "AnnotatedNotStyled");
+    }
+
+    [Fact]
+    public void Extract_JavaScript_HocBindingPatternRejectsOperatorAfterStyledTemplate()
+    {
+        // `styled.div\`color: red\` + theme` is theme composition, not a styled
+        // binding — even though the tag-head backtick is present, the depth-0
+        // `+` operator after the closing backtick indicates the right-hand side
+        // is a binary expression. The gate must walk past the template body and
+        // still reject on the post-template operator. Closes #240 follow-up
+        // (codex review #13 High blocker).
+        // `styled.div\`color: red\` + theme` はテーマ合成式であって styled 束縛では
+        // ない — tag head の backtick が存在しても、closing backtick 後の depth 0
+        // `+` 演算子により右辺が二項式になっている。ゲートはテンプレート本体を
+        // 読み飛ばした後でも post-template operator を検出して除外する必要がある。
+        // Closes #240 follow-up（codex レビュー #13 High blocker）。
+        var content = """
+            const NotStyledPlusTheme = styled.div`color: red` + theme;
+            const NotStyledCallPlusTheme = styled(Component)`color: blue` + theme;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "NotStyledPlusTheme");
+        Assert.DoesNotContain(symbols, s => s.Name == "NotStyledCallPlusTheme");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_HocBindingPatternRejectsOperatorAfterStyledTemplate()
+    {
+        // TypeScript counterpart for the post-template operator reject —
+        // including a typed-annotation variant. Closes #240 follow-up
+        // (codex review #13 High blocker).
+        // TypeScript 側の post-template 演算子除外（型注釈付き変種を含む）。
+        // Closes #240 follow-up（codex レビュー #13 High blocker）。
+        var content = """
+            const NotStyledPlusTheme = styled.div`color: red` + theme;
+            const NotStyledCallPlusTheme = styled(Component)`color: blue` + theme;
+            const AnnotatedNotStyledPlusTheme: StyledComponent<'div'> = styled.div`color: red` + theme;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "NotStyledPlusTheme");
+        Assert.DoesNotContain(symbols, s => s.Name == "NotStyledCallPlusTheme");
+        Assert.DoesNotContain(symbols, s => s.Name == "AnnotatedNotStyledPlusTheme");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_HocBindingPatternAcceptsLongAttrsChainBeforeTemplate()
+    {
+        // Prettier-formatted `.attrs((props) => ({ ... }))` argument objects can
+        // span more than ten lines before the backtick is reached. The gate's
+        // lookahead window must be large enough so the trailing tagged template
+        // is still recognized and the styled binding is kept. Closes #240
+        // follow-up (codex review #13 Medium blocker).
+        // Prettier 整形の `.attrs((props) => ({ ... }))` 引数オブジェクトは
+        // バッククォート到達まで 10 行を超えることがある。lookahead window が
+        // 十分広くないと末尾の tagged template を見落とし styled 束縛が落ちる。
+        // Closes #240 follow-up（codex レビュー #13 Medium blocker）。
+        var content = """
+            const Tall = styled.div.attrs((props) => ({
+              field1: props.value1,
+              field2: props.value2,
+              field3: props.value3,
+              field4: props.value4,
+              field5: props.value5,
+              field6: props.value6,
+              field7: props.value7,
+              field8: props.value8,
+              field9: props.value9,
+              field10: props.value10,
+            }))`
+              color: red;
+              padding: 8px;
+            `;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Tall");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_HocBindingPatternAcceptsCallbackPropInsideFunctionTypeGeneric()
+    {
+        // Inline function-type generic arguments whose parameter object literal
+        // carries a callback-prop with ITS OWN paren group
+        // (`React.memo<(props: { onClick: (x: number) => void }) => JSX.Element>(Box)`)
+        // must still be accepted. The shared TypeScriptOptionalHocTypeArgsPattern
+        // now balances one level of nested parens inside each generic-argument paren
+        // segment so real React callback-prop shapes do not get dropped. Closes #240.
+        // 関数型 generic 引数の中にある引数オブジェクトに、さらに自前の paren を持つ
+        // callback-prop が入る形
+        // （`React.memo<(props: { onClick: (x: number) => void }) => JSX.Element>(Box)`）
+        // もマッチさせる必要がある。共有定数 TypeScriptOptionalHocTypeArgsPattern は、
+        // 各 generic 引数内の paren セグメントで 1 段のネスト paren を balance するように
+        // なったため、実在する React の callback-prop 形を取りこぼさない。Closes #240.
+        var content = """
+            import React from 'react';
+
+            const NestedCallbackPropMemo = React.memo<(props: { onClick: (x: number) => void }) => JSX.Element>(Box);
+            const BareCallbackPropMemo = memo<(props: { onChange: (value: string) => void }) => JSX.Element>(Box);
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "NestedCallbackPropMemo");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "BareCallbackPropMemo");
+    }
+
+    [Fact]
     public void Extract_JavaScript_DetectsReExportSurfaceSymbols()
     {
         var content = """
