@@ -2,6 +2,7 @@ using System.Text;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
+using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
 
@@ -1507,6 +1508,62 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchReferences_UsesReferenceLinesContextInCurrentSchema()
+    {
+        InsertIndexedFile(
+            "src/current_sql.sql",
+            "sql",
+            """
+            CREATE PROCEDURE dbo.Caller
+            AS
+            BEGIN
+                EXEC dbo.Target;
+            END
+            GO
+            """);
+
+        var reference = Assert.Single(
+            _reader.SearchReferences("dbo.Target", lang: "sql", exact: true, pathPatterns: ["current_sql"]));
+        Assert.Equal("src/current_sql.sql", reference.Path);
+        Assert.Contains("EXEC dbo.Target;", reference.RawContext);
+
+        using var cmd = _db.Connection.CreateCommand();
+        cmd.Parameters.AddWithValue("@path", "src/current_sql.sql");
+        cmd.CommandText = "SELECT id FROM files WHERE path = @path";
+        var fileId = (long)cmd.ExecuteScalar()!;
+
+        cmd.Parameters.Clear();
+        cmd.Parameters.AddWithValue("@fileId", fileId);
+        cmd.CommandText = "SELECT COUNT(*) FROM reference_lines WHERE file_id = @fileId";
+        Assert.Equal(1L, (long)cmd.ExecuteScalar()!);
+
+        cmd.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE file_id = @fileId AND context IS NOT NULL";
+        Assert.Equal(0L, (long)cmd.ExecuteScalar()!);
+    }
+
+    [Fact]
+    public void SearchReferences_LegacyDatabaseWithoutReferenceLinesTableStillWorks()
+    {
+        var legacyPath = Path.Combine(Path.GetTempPath(), $"codeindex_legacy_reader_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var connection = CreateLegacyReferenceConnection(legacyPath);
+            var legacyReader = new DbReader(connection);
+
+            var status = legacyReader.GetStatus();
+            Assert.Equal(1, status.References);
+
+            var file = legacyReader.GetFileByPath("src/legacy_sql.sql");
+            Assert.NotNull(file);
+            Assert.Equal(1, file!.ReferenceCount);
+        }
+        finally
+        {
+            try { File.Delete(legacyPath); } catch { }
+        }
+    }
+
+    [Fact]
     public void GetCallers_ReturnsCallingFunctions()
     {
         InsertIndexedFile("src/session.py", "python", "def login(user, password):\n    return authenticate(user, password)\n");
@@ -2803,6 +2860,28 @@ public class DbReaderTests : IDisposable
 
         var exactHit = _reader.AnalyzeSymbol("HandleRequest", exact: true);
         Assert.Null(exactHit.ExactZeroHint);
+    }
+
+    [Fact]
+    public void AnalyzeSymbol_BareVerbatimTokenFailsClosed()
+    {
+        InsertIndexedFile("src/app.cs", "csharp", "public class Foo { public int Bar() => 0; }\n");
+
+        var analysis = _reader.AnalyzeSymbol("@", lang: "csharp", exact: true);
+        var callers = _reader.GetCallers("@", lang: "csharp", exact: true);
+        var callees = _reader.GetCallees("@", lang: "csharp", exact: true);
+
+        Assert.Equal("@", analysis.Query);
+        Assert.Empty(analysis.Definitions);
+        Assert.Empty(analysis.References);
+        Assert.Empty(analysis.Callers);
+        Assert.Empty(analysis.Callees);
+        Assert.Empty(analysis.NearbySymbols);
+        Assert.Null(analysis.File);
+        Assert.Empty(callers);
+        Assert.Empty(callees);
+        Assert.Equal(0, _reader.CountCallers("@", lang: "csharp", exact: true));
+        Assert.Equal(0, _reader.CountCallees("@", lang: "csharp", exact: true));
     }
 
     [Fact]
@@ -6672,9 +6751,10 @@ public class DbReaderTests : IDisposable
         using (var templateCmd = _db.Connection.CreateCommand())
         {
             templateCmd.CommandText = """
-                SELECT r.column_number, r.context
+                SELECT r.column_number, COALESCE(r.context, rl.context)
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
+                LEFT JOIN reference_lines rl ON rl.id = r.reference_line_id
                 WHERE f.path = 'src/Use.cs'
                   AND r.symbol_name = 'Red'
                   AND r.reference_kind = 'type_reference'
@@ -11147,5 +11227,55 @@ public class DbReaderTests : IDisposable
         {
             try { Directory.Delete(tempDir, recursive: true); } catch { }
         }
+    }
+
+    private static SqliteConnection CreateLegacyReferenceConnection(string legacyPath)
+    {
+        var db = new DbContext(legacyPath);
+        db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/legacy_sql.sql",
+            Lang = "sql",
+            Size = 64,
+            Lines = 4,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "dbo.Target",
+                ReferenceKind = "call",
+                Line = 3,
+                Column = 9,
+                Context = "EXEC dbo.Target;",
+                ContainerKind = "procedure",
+                ContainerName = "dbo.Caller",
+            },
+        ]);
+        writer.MarkGraphReady();
+
+        using (var cmd = db.Connection.CreateCommand())
+        {
+            cmd.CommandText = "UPDATE symbol_references SET context = @context WHERE file_id = @fileId";
+            cmd.Parameters.AddWithValue("@context", "EXEC dbo.Target;");
+            cmd.Parameters.AddWithValue("@fileId", fileId);
+            cmd.ExecuteNonQuery();
+        }
+
+        using (var cmd = db.Connection.CreateCommand())
+        {
+            cmd.CommandText = @"
+                PRAGMA foreign_keys = OFF;
+                DROP TABLE reference_lines;
+                PRAGMA foreign_keys = ON;";
+            cmd.ExecuteNonQuery();
+        }
+
+        return db.Connection;
     }
 }

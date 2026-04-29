@@ -557,12 +557,14 @@ If a query itself begins with `-`, pass it as `--query <query>` or `-- <query>`.
 
 If a query fails with a SQLite reader error such as `The data is NULL at ordinal N`, set `CDIDX_DEBUG=1` and rerun. The failing SQL, bound parameters, and the last-read row's columns will be printed to stderr so the offending record can be located. No-op when unset.
 
-Text values (chunk `content`, `context`, paths, signatures, string parameters) are **redacted by default** — only the length and a short SHA256 prefix are emitted, so diagnostics can be pasted into issues without leaking indexed source code. Numeric columns, column names, NULL markers, and SQL text are shown as-is. To include raw text content in a local troubleshooting session, set `CDIDX_DEBUG=unsafe` instead (never paste this output publicly).
+  Text values (chunk `content`, `context`, paths, signatures, string parameters) are **redacted by default** — only the length and a short SHA256 prefix are emitted, so diagnostics can be pasted into issues without leaking indexed source code. Numeric columns, column names, NULL markers, and SQL text are shown as-is. To include raw text content in a local troubleshooting session, set `CDIDX_DEBUG=unsafe` instead (never paste this output publicly).
 
-```bash
-CDIDX_DEBUG=1 cdidx unused            # redacted text / テキスト伏字化
-CDIDX_DEBUG=unsafe cdidx unused       # raw content, local only / 生テキスト、ローカルのみ
-```
+  Reference line text is now stored once per file/line in `reference_lines`, so fresh indexes stay smaller than the legacy schema that duplicated the same `context` text on every `symbol_references` row. If an existing `.cdidx/codeindex.db` has already grown large, re-run `cdidx . --rebuild` to reclaim the space; `VACUUM` alone will not remove the old duplicated rows from a pre-migration database.
+
+  ```bash
+  CDIDX_DEBUG=1 cdidx unused            # redacted text / テキスト伏字化
+  CDIDX_DEBUG=unsafe cdidx unused       # raw content, local only / 生テキスト、ローカルのみ
+  ```
 
 ## How it works
 
@@ -1464,7 +1466,8 @@ Languages:
 ```
 
 `status --json` には `fold_ready`、`fold_ready_reason`、`graph_table_available`、`issues_table_available`、`sql_graph_contract_ready`、`sql_graph_contract_degraded_reason`、`hotspot_family_ready`、`hotspot_family_degraded_reason`、`csharp_symbol_name_ready`、`csharp_metadata_target_ready` などの trust flag / availability field も含まれます。`fold_ready` だけが縮退している場合は、generic な warning を推測させないように `degraded_reason`、`recommended_action`、`alternative_action` も追加され、まず `cdidx backfill-fold`、必要なら full rebuild という具体的な対処をそのまま機械的に扱えます。明示的な read-only `file:` DB URI を渡している場合でも、absolute な `file:///...?...` と relative な `file:codeindex.db?...` の両方で、これらの remediation field は失敗する read-only URI をそのまま返さず、writable な filesystem path に正規化して返します。`sql_graph_contract_ready` が `false` の場合、unchanged な SQL 行が古い graph contract のまま残っている可能性があるため、SQL の `references` / `callers` / `deps` / `unused` / `hotspots` を信頼する前に `cdidx index .` を再実行してください。同じ SQL graph contract のペアは、SQL の graph read が実際に関与した `inspect --json`、JSON の graph/dependency 系出力、MCP の graph/dependency 系ツールにも反映されるため、stale な SQL 行が authoritative なヒットや 0 件応答に見えてしまうのを防ぎつつ、無関係な C# / JS などの graph query には混入しません。`hotspot_family_ready` が `false` の間も `hotspots` 自体は使えますが、duplicate-name family は authoritative ではない保守的 fallback に縮退しうるため、`cdidx index .` を再実行して hotspot-family metadata を restamp してください。`csharp_symbol_name_ready` が `false` の場合は、`cdidx index .` を 1 回実行して unchanged な C# 行を現在の canonical operator / conversion operator / indexer 名へ書き換えてください。`csharp_metadata_target_ready` が `false` の場合、`deps` / `impact` の metadata attribute edge 判定はシグネチャ形状ヒューリスティックへフォールバックし、attribute でない同名クラスを黙ってドロップしうるため、`cdidx index .` を 1 回実行して authoritative resolver に各 C# クラスが attribute 派生かどうかを永続化させてください。
-`status` の summary の鮮度判定は、ビルドからの経過時間ではなく、保存された `indexed_at` と `latest_modified` の比較で決まります。`indexed_at >= latest_modified` かつ workspace が clean なら、index 自体が数分以上前でも fresh と表示されます。
+参照本文は `reference_lines` に file/line ごと 1 回だけ保存されるため、新規 index は legacy schema より小さくなります。既存の `.cdidx/codeindex.db` がすでに肥大化している場合は、`VACUUM` だけでは古い重複行を消せないので、`cdidx . --rebuild` で再構築して空き領域を回収してください。
+ `status` の summary の鮮度判定は、ビルドからの経過時間ではなく、保存された `indexed_at` と `latest_modified` の比較で決まります。`indexed_at >= latest_modified` かつ workspace が clean なら、index 自体が数分以上前でも fresh と表示されます。
 
 ### 検索前にリポジトリ全体を俯瞰する
 

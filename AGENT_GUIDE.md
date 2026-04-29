@@ -56,12 +56,19 @@ Avoid unrelated refactors.
 Preserve public behavior unless the issue explicitly requires a change.
 When editing changelog content, verify that both English and Japanese entries are updated where the repository convention requires both.
 
+## Documentation Rules
+
+- Treat documentation as part of the feature contract, not as optional cleanup.
+- If a change affects user-visible behavior, CLI/MCP output, flags, error messages, install/release behavior, or contributor/agent workflow, update the matching docs in the same change. For CodeIndex this usually means `README.md`, `DEVELOPER_GUIDE.md`, `TESTING_GUIDE.md`, `SELF_IMPROVEMENT.md`, `INTEGRATION_POLICY.md`, `CLAUDE.md`, `AGENT_GUIDE.md`, or the relevant `.codex/workflows/*.md` file.
+- Do not open or merge a PR with a user-visible change unless the required docs and changelog updates are present, or the PR body explicitly explains why no docs/changelog change is needed.
+- Changelog entries are required for user-visible or behavior-changing work. If `CHANGELOG.md` is edited, update both English and Japanese sections in the same commit.
+
 ## Repository Rules
 
 - Follow `DEVELOPER_GUIDE.md` for architecture and dependency policy. Production/runtime dependencies stay limited to `Microsoft.Data.Sqlite`.
 - Follow `TESTING_GUIDE.md` for test conventions, helpers, and parallelism rules.
 - Follow `SELF_IMPROVEMENT.md` when the task is about improving `cdidx` itself.
-- If a change is user-facing, keep the matching tests, docs, and changelog entry in the same commit when practical.
+- If a change is user-facing, keep the matching tests, docs, and changelog entry in the same commit.
 - Preserve cross-platform behavior when touching filesystem behavior, process execution, console output, or SQLite lifetime.
 - Ask before implementing breaking, destructive, or user-workflow-changing changes.
 

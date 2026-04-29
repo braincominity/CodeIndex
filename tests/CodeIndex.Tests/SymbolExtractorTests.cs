@@ -534,6 +534,51 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_HocBindingPatternRejectsPostTemplateComparisonAndDivisionOperators()
+    {
+        // After a real tagged template, the styled-factory gate must also
+        // reject post-template comparison and division operators. Without this
+        // guard, `styled.div` bindings can leak through as phantom symbols for
+        // `<`, `>`, and `/` continuations. Closes #997.
+        // 本物のタグ付きテンプレートの後でも、styled-factory ゲートは比較演算子と
+        // 除算演算子を拒否しなければならない。これがないと `styled.div` 束縛が
+        // `<`、`>`、`/` の継続として phantom シンボル化する。Closes #997.
+        var content = """
+            const StyledLess = styled.div`color: red` < theme;
+            const StyledGreater = styled.div`color: red` > theme;
+            const StyledDivide = styled.div`color: red` / theme;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "StyledLess");
+        Assert.DoesNotContain(symbols, s => s.Name == "StyledGreater");
+        Assert.DoesNotContain(symbols, s => s.Name == "StyledDivide");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_HocBindingPatternRejectsPostTemplateComparisonAndDivisionOperators()
+    {
+        // Same post-template operator rejection applies to TypeScript inputs.
+        // Comparison and division operators after the closing backtick must not
+        // keep a styled binding alive. Closes #997.
+        // TypeScript 入力でも同じ post-template 演算子拒否が必要。閉じバッククォート
+        // の後に比較演算子・除算演算子があっても styled 束縛を生かしてはならない。
+        // Closes #997.
+        var content = """
+            const StyledLess = styled.div`color: red` < theme;
+            const StyledGreater = styled.div`color: red` > theme;
+            const StyledDivide = styled.div`color: red` / theme;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "StyledLess");
+        Assert.DoesNotContain(symbols, s => s.Name == "StyledGreater");
+        Assert.DoesNotContain(symbols, s => s.Name == "StyledDivide");
+    }
+
+    [Fact]
     public void Extract_JavaScript_HocBindingPatternIgnoresStyledBacktickInCommentsAndStrings()
     {
         // The statement-local styled-factory gate must understand line comments,
