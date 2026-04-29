@@ -3295,6 +3295,44 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SqlQualifiedNames_NonExactQualifiedLookupsStaySchemaScoped()
+    {
+        InsertIndexedFile("src/sql_nonexact_scope_target.sql", "sql",
+            """
+            CREATE PROCEDURE archive.sales.proc_name
+            AS
+            BEGIN
+                SELECT 1;
+            END
+            GO
+            """);
+
+        InsertIndexedFile("src/sql_nonexact_scope_caller.sql", "sql",
+            """
+            CREATE PROCEDURE sales.caller
+            AS
+            BEGIN
+                EXEC archive.sales.proc_name;
+            END
+            GO
+            """);
+
+        Assert.Empty(_reader.SearchReferences("sales.proc_name", lang: "sql", pathPatterns: ["sql_nonexact_scope"]));
+        Assert.Empty(_reader.GetCallers("sales.proc_name", lang: "sql", pathPatterns: ["sql_nonexact_scope"]));
+
+        Assert.Empty(_reader.SearchReferences("sales.proc_name", lang: "sql", exact: true, pathPatterns: ["sql_nonexact_scope"]));
+        Assert.Empty(_reader.GetCallers("sales.proc_name", lang: "sql", exact: true, pathPatterns: ["sql_nonexact_scope"]));
+
+        var references = Assert.Single(_reader.SearchReferences("archive.sales.proc_name", lang: "sql", pathPatterns: ["sql_nonexact_scope"]));
+        Assert.Equal(4, references.Line);
+        Assert.Equal("sales.caller", references.ContainerName);
+
+        var callers = Assert.Single(_reader.GetCallers("archive.sales.proc_name", lang: "sql", pathPatterns: ["sql_nonexact_scope"]));
+        Assert.Equal("sales.caller", callers.CallerName);
+        Assert.Equal(1, callers.ReferenceCount);
+    }
+
+    [Fact]
     public void SqlQualifiedNames_ExactLookups_DoNotConflateQuotedSingleIdentifierDotsWithQualifiedNames()
     {
         InsertIndexedFile("src/sql_dotted_identifier_collision.sql", "sql",
@@ -3362,6 +3400,8 @@ public class DbReaderTests : IDisposable
             AS
             BEGIN
                 CALL "sales.fn_Target";
+                EXEC "sales.fn_Target";
+                EXECUTE "sales.fn_Target";
             END
             GO
             """);
@@ -3383,6 +3423,26 @@ public class DbReaderTests : IDisposable
         var impact = _reader.AnalyzeImpact("sales.fn_Target", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_dotted_identifier_graph"]);
         Assert.Equal("sales.fn_Target", Assert.Single(impact.Definitions).Name);
         Assert.Equal("sales.caller", Assert.Single(impact.Callers).CallerName);
+
+        var quotedReferences = _reader.SearchReferences("\"sales.fn_Target\"", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]);
+        Assert.Equal(3, quotedReferences.Count);
+        Assert.All(quotedReferences, reference => Assert.Equal("quoted.caller", reference.ContainerName));
+        Assert.Contains(quotedReferences, reference => reference.Context == "CALL \"sales.fn_Target\";");
+        Assert.Contains(quotedReferences, reference => reference.Context == "EXEC \"sales.fn_Target\";");
+        Assert.Contains(quotedReferences, reference => reference.Context == "EXECUTE \"sales.fn_Target\";");
+        Assert.Equal(3, _reader.CountSearchReferences("\"sales.fn_Target\"", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
+        Assert.Equal(new QueryCountResult(3, 1, IncludesSql: true), _reader.CountSearchReferencesTotal("\"sales.fn_Target\"", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
+
+        var quotedCallers = _reader.GetCallers("\"sales.fn_Target\"", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]);
+        var quotedCaller = Assert.Single(quotedCallers);
+        Assert.Equal("quoted.caller", quotedCaller.CallerName);
+        Assert.Equal(3, quotedCaller.ReferenceCount);
+        Assert.Equal(1, _reader.CountCallers("\"sales.fn_Target\"", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: true), _reader.CountCallersTotal("\"sales.fn_Target\"", lang: "sql", exact: true, pathPatterns: ["sql_dotted_identifier_graph"]));
+
+        var quotedImpact = _reader.AnalyzeImpact("\"sales.fn_Target\"", maxDepth: 1, limit: 10, lang: "sql", pathPatterns: ["sql_dotted_identifier_graph"]);
+        Assert.Equal("\"sales.fn_Target\"", Assert.Single(quotedImpact.Definitions).Name);
+        Assert.Equal("quoted.caller", Assert.Single(quotedImpact.Callers).CallerName);
     }
 
     [Fact]
@@ -4357,6 +4417,56 @@ public class DbReaderTests : IDisposable
 
         Assert.Contains(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/RealFooAttribute.cs");
         Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/ImpostorFooAttribute.cs");
+    }
+
+    [Fact]
+    public void GetFileDependencies_CSharpMetadataTargetResolverKeepsQualifiedAttributeEdgeWithSameNameNonAttributeSibling()
+    {
+        // issue #443: a fully-qualified metadata reference like `[A.Foo]` must still
+        // resolve to the real `A.FooAttribute` even when a sibling namespace contains
+        // a same-named non-Attribute impostor. The ambiguity guard must not let the
+        // impostor suppress the legitimate deps edge.
+        // issue #443: `[A.Foo]` のような fully-qualified metadata 参照は、別 namespace に
+        // 同名の non-Attribute impostor があっても本物の `A.FooAttribute` に解決される必要がある。
+        // impostor を理由に legitimate な deps edge を消してはならない。
+        InsertIndexedFile("src/A/FooAttribute.cs", "csharp",
+            """
+            namespace A;
+
+            public sealed class FooAttribute : System.Attribute
+            {
+            }
+            """);
+        InsertIndexedFile("src/B/FooAttribute.cs", "csharp",
+            """
+            namespace B;
+
+            public class BaseService
+            {
+            }
+
+            public sealed class FooAttribute : BaseService
+            {
+            }
+            """);
+        InsertIndexedFile("src/Svc.cs", "csharp",
+            """
+            namespace A;
+
+            [A.Foo]
+            public class Svc
+            {
+            }
+            """);
+
+        _writer.ResolveCSharpMetadataTargets();
+        _writer.MarkMetadataTargetReady("csharp");
+        var resolverReader = new DbReader(_db.Connection);
+
+        var dependencies = resolverReader.GetFileDependencies(limit: 10, lang: "csharp");
+
+        Assert.Contains(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/A/FooAttribute.cs");
+        Assert.DoesNotContain(dependencies, d => d.SourcePath == "src/Svc.cs" && d.TargetPath == "src/B/FooAttribute.cs");
     }
 
     [Fact]
@@ -6574,6 +6684,44 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void SearchReferences_ExactCSharpUsingStaticTypeAliasPattern_KeepsVisibleRows()
+    {
+        InsertIndexedFile("src/Defs.cs", "csharp",
+            """
+            namespace Probe
+            {
+                public enum Color
+                {
+                    Red
+                }
+
+                namespace Real
+                {
+                    public class Red {}
+                }
+            }
+            """);
+        InsertIndexedFile("src/Use.cs", "csharp",
+            """
+            using static Probe.Color;
+            using Red = Probe.Real.Red;
+
+            namespace Probe;
+
+            class Demo
+            {
+                bool Match(object value) => value is Red;
+            }
+            """);
+
+        var result = Assert.Single(_reader.SearchReferences("Red", limit: 20, lang: "csharp", referenceKind: "type_reference", exact: true, pathPatterns: ["src/Use.cs"]));
+        Assert.Equal("Red", result.SymbolName);
+        Assert.Equal("type_reference", result.ReferenceKind);
+        Assert.Equal("Match", result.ContainerName);
+        Assert.Contains("value is Red", result.Context, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void SearchReferences_ExactSameLineResults_AreOrderedByColumn()
     {
         var fileId = _writer.UpsertFile(new FileRecord
@@ -7753,6 +7901,113 @@ public class DbReaderTests : IDisposable
         for (int i = 1; i < outline.Symbols.Count; i++)
             Assert.True(outline.Symbols[i].Line >= outline.Symbols[i - 1].Line,
                 $"Symbol at index {i} (line {outline.Symbols[i].Line}) should be >= previous (line {outline.Symbols[i - 1].Line})");
+    }
+
+    [Fact]
+    public void GetOutline_ComputesContainerDepthFromSymbolChain()
+    {
+        InsertIndexedFile(
+            "src/deep.cs",
+            "csharp",
+            """
+            namespace OuterNs
+            {
+                namespace InnerNs
+                {
+                    public class OuterClass
+                    {
+                        public class NestedClass
+                        {
+                            public class DeeplyNested
+                            {
+                                public void Method() { }
+                            }
+                        }
+                    }
+                }
+            }
+            """);
+
+        var outline = _reader.GetOutline("src/deep.cs");
+
+        Assert.NotNull(outline);
+        Assert.Equal(6, outline!.Symbols.Count);
+        Assert.Collection(outline.Symbols,
+            symbol =>
+            {
+                Assert.Equal("OuterNs", symbol.Name);
+                Assert.Equal(0, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("InnerNs", symbol.Name);
+                Assert.Equal(1, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("OuterClass", symbol.Name);
+                Assert.Equal(2, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("NestedClass", symbol.Name);
+                Assert.Equal(3, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("DeeplyNested", symbol.Name);
+                Assert.Equal(4, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("Method", symbol.Name);
+                Assert.Equal(5, symbol.Depth);
+            });
+    }
+
+    [Fact]
+    public void GetOutline_ComputesDepthForFileScopedNamespace()
+    {
+        InsertIndexedFile(
+            "src/file_scoped.cs",
+            "csharp",
+            """
+            namespace FileScoped;
+
+            public class OuterClass
+            {
+                public class NestedClass
+                {
+                    public void Method() { }
+                }
+            }
+            """);
+
+        var outline = _reader.GetOutline("src/file_scoped.cs");
+
+        Assert.NotNull(outline);
+        Assert.Equal(4, outline!.Symbols.Count);
+        Assert.Collection(outline.Symbols,
+            symbol =>
+            {
+                Assert.Equal("FileScoped", symbol.Name);
+                Assert.Equal(0, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("OuterClass", symbol.Name);
+                Assert.Equal(1, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("NestedClass", symbol.Name);
+                Assert.Equal(2, symbol.Depth);
+            },
+            symbol =>
+            {
+                Assert.Equal("Method", symbol.Name);
+                Assert.Equal(3, symbol.Depth);
+            });
     }
 
     [Fact]
@@ -9400,6 +9655,345 @@ public class DbReaderTests : IDisposable
         Assert.DoesNotContain(unused, symbol => symbol.Name == "Red");
         Assert.DoesNotContain(unused, symbol => symbol.Name == "Blue");
         Assert.Equal(2, count.Count);
+        Assert.Equal(1, count.FileCount);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_CSharpEnumMemberNameCollisionsStayConservative()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/unused_enum_collision_fixture.cs",
+            Lang = "csharp",
+            Size = 240,
+            Lines = 18,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "Color",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 4,
+                Signature = "public enum Color",
+                Visibility = "public",
+                ContainerKind = "namespace",
+                ContainerName = "Demo",
+                ContainerQualifiedName = "Demo.Color",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "None",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "None,",
+                ContainerKind = "enum",
+                ContainerName = "Color",
+                ContainerQualifiedName = "Demo.Color",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "Red",
+                Line = 4,
+                StartLine = 4,
+                EndLine = 4,
+                Signature = "Red",
+                ContainerKind = "enum",
+                ContainerName = "Color",
+                ContainerQualifiedName = "Demo.Color",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "Status",
+                Line = 6,
+                StartLine = 6,
+                EndLine = 9,
+                Signature = "public enum Status",
+                Visibility = "public",
+                ContainerKind = "namespace",
+                ContainerName = "Demo",
+                ContainerQualifiedName = "Demo.Status",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "None",
+                Line = 8,
+                StartLine = 8,
+                EndLine = 8,
+                Signature = "None,",
+                ContainerKind = "enum",
+                ContainerName = "Status",
+                ContainerQualifiedName = "Demo.Status",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "Started",
+                Line = 9,
+                StartLine = 9,
+                EndLine = 9,
+                Signature = "Started",
+                ContainerKind = "enum",
+                ContainerName = "Status",
+                ContainerQualifiedName = "Demo.Status",
+            },
+        ]);
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "enum", lang: "csharp",
+            pathPatterns: ["unused_enum_collision_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+        var count = _reader.CountUnusedSymbols(kind: "enum", lang: "csharp",
+            pathPatterns: ["unused_enum_collision_fixture.cs"], excludePathPatterns: null, excludeTests: false);
+
+        Assert.DoesNotContain(unused, symbol => symbol.Name == "None");
+        Assert.Contains(unused, symbol => symbol.Name == "Red");
+        Assert.Contains(unused, symbol => symbol.Name == "Status");
+        Assert.Contains(unused, symbol => symbol.Name == "Started");
+        Assert.Equal(4, count.Count);
+        Assert.Equal(1, count.FileCount);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_CSharpEnumMemberCollisionsRespectPathScope()
+    {
+        var srcFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/active.cs",
+            Lang = "csharp",
+            Size = 140,
+            Lines = 8,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var testFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "tests/peer.cs",
+            Lang = "csharp",
+            Size = 140,
+            Lines = 8,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = srcFileId,
+                Kind = "enum",
+                Name = "Color",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 4,
+                Signature = "public enum Color",
+                Visibility = "public",
+                ContainerKind = "namespace",
+                ContainerName = "Demo",
+                ContainerQualifiedName = "Demo.Color",
+            },
+            new SymbolRecord
+            {
+                FileId = srcFileId,
+                Kind = "enum",
+                Name = "None",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "None,",
+                ContainerKind = "enum",
+                ContainerName = "Color",
+                ContainerQualifiedName = "Demo.Color",
+            },
+            new SymbolRecord
+            {
+                FileId = srcFileId,
+                Kind = "enum",
+                Name = "Red",
+                Line = 4,
+                StartLine = 4,
+                EndLine = 4,
+                Signature = "Red",
+                ContainerKind = "enum",
+                ContainerName = "Color",
+                ContainerQualifiedName = "Demo.Color",
+            },
+            new SymbolRecord
+            {
+                FileId = testFileId,
+                Kind = "enum",
+                Name = "Status",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 4,
+                Signature = "public enum Status",
+                Visibility = "public",
+                ContainerKind = "namespace",
+                ContainerName = "Demo",
+                ContainerQualifiedName = "Demo.Status",
+            },
+            new SymbolRecord
+            {
+                FileId = testFileId,
+                Kind = "enum",
+                Name = "None",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "None,",
+                ContainerKind = "enum",
+                ContainerName = "Status",
+                ContainerQualifiedName = "Demo.Status",
+            },
+            new SymbolRecord
+            {
+                FileId = testFileId,
+                Kind = "enum",
+                Name = "Stopped",
+                Line = 4,
+                StartLine = 4,
+                EndLine = 4,
+                Signature = "Stopped",
+                ContainerKind = "enum",
+                ContainerName = "Status",
+                ContainerQualifiedName = "Demo.Status",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "enum", lang: "csharp",
+            pathPatterns: ["src/"], excludePathPatterns: null, excludeTests: false);
+        var count = _reader.CountUnusedSymbols(kind: "enum", lang: "csharp",
+            pathPatterns: ["src/"], excludePathPatterns: null, excludeTests: false);
+
+        Assert.Contains(unused, symbol => symbol.Name == "None");
+        Assert.Contains(unused, symbol => symbol.Name == "Red");
+        Assert.Contains(unused, symbol => symbol.Name == "Color");
+        Assert.DoesNotContain(unused, symbol => symbol.Path.StartsWith("tests/", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(3, count.Count);
+        Assert.Equal(1, count.FileCount);
+    }
+
+    [Fact]
+    public void GetUnusedSymbols_CSharpEnumMemberCollisionsRespectExcludeTestsScope()
+    {
+        var srcFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/active.cs",
+            Lang = "csharp",
+            Size = 140,
+            Lines = 8,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var testFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "tests/peer.cs",
+            Lang = "csharp",
+            Size = 140,
+            Lines = 8,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = srcFileId,
+                Kind = "enum",
+                Name = "Color",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 4,
+                Signature = "public enum Color",
+                Visibility = "public",
+                ContainerKind = "namespace",
+                ContainerName = "Demo",
+                ContainerQualifiedName = "Demo.Color",
+            },
+            new SymbolRecord
+            {
+                FileId = srcFileId,
+                Kind = "enum",
+                Name = "None",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "None,",
+                ContainerKind = "enum",
+                ContainerName = "Color",
+                ContainerQualifiedName = "Demo.Color",
+            },
+            new SymbolRecord
+            {
+                FileId = srcFileId,
+                Kind = "enum",
+                Name = "Red",
+                Line = 4,
+                StartLine = 4,
+                EndLine = 4,
+                Signature = "Red",
+                ContainerKind = "enum",
+                ContainerName = "Color",
+                ContainerQualifiedName = "Demo.Color",
+            },
+            new SymbolRecord
+            {
+                FileId = testFileId,
+                Kind = "enum",
+                Name = "Status",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 4,
+                Signature = "public enum Status",
+                Visibility = "public",
+                ContainerKind = "namespace",
+                ContainerName = "Demo",
+                ContainerQualifiedName = "Demo.Status",
+            },
+            new SymbolRecord
+            {
+                FileId = testFileId,
+                Kind = "enum",
+                Name = "None",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+                Signature = "None,",
+                ContainerKind = "enum",
+                ContainerName = "Status",
+                ContainerQualifiedName = "Demo.Status",
+            },
+            new SymbolRecord
+            {
+                FileId = testFileId,
+                Kind = "enum",
+                Name = "Stopped",
+                Line = 4,
+                StartLine = 4,
+                EndLine = 4,
+                Signature = "Stopped",
+                ContainerKind = "enum",
+                ContainerName = "Status",
+                ContainerQualifiedName = "Demo.Status",
+            },
+        ]);
+
+        var unused = _reader.GetUnusedSymbols(limit: 10, kind: "enum", lang: "csharp",
+            pathPatterns: null, excludePathPatterns: null, excludeTests: true);
+        var count = _reader.CountUnusedSymbols(kind: "enum", lang: "csharp",
+            pathPatterns: null, excludePathPatterns: null, excludeTests: true);
+
+        Assert.Contains(unused, symbol => symbol.Name == "None");
+        Assert.Contains(unused, symbol => symbol.Name == "Red");
+        Assert.Contains(unused, symbol => symbol.Name == "Color");
+        Assert.DoesNotContain(unused, symbol => symbol.Path.StartsWith("tests/", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(3, count.Count);
         Assert.Equal(1, count.FileCount);
     }
 

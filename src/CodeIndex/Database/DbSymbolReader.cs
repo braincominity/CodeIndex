@@ -955,6 +955,8 @@ public partial class DbReader
             }
         }
 
+        PopulateOutlineDepths(symbols);
+
         return new OutlineResult
         {
             Path = filePath,
@@ -963,6 +965,68 @@ public partial class DbReader
             SymbolCount = symbols.Count,
             Symbols = symbols,
         };
+    }
+
+    private static void PopulateOutlineDepths(List<OutlineSymbol> symbols)
+    {
+        var depthCache = new Dictionary<int, int>();
+        var activeStack = new HashSet<int>();
+        for (var i = 0; i < symbols.Count; i++)
+            symbols[i].Depth = GetOutlineDepth(symbols, i, depthCache, activeStack);
+    }
+
+    private static int GetOutlineDepth(List<OutlineSymbol> symbols, int index, Dictionary<int, int> depthCache, HashSet<int> activeStack)
+    {
+        if (depthCache.TryGetValue(index, out var cachedDepth))
+            return cachedDepth;
+
+        if (!activeStack.Add(index))
+            return 0;
+
+        var symbol = symbols[index];
+        var depth = 0;
+        if (!string.IsNullOrEmpty(symbol.ContainerName))
+        {
+            var parentIndex = FindOutlineContainerIndex(symbols, index, symbol.ContainerName, symbol.ContainerKind);
+            if (parentIndex >= 0)
+                depth = GetOutlineDepth(symbols, parentIndex, depthCache, activeStack) + 1;
+        }
+
+        activeStack.Remove(index);
+        depthCache[index] = depth;
+        return depth;
+    }
+
+    private static int FindOutlineContainerIndex(List<OutlineSymbol> symbols, int childIndex, string containerName, string? containerKind)
+    {
+        var child = symbols[childIndex];
+        for (var i = childIndex - 1; i >= 0; i--)
+        {
+            var candidate = symbols[i];
+            if (!string.Equals(candidate.Name, containerName, StringComparison.Ordinal))
+                continue;
+            if (containerKind != null && !string.Equals(candidate.Kind, containerKind, StringComparison.Ordinal))
+                continue;
+            if (candidate.Line > child.Line)
+                continue;
+            if (IsOutlineContainerMatch(candidate, child.Line))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static bool IsOutlineContainerMatch(OutlineSymbol candidate, int childLine)
+    {
+        if (candidate.StartLine <= childLine && candidate.EndLine >= childLine)
+            return true;
+
+        // file-scoped namespaces have no body range, so they do not enclose children by lines
+        // even though they are the correct logical container.
+        return candidate.Kind == "namespace"
+            && candidate.BodyStartLine == null
+            && candidate.BodyEndLine == null
+            && candidate.Line <= childLine;
     }
 
     /// <summary>
@@ -1617,6 +1681,40 @@ public partial class DbReader
     /// 参照テーブルに一致する参照がないシンボルを検索する（潜在的なデッドコード）。
     /// グラフ対応言語でのみ意味がある — 未対応言語はデフォルトで除外。
     /// </summary>
+    private string BuildAmbiguousCSharpEnumMemberExclusionSql(
+        string symbolAlias,
+        string fileAlias,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests)
+    {
+        var symbolContainerKindSql = GetSymbolColumnSql("container_kind", "''", symbolAlias);
+        var symbolContainerNameSql = GetSymbolColumnSql("container_name", "''", symbolAlias);
+        var symbolContainerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name", symbolContainerNameSql, symbolAlias);
+        var peerContainerKindSql = GetSymbolColumnSql("container_kind", "''", "s_peer");
+        var peerContainerNameSql = GetSymbolColumnSql("container_name", "''", "s_peer");
+        var peerContainerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name", peerContainerNameSql, "s_peer");
+        var peerPathFiltersSql = BuildPathFiltersSql("f_peer", pathPatterns, excludePathPatterns, excludeTests);
+
+        return $@"
+                NOT (
+                    {fileAlias}.lang = 'csharp'
+                    AND {symbolAlias}.kind = 'enum'
+                    AND {symbolContainerKindSql} = 'enum'
+                    AND EXISTS (
+                        SELECT 1
+                        FROM symbols s_peer
+                        JOIN files f_peer ON f_peer.id = s_peer.file_id
+                        WHERE f_peer.lang = 'csharp'
+                          {peerPathFiltersSql}
+                          AND s_peer.kind = 'enum'
+                          AND {peerContainerKindSql} = 'enum'
+                          AND s_peer.name = {symbolAlias}.name
+                          AND {peerContainerQualifiedNameSql} <> {symbolContainerQualifiedNameSql}
+                    )
+                )";
+    }
+
     public List<UnusedSymbolResult> GetUnusedSymbols(int limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
         // Without symbol_references (legacy read-only DB), every symbol would appear unused,
@@ -1729,18 +1827,19 @@ public partial class DbReader
                                 (sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_segment_count(s.name)
                                  AND sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_normalize_name(s.name) COLLATE NOCASE)
                          OR (sql_segment_count(sr.symbol_name) = 1
-                             AND sql_allow_leaf_fallback_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = 1
-                             AND sr.symbol_name = sql_leaf_name(s.name) COLLATE NOCASE
-                             AND NOT EXISTS (
+                            AND sql_allow_leaf_fallback_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = 1
+                            AND sr.symbol_name = sql_leaf_name(s.name) COLLATE NOCASE
+                            AND NOT EXISTS (
                                     SELECT 1
                                     FROM symbols s_exact
                                     JOIN files f_exact ON f_exact.id = s_exact.file_id
                                     WHERE f_exact.lang = 'sql'
                                       AND sql_segment_count(s_exact.name) = sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number)
-                                      AND sql_normalize_name(s_exact.name) = sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) COLLATE NOCASE
+                                     AND sql_normalize_name(s_exact.name) = sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) COLLATE NOCASE
                                 ))
                          ))
                   )";
+        sql += $"\n              AND {BuildAmbiguousCSharpEnumMemberExclusionSql("s", "f", pathPatterns, excludePathPatterns, excludeTests)}";
 
         if (lang != null)
             sql += " AND f.lang = @lang";
@@ -1871,9 +1970,9 @@ public partial class DbReader
                             (sql_resolve_reference_segment_count_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_segment_count(s.name)
                              AND sql_resolve_reference_name_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = sql_normalize_name(s.name) COLLATE NOCASE)
                          OR (sql_segment_count(sr.symbol_name) = 1
-                             AND sql_allow_leaf_fallback_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = 1
-                             AND sr.symbol_name = sql_leaf_name(s.name) COLLATE NOCASE
-                             AND NOT EXISTS (
+                            AND sql_allow_leaf_fallback_at(sr.symbol_name, sr.context, sr.container_name, sr.column_number) = 1
+                            AND sr.symbol_name = sql_leaf_name(s.name) COLLATE NOCASE
+                            AND NOT EXISTS (
                                     SELECT 1
                                     FROM symbols s_exact
                                     JOIN files f_exact ON f_exact.id = s_exact.file_id
@@ -1883,6 +1982,7 @@ public partial class DbReader
                                 ))
                      ))
               )";
+        sql += $"\n              AND {BuildAmbiguousCSharpEnumMemberExclusionSql("s", "f", pathPatterns, excludePathPatterns, excludeTests)}";
 
         if (lang != null)
             sql += " AND f.lang = @lang";

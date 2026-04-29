@@ -132,6 +132,21 @@ public class ProgramCliTests
         Assert.Contains("Usage: cdidx --completions <shell>", stderr);
     }
 
+    [Theory]
+    [InlineData("license")]
+    [InlineData("--license")]
+    public void License_PrintsLicenseSummary(string arg)
+    {
+        var (exitCode, stdout, stderr) = RunCliInSubprocess([arg]);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("PolyForm Perimeter License 1.0.0", stdout);
+        Assert.Contains("competes with CodeIndex", stdout);
+        Assert.Contains("competing commercial product or service", stdout);
+        Assert.Contains("separate written agreement", stdout);
+    }
+
     private static (int ExitCode, string StdOut, string StdErr) RunCliInSubprocess(string[] args)
     {
         var psi = new System.Diagnostics.ProcessStartInfo

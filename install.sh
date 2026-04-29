@@ -785,7 +785,17 @@ download_and_install() {
         *)     error "Internal error: unknown OS_NAME '$OS_NAME' for asset selection." ;;
     esac
 
+    # License and trademark notices are shipped when present, but older mirrors
+    # may still lack them. Treat them as best-effort extras so we can keep
+    # supporting older release archives while ensuring new releases install the
+    # legal files that the release workflow now verifies.
+    # LICENSE / 商用ライセンス / 商標の案内は存在すれば一緒に配置するが、
+    # 古い mirror にはまだ無い可能性があるため必須にはしない。古い
+    # release archive を壊さず、新しい release では workflow が検証する
+    # 法務ファイルを確実にインストールできるようにする。
     local required_files="${BINARY_NAME} ${required_assets}"
+    local optional_assets="LICENSE COMMERCIAL_LICENSE.md TRADEMARKS.md"
+    local staged_assets="$required_assets"
     local asset
     for asset in $required_files; do
         if [ ! -f "${extract_dir}/${asset}" ]; then
@@ -808,6 +818,12 @@ download_and_install() {
     for asset in $required_files; do
         cp "${extract_dir}/${asset}" "${stage_dir}/${asset}"
     done
+    for asset in $optional_assets; do
+        if [ -f "${extract_dir}/${asset}" ]; then
+            cp "${extract_dir}/${asset}" "${stage_dir}/${asset}"
+            staged_assets="${staged_assets} ${asset}"
+        fi
+    done
     chmod +x "${stage_dir}/${BINARY_NAME}"
 
     local backup_dir
@@ -816,7 +832,7 @@ download_and_install() {
     fi
     BACKUP_DIR_CLEANUP="$backup_dir"
 
-    if ! promote_staged_install "$stage_dir" "$backup_dir" "$INSTALL_DIR" "$required_files" "$required_assets"; then
+    if ! promote_staged_install "$stage_dir" "$backup_dir" "$INSTALL_DIR" "$required_files" "$staged_assets"; then
         return 1
     fi
 

@@ -420,6 +420,30 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpInterpolatedString_KeepsSingleLineInterpolationCallReferences()
+    {
+        const string content = """
+            public class FixtureHost
+            {
+                public int Run() => 42;
+
+                public string Render()
+                {
+                    return $"value = {Run()}";
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var runReference = Assert.Single(references);
+        Assert.Equal("Run", runReference.SymbolName);
+        Assert.Equal("call", runReference.ReferenceKind);
+        Assert.Equal("Render", runReference.ContainerName);
+    }
+
+    [Fact]
     public void Extract_CsharpInterpolatedRawString_WithNestedRawString_DoesNotLeakPhantomReferences()
     {
         const string content = """"
@@ -470,6 +494,50 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         Assert.DoesNotContain(references, reference => reference.SymbolName == "Run");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptTemplateLiteral_KeepsSingleLineInterpolationCallReferences()
+    {
+        const string content = """
+            function run() {
+                return 42;
+            }
+
+            function use() {
+                const value = `value = ${run()}`;
+                return value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        var runReference = Assert.Single(references);
+        Assert.Equal("run", runReference.SymbolName);
+        Assert.Equal("call", runReference.ReferenceKind);
+        Assert.Equal("use", runReference.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_PythonFString_KeepsSingleLineInterpolationCallReferences()
+    {
+        const string content = """
+            def run():
+                return 42
+
+            def use():
+                value = f"value = {run()}"
+                return value
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+
+        var runReference = Assert.Single(references);
+        Assert.Equal("run", runReference.SymbolName);
+        Assert.Equal("call", runReference.ReferenceKind);
+        Assert.Equal("use", runReference.ContainerName);
     }
 
     [Fact]
@@ -746,6 +814,63 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
 
         Assert.Contains(references, reference => reference.SymbolName == "require" && reference.ContainerName == "load");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptLineContinuationString_DoesNotLeakPhantomReferences()
+    {
+        const string crlf = "\r\n";
+        var content = string.Concat(
+            "function caller() {", crlf,
+            "  const s = \"line1\\", crlf,
+            "} externalCall() line2\";", crlf,
+            "  runTask();", crlf,
+            "}", crlf,
+            "function runTask() {}");
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "runTask" && reference.ContainerName == "caller");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "externalCall");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptLineContinuationString_DoesNotLeakPhantomReferences()
+    {
+        const string content = """
+            function caller() {
+              const s = 'line1\
+            } externalCall() line2';
+              runTask();
+            }
+            function runTask() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "runTask" && reference.ContainerName == "caller");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "externalCall");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptContinuedSingleQuotedString_DoesNotPolluteForOfHeaderScan()
+    {
+        const string content = "function f() {\n" +
+            "    const s = 'line1\\\n" +
+            "of externalCall';\n" +
+            "    for (\n" +
+            "        const ch of `abc`\n" +
+            "    ) {\n" +
+            "        use(ch);\n" +
+            "    }\n" +
+            "}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
     }
 
     [Fact]
@@ -1061,6 +1186,37 @@ public class ReferenceExtractorTests
         var ready = Assert.Single(references.Where(reference => reference.SymbolName == "Ready"));
         Assert.Equal("call", ready.ReferenceKind);
         Assert.Equal("Read", ready.ContainerName);
+    }
+
+    [Fact]
+    public void Extract_CsharpUsingStaticConstantPattern_WithTypeAliasKeepsTypeReference()
+    {
+        const string content = """
+            using Red = RealTypes.Red;
+            using static Probe.Color;
+
+            namespace Probe;
+
+            enum Color { Red, Blue }
+            class Demo
+            {
+                bool Match(object value) => value is Red;
+                void ProbeType() { _ = typeof(Red); }
+            }
+
+            namespace RealTypes;
+            class Red {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var redRefs = references.Where(reference =>
+            reference.SymbolName == "Red"
+            && reference.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(2, redRefs.Count);
+        Assert.Contains(redRefs, reference => reference.ContainerName == "Match" && reference.Line == 9);
+        Assert.Contains(redRefs, reference => reference.ContainerName == "ProbeType" && reference.Line == 10);
     }
 
     [Fact]
@@ -5567,6 +5723,50 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_FromCommaSeparatedSourcesCapturesAllReferences()
+    {
+        // issue #802: comma-separated `FROM` source lists must keep every top-level source, not
+        // just the first one before the comma.
+        // issue #802: comma-separated な `FROM` source list は、comma の前にある 1 件目だけで
+        // なく top-level な全 source を保持する必要がある。
+        const string content = """
+            SELECT * FROM users, accounts;
+            SELECT * FROM public.logs l, [archive].[events] e;
+            SELECT * FROM users WITH (NOLOCK), accounts;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "users" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "accounts" && r.ReferenceKind == "reference"));
+        Assert.Equal(1, references.Count(r => r.SymbolName == "logs" && r.ReferenceKind == "reference"));
+        Assert.Equal(1, references.Count(r => r.SymbolName == "events" && r.ReferenceKind == "reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "NOLOCK");
+        Assert.DoesNotContain(references, r => r.SymbolName == "public.logs");
+        Assert.DoesNotContain(references, r => r.SymbolName == "archive].[events");
+    }
+
+    [Fact]
+    public void Extract_SQL_FromDerivedTableSourcesCapturesLaterReferences()
+    {
+        // issue #942: a derived-table source must not stop the top-level comma walk before later items.
+        // issue #942: derived table の後続にある top-level comma-separated source を落とさない。
+        const string content = """
+            SELECT * FROM (SELECT 1) x, accounts;
+            SELECT * FROM (SELECT 1) x(c1), accounts;
+            SELECT * FROM (SELECT func(subfunc(a)) FROM t) AS y, accounts;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(3, references.Count(r => r.SymbolName == "accounts" && r.ReferenceKind == "reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "x" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "y" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_SQL_DeleteUsingTempSourcesAfterComma_AreNotTreatedAsComments()
     {
         // issue #789: `#temp` after a comma in `DELETE ... USING #a, #b` must stay on the temp-table
@@ -5586,6 +5786,72 @@ public class ReferenceExtractorTests
         Assert.Equal(1, references.Count(r => r.SymbolName == "#staging_a" && r.ReferenceKind == "reference"));
         Assert.Equal(1, references.Count(r => r.SymbolName == "#staging_b" && r.ReferenceKind == "reference"));
         Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_DeleteUsingTempSourcesWithAliasesAfterComma_AreNotTreatedAsComments()
+    {
+        // issue #792: `DELETE ... USING #a AS alias, #b AS alias` must keep later temp sources on the
+        // temp-table path instead of treating the comma tail as a MySQL `# comment`.
+        // issue #792: `DELETE ... USING #a AS alias, #b AS alias` は、comma 後続を MySQL `# comment`
+        // と誤認せず、後続の temp source を temp-table 経路に残す必要がある。
+        const string content = """
+            CREATE TABLE #staging_a (id int);
+            CREATE TABLE #staging_b (id int);
+            DELETE FROM audit_log USING #staging_a AS a, #staging_b AS b
+            WHERE audit_log.id = a.id;
+            DELETE FROM audit_log USING #staging_a a, #staging_b b
+            WHERE audit_log.id = a.id;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#staging_a" && r.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#staging_b" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_DeleteUsingQuotedIdentifierWithCommaAfterComma_AreNotTreatedAsComments()
+    {
+        // issue #792: `DELETE ... USING [schema,table], #b` must keep later temp sources on the
+        // temp-table path even when the previous list item contains a comma inside a quoted identifier.
+        // issue #792: `DELETE ... USING [schema,table], #b` は、直前の list item の quoted identifier 内に
+        // comma があっても、後続の temp source を temp-table 経路に残す必要がある。
+        const string content = """
+            CREATE TABLE #staging_b (id int);
+            DELETE FROM audit_log USING [schema,table], #staging_b AS b
+            WHERE audit_log.id = b.id;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "#staging_b" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
+    public void Extract_SQL_DeleteUsingMixedTableAndTempSourcesAfterComma_AreNotTreatedAsComments()
+    {
+        // issue #792: `DELETE ... USING reusing_data, #temp` must keep the temp source after the
+        // comma even when the previous list item is a regular table source that contains `using`
+        // as a substring.
+        // issue #792: `DELETE ... USING reusing_data, #temp` は、直前の list item が通常テーブルでも
+        // `using` を部分文字列に含む場合があっても、
+        // comma 後続の temp source を保持する必要がある。
+        const string content = """
+            CREATE TABLE #staging_b (id int);
+            DELETE FROM audit_log USING reusing_data, #staging_b AS b
+            WHERE audit_log.id = b.id;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "reusing_data" && r.ReferenceKind == "reference");
+        Assert.Equal(1, references.Count(r => r.SymbolName == "#staging_b" && r.ReferenceKind == "reference"));
     }
 
     [Fact]
@@ -6257,13 +6523,21 @@ public class ReferenceExtractorTests
     [Fact]
     public void Extract_SQL_HashCommentsDoNotLeakAsTempObjects()
     {
-        // issue #653: after restoring temp-table support, MySQL-style `# comment` tails that begin
-        // with identifier-looking text must not be mistaken for temp tables or procedures.
-        // issue #653: temp-table 対応を戻した後でも、識別子風テキストで始まる MySQL 形式の
-        // `# comment` は temp table / procedure と誤認しない。
+        // issue #653 / #656: after restoring temp-table support, MySQL-style `# comment` tails must
+        // never be mistaken for T-SQL temp tables or stored procedures. Bare `EXEC #foo;` /
+        // `EXECUTE #foo;` / `CALL #foo;` without any same-file T-SQL establishment of `#foo` should
+        // stay comments — only same-file evidence (prior `CREATE TABLE #x`, `SELECT ... INTO #x`, a
+        // mutation target of `#x`, or `CREATE PROCEDURE|FUNCTION #x`) promotes the call back to a
+        // graph edge.
+        // issue #653 / #656: temp-table 対応を戻した後も、MySQL の `# comment` 末尾を T-SQL の
+        // temp table / stored procedure と誤認しない。確立のない bare な `EXEC #foo;` /
+        // `EXECUTE #foo;` / `CALL #foo;` はコメント扱いのままとし、同一ファイル内で
+        // `CREATE TABLE #x` / `SELECT ... INTO #x` / `#x` を変更対象とする更新 /
+        // `CREATE PROCEDURE|FUNCTION #x` のいずれかで確立された `#name` だけを edge に昇格させる。
         const string content = """
             CALL #commented_out;
             EXEC #tempProc;
+            EXECUTE #tempExecute;
             SELECT * FROM #commented_source;
             INSERT INTO #audit_log (action) VALUES ('login');
             SELECT * FROM #audit_log;
@@ -6274,11 +6548,88 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
 
         Assert.DoesNotContain(references, r => r.SymbolName == "#commented_out");
-        Assert.Contains(references, r => r.SymbolName == "#tempProc" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "#tempProc");
+        Assert.DoesNotContain(references, r => r.SymbolName == "#tempExecute");
         Assert.DoesNotContain(references, r => r.SymbolName == "#commented_source");
         Assert.Equal(2, references.Count(r => r.SymbolName == "#audit_log" && r.ReferenceKind == "reference"));
         Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
         Assert.DoesNotContain(references, r => r.SymbolName == "#trailing_comment");
+    }
+
+    [Fact]
+    public void Extract_SQL_EstablishedTempRoutineCallsStillEmitEdges()
+    {
+        // issue #656: the bare `EXEC #sp` / `CALL #sp` / `EXECUTE #sp` comment guard must still let a
+        // T-SQL temp stored procedure defined in the same file produce call edges. Establishment is
+        // recognized from `CREATE PROCEDURE`, `CREATE PROC`, `CREATE OR ALTER PROCEDURE`, and
+        // `CREATE FUNCTION` (all with optional `TEMP|TEMPORARY` / `IF NOT EXISTS`).
+        // issue #656: bare `EXEC #sp` / `CALL #sp` / `EXECUTE #sp` のコメントガードを入れても、同一
+        // ファイル内で定義した T-SQL temp stored procedure の call edge は引き続き出す。
+        // `CREATE PROCEDURE` / `CREATE PROC` / `CREATE OR ALTER PROCEDURE` / `CREATE FUNCTION`
+        // （`TEMP|TEMPORARY` / `IF NOT EXISTS` の有無は問わない）を establishment として認識する。
+        const string content = """
+            CREATE PROCEDURE #localSp AS SELECT 1;
+            EXEC #localSp;
+            CREATE PROC ##globalSp AS SELECT 1;
+            EXECUTE ##globalSp;
+            CREATE OR ALTER PROCEDURE #altSp AS SELECT 1;
+            CALL #altSp;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "#localSp" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "##globalSp" && r.ReferenceKind == "call" && r.Line == 4);
+        Assert.Contains(references, r => r.SymbolName == "#altSp" && r.ReferenceKind == "call" && r.Line == 6);
+    }
+
+    [Fact]
+    public void Extract_SQL_SemicolonlessTempRoutineEstablishmentStillEmitsCallEdges()
+    {
+        // issue #656 follow-up (codex review #1): a `CREATE PROCEDURE|FUNCTION #x` line that ends
+        // without `;` (the typical T-SQL `GO`-batch shape, where the routine body uses BEGIN/END)
+        // must still establish `#x` before the next-line `EXEC` / `CALL` is processed. Without the
+        // matching `CanSqlStatementEstablishTempObject()` flush, the call edge would silently be
+        // dropped by the new proc-call `#`-gate even though the routine is defined right above.
+        // issue #656 フォローアップ（codex review #1）: `;` で閉じない `CREATE PROCEDURE|FUNCTION #x`
+        // 行（routine 本体に BEGIN/END を使う典型的な T-SQL `GO` バッチ形）でも、次行の `EXEC` /
+        // `CALL` を処理する前に `#x` を確立しなければならない。これに対応する
+        // `CanSqlStatementEstablishTempObject()` の flush を追加しないと、新しい proc 呼び出し
+        // `#` ゲートが上行で定義された routine の call edge を黙って落としてしまう。
+        const string content = """
+            CREATE PROCEDURE #localSp AS SELECT 1
+            EXEC #localSp;
+            CREATE FUNCTION #localFn() RETURNS INT AS BEGIN RETURN 1 END
+            CALL #localFn;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "#localSp" && r.ReferenceKind == "call" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "#localFn" && r.ReferenceKind == "call" && r.Line == 4);
+    }
+
+    [Fact]
+    public void Extract_SQL_QuotedTempProcCallsBypassHashCommentGate()
+    {
+        // issue #656: quoted forms are unambiguously identifiers (MySQL uses `#` for comments but
+        // not inside `[...]` / `` `...` ``), so `EXEC [#tempProc]` / `` EXEC `#tempProc` `` must
+        // keep emitting call edges without any prior in-file establishment.
+        // issue #656: 引用形は識別子として明確なので（MySQL は `#` をコメントに使うが
+        // `[...]` / `` `...` `` の内側には影響しない）、`EXEC [#tempProc]` /
+        // `` EXEC `#tempProc` `` は同一ファイル内の establish 無しでも call edge を出し続ける。
+        const string content = """
+            EXEC [#tempProc];
+            EXEC `#backtickProc`;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "#tempProc" && r.ReferenceKind == "call" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "#backtickProc" && r.ReferenceKind == "call" && r.Line == 2);
     }
 
     [Fact]
@@ -8547,6 +8898,99 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpSwitchExpressionLaterGenericArmAfterWhenGuard_StillEmitsTypeHead()
+    {
+        // issue #851: a `when` clause on an earlier arm must not hide a later generic arm head.
+        // issue #851: 先行 arm の `when` 句で後続の generic arm head を隠してはならない。
+        const string content = """
+            namespace Probe;
+
+            class Point {}
+            class Shape {}
+            class Wrapper<TLeft, TRight> {}
+
+            class Demo
+            {
+                int Match(object value) => value switch
+                {
+                    Point p when p.GetHashCode() > 0 => 1,
+                    Wrapper<Point, Shape> => 2,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Wrapper" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Equal(2, references.Count(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match"));
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+    }
+
+    [Theory]
+    [InlineData("Point { X: < 0 } => 1,")]
+    [InlineData("Point { X: > 0 } => 1,")]
+    public void Extract_CsharpSwitchExpressionLaterArmAfterRelationalPattern_StillEmitsTypeHead(string previousArm)
+    {
+        // issue #852: relational pattern operators in an earlier arm must not poison later comma detection.
+        // issue #852: 先行 arm の relational pattern 演算子で後続 arm 区切りを見失ってはならない。
+        var content = $$"""
+            namespace Probe;
+
+            class Point { public int X { get; init; } }
+            class Shape {}
+
+            class Demo
+            {
+                int Match(object value) => value switch
+                {
+                    {{previousArm}}
+                    Shape => 2,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+    }
+
+    [Fact]
+    public void Extract_CsharpSwitchExpressionLaterGenericArmAfterRelationalPattern_StillEmitsTypeHead()
+    {
+        // issue #852: relational `<` in a previous recursive pattern must not hide a later generic arm.
+        // issue #852: 先行 recursive pattern の relational `<` で後続 generic arm を隠してはならない。
+        const string content = """
+            namespace Probe;
+
+            class Point { public int X { get; init; } }
+            class Shape {}
+            class Wrapper<TLeft, TRight> {}
+
+            class Demo
+            {
+                int Match(object value) => value switch
+                {
+                    Point { X: < 0 } => 1,
+                    Wrapper<Point, Shape> => 2,
+                    _ => 0,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Wrapper" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+        Assert.Equal(2, references.Count(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match"));
+        Assert.Contains(references, r => r.SymbolName == "Shape" && r.ReferenceKind == "type_reference" && r.ContainerName == "Match");
+    }
+
+    [Fact]
     public void Extract_CsharpVerbatimPatternTypeNames_DoNotCollapseIntoBarePatternTokens()
     {
         // issue #677: `@not` / `@default` are legal type names, so the non-type pattern
@@ -9020,6 +9464,35 @@ public class ReferenceExtractorTests
                 {
                     bool Match(object value) => value is Red;
                 }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+        var redRef = Assert.Single(references.Where(r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference"));
+
+        Assert.Equal("Match", redRef.ContainerName);
+        Assert.Contains("value is Red", redRef.Context, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Extract_CsharpUsingStaticNestedSameNameTypePattern_KeepsTypeReference()
+    {
+        const string content = """
+            using static Probe.Color;
+
+            namespace Probe;
+
+            enum Color
+            {
+                Red
+            }
+
+            class Outer
+            {
+                class Red {}
+
+                bool Match(object value) => value is Red;
             }
             """;
 
@@ -12289,6 +12762,32 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "sales" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "dbo" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "not_a_proc" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SqlExecDoubleQuotedSingleIdentifierContainingDot_IsCaptured()
+    {
+        // issue #722: `"sales.fn_Target"` is one quoted identifier whose dot is part of the
+        // identifier, not a schema separator. EXEC / EXECUTE must preserve and normalize it
+        // as one call target while ordinary single-quoted SQL strings remain masked.
+        // issue #722: `"sales.fn_Target"` は dot を含む 1 つの quoted identifier であり、
+        // schema 区切りではない。EXEC / EXECUTE は 1 つの呼び出し対象として保持・正規化し、
+        // 通常の単一引用符 SQL 文字列は引き続き無視する。
+        const string content = """
+            EXEC "sales.fn_Target";
+            EXECUTE "sales.fn_Target";
+            EXEC 'sales.fn_Target';
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        var targetRefs = references
+            .Where(r => r.SymbolName == "sales.fn_Target" && r.ReferenceKind == "call")
+            .ToList();
+        Assert.Equal(2, targetRefs.Count);
+        Assert.Contains(targetRefs, r => r.Line == 1 && r.Column == 7);
+        Assert.Contains(targetRefs, r => r.Line == 2 && r.Column == 10);
     }
 
     [Fact]

@@ -826,6 +826,96 @@ public sealed class InstallScriptTests : IDisposable
     }
 
     [Fact]
+    public void DownloadAndInstall_OptionalLicenseAssetsAreInstalledWhenPresent()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var installDir = Path.Combine(_tempRoot, "license_assets_target");
+        var payloadDir = Path.Combine(_tempRoot, "license_assets_payload");
+        var archivePath = Path.Combine(_tempRoot, "license_assets.tar.gz");
+        var checksumsPath = Path.Combine(_tempRoot, "license_assets.sha256sums.txt");
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            $$"""
+            mkdir -p "{{payloadDir}}"
+            cat > "{{Path.Combine(payloadDir, "cdidx")}}" <<'EOF'
+            #!/usr/bin/env bash
+            echo "cdidx v1.2.3"
+            EOF
+            chmod +x "{{Path.Combine(payloadDir, "cdidx")}}"
+            printf '{"version":"1.2.3"}' > "{{Path.Combine(payloadDir, "version.json")}}"
+            printf 'new-lib' > "{{Path.Combine(payloadDir, "libe_sqlite3.so")}}"
+            printf 'license text' > "{{Path.Combine(payloadDir, "LICENSE")}}"
+            printf 'commercial license text' > "{{Path.Combine(payloadDir, "COMMERCIAL_LICENSE.md")}}"
+            printf 'trademark text' > "{{Path.Combine(payloadDir, "TRADEMARKS.md")}}"
+            tar czf "{{archivePath}}" -C "{{payloadDir}}" .
+
+            if command -v sha256sum > /dev/null 2>&1; then
+                checksum="$(sha256sum "{{archivePath}}" | awk '{print $1}')"
+            elif command -v shasum > /dev/null 2>&1; then
+                checksum="$(shasum -a 256 "{{archivePath}}" | awk '{print $1}')"
+            else
+                checksum="$(openssl dgst -sha256 "{{archivePath}}" | awk '{print $NF}')"
+            fi
+            printf '%s  CodeIndex-linux-x64.tar.gz\n' "$checksum" > "{{checksumsPath}}"
+
+            VERSION="v1.2.3"
+            OS_NAME="linux"
+            ARCH_NAME="x64"
+            RID="linux-x64"
+
+            curl() {
+                local output_path=""
+                local url=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -o)
+                            output_path="$2"
+                            shift 2
+                            ;;
+                        -w)
+                            shift 2
+                            ;;
+                        *)
+                            url="$1"
+                            shift
+                            ;;
+                    esac
+                done
+
+                case "$url" in
+                    */sha256sums.txt) cp "{{checksumsPath}}" "$output_path" ;;
+                    *) cp "{{archivePath}}" "$output_path" ;;
+                esac
+
+                printf '200'
+                return 0
+            }
+
+            download_and_install
+            echo "INSTALL_OK"
+            echo "LICENSE:$(cat "{{Path.Combine(installDir, "LICENSE")}}")"
+            echo "COMMERCIAL:$(cat "{{Path.Combine(installDir, "COMMERCIAL_LICENSE.md")}}")"
+            echo "TRADEMARKS:$(cat "{{Path.Combine(installDir, "TRADEMARKS.md")}}")"
+            """,
+            new Dictionary<string, string?>
+            {
+                ["CDIDX_INSTALL_DIR"] = installDir,
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("INSTALL_OK", stdout);
+        Assert.Contains("LICENSE:license text", stdout);
+        Assert.Contains("COMMERCIAL:commercial license text", stdout);
+        Assert.Contains("TRADEMARKS:trademark text", stdout);
+        Assert.Equal("license text", File.ReadAllText(Path.Combine(installDir, "LICENSE")));
+        Assert.Equal("commercial license text", File.ReadAllText(Path.Combine(installDir, "COMMERCIAL_LICENSE.md")));
+        Assert.Equal("trademark text", File.ReadAllText(Path.Combine(installDir, "TRADEMARKS.md")));
+        Assert.Equal(string.Empty, stderr);
+    }
+
+    [Fact]
     public void DownloadAndInstall_StageDirMktempFailure_AbortsBeforeInstallWritesUnderStrictMode()
     {
         if (OperatingSystem.IsWindows())

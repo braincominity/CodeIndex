@@ -1116,6 +1116,9 @@ public partial class DbReader
             return false;
         }
 
+        if (HasActiveCSharpUsingTypeAlias(path, lineNumber, symbolName))
+            return false;
+
         var patternContext = contextForFilter;
         var patternColumn = columnNumber;
         if (!TryBuildCSharpUsingStaticPatternContextWindow(
@@ -1130,7 +1133,7 @@ public partial class DbReader
             return false;
         }
 
-        if (ShouldSuppressCSharpQualifiedConstantPatternReference(path, lineNumber, symbolName, patternContext, patternColumn))
+        if (ShouldSuppressCSharpQualifiedConstantPatternReference(path, lineNumber, symbolName, patternContext, patternColumn, referenceKind))
             return true;
 
         if (!string.Equals(referenceKind, "type_reference", StringComparison.Ordinal))
@@ -1138,9 +1141,6 @@ public partial class DbReader
 
         var activeTargets = GetActiveCSharpUsingStaticTargets(path, lineNumber);
         if (activeTargets.Count == 0)
-            return false;
-
-        if (HasActiveCSharpUsingAlias(path, lineNumber, symbolName))
             return false;
 
         var matchingContainers = GetCSharpConstantPatternContainersByMemberName(symbolName);
@@ -1159,10 +1159,20 @@ public partial class DbReader
         return false;
     }
 
-    private bool ShouldSuppressCSharpQualifiedConstantPatternReference(string path, int lineNumber, string symbolName, string patternContext, int patternColumn)
+    private bool ShouldSuppressCSharpQualifiedConstantPatternReference(string path, int lineNumber, string symbolName, string patternContext, int patternColumn, string referenceKind)
     {
-        if (!TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out var qualifier))
+        if (!TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out var qualifier, out var anchorKind))
             return false;
+
+        // Exact `call` suppression only applies to `case` constant patterns; `is` patterns
+        // keep their preserved call row so qualified `is` expressions remain visible.
+        // exact の `call` 抑制は `case` 定数パターンのみに限定する。`is` パターンは
+        // preserved call row を維持し、qualified な `is` 式を可視のまま残す。
+        if (string.Equals(referenceKind, "call", StringComparison.Ordinal)
+            && !string.Equals(anchorKind, "case", StringComparison.Ordinal))
+        {
+            return false;
+        }
 
         var matchingContainers = GetCSharpConstantPatternContainersByMemberName(symbolName);
         if (matchingContainers.Count == 0)
@@ -1179,6 +1189,16 @@ public partial class DbReader
 
     private bool HasScopedCSharpTypeCandidate(string path, int lineNumber, string symbolName)
     {
+        if (HasActiveCSharpUsingTypeAlias(path, lineNumber, symbolName))
+            return true;
+
+        var activeAliasReference = ResolveActiveCSharpUsingAliasReference(path, lineNumber, symbolName);
+        if (!string.Equals(activeAliasReference, symbolName, StringComparison.Ordinal)
+            && IsKnownCSharpTypeQualifiedName(activeAliasReference))
+        {
+            return true;
+        }
+
         var candidateNamespaces = GetCSharpTypeNamespacesByName(symbolName);
         var candidateContainingTypes = GetCSharpTypeContainingTypesByName(symbolName);
         if (candidateNamespaces.Count == 0 && candidateContainingTypes.Count == 0)
@@ -1412,9 +1432,54 @@ public partial class DbReader
         return normalized;
     }
 
-    private bool HasActiveCSharpUsingAlias(string path, int lineNumber, string symbolName)
+    private bool HasActiveCSharpUsingTypeAlias(string path, int lineNumber, string symbolName)
     {
-        return TryResolveActiveCSharpUsingAliasScope(path, lineNumber, symbolName, requireTypeAlias: true, out _);
+        if (string.IsNullOrWhiteSpace(path) || string.IsNullOrWhiteSpace(symbolName))
+            return false;
+
+        if (TryResolveActiveCSharpUsingAliasScope(path, lineNumber, symbolName, requireTypeAlias: true, out _))
+            return true;
+
+        if (!_csharpUsingAliasScopesByPath.TryGetValue(path, out var scopes))
+        {
+            scopes = LoadCSharpUsingAliasScopes(path);
+            _csharpUsingAliasScopesByPath[path] = scopes;
+        }
+
+        for (var i = scopes.Count - 1; i >= 0; i--)
+        {
+            var scope = scopes[i];
+            if (!string.Equals(scope.AliasName, symbolName, StringComparison.Ordinal))
+                continue;
+            if (scope.Line > lineNumber)
+                continue;
+            if (lineNumber < scope.ScopeStartLine || lineNumber > scope.ScopeEndLine)
+                continue;
+            if (IsKnownCSharpTypeQualifiedName(scope.TargetQualifiedName))
+                return true;
+
+            var resolvedContainer = ResolveScopedCSharpContainingTypeQualifiedName(path, lineNumber, scope.TargetQualifiedName);
+            if (string.IsNullOrWhiteSpace(resolvedContainer))
+                continue;
+
+            if (IsKnownCSharpTypeQualifiedName(resolvedContainer))
+                return true;
+
+            foreach (var activeNamespace in GetActiveCSharpTypeNamespaces(path, lineNumber))
+            {
+                if (string.IsNullOrWhiteSpace(activeNamespace))
+                    continue;
+
+                var namespacedTarget = CombineDbQualifiedName(activeNamespace, resolvedContainer);
+                if (!string.IsNullOrWhiteSpace(namespacedTarget)
+                    && IsKnownCSharpTypeQualifiedName(namespacedTarget))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private HashSet<string> GetActiveCSharpUsingStaticTargets(string path, int lineNumber)
@@ -2284,13 +2349,14 @@ public partial class DbReader
 
         var cursor = symbolColumn;
         cursor = SkipCSharpTriviaBackward(context, cursor);
-        return IsCSharpUsingStaticConstantPatternAnchor(context, ref cursor)
+        return IsCSharpUsingStaticConstantPatternAnchor(context, ref cursor, out _)
             || IsCSharpUsingStaticConstantTypeKeywordAnchor(context, ref cursor);
     }
 
-    private static bool TryExtractQualifiedCSharpPatternQualifier(string context, string symbolName, int columnNumber, out string qualifier)
+    private static bool TryExtractQualifiedCSharpPatternQualifier(string context, string symbolName, int columnNumber, out string qualifier, out string anchorKind)
     {
         qualifier = string.Empty;
+        anchorKind = string.Empty;
         if (string.IsNullOrWhiteSpace(context)
             || string.IsNullOrWhiteSpace(symbolName)
             || !TryFindCSharpReferenceTokenStart(context, symbolName, columnNumber, out var symbolColumn))
@@ -2311,24 +2377,31 @@ public partial class DbReader
             return false;
 
         var anchorCursor = headCursor;
-        if (!IsCSharpUsingStaticConstantPatternAnchor(context, ref anchorCursor))
+        if (!IsCSharpUsingStaticConstantPatternAnchor(context, ref anchorCursor, out anchorKind))
             return false;
 
         qualifier = fullHead[..lastDot];
         return !string.IsNullOrWhiteSpace(qualifier);
     }
 
-    private static bool IsCSharpUsingStaticConstantPatternAnchor(string text, ref int cursor)
+    private static bool IsCSharpUsingStaticConstantPatternAnchor(string text, ref int cursor, out string anchorKind)
     {
+        anchorKind = string.Empty;
         cursor = SkipCSharpTriviaBackward(text, cursor);
         if (TryConsumeTrailingCSharpToken(text, ref cursor, "not"))
             cursor = SkipCSharpTriviaBackward(text, cursor);
 
         while (true)
         {
-            if (TryConsumeTrailingCSharpToken(text, ref cursor, "case")
-                || TryConsumeTrailingCSharpToken(text, ref cursor, "is"))
+            if (TryConsumeTrailingCSharpToken(text, ref cursor, "case"))
             {
+                anchorKind = "case";
+                return true;
+            }
+
+            if (TryConsumeTrailingCSharpToken(text, ref cursor, "is"))
+            {
+                anchorKind = "is";
                 return true;
             }
 
@@ -2379,11 +2452,11 @@ public partial class DbReader
             || columnNumber <= 0)
         {
             return IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn)
-                || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _);
+                || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _, out _);
         }
 
         if (IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn)
-            || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _))
+            || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _, out _))
         {
             return true;
         }
@@ -2397,7 +2470,7 @@ public partial class DbReader
                 || !lineMap.TryGetValue(lineNumber, out var currentLine))
             {
                 return IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn)
-                    || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _);
+                    || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _, out _);
             }
 
             var lines = new List<string>();
@@ -2415,7 +2488,7 @@ public partial class DbReader
             patternContext = lines.Count <= 1 ? currentLine : string.Join('\n', lines);
             patternColumn = lines.Count <= 1 ? columnNumber : prefixLength + columnNumber;
             if (IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn)
-                || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _))
+                || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _, out _))
             {
                 return true;
             }
@@ -4794,7 +4867,7 @@ public partial class DbReader
         return columns;
     }
 
-    private string GetSymbolColumnSql(string columnName, string? fallbackSql = null)
+    private string GetSymbolColumnSql(string columnName, string? fallbackSql = null, string symbolAlias = "s")
     {
         if (_symbolColumns.Contains(columnName))
         {
@@ -4803,8 +4876,8 @@ public partial class DbReader
             // 古いバイナリがカラムだけ追加して既存行を NULL のまま残しているケースに備え、
             // fallback と COALESCE してレガシーインデックスでクラッシュしないようにする。
             return fallbackSql != null
-                ? $"COALESCE(s.{columnName}, {fallbackSql})"
-                : $"s.{columnName}";
+                ? $"COALESCE({symbolAlias}.{columnName}, {fallbackSql})"
+                : $"{symbolAlias}.{columnName}";
         }
 
         return fallbackSql ?? "NULL";
@@ -5335,6 +5408,30 @@ public partial class DbReader
             for (int i = 0; i < excludePathPatterns.Count; i++)
                 cmd.Parameters.AddWithValue($"@excludePathPattern{i}", $"%{EscapeLikeQuery(excludePathPatterns[i])}%");
         }
+    }
+
+    internal static string BuildPathFiltersSql(string fileAlias, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
+    {
+        var sql = string.Empty;
+        if (pathPatterns != null && pathPatterns.Count > 0)
+        {
+            // Multiple --path values are OR'd together / 複数の --path 値は OR で結合する
+            var ors = new List<string>(pathPatterns.Count);
+            for (int i = 0; i < pathPatterns.Count; i++)
+                ors.Add($"{fileAlias}.path LIKE @pathPattern{i} ESCAPE '\\'");
+            sql += " AND (" + string.Join(" OR ", ors) + ")";
+        }
+
+        if (excludePathPatterns != null)
+        {
+            for (int i = 0; i < excludePathPatterns.Count; i++)
+                sql += $" AND {fileAlias}.path NOT LIKE @excludePathPattern{i} ESCAPE '\\'";
+        }
+
+        if (excludeTests)
+            sql += $" AND NOT {TestPathCondition.Replace("f.path", $"{fileAlias}.path")}";
+
+        return sql;
     }
 
     internal static DateTime? GetNullableDateTime(SqliteDataReader reader, int ordinal)

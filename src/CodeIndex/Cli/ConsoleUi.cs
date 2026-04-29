@@ -15,26 +15,27 @@ public static class ConsoleUi
         ("backfill-fold", "cdidx backfill-fold [--db <path>] [--json]"),
         ("index-commits", "cdidx index <projectPath> --commits <id> [id ...] [--db <path>] [--verbose] [--dry-run] [--json]"),
         ("index-files", "cdidx index <projectPath> --files <path> [path ...] [--db <path>] [--verbose] [--dry-run] [--json]"),
-        ("search", "cdidx search <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--count] [--since <datetime>] [--no-dedup]"),
-        ("definition", "cdidx definition <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--since <datetime>]"),
-        ("references", "cdidx references <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
-        ("callers", "cdidx callers <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name] [--count]"),
-        ("callees", "cdidx callees <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name] [--count]"),
-        ("symbols", "cdidx symbols [query] [--name <name>] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]"),
-        ("files", "cdidx files [query] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--count] [--since <datetime>]"),
+        ("search", "cdidx search <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--snippet-lines <n>] [--max-line-width <n>] [--fts] [--exact|--exact-substring] [--count] [--since <datetime>] [--no-dedup]"),
+        ("definition", "cdidx definition <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--since <datetime>]"),
+        ("references", "cdidx references <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--max-line-width <n>] [--exact|--exact-name] [--count]"),
+        ("callers", "cdidx callers <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name] [--count]"),
+        ("callees", "cdidx callees <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name] [--count]"),
+        ("symbols", "cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--kind <kind>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--exact|--exact-name] [--count] [--since <datetime>]"),
+        ("files", "cdidx files [query|--query <query>|-- <query>] [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--count] [--since <datetime>]"),
         ("find", "cdidx find <query> --path <pattern> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--exclude-path <pattern>] [--exclude-tests] [--before <n>] [--after <n>] [--max-line-width <n>] [--exact] [--count]"),
         ("excerpt", "cdidx excerpt <path> --start <line> [--end <line>] [--before <n>] [--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json]"),
         ("map", "cdidx map [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests]"),
-        ("inspect", "cdidx inspect <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--max-line-width <n>] [--exact|--exact-name]"),
+        ("inspect", "cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--body] [--max-line-width <n>] [--exact|--exact-name]"),
         ("outline", "cdidx outline <path> [--db <path>] [--json]"),
         ("status", "cdidx status [--db <path>] [--json]"),
         ("validate", "cdidx validate [--db <path>] [--json] [--kind <kind>] [--path <pattern>]"),
-        ("impact", "cdidx impact <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--depth <n>] [--count]"),
+        ("impact", "cdidx impact <query>|--query <query>|-- <query> [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--depth <n>] [--count]"),
         ("deps", "cdidx deps [--db <path>] [--json] [--limit <n>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--reverse]"),
         ("unused", "cdidx unused [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--count]"),
         ("hotspots", "cdidx hotspots [--db <path>] [--json] [--limit <n>] [--kind <kind>] [--lang <lang>] [--path <pattern>] [--exclude-path <pattern>] [--exclude-tests] [--count] [--group-by-name]"),
         ("languages", "cdidx languages [--json]"),
         ("mcp", "cdidx mcp [--db <path>]"),
+        ("license", "cdidx license"),
     ];
 
     private const int SpinnerFrameDelayMs = 100;
@@ -354,6 +355,7 @@ public static class ConsoleUi
         Console.WriteLine("  hotspots                   Find high-impact symbols; duplicate-name families may fall back conservatively");
         Console.WriteLine("  languages                  List supported languages and their capabilities");
         Console.WriteLine("  mcp                        Start MCP server (for AI tools: Claude, Cursor, etc.)");
+        Console.WriteLine("  license                    Show licensing, trademark, and commercial-use summary");
         Console.WriteLine();
         Console.WriteLine("Index and update options:");
         Console.WriteLine("  --db <path>                Database file path (default for index: <projectPath>/.cdidx/codeindex.db)");
@@ -365,6 +367,7 @@ public static class ConsoleUi
         Console.WriteLine("  --files <path> [path ...]  Update only the specified files; old rename/delete paths are not purged unless also listed");
         Console.WriteLine("  --help, -h                 Show this help message");
         Console.WriteLine("  --version, -V              Show version information");
+        Console.WriteLine("  --license                  Show licensing, trademark, and commercial-use summary");
         Console.WriteLine("  --completions <shell>      Generate shell completions (bash, zsh, fish)");
         Console.WriteLine();
         Console.WriteLine("Update workflows:");
@@ -377,10 +380,11 @@ public static class ConsoleUi
         Console.WriteLine("  --limit <n>, --top <n>     Max results to return (default: 20)");
         Console.WriteLine("  --lang <lang>              Filter by language");
         Console.WriteLine("  --path <pattern>           Restrict matches to paths containing this text");
+        Console.WriteLine("  --query <query>            Pass a query literal, useful when the query starts with '-'");
         Console.WriteLine("  --exclude-path <pattern>   Exclude paths containing this text (repeatable)");
         Console.WriteLine("  --exclude-tests            Exclude likely test files");
         Console.WriteLine("  --snippet-lines <n>        Search snippet length (1-20, default: 8)");
-        Console.WriteLine($"  --max-line-width <n>       search/references/find/excerpt/inspect only: clamp very long single-line snippet/context/excerpt payloads (default: {LineWidthFormatter.DefaultMaxLineWidth})");
+        Console.WriteLine($"  --max-line-width <n>       search/references/find/excerpt/inspect only: clamp very long single-line snippet/context/excerpt payloads (`0` disables clamping; default: {LineWidthFormatter.DefaultMaxLineWidth})");
         Console.WriteLine("  --focus-line <line>        excerpt: line whose focused column should stay visible (requires --focus-column)");
         Console.WriteLine("  --focus-column <n>         excerpt: column to keep centered when clamping (must be within the focused line)");
         Console.WriteLine("  --focus-length <n>         excerpt: width of the focused span (default: 1, requires --focus-column)");
@@ -394,7 +398,7 @@ public static class ConsoleUi
         Console.WriteLine("  --depth <n>                Max BFS depth for impact analysis (default: 5)");
         Console.WriteLine("  --reverse                  Reverse direction for deps (show dependents)");
         Console.WriteLine("  --group-by-name            hotspots: collapse rows sharing (name, kind) across files into one line");
-        Console.WriteLine("  Note: if a string value itself starts with '--', pass it as --opt=<value> (for example --path=--json-dir or --db=--tmp.db)");
+        Console.WriteLine("  Note: if a query itself starts with '-', pass it with --query <query> or -- <query>; for option values that start with '--', use --opt=<value>.");
         Console.WriteLine();
         Console.WriteLine("Examples:");
         Console.WriteLine("  cdidx ./myproject                             Index a project");
@@ -404,6 +408,7 @@ public static class ConsoleUi
         Console.WriteLine("                                              Update DB from multiple commits");
         Console.WriteLine("  cdidx index ./myproject --files src/app.cs    Update specific files");
         Console.WriteLine("  cdidx search \"authenticate\"                    Full-text search");
+        Console.WriteLine("  cdidx search --query --path --path README.md   Search for a literal option token");
         Console.WriteLine("  cdidx search \"Run();\" --exact-substring        Case-sensitive exact substring search");
         Console.WriteLine("  cdidx definition ResolveGitCommonDir --body   Show a symbol definition and body");
         Console.WriteLine("  cdidx references ResolveGitCommonDir          Find indexed references");
@@ -433,6 +438,20 @@ public static class ConsoleUi
         Console.WriteLine("  cdidx files --since 2024-01-01                 Files modified since a date");
         Console.WriteLine("  cdidx status --json                            DB stats as JSON");
         Console.WriteLine("  cdidx languages                                Show supported languages");
+        Console.WriteLine("  cdidx license                                  Show licensing and commercial-use terms");
+    }
+
+    public static void PrintLicenseSummary()
+    {
+        Console.WriteLine("cdidx / CodeIndex license");
+        Console.WriteLine();
+        Console.WriteLine("License: PolyForm Perimeter License 1.0.0");
+        Console.WriteLine("Copyright: Copyright 2026 Widthdom.");
+        Console.WriteLine("Summary: use, modification, and distribution are allowed, except for providing a product that competes with CodeIndex.");
+        Console.WriteLine("Providing a competing commercial product or service requires a separate written agreement with Widthdom.");
+        Console.WriteLine("Names and trademarks: CodeIndex and cdidx are not licensed for derivative product, package, or service branding.");
+        Console.WriteLine();
+        Console.WriteLine("See LICENSE, COMMERCIAL_LICENSE.md, and TRADEMARKS.md for the controlling terms.");
     }
 
     public static string? GetUsageLine(string command)
@@ -513,7 +532,7 @@ public static class ConsoleUi
     [
         "index", "backfill-fold", "search", "definition", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots", "languages", "mcp",
+        "validate", "deps", "impact", "unused", "hotspots", "languages", "mcp", "license",
     ];
 
     /// <summary>
@@ -563,7 +582,7 @@ public static class ConsoleUi
     commands=""{cmds}""
 
     if [ $COMP_CWORD -eq 1 ]; then
-        COMPREPLY=($(compgen -W ""$commands --help --version"" -- ""$cur""))
+        COMPREPLY=($(compgen -W ""$commands --help --version --license"" -- ""$cur""))
         return
     fi
 
@@ -625,7 +644,7 @@ _cdidx() {{
                     '--exclude-tests[Exclude tests]' \
                     '--before[Context lines before]:number' \
                     '--after[Context lines after]:number' \
-                    '--max-line-width[Clamp long single-line snippets]:number' \
+                    '--max-line-width[Clamp long single-line snippets (0 disables clamping)]:number' \
                     '--exact[Exact match]' \
                     '--count[Count only]' \
                     '--query[Literal query]' \
@@ -654,7 +673,7 @@ _cdidx() {{
                     '--exclude-path[Exclude path]:pattern' \
                     '--exclude-tests[Exclude tests]' \
                     '--count[Count only]' \
-                    '--max-line-width[Clamp long single-line contexts]:number' \
+                    '--max-line-width[Clamp long single-line contexts (0 disables clamping)]:number' \
                     '--exact[Backward-compatible exact shorthand]' \
                     '--exact-name[Exact symbol-name equality]' \
                     '*:query'
@@ -668,7 +687,7 @@ _cdidx() {{
                     '--exclude-path[Exclude path]:pattern' \
                     '--exclude-tests[Exclude tests]' \
                     '--body[Include body]' \
-                    '--max-line-width[Clamp long single-line contexts]:number' \
+                    '--max-line-width[Clamp long single-line contexts (0 disables clamping)]:number' \
                     '--exact[Backward-compatible exact shorthand]' \
                     '--exact-name[Exact symbol-name equality]' \
                     '*:query'
@@ -733,6 +752,7 @@ _cdidx");
             Console.WriteLine($"complete -c cdidx -n '__fish_use_subcommand' -a '{cmd}' -d '{cmd} command'");
         Console.WriteLine("complete -c cdidx -n '__fish_use_subcommand' -l help -d 'Show help'");
         Console.WriteLine("complete -c cdidx -n '__fish_use_subcommand' -l version -d 'Show version'");
+        Console.WriteLine("complete -c cdidx -n '__fish_use_subcommand' -l license -d 'Show license summary'");
 
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find excerpt map inspect outline status' -l db -r -d 'Database path'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols files find excerpt map inspect outline status' -l json -d 'JSON output'");
@@ -745,7 +765,7 @@ _cdidx");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from find' -l query -r -d 'Literal query'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from find excerpt' -l before -r -d 'Context lines before'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from find excerpt' -l after -r -d 'Context lines after'");
-        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search references excerpt find inspect' -l max-line-width -r -d 'Clamp long single-line payloads'");
+        Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from search references excerpt find inspect' -l max-line-width -r -d 'Clamp long single-line payloads (0 disables clamping)'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l focus-line -r -d 'Focused line to keep visible when clamping'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l focus-column -r -d 'Focused column to keep visible when clamping'");
         Console.WriteLine("complete -c cdidx -n '__fish_seen_subcommand_from excerpt' -l focus-length -r -d 'Focused span width when clamping'");
