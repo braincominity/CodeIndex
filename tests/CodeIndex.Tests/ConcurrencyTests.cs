@@ -191,26 +191,37 @@ public class ConcurrencyTests : IDisposable
     }
 
     [Fact]
-    public async Task AnalyzeSymbol_ReferencesAndCallersStaySnapshotConsistent_UnderConcurrentWriter()
+    public async Task AnalyzeSymbol_RefsCallersAndFreshnessStaySnapshotConsistent_UnderConcurrentWriter()
     {
         // Issue #180 regression for the `inspect` / MCP `analyze_symbol` bundle: the
         // multi-statement read path must resolve every sub-query (definitions, file,
         // freshness, references, callers, callees, nearby symbols) against the same WAL
-        // snapshot. The invariant we pin is `references.Count == callers.Count`: each
-        // toggled-in file contributes exactly one reference row and one caller row for
-        // symbol `S`, so every consistent snapshot must see matching totals. Without the
-        // DEFERRED wrap, a writer commit landing between `SearchReferences` and
-        // `GetCallers` inside `AnalyzeSymbol` breaks that equality.
-        // Issue #180 回帰テスト（inspect / MCP analyze_symbol 用）: AnalyzeSymbol の
-        // 多段 sub-query が同じ WAL snapshot を参照することを検証する。各 file は S に対し
-        // reference 1 件と caller 1 件を対称的に寄与させるので、snapshot が一致している
-        // 限り `references.Count == callers.Count`。DEFERRED が無いと `SearchReferences`
-        // と `GetCallers` の間に writer が commit したときに不等になる。
+        // snapshot. We pin two invariants that exercise three different sub-queries:
+        //
+        //   1. `references.Count == callers.Count` — each toggled-in file contributes
+        //      exactly one reference row and one caller row for symbol `S`, so this catches
+        //      a writer commit landing between `SearchReferences` and `GetCallers`.
+        //   2. `WorkspaceLatestModified` matches the `references.Count` state (1 ref => only
+        //      file A is present so freshness = T0; 2 refs => file B is present too, with
+        //      modified = T1 > T0, so freshness = T1). This catches a writer commit landing
+        //      between `SearchReferences` / `GetCallers` and `GetWorkspaceFreshness`.
+        //
+        // Issue #180 回帰テスト（inspect / MCP analyze_symbol 用）: AnalyzeSymbol bundle が
+        // 同じ WAL snapshot から sub-query を返すことを 2 つの不変条件で検証する。
+        //   1. `references.Count == callers.Count` — 各 file が S に対して reference 1 件
+        //      と caller 1 件を対称に寄与するため、`SearchReferences` と `GetCallers` の
+        //      間で writer が commit すると等式が壊れる。
+        //   2. `WorkspaceLatestModified` が `references.Count` と整合する — 1 ref なら
+        //      file A のみで freshness = T0、2 refs なら file B も存在し modified = T1 > T0
+        //      なので freshness = T1。`SearchReferences` / `GetCallers` と
+        //      `GetWorkspaceFreshness` の間で writer が commit すると食い違う。
+        var fileAModified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var fileBModified = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc);
         var writer = new DbWriter(_db.Connection);
         var fileAId = writer.UpsertFile(new FileRecord
         {
             Path = "src/A.cs", Lang = "csharp", Size = 100, Lines = 20,
-            Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Modified = fileAModified,
             Checksum = "A",
         });
         writer.InsertSymbols([
@@ -242,7 +253,7 @@ public class ConcurrencyTests : IDisposable
         writer.MarkCSharpSymbolNameContractReady();
 
         using var cts = new CancellationTokenSource();
-        var violations = new ConcurrentBag<(int references, int callers)>();
+        var violations = new ConcurrentBag<(string kind, int references, int callers, DateTime? workspaceLatestModified)>();
         long readerIterations = 0;
         long writerIterations = 0;
 
@@ -260,7 +271,7 @@ public class ConcurrencyTests : IDisposable
                     var fileBId = w.UpsertFile(new FileRecord
                     {
                         Path = "src/B.cs", Lang = "csharp", Size = 80, Lines = 10,
-                        Modified = new DateTime(2025, 1, 2, 0, 0, 0, DateTimeKind.Utc),
+                        Modified = fileBModified,
                         Checksum = "B",
                     });
                     w.InsertSymbols([new SymbolRecord
@@ -297,7 +308,18 @@ public class ConcurrencyTests : IDisposable
             {
                 var result = reader.AnalyzeSymbol("S", limit: 10, lang: "csharp", exact: true);
                 if (result.References.Count != result.Callers.Count)
-                    violations.Add((result.References.Count, result.Callers.Count));
+                    violations.Add(("refs!=callers", result.References.Count, result.Callers.Count, result.WorkspaceLatestModified));
+                // Each consistent snapshot has refs.Count ∈ {1, 2}; the matching freshness
+                // is fileAModified for a file-A-only snapshot and fileBModified when file B
+                // is also present. Anything else (refs == 1 with freshness == T1, or refs
+                // == 2 with freshness == T0, or refs not in {1,2}) is a torn-read failure.
+                // 1 ref => freshness = T0, 2 refs => freshness = T1 という対応関係を破ると
+                // freshness が SearchReferences と別 snapshot から返ってきていることになる。
+                var expectedFreshness = result.References.Count == 1 ? fileAModified
+                    : result.References.Count == 2 ? fileBModified
+                    : (DateTime?)null;
+                if (expectedFreshness == null || result.WorkspaceLatestModified != expectedFreshness)
+                    violations.Add(("freshness!=refsState", result.References.Count, result.Callers.Count, result.WorkspaceLatestModified));
                 Interlocked.Increment(ref readerIterations);
             }
         });
@@ -308,27 +330,35 @@ public class ConcurrencyTests : IDisposable
 
         Assert.True(
             violations.IsEmpty,
-            $"AnalyzeSymbol returned inconsistent references/callers snapshots {violations.Count} times out of " +
+            $"AnalyzeSymbol returned torn snapshots {violations.Count} times out of " +
             $"{readerIterations} reads while the writer committed {writerIterations} times. " +
-            $"Sample: {string.Join(", ", violations.Take(3).Select(v => $"refs={v.references} callers={v.callers}"))}");
+            $"Sample: {string.Join(", ", violations.Take(3).Select(v => $"{v.kind}: refs={v.references} callers={v.callers} freshness={v.workspaceLatestModified:o}"))}");
     }
 
     [Fact]
-    public async Task GetRepoMap_FreshnessMatchesScopedStats_UnderConcurrentWriter()
+    public async Task GetRepoMap_FreshnessAndEntrypointsStaySnapshotConsistent_UnderConcurrentWriter()
     {
         // Issue #180 regression for `map` / MCP `repo_map`: `RepoMapBuilder.Build` runs
         // `GetFileStats`, then `getFreshness`, then `GetEntrypoints` — each a separate
-        // SQL statement. Without the DEFERRED wrap, a writer commit between fileStats
-        // and freshness can make `workspace_latest_modified` reflect a newer state than
-        // `latest_modified` (even when the map scope is the entire workspace). The
-        // invariant we pin is `latest_modified == workspace_latest_modified` when the
-        // map is called without any filters, because both aggregate across the full
-        // workspace and must come from the same WAL snapshot.
+        // SQL statement. We pin two invariants that exercise all three sub-queries:
+        //
+        //   1. `latest_modified == workspace_latest_modified` for an unfiltered map call —
+        //      both aggregate across the whole workspace, so a torn read between
+        //      `GetFileStats` and `getFreshness` makes them disagree.
+        //   2. The presence/absence of the toggled `src/Program.cs` entrypoint must match
+        //      the freshness state. When `WorkspaceLatestModified == newerModified` the
+        //      writer's `Program.cs` (containing `Main()`) is committed, so `Entrypoints`
+        //      must include it; when `WorkspaceLatestModified == baselineModified` it is
+        //      gone, so `Entrypoints` must NOT include it. A torn read between
+        //      `getFreshness` and `GetEntrypoints` breaks that correlation.
+        //
         // Issue #180 回帰テスト（map / MCP repo_map 用）: `RepoMapBuilder.Build` は
         // `GetFileStats` → `getFreshness` → `GetEntrypoints` と独立 SQL を順に発行する。
-        // DEFERRED が無いと、filter 無しでも `workspace_latest_modified` が fileStats
-        // より新しい writer commit を拾って `latest_modified != workspace_latest_modified`
-        // となる。snapshot が同じなら両者は常に一致する。
+        // 2 つの不変条件で 3 つの sub-query を全部踏む:
+        //   1. filter 無しの map では `latest_modified == workspace_latest_modified`。
+        //      `GetFileStats` と `getFreshness` の torn read で破れる。
+        //   2. `src/Program.cs`（`Main()` 関数を持つ）の存在は freshness と整合する。
+        //      `getFreshness` と `GetEntrypoints` の torn read で破れる。
         var writer = new DbWriter(_db.Connection);
         var baselineModified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         for (var seedIndex = 0; seedIndex < 3; seedIndex++)
@@ -340,12 +370,18 @@ public class ConcurrencyTests : IDisposable
                 Checksum = $"seed{seedIndex}",
             });
         }
+        // Mark graph ready so the map's reference-count subquery and entrypoint scoring run
+        // on the authoritative path the production reader uses.
+        // map の reference count subquery / entrypoint scoring が production と同じ
+        // authoritative 経路を通るよう、graph readiness を立てておく。
+        writer.MarkGraphReady();
 
         using var cts = new CancellationTokenSource();
-        var violations = new ConcurrentBag<(DateTime? latestModified, DateTime? workspaceLatestModified)>();
+        var violations = new ConcurrentBag<(string kind, DateTime? scoped, DateTime? workspace, bool hasEntrypoint)>();
         long readerIterations = 0;
         long writerIterations = 0;
         var newerModified = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc);
+        const string toggledPath = "src/Program.cs";
 
         var writeTask = Task.Run(() =>
         {
@@ -358,16 +394,23 @@ public class ConcurrencyTests : IDisposable
                 using var txn = w.BeginTransaction();
                 if ((toggle & 1) == 0)
                 {
-                    w.UpsertFile(new FileRecord
+                    var fileId = w.UpsertFile(new FileRecord
                     {
-                        Path = "src/newer.cs", Lang = "csharp", Size = 120, Lines = 12,
+                        Path = toggledPath, Lang = "csharp", Size = 120, Lines = 12,
                         Modified = newerModified,
                         Checksum = "newer",
                     });
+                    w.InsertSymbols([new SymbolRecord
+                    {
+                        FileId = fileId, Kind = "function", Name = "Main",
+                        Line = 1, StartLine = 1, EndLine = 3,
+                        ContainerKind = "class", ContainerName = "Program",
+                        Signature = "public static void Main()", Visibility = "public", ReturnType = "void",
+                    }]);
                 }
                 else
                 {
-                    w.DeleteFileByPath("src/newer.cs");
+                    w.DeleteFileByPath(toggledPath);
                 }
                 txn.Commit();
                 Interlocked.Increment(ref writerIterations);
@@ -383,8 +426,28 @@ public class ConcurrencyTests : IDisposable
             while (!cts.IsCancellationRequested)
             {
                 var map = reader.GetRepoMap();
+                var hasEntrypoint = map.Entrypoints.Any(entrypoint => entrypoint.Path == toggledPath);
                 if (map.LatestModified != map.WorkspaceLatestModified)
-                    violations.Add((map.LatestModified, map.WorkspaceLatestModified));
+                    violations.Add(("scoped!=workspace", map.LatestModified, map.WorkspaceLatestModified, hasEntrypoint));
+                // Freshness and entrypoint set must come from the same snapshot. When the
+                // writer has committed Program.cs, freshness is newerModified and the
+                // entrypoint list must contain it; when Program.cs is absent freshness is
+                // baselineModified and the list must not contain it.
+                // freshness と entrypoint 集合は同じ snapshot から来る必要がある。
+                if (map.WorkspaceLatestModified == newerModified)
+                {
+                    if (!hasEntrypoint)
+                        violations.Add(("entrypointMissing", map.LatestModified, map.WorkspaceLatestModified, hasEntrypoint));
+                }
+                else if (map.WorkspaceLatestModified == baselineModified)
+                {
+                    if (hasEntrypoint)
+                        violations.Add(("entrypointStale", map.LatestModified, map.WorkspaceLatestModified, hasEntrypoint));
+                }
+                else
+                {
+                    violations.Add(("freshnessUnexpected", map.LatestModified, map.WorkspaceLatestModified, hasEntrypoint));
+                }
                 Interlocked.Increment(ref readerIterations);
             }
         });
@@ -395,9 +458,9 @@ public class ConcurrencyTests : IDisposable
 
         Assert.True(
             violations.IsEmpty,
-            $"GetRepoMap returned inconsistent scoped/workspace freshness snapshots {violations.Count} times out of " +
+            $"GetRepoMap returned torn snapshots {violations.Count} times out of " +
             $"{readerIterations} reads while the writer committed {writerIterations} times. " +
-            $"Sample: {string.Join(", ", violations.Take(3).Select(v => $"scoped={v.latestModified:o} workspace={v.workspaceLatestModified:o}"))}");
+            $"Sample: {string.Join(", ", violations.Take(3).Select(v => $"{v.kind}: scoped={v.scoped:o} workspace={v.workspace:o} hasEntrypoint={v.hasEntrypoint}"))}");
     }
 
     private static List<ReferenceRecord> BuildReferenceBatch(long fileId, string label, int count)
