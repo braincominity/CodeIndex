@@ -1013,9 +1013,9 @@ public static class SymbolExtractor
             // Class/object with expanded modifiers: data, sealed, value, inner, annotation, expect, actual
             // クラス/オブジェクト — 拡張修飾子対応: data, sealed, value, inner, annotation, expect, actual
             new("class",    new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:abstract|data|sealed|open|inner|value|annotation|expect|actual)\s+)*(?:class|object)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            // Function / 関数 (including extension, override, and abstract forms)
-            // 関数 — 拡張・override・abstract 形を含む
-            new("function", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:suspend|inline|infix|operator|tailrec|external|expect|actual|abstract|override)\s+)*fun\s+(?:\w+(?:<[^>]+>)?\.)?(?<name>\w+)\s*[\(<](?:.*?\))?(?::\s*(?<returnType>[^ {=]+))?", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            // Function / 関数 (including extension, secondary constructor, override, and abstract forms)
+            // 関数 — 拡張・セカンダリコンストラクタ・override・abstract 形を含む
+            new("function", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:suspend|inline|infix|operator|tailrec|external|expect|actual|abstract|override|open|final)\s+)*fun\s+(?:\w+(?:<[^>]+>)?\.)?(?<name>\w+)\s*[\(<](?:.*?\))?(?::\s*(?<returnType>[^ {=]+))?", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
             // Secondary constructor / セカンダリコンストラクタ
             new("function", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*constructor\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Enum entry / enum エントリ
