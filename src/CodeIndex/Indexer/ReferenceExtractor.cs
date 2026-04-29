@@ -189,6 +189,18 @@ public static class ReferenceExtractor
     private static readonly Regex StringLiteralRegex = new(
         "\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`",
         RegexOptions.Compiled);
+    private static readonly Regex CssCustomPropertyReferenceRegex = new(@"\bvar\(\s*--(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex CssAnimationNameReferenceRegex = new(@"\banimation-name\s*:\s*(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex CssAnimationShorthandValueRegex = new(@"\banimation\s*:\s*(?<value>[^;{}]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex CssClassSelectorReferenceRegex = new(@"(?<![A-Za-z0-9_-])\.(?<name>[\w-]+)", RegexOptions.Compiled);
+    private static readonly HashSet<string> CssAnimationShorthandIgnoredTokens = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "ease", "ease-in", "ease-out", "ease-in-out", "linear",
+        "step-start", "step-end", "cubic-bezier", "steps",
+        "infinite", "normal", "reverse", "alternate", "alternate-reverse",
+        "none", "forwards", "backwards", "both", "running", "paused",
+        "initial", "inherit", "unset", "revert", "revert-layer",
+    };
     // SQL-specific single-quoted string stripper: preserve identifier quoting (`[...]`, `` `...` ``,
     // and ANSI `"..."`) so the SQL graph path can still see real object names while literal payloads
     // stay masked.
@@ -221,6 +233,17 @@ public static class ReferenceExtractor
     // 平坦な `<[^>\n]+>` では末尾 `>>` を釣り合わせられないため、depth-aware な fallback scanner
     // で補完する。issue #263 参照。
     private static readonly Regex CallRegex = new($@"(?<![\w$])(?<name>{CSharpIdentifierPattern})(?:\?\.)?(?:<[^>\n]+>)?\s*\(", RegexOptions.Compiled);
+    // PowerShell cmdlet / function calls are statement-start or pipeline-stage forms such as
+    // `Get-ChildItem -Path .`, `Write-Host "x"`, and `$items | ForEach-Object { ... }`.
+    // The shared CallRegex only sees parenthesized calls and would split hyphenated cmdlets
+    // after the hyphen, so PowerShell uses a dedicated pass. See issue #281.
+    // PowerShell の cmdlet / function 呼び出しは `Get-ChildItem -Path .` や
+    // `Write-Host "x"`、`$items | ForEach-Object { ... }` のような statement-start / pipeline 形。
+    // 共有 CallRegex は `(` 付きしか見えず、ハイフン入り cmdlet も hyphen の後ろで分断するため、
+    // PowerShell は専用パスを使う。issue #281 参照。
+    private static readonly Regex PowerShellCallRegex = new(
+        @"(?:^|[|;&{=]\s*)\s*(?<name>[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z][A-Za-z0-9]*)+)\b",
+        RegexOptions.Compiled | RegexOptions.Multiline);
     // SQL stored-procedure call without parentheses: T-SQL `EXEC` / `EXECUTE` and MySQL / MariaDB `CALL`.
     // The shared CallRegex requires a trailing `(`, which misses the dominant real-world form such as
     // `EXEC dbo.sp_Target;`, `EXEC dbo.sp_Target @x = 1, @y = 2;`, `CALL sp_Helper;`, and the bracketed
@@ -1245,6 +1268,18 @@ public static class ReferenceExtractor
                     ResolveContainerForCall,
                     container);
             }
+            else if (language == "css")
+            {
+                EmitCssReferences(
+                    preparedLine,
+                    context,
+                    lineNumber,
+                    references,
+                    seen,
+                    fileId,
+                    definitionNames,
+                    container);
+            }
 
             var sqlSuppressedCallIndices = language is "sql" ? new HashSet<int>() : null;
 
@@ -1803,24 +1838,36 @@ public static class ReferenceExtractor
             }
 
             var matchedCallIndices = new HashSet<int>();
-            foreach (Match match in CallRegex.Matches(preparedLine))
+            if (language is "powershell")
             {
-                var name = match.Groups["name"].Value;
-                var callIndex = match.Groups["name"].Index;
-                if (sqlSuppressedCallIndices != null && sqlSuppressedCallIndices.Contains(callIndex))
-                    continue;
-                matchedCallIndices.Add(callIndex);
-                AddCallLikeReference(name, callIndex);
+                foreach (Match match in PowerShellCallRegex.Matches(preparedLine))
+                {
+                    var name = match.Groups["name"].Value;
+                    var callIndex = match.Groups["name"].Index;
+                    AddCallLikeReference(name, callIndex);
+                }
             }
+            else
+            {
+                foreach (Match match in CallRegex.Matches(preparedLine))
+                {
+                    var name = match.Groups["name"].Value;
+                    var callIndex = match.Groups["name"].Index;
+                    if (sqlSuppressedCallIndices != null && sqlSuppressedCallIndices.Contains(callIndex))
+                        continue;
+                    matchedCallIndices.Add(callIndex);
+                    AddCallLikeReference(name, callIndex);
+                }
 
-            // The flat CallRegex misses nested generic tails like `>>(` because `<[^>\n]+>`
-            // stops at the first `>`. Add a depth-aware fallback so `Foo<Bar<int>>()` and
-            // `new Dict<K, List<V>>()` still emit call/instantiate rows. See issue #263.
-            // 平坦な CallRegex は `<[^>\n]+>` が最初の `>` で止まるため `>>(` 形を取りこぼす。
-            // depth-aware な fallback を足し、`Foo<Bar<int>>()` や `new Dict<K, List<V>>()` でも
-            // `call` / `instantiate` を発行する。issue #263 参照。
-            foreach (var candidate in EnumerateNestedGenericCallCandidates(preparedLine, matchedCallIndices))
-                AddCallLikeReference(candidate.Name, candidate.NameIndex);
+                // The flat CallRegex misses nested generic tails like `>>(` because `<[^>\n]+>`
+                // stops at the first `>`. Add a depth-aware fallback so `Foo<Bar<int>>()` and
+                // `new Dict<K, List<V>>()` still emit call/instantiate rows. See issue #263.
+                // 平坦な CallRegex は `<[^>\n]+>` が最初の `>` で止まるため `>>(` 形を取りこぼす。
+                // depth-aware な fallback を足し、`Foo<Bar<int>>()` や `new Dict<K, List<V>>()` でも
+                // `call` / `instantiate` を発行する。issue #263 参照。
+                foreach (var candidate in EnumerateNestedGenericCallCandidates(preparedLine, matchedCallIndices))
+                    AddCallLikeReference(candidate.Name, candidate.NameIndex);
+            }
 
             // Qualified C# enum-member access such as `Nested.A` or `Outer.First.None` is not
             // a method call, but downstream symbol workflows (`references`, `callers`,
@@ -2012,6 +2059,297 @@ public static class ReferenceExtractor
             ContainerKind = container?.Kind,
             ContainerName = container?.Name,
         });
+    }
+
+    private static void EmitCssReferences(
+        string preparedLine,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        HashSet<string>? definitionNames,
+        SymbolRecord? container)
+    {
+        foreach (Match match in CssCustomPropertyReferenceRegex.Matches(preparedLine))
+        {
+            var nameGroup = match.Groups["name"];
+            if (definitionNames != null && definitionNames.Contains(nameGroup.Value))
+                continue;
+
+            AddReference(references, seen, fileId, nameGroup.Value, nameGroup.Index, "reference", context, lineNumber, container);
+        }
+
+        foreach (Match match in CssAnimationNameReferenceRegex.Matches(preparedLine))
+        {
+            var nameGroup = match.Groups["name"];
+            if (definitionNames != null && definitionNames.Contains(nameGroup.Value))
+                continue;
+
+            AddReference(references, seen, fileId, nameGroup.Value, nameGroup.Index, "reference", context, lineNumber, container);
+        }
+
+        foreach (Match match in CssAnimationShorthandValueRegex.Matches(preparedLine))
+        {
+            EmitCssAnimationShorthandReferences(
+                match.Groups["value"].Value,
+                match.Groups["value"].Index,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                definitionNames,
+                container);
+        }
+
+        EmitCssClassSelectorReferences(
+            preparedLine,
+            context,
+            lineNumber,
+            references,
+            seen,
+            fileId,
+            definitionNames,
+            container);
+    }
+
+    private static void EmitCssAnimationShorthandReferences(
+        string value,
+        int valueIndex,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        HashSet<string>? definitionNames,
+        SymbolRecord? container)
+    {
+        var segmentStart = 0;
+        var parenDepth = 0;
+        for (var i = 0; i <= value.Length; i++)
+        {
+            if (i < value.Length)
+            {
+                var ch = value[i];
+                if (ch == '(')
+                {
+                    parenDepth++;
+                    continue;
+                }
+
+                if (ch == ')' && parenDepth > 0)
+                {
+                    parenDepth--;
+                    continue;
+                }
+
+                if (ch != ',' || parenDepth > 0)
+                    continue;
+            }
+
+            EmitCssAnimationShorthandSegmentReference(
+                value,
+                valueIndex,
+                segmentStart,
+                i,
+                context,
+                lineNumber,
+                references,
+                seen,
+                fileId,
+                definitionNames,
+                container);
+            segmentStart = i + 1;
+        }
+    }
+
+    private static void EmitCssAnimationShorthandSegmentReference(
+        string value,
+        int valueIndex,
+        int segmentStart,
+        int segmentEnd,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        HashSet<string>? definitionNames,
+        SymbolRecord? container)
+    {
+        var cursor = segmentStart;
+        while (cursor < segmentEnd && char.IsWhiteSpace(value[cursor]))
+            cursor++;
+
+        while (cursor < segmentEnd)
+        {
+            var tokenStart = cursor;
+            while (cursor < segmentEnd && !char.IsWhiteSpace(value[cursor]))
+                cursor++;
+
+            var token = value[tokenStart..cursor];
+            if (!IsCssAnimationNameToken(token))
+                continue;
+            if (definitionNames != null && definitionNames.Contains(token))
+                return;
+
+            AddReference(references, seen, fileId, token, valueIndex + tokenStart, "reference", context, lineNumber, container);
+            return;
+        }
+    }
+
+    private static void EmitCssClassSelectorReferences(
+        string preparedLine,
+        string context,
+        int lineNumber,
+        List<ReferenceRecord> references,
+        HashSet<string> seen,
+        long fileId,
+        HashSet<string>? definitionNames,
+        SymbolRecord? container)
+    {
+        var segmentStart = 0;
+        while (segmentStart < preparedLine.Length)
+        {
+            var braceIndex = preparedLine.IndexOf('{', segmentStart);
+            var segmentEnd = braceIndex >= 0 ? braceIndex : preparedLine.Length;
+            if (LooksLikeCssSelectorSegment(preparedLine, segmentStart, segmentEnd))
+            {
+                var trimmedStart = segmentStart;
+                while (trimmedStart < segmentEnd && char.IsWhiteSpace(preparedLine[trimmedStart]))
+                    trimmedStart++;
+
+                var selectorSegment = preparedLine[trimmedStart..segmentEnd];
+                foreach (Match match in CssClassSelectorReferenceRegex.Matches(selectorSegment))
+                {
+                    var nameGroup = match.Groups["name"];
+                    var name = "." + nameGroup.Value;
+                    if (definitionNames != null && definitionNames.Contains(name))
+                        continue;
+
+                    AddReference(
+                        references,
+                        seen,
+                        fileId,
+                        name,
+                        trimmedStart + nameGroup.Index - 1,
+                        "reference",
+                        context,
+                        lineNumber,
+                        container);
+                }
+            }
+
+            if (braceIndex < 0)
+                break;
+
+            segmentStart = braceIndex + 1;
+        }
+    }
+
+    private static bool LooksLikeCssSelectorSegment(string line, int segmentStart, int segmentEnd)
+    {
+        var index = segmentStart;
+        while (index < segmentEnd && char.IsWhiteSpace(line[index]))
+            index++;
+        if (index >= segmentEnd)
+            return false;
+
+        return line[index] is '.' or '#' or '[' or '*' or ':' or '&';
+    }
+
+    private static bool IsCssAnimationNameToken(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return false;
+
+        if (CssAnimationShorthandIgnoredTokens.Contains(token))
+            return false;
+        if (token.IndexOf('(') >= 0 || token.IndexOf(')') >= 0 || token.IndexOf(',') >= 0
+            || token.IndexOf('/') >= 0 || token.IndexOf(':') >= 0 || token.IndexOf(';') >= 0)
+            return false;
+        if (IsCssAnimationTimeToken(token) || IsCssAnimationNumberToken(token))
+            return false;
+        if (token.StartsWith("--", StringComparison.Ordinal))
+            return false;
+        if (!(char.IsLetter(token[0]) || token[0] == '_' || token[0] == '-'))
+            return false;
+        if (token[0] == '-' && token.Length > 1 && (token[1] == '-' || char.IsDigit(token[1])))
+            return false;
+
+        for (var i = 1; i < token.Length; i++)
+        {
+            if (char.IsLetterOrDigit(token[i]) || token[i] == '_' || token[i] == '-')
+                continue;
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsCssAnimationTimeToken(string token)
+    {
+        if (token.Length < 2)
+            return false;
+
+        var unitLength = token.EndsWith("ms", StringComparison.OrdinalIgnoreCase)
+            ? 2
+            : token.EndsWith("s", StringComparison.OrdinalIgnoreCase)
+                ? 1
+                : 0;
+        if (unitLength == 0 || token.Length == unitLength)
+            return false;
+
+        var numberPart = token[..^unitLength];
+        var sawDigit = false;
+        var sawDot = false;
+        foreach (var ch in numberPart)
+        {
+            if (char.IsDigit(ch))
+            {
+                sawDigit = true;
+                continue;
+            }
+
+            if (ch == '.' && !sawDot)
+            {
+                sawDot = true;
+                continue;
+            }
+
+            return false;
+        }
+
+        return sawDigit;
+    }
+
+    private static bool IsCssAnimationNumberToken(string token)
+    {
+        if (token.Length == 0 || token.IndexOfAny(['(', ')', ',', '/', ':', ';']) >= 0)
+            return false;
+        if (!(char.IsDigit(token[0]) || token[0] == '.'))
+            return false;
+
+        var sawDigit = false;
+        var sawDot = false;
+        foreach (var ch in token)
+        {
+            if (char.IsDigit(ch))
+            {
+                sawDigit = true;
+                continue;
+            }
+
+            if (ch == '.' && !sawDot)
+            {
+                sawDot = true;
+                continue;
+            }
+
+            return false;
+        }
+
+        return sawDigit;
     }
 
     private static void NormalizeSqlIdentifier(

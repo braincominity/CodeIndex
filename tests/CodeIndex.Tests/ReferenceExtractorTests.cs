@@ -67,6 +67,60 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Css_CustomPropertiesAnimationsAndSelectors_AreReferenced()
+    {
+        const string content = """
+            :root {
+                --primary-color: #336699;
+                --spacing-unit: 8px;
+            }
+
+            .card {
+                color: var(--primary-color);
+                padding: var(--spacing-unit);
+                background: url('images/bg.png');
+            }
+
+            .btn-primary {
+                background: var(--primary-color);
+            }
+
+            .container .card {
+                margin: calc(var(--spacing-unit) * 2);
+            }
+
+            @media screen { .inline-media { color: red; } }
+
+            @keyframes fade-in {
+                from { opacity: 0; }
+                to   { opacity: 1; }
+            }
+
+            .modal {
+                animation-name: fade-in;
+                animation-duration: 0.3s;
+                animation: fade-in 0.3s ease-in;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+        var references = ReferenceExtractor.Extract(1, "css", content, symbols);
+
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "primary-color"
+            && reference.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "spacing-unit"
+            && reference.ReferenceKind == "reference"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == ".card"
+            && reference.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "fade-in"
+            && reference.ReferenceKind == "reference"));
+    }
+
+    [Fact]
     public void Extract_CsharpExpressionBodiedMembers_AttributeToIndividualMember()
     {
         // issue #233: expression-bodied methods and properties must attribute their
@@ -6963,23 +7017,48 @@ public class ReferenceExtractorTests
     public void Extract_PowerShell_DetectsCallSites()
     {
         const string content = """
-            function Deploy-App {
-                param([string]$Path)
-                $items = Get-ChildItem($Path)
-                Write-Host("Deploying...")
-                # comment with FakeCall()
+            function Get-UserData {
+                param([string]$Name, [int]$Id)
+                Write-Host "Looking up $Name"
+                Fetch-Remote -Endpoint "/users/$Id"
             }
+
+            function Fetch-Remote {
+                param($Endpoint)
+                Invoke-RestMethod -Uri "https://api.example.com$Endpoint"
+            }
+
+            function Process-Items {
+                param([array]$Items)
+                $Items | ForEach-Object { Process-One $_ }
+                $Items | Where-Object { $_.IsValid } | ForEach-Object { Transform-Item $_ }
+                $result = Compute-Stats -Data $Items
+                return $result
+            }
+
+            function Process-One   { param($Item) Write-Host $Item }
+            function Transform-Item { param($x) return $x }
+            function Compute-Stats  { param($d) return @{count = $d.Count} }
+
+            Get-UserData -Name "Alice" -Id 42
+            Process-Items -Items @(1,2,3)
+            if ($Items -lt 10) { Write-Host "too few" }
             """;
 
         var symbols = SymbolExtractor.Extract(1, "powershell", content);
         var references = ReferenceExtractor.Extract(1, "powershell", content, symbols);
 
-        // PowerShell cmdlets like Get-ChildItem are split by hyphen — the call regex captures "ChildItem"
-        // PowerShell コマンドレットはハイフンで分割される — CallRegex は "ChildItem" を捕捉
-        Assert.Contains(references, r => r.SymbolName == "ChildItem" && r.ReferenceKind == "call");
-        Assert.Contains(references, r => r.SymbolName == "Host" && r.ReferenceKind == "call");
-        // Comments should not produce references / コメントは参照を生成しないこと
-        Assert.DoesNotContain(references, r => r.SymbolName == "FakeCall");
+        Assert.Contains(references, r => r.SymbolName == "Get-UserData" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Fetch-Remote" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Process-Items" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Process-One" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Transform-Item" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Compute-Stats" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Write-Host" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Invoke-RestMethod" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "ForEach-Object" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "Where-Object" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "lt");
     }
 
     [Fact]

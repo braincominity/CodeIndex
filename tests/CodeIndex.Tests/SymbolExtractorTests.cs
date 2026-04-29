@@ -10768,6 +10768,25 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Kotlin_DetectsTypealiasDeclarations()
+    {
+        var content = """
+            typealias Handler = (String) -> Unit
+            internal typealias UserMap = Map<String, User>
+            public typealias Nested<T> = List<Pair<String, T>>
+
+            val type = 1
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Handler" && s.Visibility == null);
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "UserMap" && s.Visibility == "internal");
+        Assert.Contains(symbols, s => s.Kind == "import" && s.Name == "Nested" && s.Visibility == "public");
+        Assert.DoesNotContain(symbols, s => s.Kind == "import" && s.Name == "type");
+    }
+
+    [Fact]
     public void Extract_Kotlin_DetectsSecondaryConstructors()
     {
         var content = """
@@ -14360,9 +14379,41 @@ public class SymbolExtractorTests
     }
 
     [Fact]
-    public void Extract_CSS_CapturesSelectorsInsideGroupingAtRulesButNotTrueNesting()
+    public void Extract_CSS_CapturesGroupingAtRulesAndNativeNestingSelectors()
     {
         var content = """
+            @layer components {
+              .layer-class {
+                &:hover {
+                  color: blue;
+                }
+
+                & .icon {
+                  color: white;
+                }
+
+                &.modifier {
+                  color: green;
+                }
+
+                & > .child {
+                  color: yellow;
+                }
+              }
+            }
+
+            @container (min-width: 500px) {
+              .container-class {
+                display: flex;
+              }
+            }
+
+            @supports (display: grid) {
+              .supports-class {
+                display: grid;
+              }
+            }
+
             @media screen {
               .media-class {
                 color: red;
@@ -14376,11 +14427,22 @@ public class SymbolExtractorTests
             }
 
             @media screen { .inline-media { color: red; } }
-            """;
+        """;
         var symbols = SymbolExtractor.Extract(1, "css", content);
 
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "layer");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "container");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "supports");
+        Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "media");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".layer-class");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".container-class");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".supports-class");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".media-class");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == ".inline-media");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "hover");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "icon");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "modifier");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "child");
         Assert.DoesNotContain(symbols, s => s.Kind == "class" && s.Name == ".nested-child");
     }
 
