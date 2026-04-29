@@ -124,7 +124,12 @@ That guide also covers `CDIDX_GITHUB_BASE_URL` /
 `CDIDX_GITHUB_API_BASE_URL` for mirror or proxy installs, plus the isolated
 local-mirror self-test path. The self-test requires `python3` and permission
 to listen on `127.0.0.1`; if the default port is busy, move it with
-`CDIDX_LOCAL_MIRROR_PORT=18766`.
+`CDIDX_LOCAL_MIRROR_PORT=18766`. When an install fails behind a corporate
+proxy, `bash ./install.sh --doctor` prints the active proxy environment
+(with any URL credentials redacted) and probes the installer's upstream URLs,
+surfacing the canonical `CONNECT tunnel failed, response 403` guidance so
+users get a single actionable next step without having to hand-roll
+`curl -I` probes.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash
@@ -1089,7 +1094,12 @@ cdidx search "handleRequest"
 `CDIDX_GITHUB_BASE_URL` / `CDIDX_GITHUB_API_BASE_URL`、隔離された
 local-mirror self-test の使い方、そして `python3` と `127.0.0.1` への
 listen 権限が必要なことも書いてあります。既定ポートが埋まっている場合は
-`CDIDX_LOCAL_MIRROR_PORT=18766` で変更できます。
+`CDIDX_LOCAL_MIRROR_PORT=18766` で変更できます。企業 proxy 経由で
+インストールが失敗するときは `bash ./install.sh --doctor` を使うと、
+有効な proxy 環境変数（URL 中の資格情報は redact 済み）を表示し、
+installer が叩く upstream URL を probe して、`CONNECT tunnel failed,
+response 403` 用の定型ガイダンスまで自動で出力します。`curl -I` を
+手打ちしなくても、次の一手がひと目で分かります。
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Widthdom/CodeIndex/main/install.sh | bash

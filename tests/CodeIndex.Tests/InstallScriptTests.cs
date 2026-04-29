@@ -3801,6 +3801,430 @@ public sealed class InstallScriptTests : IDisposable
         Assert.DoesNotContain("search returned a non-zero exit code", stderr);
     }
 
+    // --- Doctor diagnostic mode (#436) / --doctor ネットワーク診断 (#436) ---
+
+    [Fact]
+    public void Doctor_AllProbesReturn200_ExitsZeroAndReportsReachable()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            curl() {
+                local url=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -w)
+                            shift 2
+                            ;;
+                        -o)
+                            shift 2
+                            ;;
+                        -*)
+                            shift
+                            ;;
+                        *)
+                            url="$1"
+                            shift
+                            ;;
+                    esac
+                done
+                printf '%s' "200"
+                return 0
+            }
+
+            run_doctor v1.2.3
+            """);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("cdidx installer doctor", stdout);
+        Assert.Contains("Proxy environment variables", stdout);
+        Assert.Contains("Probing version: v1.2.3 (explicit argument)", stdout);
+        Assert.Contains("Result: HTTP 200", stdout);
+        Assert.Contains("Doctor summary", stdout);
+        Assert.Contains("API probe: reachable", stdout);
+        Assert.Contains("Release asset probe: reachable", stdout);
+        Assert.Contains("Checksums probe: reachable", stdout);
+        Assert.Contains("all probed endpoints are reachable", stdout);
+        Assert.DoesNotContain("Doctor detected", stderr);
+    }
+
+    [Fact]
+    public void Doctor_ConnectTunnel403_PrintsUpstreamProxyGuidanceAndExitsOne()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            curl() {
+                # Simulate a proxy that denies the CONNECT tunnel with HTTP 403.
+                # curl exit 56 + the specific stderr text are what
+                # `is_proxy_tunnel_403` keys on, so this reproduces the exact
+                # shape the doctor must surface the advisory for.
+                # CONNECT トンネル段階で HTTP 403 を返す proxy を模擬。
+                # curl exit 56 + 特定 stderr を `is_proxy_tunnel_403` が検出する。
+                printf '%s\n' "curl: (56) CONNECT tunnel failed, response 403" >&2
+                return 56
+            }
+
+            run_doctor v1.2.3
+            """);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("CONNECT tunnel failed with HTTP 403", stderr);
+        Assert.Contains("upstream proxy/egress policy before TLS", stderr);
+        Assert.Contains("Route substitution alone will not fix it", stderr);
+        Assert.Contains("allow-list at least one artifact host path", stderr);
+        Assert.Contains("CDIDX_GITHUB_BASE_URL", stderr);
+        Assert.Contains("Doctor detected at least one unreachable endpoint", stderr);
+        Assert.Contains("API probe: FAILED", stdout);
+        Assert.Contains("Release asset probe: FAILED", stdout);
+        Assert.Contains("Checksums probe: FAILED", stdout);
+    }
+
+    [Fact]
+    public void Doctor_PrintsConfiguredProxyEnvVars()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, _) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            curl() { printf '%s' "200"; return 0; }
+
+            run_doctor v1.2.3
+            """,
+            new Dictionary<string, string?>
+            {
+                ["HTTP_PROXY"] = "http://proxy:8080",
+                ["HTTPS_PROXY"] = "http://proxy:8080",
+                ["NO_PROXY"] = "127.0.0.1,localhost",
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("HTTP_PROXY=http://proxy:8080", stdout);
+        Assert.Contains("HTTPS_PROXY=http://proxy:8080", stdout);
+        Assert.Contains("NO_PROXY=127.0.0.1,localhost", stdout);
+        Assert.Contains("ALL_PROXY=(unset)", stdout);
+    }
+
+    [Fact]
+    public void Doctor_RedactsProxyUrlCredentialsBeforePrinting()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        // `--doctor` is the command users paste into logs, issues, and support
+        // transcripts when they're trying to diagnose a proxy-blocked install.
+        // If the proxy URL contains credentials (a common pattern on corporate
+        // MITM proxies, e.g. `http://alice:hunter2@proxy.example.com:8080`), the
+        // raw value would leak those credentials to whoever receives the
+        // output. Redact the userinfo portion before printing while keeping the
+        // host/port visible for reachability diagnosis.
+        // `--doctor` の出力は proxy 起因のインストール失敗を診断するため
+        // log / issue / サポート窓口に貼られやすい。proxy URL に資格情報が
+        // 入る形（例: 企業 MITM の `http://alice:hunter2@proxy.example.com:8080`）
+        // では raw 値を表示すると secret が共有先に漏れるため、reachability 診断
+        // に必要な host/port は保ったまま userinfo 部分だけを redact する。
+        var (exitCode, stdout, stderr) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            curl() { printf '%s' "200"; return 0; }
+
+            run_doctor v1.2.3
+            """,
+            new Dictionary<string, string?>
+            {
+                ["HTTP_PROXY"] = "http://alice:hunter2@proxy.example.com:8080",
+                ["HTTPS_PROXY"] = "https://bob@secure-proxy.example.com:3128",
+                ["ALL_PROXY"] = "socks5://carol:s3cret@socks.example.com:1080",
+                ["NO_PROXY"] = "127.0.0.1,localhost",
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("hunter2", stdout);
+        Assert.DoesNotContain("hunter2", stderr);
+        Assert.DoesNotContain("s3cret", stdout);
+        Assert.DoesNotContain("s3cret", stderr);
+        Assert.DoesNotContain("alice:hunter2", stdout);
+        Assert.DoesNotContain("bob@secure-proxy", stdout);
+        Assert.DoesNotContain("carol:s3cret", stdout);
+        Assert.Contains("HTTP_PROXY=http://<redacted>@proxy.example.com:8080", stdout);
+        Assert.Contains("HTTPS_PROXY=https://<redacted>@secure-proxy.example.com:3128", stdout);
+        Assert.Contains("ALL_PROXY=socks5://<redacted>@socks.example.com:1080", stdout);
+        Assert.Contains("NO_PROXY=127.0.0.1,localhost", stdout);
+    }
+
+    [Fact]
+    public void Doctor_CredentialLessProxyUrlsAreNotRewritten()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        // The redactor must only touch values that actually carry a
+        // `scheme://userinfo@host` shape. Plain `scheme://host:port` or
+        // bare-host NO_PROXY values would otherwise be rewritten into a form
+        // that looks like it has been redacted, which is both misleading and
+        // would make diagnostic output harder to read.
+        // redactor は `scheme://userinfo@host` の形を持つ値のみを書き換える。
+        // `scheme://host:port` や bare host の NO_PROXY 値まで書き換えると、
+        // 資格情報があったかのような誤った印象を与え、診断ログが読みにくくなる。
+        var (exitCode, stdout, _) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            curl() { printf '%s' "200"; return 0; }
+
+            run_doctor v1.2.3
+            """,
+            new Dictionary<string, string?>
+            {
+                ["HTTP_PROXY"] = "http://proxy.example.com:8080",
+                ["NO_PROXY"] = "127.0.0.1,localhost,*.internal",
+            });
+
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("<redacted>", stdout);
+        Assert.Contains("HTTP_PROXY=http://proxy.example.com:8080", stdout);
+        Assert.Contains("NO_PROXY=127.0.0.1,localhost,*.internal", stdout);
+    }
+
+    [Fact]
+    public void Doctor_ExplicitVersionArgument_ProbesReleaseAssetForThatVersion()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, _) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            curl() { printf '%s' "200"; return 0; }
+
+            run_doctor v9.8.7
+            """);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Probing version: v9.8.7 (explicit argument)", stdout);
+        Assert.Contains("/releases/download/v9.8.7/CodeIndex-linux-x64.tar.gz", stdout);
+        Assert.Contains("/releases/download/v9.8.7/sha256sums.txt", stdout);
+    }
+
+    [Fact]
+    public void Doctor_BareVersionArgument_GetsVPrefixBeforeProbing()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var (exitCode, stdout, _) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            curl() { printf '%s' "200"; return 0; }
+
+            run_doctor 1.2.3
+            """);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Probing version: v1.2.3 (explicit argument)", stdout);
+        Assert.Contains("/releases/download/v1.2.3/CodeIndex-linux-x64.tar.gz", stdout);
+    }
+
+    [Fact]
+    public void Doctor_NoExplicitVersion_ReadsVersionJson()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        // `default_self_test_version` reads the version.json sitting next to
+        // this script, so when no explicit version is passed the doctor should
+        // use that as the probe target.
+        // 明示バージョン無しなら `default_self_test_version` が拾う version.json を使う。
+        var (exitCode, stdout, _) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            curl() { printf '%s' "200"; return 0; }
+            default_self_test_version() { printf '%s' "v4.5.6"; }
+
+            run_doctor
+            """);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Probing version: v4.5.6 (version.json)", stdout);
+        Assert.Contains("/releases/download/v4.5.6/CodeIndex-linux-x64.tar.gz", stdout);
+    }
+
+    [Fact]
+    public void Doctor_NoExplicitVersionAndNoVersionJson_SkipsReleaseProbes()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        // When neither an explicit argument nor a version.json is available,
+        // `default_self_test_version` returns v0.0.0. The doctor must still run
+        // the API probe and clearly mark the release probes as skipped instead
+        // of silently probing a bogus v0.0.0 release URL.
+        // 明示引数も version.json も無い場合、default_self_test_version は
+        // v0.0.0 を返す。doctor は API probe だけ走らせ、リリース系 probe は
+        // skip 扱いで表示し、偽の v0.0.0 URL を probe しない。
+        var (exitCode, stdout, _) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            curl() { printf '%s' "200"; return 0; }
+            default_self_test_version() { printf '%s' "v0.0.0"; }
+
+            run_doctor
+            """);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Probing version: unknown", stdout);
+        Assert.Contains("Release asset probe: skipped (no version)", stdout);
+        Assert.Contains("Checksums probe: skipped (no version)", stdout);
+        Assert.DoesNotContain("/releases/download/v0.0.0/", stdout);
+    }
+
+    [Fact]
+    public void Doctor_ApiReturnsHttp404_ExitsOneAndFlagsApiProbe()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        // Simulate an API endpoint that answers (curl exit 0) but the response
+        // itself is 404. Reachability is not confirmed — the probe must fail
+        // and the summary must show the API probe as FAILED, while the
+        // release probes (still 200 via the default curl path) stay reachable
+        // because the doctor does not short-circuit on a single failure.
+        // curl は 0 で終了するが HTTP 404 を返す API を模擬。probe は失敗扱い
+        // とし、サマリで API が FAILED となること、release 系は 200 を
+        // 返して reachable のままであること（doctor は最初の失敗で止まらない）
+        // を確認する。
+        var (exitCode, stdout, _) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            curl() {
+                local url=""
+                while [ $# -gt 0 ]; do
+                    case "$1" in
+                        -w|-o) shift 2 ;;
+                        -*) shift ;;
+                        *) url="$1"; shift ;;
+                    esac
+                done
+                case "$url" in
+                    *api.github.com*) printf '%s' "404" ;;
+                    *) printf '%s' "200" ;;
+                esac
+                return 0
+            }
+
+            run_doctor v1.2.3
+            """);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("API probe: FAILED", stdout);
+        Assert.Contains("Release asset probe: reachable", stdout);
+        Assert.Contains("Checksums probe: reachable", stdout);
+    }
+
+    [Fact]
+    public void Doctor_UnknownFlagAfterDoctor_IsTreatedAsVersion()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        // The dispatcher forwards the first positional token after --doctor
+        // verbatim as the version argument. Passing a bare string such as
+        // `notaversion` is normalized by `v` prefixing to `vnotaversion` and
+        // used as the probe version — no `error()` abort, because the doctor
+        // is a diagnostic command and must always print the summary so users
+        // can see what was actually attempted.
+        // --doctor の直後に置いた最初の token はそのままバージョン引数として
+        // 扱われる。不正な文字列でも `v` prefix を付けて probe を走らせ、
+        // サマリまで必ず出す（診断コマンドなので途中 abort せず、実際に
+        // 何を試したかを常に表示する）。
+        var (exitCode, stdout, _) = RunInstallerSnippet(
+            """
+            need_cmd() { :; }
+            detect_platform() { OS_NAME="linux"; ARCH_NAME="x64"; RID="linux-x64"; }
+            curl() { printf '%s' "200"; return 0; }
+
+            run_doctor notaversion
+            """);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Probing version: vnotaversion (explicit argument)", stdout);
+    }
+
+    [Fact]
+    public void Doctor_DispatcherWiresDoctorCliFlag()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        // The CLI dispatcher at the bottom of install.sh must route
+        // --doctor [<version>] to run_doctor, not into main(). Build an
+        // isolated PATH shim that replaces curl + uname with stubs, so the
+        // real dispatcher actually runs end-to-end without trying to reach
+        // the network or read the host platform.
+        // install.sh の CLI dispatcher が --doctor を run_doctor に振ることを
+        // 確認する。curl と uname を PATH shim で差し替え、実ネットワークや
+        // ホスト platform 依存に触れずに dispatcher を end-to-end で走らせる。
+        var shimDir = Path.Combine(Path.GetTempPath(), $"cdidx_doctor_shim_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(shimDir);
+        try
+        {
+            var curlStub = Path.Combine(shimDir, "curl");
+            File.WriteAllText(curlStub, "#!/usr/bin/env bash\nprintf '%s' \"200\"\n");
+            File.SetUnixFileMode(curlStub, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            var unameStub = Path.Combine(shimDir, "uname");
+            // `uname -s` -> Linux, `uname -m` -> x86_64, anything else -> unknown.
+            // install.sh の detect_platform が呼ぶ `uname -s` / `uname -m` の両方に応える。
+            File.WriteAllText(unameStub, "#!/usr/bin/env bash\ncase \"$1\" in\n  -s) echo Linux ;;\n  -m) echo x86_64 ;;\n  *) echo unknown ;;\nesac\n");
+            File.SetUnixFileMode(unameStub, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = "bash",
+                WorkingDirectory = GetRepositoryRoot(),
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            psi.ArgumentList.Add(GetInstallScriptPath());
+            psi.ArgumentList.Add("--doctor");
+            psi.ArgumentList.Add("v7.6.5");
+            psi.Environment["PATH"] = $"{shimDir}:{Environment.GetEnvironmentVariable("PATH") ?? "/usr/bin:/bin"}";
+
+            using var process = Process.Start(psi)
+                ?? throw new InvalidOperationException("Failed to start install.sh --doctor / dispatcher 起動失敗");
+            var stdOut = process.StandardOutput.ReadToEnd();
+            process.StandardError.ReadToEnd();
+            process.WaitForExit();
+
+            Assert.Equal(0, process.ExitCode);
+            Assert.Contains("cdidx installer doctor", stdOut);
+            Assert.Contains("Probing version: v7.6.5 (explicit argument)", stdOut);
+            Assert.Contains("all probed endpoints are reachable", stdOut);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(shimDir);
+        }
+    }
+
     [UnsupportedOSPlatform("windows")]
     private static (int ExitCode, string StdOut, string StdErr) RunInstallerSnippet(string snippet, IReadOnlyDictionary<string, string?>? extraEnvironment = null, bool enforceStrictMode = true)
     {
