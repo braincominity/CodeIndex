@@ -9944,6 +9944,66 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpShortAndTStyleTypeNames_CaptureTypeReferences()
+    {
+        // Regression for issue #644: real type names like `X` and `TResult` must not be
+        // dropped just because they resemble generic parameter spellings.
+        // issue #644 回帰: `X` や `TResult` のような実在型名を、generic parameter に似ている
+        // という理由だけで落としてはならない。
+        const string content = """
+            class X {}
+            class TResult {}
+
+            class Demo
+            {
+                X field;
+                X Make(X value)
+                {
+                    X local = new X();
+                    return local;
+                }
+
+                TResult Use(TResult value) => value;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.True(references.Count(r => r.SymbolName == "X" && r.ReferenceKind == "type_reference") >= 3);
+        Assert.True(references.Count(r => r.SymbolName == "TResult" && r.ReferenceKind == "type_reference") >= 2);
+    }
+
+    [Fact]
+    public void Extract_JavaGenericBounds_CaptureRealBoundsAndIgnoreParameterNames()
+    {
+        // Regression for issue #642: Java generic type-parameter bounds should emit the real
+        // bound types, including nested generic bounds, while keeping the parameter names out
+        // of the type_reference graph.
+        // issue #642 回帰: Java の generic type-parameter bounds は、ネストした generic bound
+        // を含めて実際の bound 型を拾いつつ、parameter 名は type_reference graph に出さないこと。
+        const string content = """
+            class Root {}
+            interface Bound {}
+            class Wrapper<T> {}
+
+            class Demo<T extends Root & Bound> {
+                <U extends Wrapper<Root>> U run(U value) {
+                    return value;
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "java", content);
+        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "Root" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Bound" && r.ReferenceKind == "type_reference");
+        Assert.Contains(references, r => r.SymbolName == "Wrapper" && r.ReferenceKind == "type_reference");
+        Assert.True(references.Count(r => r.SymbolName == "Root" && r.ReferenceKind == "type_reference") >= 2);
+    }
+
+    [Fact]
     public void Extract_TypePositionDetection_DoesNotTreatCallReceiversAsReturnTypes()
     {
         const string csharp = """
@@ -11854,7 +11914,9 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r =>
             r.SymbolName == "Root" && r.ReferenceKind == "call"
             && r.ContainerKind == "function" && r.ContainerName == "Leaf");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Number");
+        Assert.Contains(references, r =>
+            r.SymbolName == "Number" && r.ReferenceKind == "type_reference"
+            && r.ContainerKind == "class" && r.ContainerName == "Leaf");
         Assert.DoesNotContain(references, r => r.SymbolName == "super");
     }
 
