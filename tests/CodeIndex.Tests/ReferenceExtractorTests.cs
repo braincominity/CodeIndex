@@ -746,6 +746,78 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpIndentedRawStringBeforeBlockComment_DoesNotLeakXmlDocReferences()
+    {
+        // Regression: BuildCSharpBlockCommentLines must recognize the closing delimiter of an
+        // indented raw string. Otherwise the scanner stays in raw-string mode, misses the
+        // following ordinary block comment, and treats its `/**` opener as XML doc.
+        // 回帰: BuildCSharpBlockCommentLines はインデント付き raw string の閉じ記号を認識する必要がある。
+        // さもないと raw-string mode に居座って後続の通常 block comment を見失い、その `/**` を XML doc と
+        // 誤認してしまう。
+        var content =
+            "namespace App;\n"
+            + "\n"
+            + "public class Demo\n"
+            + "{\n"
+            + "    public void M()\n"
+            + "    {\n"
+            + "        var raw = \"\"\"\n"
+            + "            ignored content\n"
+            + "            \"\"\";\n"
+            + "\n"
+            + "        /*\n"
+            + "         * /**\n"
+            + "         * <see cref=\"PhantomCall\"/>\n"
+            + "         */\n"
+            + "\n"
+            + "        RealCall();\n"
+            + "    }\n"
+            + "\n"
+            + "    private void RealCall() { }\n"
+            + "    private void PhantomCall() { }\n"
+            + "}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "PhantomCall");
+        Assert.Contains(references, reference => reference.SymbolName == "RealCall" && reference.ContainerName == "M");
+    }
+
+    [Fact]
+    public void Extract_CsharpRawStringCloseWithSemicolon_DoesNotMaskFollowingComment()
+    {
+        // Regression for issue #988: a raw string close line with a trailing semicolon
+        // must still end raw-string tracking so the following comment line is not
+        // treated as part of the raw-string body.
+        // issue #988 回帰: 末尾にセミコロンが付く raw string の閉じ行でも raw-string tracking を
+        // 終了し、その次のコメント行が raw-string 本体として扱われないこと。
+        var lines = new[]
+        {
+            "public class Demo",
+            "{",
+            "    public string Raw() => \"\"\"",
+            "        ignored content",
+            "        \"\"\";   ",
+            "",
+            "    /// <summary><see cref=\"Helper\"/></summary>",
+            "    public void Run() { }",
+            "}",
+        };
+
+        var buildMethod = typeof(ReferenceExtractor).GetMethod(
+            "BuildCSharpMultilineStringContentLines",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(buildMethod);
+
+        var insideStringContent = (bool[])buildMethod!.Invoke(null, new object[] { lines })!;
+
+        Assert.True(insideStringContent[3]);
+        Assert.True(insideStringContent[4]);
+        Assert.False(insideStringContent[6]);
+    }
+
+    [Fact]
     public void Extract_CsharpKeywords_NotExtractedAsReferences()
     {
         // LINQ and C# contextual keywords should be ignored
@@ -10064,6 +10136,52 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatDelimitedDocCommentInsideOrdinaryBlockCommentAsDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                /*
+                /** <summary><see cref="Foo"/></summary>
+                */
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatTripleSlashInsideOrdinaryBlockCommentAsDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                /*
+                /// <summary><see cref="Foo"/></summary>
+                */
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpDocCref_DoesNotTreatTripleSlashInsideFieldInitializerLambdaAsDocComment()
     {
         const string content = """
@@ -10226,6 +10344,56 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatTripleSlashInsideMultilineGenericFieldHeaderAsDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                Dictionary<
+                    /// <summary><see cref="Foo"/></summary>
+                    string,
+                    int> map = new();
+
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_CsharpDocCref_DoesNotTreatDelimitedDocCommentInsideMultilineGenericFieldHeaderAsDocComment()
+    {
+        const string content = """
+            class Foo {}
+            class Demo
+            {
+                Dictionary<
+                    /** <summary><see cref="Foo"/></summary> */
+                    string,
+                    int> map = new();
+
+                void Run() {}
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        Assert.DoesNotContain(
+            references,
+            r => r.SymbolName == "Foo"
+                && r.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
     public void Extract_CsharpDocCref_DoesNotTreatTripleSlashBeforeTopLevelStatementAsLaterLocalFunctionDocComment()
     {
         const string content = """
@@ -10241,8 +10409,7 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(
             references,
             r => r.SymbolName == "Foo"
-                && r.ReferenceKind == "type_reference"
-                && r.Line == 2);
+                && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -10261,8 +10428,7 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(
             references,
             r => r.SymbolName == "Foo"
-                && r.ReferenceKind == "type_reference"
-                && r.Line == 2);
+                && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
@@ -10281,8 +10447,7 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(
             references,
             r => r.SymbolName == "Foo"
-                && r.ReferenceKind == "type_reference"
-                && r.Line == 2);
+                && r.ReferenceKind == "type_reference");
     }
 
     [Fact]
