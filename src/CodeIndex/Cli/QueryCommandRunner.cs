@@ -3884,6 +3884,9 @@ public static class QueryCommandRunner
 
     private static bool TryParsePositiveInt(string rawValue, string optionName, out int value, out string? error)
     {
+        if (string.Equals(optionName, "--max-line-width", StringComparison.Ordinal))
+            return TryParseNonNegativeInt(rawValue, optionName, out value, out error);
+
         if (int.TryParse(rawValue, out value) && value > 0)
         {
             error = null;
