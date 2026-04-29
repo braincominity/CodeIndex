@@ -1012,8 +1012,11 @@ public static class SymbolExtractor
             // Class/object with expanded modifiers: data, sealed, value, inner, annotation, expect, actual
             // クラス/オブジェクト — 拡張修飾子対応: data, sealed, value, inner, annotation, expect, actual
             new("class",    new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:abstract|data|sealed|open|inner|value|annotation|expect|actual)\s+)*(?:class|object)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            // Extension function (fun Type.name) / 拡張関数
-            new("function", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:suspend|inline|infix|operator|tailrec|external|expect|actual)\s+)*fun\s+(?:\w+(?:<[^>]+>)?\.)?(?<name>\w+)\s*[\(<](?:.*?\))?(?::\s*(?<returnType>[^ {=]+))?", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            // Function / 関数 (including extension, override, and abstract forms)
+            // 関数 — 拡張・override・abstract 形を含む
+            new("function", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:suspend|inline|infix|operator|tailrec|external|expect|actual|abstract|override)\s+)*fun\s+(?:\w+(?:<[^>]+>)?\.)?(?<name>\w+)\s*[\(<](?:.*?\))?(?::\s*(?<returnType>[^ {=]+))?", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            // Enum entry / enum エントリ
+            new("property", new Regex(@"^\s{2,}(?<name>[A-Z][A-Z0-9_]*)\s*(?:\((?<returnType>[^)]*)\))?\s*(?:,|\{|;)?\s*$", RegexOptions.Compiled), BodyStyle.Brace, "returnType"),
             // Top-level val/var property / トップレベルプロパティ
             new("property", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:const|lateinit|override)\s+)?(?:val|var)\s+(?<name>\w+)\s*[=:]", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None),
