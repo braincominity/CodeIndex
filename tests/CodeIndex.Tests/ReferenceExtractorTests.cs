@@ -15502,4 +15502,134 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "realScalaCall" && r.ReferenceKind == "call");
     }
+
+    [Fact]
+    public void Extract_KotlinTripleQuotedStringNestedTripleHole_PreservesRealCallReferences()
+    {
+        // Regression for issue #996: a nested `"""..."""` literal opened inside an
+        // outer Kotlin `${...}` interpolation hole still has its own `${expr}` holes.
+        // The masker must preserve real call edges inside those inner holes while
+        // continuing to mask the rest of the nested literal body.
+        // issue #996 回帰: Kotlin の outer `${...}` 内に開いた nested `"""..."""` でも
+        // それ自身の `${expr}` ホール内の本物の call を保持する。
+        const string content = """"
+            package demo
+
+            class Demo {
+                fun m() {
+                    val sql = """
+                        outer: ${ wrap("""
+                            inner: ${innerCall()}
+                            phantom: kotlinNestedPhantom(99)
+                        """) }
+                    """.trimIndent()
+                    realKotlinCall()
+                }
+
+                private fun wrap(x: String): String = x
+                private fun innerCall(): Int = 0
+                private fun realKotlinCall() {}
+                private fun kotlinNestedPhantom(x: Int): Int = x
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "innerCall" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realKotlinCall" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "kotlinNestedPhantom" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SwiftMultilineStringNestedTripleHole_PreservesRealCallReferences()
+    {
+        // Regression for issue #996: a nested `"""..."""` (or `#"""..."""#`) literal
+        // opened inside an outer Swift `\(...)` interpolation hole still has its own
+        // `\(...)` (or `\#(...)` etc.) holes. The masker must preserve real call edges
+        // inside those inner holes while continuing to mask the rest of the body.
+        // issue #996 回帰: Swift の outer `\(...)` 内に開いた nested triple でも
+        // それ自身の `\(expr)` / `\#(expr)` ホール内の本物の call を保持する。
+        const string content = """"
+            import Foundation
+
+            class Demo {
+                func m() {
+                    let sql = """
+                        outer: \( wrap("""
+                            inner: \(innerCall())
+                            phantom: swiftNestedPhantom(99)
+                            """) )
+                        raw: \( wrap(#"""
+                            inner-raw: \#(rawInnerCall())
+                            phantom-raw: swiftRawNestedPhantom(99)
+                            """#) )
+                        """
+                    realSwiftCall()
+                }
+
+                func wrap(_ x: String) -> String { x }
+                func innerCall() -> Int { 0 }
+                func rawInnerCall() -> Int { 0 }
+                func realSwiftCall() {}
+                func swiftNestedPhantom(_ x: Int) -> Int { x }
+                func swiftRawNestedPhantom(_ x: Int) -> Int { x }
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "innerCall" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "rawInnerCall" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realSwiftCall" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "swiftNestedPhantom" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "swiftRawNestedPhantom" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_ScalaStringInterpolatorHoleNestedInterpolatorTriple_PreservesRealCallReferences()
+    {
+        // Regression for issue #996: a nested interpolator-prefixed `s"""..."""` (or
+        // `f"""...`, `raw"""...`) literal opened inside an outer Scala `${...}` hole
+        // still has its own `${expr}` holes. Plain nested `"""..."""` (no prefix)
+        // continues to mask everything because plain Scala triples have no interpolation.
+        // issue #996 回帰: Scala の outer `${...}` 内に開いた interpolator 付き nested
+        // triple は `${expr}` ホール内の call を残し、プレーン nested triple は全マスク。
+        const string content = """"
+            package demo
+
+            class Demo {
+              def m(): Unit = {
+                val interp = s"""
+                    |outer: ${ wrap(s"""
+                    |    inner: ${innerCall()}
+                    |    phantom-prefixed: scalaNestedPhantom(99)
+                    |""") }
+                    |plain-outer: ${ wrap("""
+                    |    plain phantom: scalaPlainNestedPhantom(99)
+                    |""") }
+                  """.stripMargin
+                realScalaCall()
+              }
+
+              def wrap(x: String): String = x
+              def innerCall(): Int = 0
+              def realScalaCall(): Unit = ()
+              def scalaNestedPhantom(x: Int): Int = x
+              def scalaPlainNestedPhantom(x: Int): Int = x
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "scala", content);
+        var references = ReferenceExtractor.Extract(1, "scala", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "innerCall" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realScalaCall" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "scalaNestedPhantom" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "scalaPlainNestedPhantom" && r.ReferenceKind == "call");
+    }
 }
