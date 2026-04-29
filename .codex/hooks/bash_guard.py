@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""
-Claude Code PreToolUse Bash guard for Widthdom/CodeIndex.
-
-Thin adapter around the shared CodeIndex guard core.
-"""
+"""Codex PreToolUse Bash guard for Widthdom/CodeIndex."""
 
 from __future__ import annotations
 
@@ -31,58 +27,20 @@ def load_core():
 core = load_core()
 
 
-def emit_allow(reason: str) -> None:
-    print(
-        json.dumps(
-            {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "allow",
-                    "permissionDecisionReason": reason,
-                }
-            },
-            ensure_ascii=False,
-        )
-    )
-    sys.exit(0)
-
-
-def emit_deny(reason: str) -> None:
-    print(
-        json.dumps(
-            {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": reason,
-                }
-            },
-            ensure_ascii=False,
-        )
-    )
-    sys.exit(0)
-
-
 def load_payload() -> dict:
     try:
         return json.load(sys.stdin)
-    except Exception as exc:
-        emit_deny(f"failed to parse Claude Code hook input; failing closed: {exc}")
+    except Exception:
+        return {}
 
 
 def get_command(payload: dict) -> str:
     tool_input = payload.get("tool_input") or {}
     command = tool_input.get("command")
-    if not isinstance(command, str):
-        emit_deny("Bash command missing from hook input; failing closed")
-    return command
+    return command if isinstance(command, str) else ""
 
 
 def resolve_project_root(cwd: Path) -> Path:
-    env_root = os.environ.get("CLAUDE_PROJECT_DIR")
-    if env_root:
-        return Path(env_root).resolve()
-
     try:
         proc = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
@@ -103,6 +61,22 @@ def resolve_project_root(cwd: Path) -> Path:
     return cwd.resolve()
 
 
+def deny(reason: str) -> None:
+    print(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": reason,
+                }
+            },
+            ensure_ascii=False,
+        )
+    )
+    sys.exit(2)
+
+
 def main() -> None:
     payload = load_payload()
     command = get_command(payload)
@@ -111,19 +85,19 @@ def main() -> None:
 
     decision = core.evaluate_bash_command(command, cwd=cwd, project_root=project_root)
     if not decision.allowed:
-        emit_deny(decision.reason)
+        deny(decision.reason)
 
     for script in core.candidate_script_paths(command, cwd):
         script_decision = core.check_script_file(script, project_root)
         if not script_decision.allowed:
-            emit_deny(script_decision.reason)
+            deny(script_decision.reason)
 
     if re.search(r"(?i)(^|[\s;&|()`])git\s+commit\b", command):
         commit_decision = core.staged_secret_check(cwd)
         if not commit_decision.allowed:
-            emit_deny(commit_decision.reason)
+            deny(commit_decision.reason)
 
-    emit_allow(decision.reason)
+    sys.exit(0)
 
 
 if __name__ == "__main__":
