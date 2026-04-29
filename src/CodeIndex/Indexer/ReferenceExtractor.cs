@@ -5356,9 +5356,72 @@ public static class ReferenceExtractor
             if (string.IsNullOrWhiteSpace(previousLine))
                 continue;
 
-            return LineEndsWithCSharpToken(previousLine, "case")
+            if (LineEndsWithCSharpToken(previousLine, "case")
                 || LineEndsWithCSharpToken(previousLine, "is")
-                || LineEndsWithCSharpToken(previousLine, "not");
+                || LineEndsWithCSharpToken(previousLine, "not"))
+            {
+                return true;
+            }
+
+            break;
+        }
+
+        // Switch-expression arms (`Point(...) => ...`) do not have a `case` / `is` anchor,
+        // so the same positional pattern suppression has to look for the trailing arrow.
+        if (IsCSharpSwitchExpressionPatternHead(preparedLines, lineIndex, preparedLine, nameIndex))
+            return true;
+
+        return false;
+    }
+
+    private static bool IsCSharpSwitchExpressionPatternHead(string[] preparedLines, int lineIndex, string preparedLine, int nameIndex)
+    {
+        var cursor = nameIndex;
+        while (cursor < preparedLine.Length && IsCSharpIdentifierPart(preparedLine[cursor]))
+            cursor++;
+
+        cursor = SkipCSharpTriviaForward(preparedLine, cursor);
+
+        var openParenIndex = preparedLine.IndexOf('(', cursor);
+        if (openParenIndex < 0)
+            return false;
+
+        var parenDepth = 0;
+        for (var i = openParenIndex; i < preparedLine.Length; i++)
+        {
+            switch (preparedLine[i])
+            {
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    parenDepth--;
+                    if (parenDepth == 0)
+                    {
+                        var afterClose = SkipCSharpTriviaForward(preparedLine, i + 1);
+                        if (afterClose + 1 < preparedLine.Length
+                            && preparedLine[afterClose] == '='
+                            && preparedLine[afterClose + 1] == '>')
+                        {
+                            return true;
+                        }
+
+                        for (var next = lineIndex + 1; next < preparedLines.Length; next++)
+                        {
+                            var nextLine = preparedLines[next];
+                            if (string.IsNullOrWhiteSpace(nextLine))
+                                continue;
+
+                            var nextCursor = SkipCSharpTriviaForward(nextLine, 0);
+                            return nextCursor + 1 < nextLine.Length
+                                && nextLine[nextCursor] == '='
+                                && nextLine[nextCursor + 1] == '>';
+                        }
+
+                        return false;
+                    }
+                    break;
+            }
         }
 
         return false;
