@@ -5986,6 +5986,9 @@ public static class ReferenceExtractor
             return true;
         }
 
+        if (inOrdinaryBlockComment)
+            return false;
+
         if (line.AsSpan(firstNonWhitespaceIndex).StartsWith("///", StringComparison.Ordinal))
         {
             if (line.Length != firstNonWhitespaceIndex + 3 && line[firstNonWhitespaceIndex + 3] == '/')
@@ -5997,9 +6000,6 @@ public static class ReferenceExtractor
         }
 
         if (!line.AsSpan(firstNonWhitespaceIndex).StartsWith("/**", StringComparison.Ordinal))
-            return false;
-
-        if (inOrdinaryBlockComment)
             return false;
 
         var closeAfterOpenIndex = line.IndexOf("*/", firstNonWhitespaceIndex + 3, StringComparison.Ordinal);
