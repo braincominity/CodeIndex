@@ -1013,7 +1013,7 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, reference => reference.SymbolName == "import");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "super");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "yield");
-        Assert.Contains(references, reference => reference.SymbolName == "require" && reference.ContainerName == "constructor");
+        Assert.Contains(references, reference => reference.SymbolName == "require" && reference.ContainerName == "Derived");
     }
 
     [Fact]
