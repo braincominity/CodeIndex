@@ -16145,6 +16145,139 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_KotlinFourLevelDeepNestedTriple_DoesNotLeakPhantomCalls()
+    {
+        // Regression for issue #1002: a 4th nested triple opened inside the deep
+        // Kotlin body must not unwind the 3-deep frame early and expose later
+        // source on the same outer hole.
+        // issue #1002 回帰: Kotlin で deep body 内に開いた 4 段目の triple が
+        // 3 段深い frame を早抜けさせず、後続ソースを露出させないこと。
+        const string content = """"
+            package demo
+
+            class Demo {
+                fun m() {
+                    val sql = """
+                        outer: ${ wrap("""
+                            inner: ${ helper("""
+                                deep: ${ deeper("""
+                                    kotlinDeepestPhantom(99)
+                                """)
+                                kotlinAfterDeep4Phantom()
+                            """) }
+                        """) }
+                    """.trimIndent()
+                    realKotlinCall()
+                }
+
+                private fun wrap(x: String): String = x
+                private fun helper(x: String): String = x
+                private fun deeper(x: String): String = x
+                private fun kotlinAfterDeep4Phantom(): Int = 0
+                private fun kotlinDeepestPhantom(x: Int): Int = x
+                private fun realKotlinCall() {}
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "kotlinDeepestPhantom" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "kotlinAfterDeep4Phantom" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "helper" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realKotlinCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SwiftFourLevelDeepNestedTriple_DoesNotLeakPhantomCalls()
+    {
+        // Regression for issue #1002: a 4th nested triple opened inside the deep
+        // Swift body must not unwind the 3-deep frame early, including hash-
+        // delimited nested forms.
+        // issue #1002 回帰: Swift で deep body 内に開いた 4 段目の triple が
+        // 3 段深い frame を早抜けさせず、hash 付き nested 形式も含めて守ること。
+        const string content = """"
+            import Foundation
+
+            class Demo {
+                func m() {
+                    let sql = """
+                        outer: \( wrap("""
+                            inner: \( helper(#"""
+                                deep: \( deeper("""
+                                    swiftDeepestPhantom(99)
+                                """) )
+                                swiftAfterDeep4Phantom()
+                            """#) )
+                        """) )
+                    """
+                    realSwiftCall()
+                }
+
+                func wrap(_ x: String) -> String { x }
+                func helper(_ x: String) -> String { x }
+                func deeper(_ x: String) -> String { x }
+                func swiftAfterDeep4Phantom() -> Int { 0 }
+                func swiftDeepestPhantom(_ x: Int) -> Int { x }
+                func realSwiftCall() {}
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "swiftDeepestPhantom" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "swiftAfterDeep4Phantom" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "helper" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realSwiftCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_ScalaFourLevelDeepNestedTriple_DoesNotLeakPhantomCalls()
+    {
+        // Regression for issue #1002: a 4th nested triple opened inside the deep
+        // Scala body must not unwind the 3-deep frame early.
+        // issue #1002 回帰: Scala で deep body 内に開いた 4 段目の triple が
+        // 3 段深い frame を早抜けさせないこと。
+        const string content = """"
+            package demo
+
+            class Demo {
+              def m(): Unit = {
+                val interp = s"""
+                    |outer: ${ wrap(s"""
+                    |    inner: ${ helper(s"""
+                    |        deep: ${ deeper(s"""
+                    |            scalaDeepestPhantom(99)
+                    |        """) }
+                    |        scalaAfterDeep4Phantom()
+                    |    """) }
+                  """.stripMargin
+                realScalaCall()
+              }
+
+              def wrap(x: String): String = x
+              def helper(x: String): String = x
+              def deeper(x: String): String = x
+              def scalaAfterDeep4Phantom(): Int = 0
+              def scalaDeepestPhantom(x: Int): Int = x
+              def realScalaCall(): Unit = ()
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "scala", content);
+        var references = ReferenceExtractor.Extract(1, "scala", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "scalaDeepestPhantom" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "scalaAfterDeep4Phantom" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "helper" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realScalaCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_SwiftOuterHole_HashDelimitedRawStringIsMasked()
     {
         // Regression for codex review #9 finding: a `#"..."#` extended raw string

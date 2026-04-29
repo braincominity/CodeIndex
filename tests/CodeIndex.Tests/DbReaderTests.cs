@@ -2863,6 +2863,28 @@ public class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void AnalyzeSymbol_BareVerbatimTokenFailsClosed()
+    {
+        InsertIndexedFile("src/app.cs", "csharp", "public class Foo { public int Bar() => 0; }\n");
+
+        var analysis = _reader.AnalyzeSymbol("@", lang: "csharp", exact: true);
+        var callers = _reader.GetCallers("@", lang: "csharp", exact: true);
+        var callees = _reader.GetCallees("@", lang: "csharp", exact: true);
+
+        Assert.Equal("@", analysis.Query);
+        Assert.Empty(analysis.Definitions);
+        Assert.Empty(analysis.References);
+        Assert.Empty(analysis.Callers);
+        Assert.Empty(analysis.Callees);
+        Assert.Empty(analysis.NearbySymbols);
+        Assert.Null(analysis.File);
+        Assert.Empty(callers);
+        Assert.Empty(callees);
+        Assert.Equal(0, _reader.CountCallers("@", lang: "csharp", exact: true));
+        Assert.Equal(0, _reader.CountCallees("@", lang: "csharp", exact: true));
+    }
+
+    [Fact]
     public void GraphReaders_ExactPredicatesAreIndexable()
     {
         // Guard: `references / callers / callees --exact` must stay SARGable so SQLite can
