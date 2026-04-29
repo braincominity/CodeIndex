@@ -36,7 +36,7 @@ The loop is not just "suggest ideas". It is:
 
 - Create a work branch first. Use a descriptive branch name.
 - Keep **one task per commit**.
-- Before every commit, explicitly work through the `CLAUDE.md` per-commit checklist.
+- Before every commit, explicitly work through `.codex/workflows/precommit.md`.
 - Before every commit, review README `# Code Search Rules` and `# コードベース検索ルール`; strengthen them if AI behavior should change.
 - After every commit, rebuild `cdidx` from the latest local source and refresh `.cdidx/codeindex.db` using that freshly built binary.
 - Prefer the lightest truthful refresh mode: use `--files` only for known in-place edits or new files, use `--commits HEAD` after a normal commit because it tracks renames/deletes from git history, and reserve a full `cdidx . --json` scan for cases where the checkout itself changed broadly or stale files must be purged repo-wide.
@@ -194,11 +194,11 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll inspect ResolveGitCommonDir --
 Before committing, explicitly review:
 1. Tests
 2. TESTING_GUIDE.md
-3. CHANGELOG.md — New entries go under `[Unreleased]` only. Never add to or modify an existing versioned heading. See CLAUDE.md "CHANGELOG style" for the full rules.
+3. CHANGELOG.md — New entries go under `[Unreleased]` only. Never add to or modify an existing versioned heading. See `AGENT_GUIDE.md` and `.codex/workflows/precommit.md` for the full rules.
 4. README.md
 5. README `# Code Search Rules` / `# コードベース検索ルール`
 6. DEVELOPER_GUIDE.md
-7. CLAUDE.md
+7. `AGENT_GUIDE.md` and `.codex/workflows/precommit.md`
 8. This file (`SELF_IMPROVEMENT.md`)
 9. PR description, if a PR already exists
 
@@ -376,7 +376,7 @@ Read `SELF_IMPROVEMENT.md`, inspect the current repo with cdidx itself, identify
 
 - まず作業ブランチを切る。名前は内容が分かるものにする。
 - **1案件1コミット** を守る。
-- 毎コミット前に、`CLAUDE.md` の「コミットごとのチェックリスト」を明示的に確認する。
+- 毎コミット前に、`.codex/workflows/precommit.md` を明示的に確認する。
 - 毎コミット前に、README の `# Code Search Rules` と `# コードベース検索ルール` を見直し、AIの検索行動を変えるべきなら強化する。
 - 毎コミット後に、ローカルソースの最新状態から `cdidx` を再ビルドし、その新しいバイナリで `.cdidx/codeindex.db` を更新する。
 - 更新モードは「正しさを保てる範囲で最も軽いもの」を優先する。`--files` は把握している in-place 編集や新規追加だけに使い、rename/delete/拡張子変更を含む場合は旧 path も明示的に渡すか、通常どおり `--commits HEAD` を使う。checkout 全体が大きく動いた場合や repo 全体で stale file を掃除したい場合だけ `cdidx . --json` のフルスキャンへ上げる。
@@ -530,11 +530,11 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll inspect ResolveGitCommonDir --
 コミット前に、明示的に次を確認します:
 1. Tests
 2. TESTING_GUIDE.md
-3. CHANGELOG.md — 新エントリは `[Unreleased]` のみに書く。既存のバージョン見出しには追加も変更もしない。完全なルールは CLAUDE.md「CHANGELOGのスタイル」参照。
+3. CHANGELOG.md — 新エントリは `[Unreleased]` のみに書く。既存のバージョン見出しには追加も変更もしない。完全なルールは `AGENT_GUIDE.md` と `.codex/workflows/precommit.md` 参照。
 4. README.md
 5. README `# Code Search Rules` / `# コードベース検索ルール`
 6. DEVELOPER_GUIDE.md
-7. CLAUDE.md
+7. `AGENT_GUIDE.md` と `.codex/workflows/precommit.md`
 8. このファイル（`SELF_IMPROVEMENT.md`）
 9. 既存PRがあるなら PR説明
 
