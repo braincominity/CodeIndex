@@ -498,6 +498,23 @@ public class McpServerTests : IDisposable
         Assert.Equal("src/app.cs", response["result"]!["structuredContent"]!["results"]![0]!["path"]!.GetValue<string>());
     }
 
+    [Theory]
+    [InlineData("definition")]
+    [InlineData("references")]
+    [InlineData("callers")]
+    [InlineData("callees")]
+    [InlineData("analyze_symbol")]
+    [InlineData("impact_analysis")]
+    public void ToolsCall_BareVerbatimPrefix_IsRejected(string toolName)
+    {
+        var request = JsonNode.Parse($@"{{""jsonrpc"":""2.0"",""id"":1,""method"":""tools/call"",""params"":{{""name"":""{toolName}"",""arguments"":{{""query"":""@""}}}}}}")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]!.GetValue<bool>());
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("bare verbatim prefixes like `@` are not valid queries", text);
+    }
+
     [Fact]
     public void ToolsCall_Search_SnippetLinesControlsExcerptLength()
     {

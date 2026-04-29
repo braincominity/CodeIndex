@@ -142,7 +142,7 @@ public static class QueryCommandRunner
                 Console.Error.WriteLine($"({results.Count} results in {fileCount} files)");
             }
             return CommandExitCodes.Success;
-        }, options.RawFts);
+        });
     }
 
     public static int RunDefinition(string[] cmdArgs, JsonSerializerOptions jsonOptions)
@@ -163,12 +163,27 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(exactError);
             return CommandExitCodes.UsageError;
         }
+        if (exact && options.Query is not null && IsBareVerbatimQueryToken(options.Query) && options.CountOnly && string.Equals(options.Lang, "csharp", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine(options.Json
+                ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions)
+                : "0");
+            return CommandExitCodes.Success;
+        }
         if (string.IsNullOrWhiteSpace(options.Query))
         {
             WriteUsageError(
                 "definition requires a symbol query argument",
                 GetUsageLineOrThrow("definition"),
                 "Add the symbol name after the command, for example: `cdidx definition QueryCommandRunner`.");
+            return CommandExitCodes.UsageError;
+        }
+        if (IsBareVerbatimQueryToken(options.Query))
+        {
+            WriteUsageError(
+                "definition requires a symbol query argument",
+                GetUsageLineOrThrow("definition"),
+                "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
             return CommandExitCodes.UsageError;
         }
         if (TryWriteUnexpectedExtraPositionals("definition", options))
@@ -300,6 +315,14 @@ public static class QueryCommandRunner
                 "Add the symbol name you want to trace, for example: `cdidx references QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
+        if (IsBareVerbatimQueryToken(options.Query))
+        {
+            WriteUsageError(
+                "references requires a symbol query argument",
+                GetUsageLineOrThrow("references"),
+                "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
+            return CommandExitCodes.UsageError;
+        }
         if (TryWriteUnexpectedExtraPositionals("references", options))
             return CommandExitCodes.UsageError;
 
@@ -414,6 +437,14 @@ public static class QueryCommandRunner
                 "Add the callee symbol name after the command, for example: `cdidx callers QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
+        if (IsBareVerbatimQueryToken(options.Query))
+        {
+            WriteUsageError(
+                "callers requires a symbol query argument",
+                GetUsageLineOrThrow("callers"),
+                "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
+            return CommandExitCodes.UsageError;
+        }
         if (TryWriteUnexpectedExtraPositionals("callers", options))
             return CommandExitCodes.UsageError;
 
@@ -524,6 +555,14 @@ public static class QueryCommandRunner
                 "Add the caller symbol name after the command, for example: `cdidx callees RunIndex`.");
             return CommandExitCodes.UsageError;
         }
+        if (IsBareVerbatimQueryToken(options.Query))
+        {
+            WriteUsageError(
+                "callees requires a caller query argument",
+                GetUsageLineOrThrow("callees"),
+                "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
+            return CommandExitCodes.UsageError;
+        }
         if (TryWriteUnexpectedExtraPositionals("callees", options))
             return CommandExitCodes.UsageError;
 
@@ -623,6 +662,8 @@ public static class QueryCommandRunner
         if (!hadExplicitInput)
             return (null, false);
         var deduped = raw.Where(s => !string.IsNullOrEmpty(s)).Distinct().ToList();
+        if (deduped.Any(IsBareVerbatimQueryToken))
+            return (null, hadExplicitInput);
         return (deduped.Count == 0 ? null : deduped, hadExplicitInput);
     }
 
@@ -644,13 +685,24 @@ public static class QueryCommandRunner
             Console.Error.WriteLine(exactError);
             return CommandExitCodes.UsageError;
         }
+        var exactBareVerbatimOnly = exact && string.Equals(options.Lang, "csharp", StringComparison.OrdinalIgnoreCase) && (
+            (options.Query is not null && IsBareVerbatimQueryToken(options.Query) && options.ExtraNames.Count == 0) ||
+            (options.Query is null && options.ExtraNames.Count > 0 && options.ExtraNames.All(IsBareVerbatimQueryToken)));
         var (symbolQueries, hadExplicitInput) = BuildSymbolQueryList(options);
         if (hadExplicitInput && symbolQueries == null)
         {
-            // Fail closed: an explicit name/query was provided but normalized to empty (e.g. "|",
-            // --name ""). Returning null here would broaden into an unfiltered symbol dump. /
-            // 明示入力が正規化で空になった場合、null のまま検索すると全件検索に化けるので必ず拒否する。
-            Console.Error.WriteLine("Error: symbol name list is empty after normalization. Check for empty --name values or bare '|' separators. / シンボル名リストが正規化の結果空です。--name の空値や単独の '|' を確認してください。");
+            if (exactBareVerbatimOnly && options.CountOnly)
+            {
+                Console.WriteLine(options.Json
+                    ? JsonSerializer.Serialize(new { count = 0, files = 0 }, jsonOptions)
+                    : "0");
+                return CommandExitCodes.Success;
+            }
+            // Fail closed: an explicit name/query was provided but normalized to empty or a bare
+            // verbatim prefix (e.g. `|`, `@`, `--name ""`). Returning null here would broaden into
+            // an unfiltered symbol dump. /
+            // 明示入力が正規化で空、または verbatim 接頭辞単独（`|`、`@`、`--name ""` など）になった場合は必ず拒否する。
+            Console.Error.WriteLine("Error: symbol name list is empty after normalization. Check for empty --name values, bare verbatim prefixes like `@`, or bare `|` separators. / シンボル名リストが正規化の結果空です。--name の空値、`@` のような verbatim 接頭辞単独、単独の `|` を確認してください。");
             return CommandExitCodes.UsageError;
         }
         if (symbolQueries != null && symbolQueries.Count > MaxSymbolQueryNames)
@@ -1096,11 +1148,8 @@ public static class QueryCommandRunner
                     value = args[i + 1];
                     i++;
                 }
-                if (arg == "--limit" || arg == "--top")
-                {
-                    if (!int.TryParse(value, out var limit) || limit <= 0)
-                        return $"Error: {arg} requires a positive integer, got '{value}'";
-                }
+                if ((arg == "--limit" || arg == "--top") && (!int.TryParse(value, out var limit) || limit <= 0))
+                    return $"Error: {arg} requires a positive integer, got '{value}'";
                 if (arg == "--max-line-width" && (!int.TryParse(value, out var widthValue) || widthValue < 0))
                     return $"Error: {arg} requires a non-negative integer, got '{value}'";
                 if (arg == "--max-line-width" && int.TryParse(value, out var widthCeil) && widthCeil > LineWidthFormatter.MaxAllowedLineWidth)
@@ -1263,6 +1312,14 @@ public static class QueryCommandRunner
                 "Add the symbol you want to inspect, for example: `cdidx inspect QueryCommandRunner`.");
             return CommandExitCodes.UsageError;
         }
+        if (IsBareVerbatimQueryToken(options.Query))
+        {
+            WriteUsageError(
+                "inspect requires a symbol query argument",
+                GetUsageLineOrThrow("inspect"),
+                "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
+            return CommandExitCodes.UsageError;
+        }
         if (TryWriteUnexpectedExtraPositionals("inspect", options))
             return CommandExitCodes.UsageError;
 
@@ -1392,8 +1449,8 @@ public static class QueryCommandRunner
                 Console.WriteLine();
                 foreach (var sym in outline.Symbols)
                 {
-                    // Indent nested symbols under their container / コンテナ内のシンボルをインデント
-                    var indent = sym.Depth > 0 ? new string(' ', sym.Depth * 4) : "";
+                    // Indent nested symbols by computed tree depth / コンテナ連鎖の深さでインデント
+                    var indent = sym.Depth > 0 ? new string(' ', 4 * sym.Depth) : "";
                     var ret = sym.ReturnType != null ? $": {sym.ReturnType} " : "";
                     var sig = sym.Signature ?? $"{sym.Kind} {sym.Name}";
                     // Avoid duplicating visibility when signature already contains it
@@ -1658,6 +1715,14 @@ public static class QueryCommandRunner
                 "impact requires a symbol query argument",
                 GetUsageLineOrThrow("impact"),
                 "Add the symbol whose callers you want to inspect, for example: `cdidx impact QueryCommandRunner`.");
+            return CommandExitCodes.UsageError;
+        }
+        if (IsBareVerbatimQueryToken(options.Query))
+        {
+            WriteUsageError(
+                "impact requires a symbol query argument",
+                GetUsageLineOrThrow("impact"),
+                "Add a real symbol name after the command; bare verbatim prefixes like `@` are not valid queries.");
             return CommandExitCodes.UsageError;
         }
         if (TryWriteUnexpectedExtraPositionals("impact", options))
@@ -2879,7 +2944,7 @@ public static class QueryCommandRunner
     // preview 系オプションの検証はコマンド別 allowlist に寄せたため、この shim は常に null を返す。
     private static string? ValidatePreviewOptions(string commandName, string[] args, bool allowMaxLineWidth, bool allowFocusOptions) => null;
 
-    private static int WithDb(string dbPath, Func<DbReader, int> action, bool allowFtsQuerySyntaxErrors = false)
+    private static int WithDb(string dbPath, Func<DbReader, int> action)
     {
         if (string.IsNullOrWhiteSpace(dbPath))
         {
@@ -2910,13 +2975,23 @@ public static class QueryCommandRunner
             var reader = new DbReader(db.Connection, db.IsReadOnly);
             return action(reader);
         }
+        catch (FtsQuerySyntaxException ex)
+        {
+            Console.Error.WriteLine($"Error: FTS5 query syntax: {ex.Message}");
+            if (ex.Message.Contains("no such column", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.Error.WriteLine("Hint: `--fts` passes raw FTS5 syntax, so `:` is treated as a column qualifier. Drop `--fts` if you want literal-safe search.");
+            }
+            else
+            {
+                Console.Error.WriteLine("Hint: `--fts` passes raw FTS5 syntax. Fix the query or drop `--fts` to use literal-safe search.");
+            }
+            return CommandExitCodes.UsageError;
+        }
         catch (Exception ex)
         {
             if (JsonOutputFailure.TryHandle(ex, out var exitCode))
                 return exitCode;
-
-            if (allowFtsQuerySyntaxErrors && TryWriteFtsQuerySyntaxError(ex, out var ftsExitCode))
-                return ftsExitCode;
 
             if (ex is SqliteException sqliteEx && sqliteEx.SqliteErrorCode == 13)
             {
@@ -2935,36 +3010,6 @@ public static class QueryCommandRunner
         {
             Database.DbDebug.ResetContext();
         }
-    }
-
-    private static bool TryWriteFtsQuerySyntaxError(Exception ex, out int exitCode)
-    {
-        exitCode = default;
-        if (ex is not SqliteException sqliteEx)
-            return false;
-
-        if (!IsFtsQuerySyntaxError(sqliteEx.Message))
-            return false;
-
-        Console.Error.WriteLine($"Error: FTS5 query syntax: {sqliteEx.Message}");
-        Console.Error.WriteLine(BuildFtsQuerySyntaxHint(sqliteEx.Message));
-        exitCode = CommandExitCodes.UsageError;
-        return true;
-    }
-
-    private static bool IsFtsQuerySyntaxError(string message)
-    {
-        return message.Contains("fts5: syntax error", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("no such column:", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("unterminated string", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string BuildFtsQuerySyntaxHint(string message)
-    {
-        if (message.Contains("no such column:", StringComparison.OrdinalIgnoreCase))
-            return "Hint: --fts treats `:` as an FTS5 column qualifier. If `:` is part of the identifier, drop `--fts` to use literal-safe search.";
-
-        return "Hint: fix the raw FTS5 syntax or drop `--fts` to use literal-safe search.";
     }
 
     private static void WriteNumberedExcerpt(int startLine, string content)
@@ -3937,6 +3982,12 @@ public static class QueryCommandRunner
 
     private static bool IsRecognizedOptionToken(string value) =>
         ValueTakingOptions.Contains(value) || FlagOnlyOptions.Contains(value);
+
+    private static bool IsBareVerbatimQueryToken(string value)
+    {
+        var trimmed = value.Trim();
+        return trimmed.Length > 0 && trimmed.All(ch => ch == '@');
+    }
 
     private static bool TrySplitInlineOptionValue(string token, out string? optionName)
     {
