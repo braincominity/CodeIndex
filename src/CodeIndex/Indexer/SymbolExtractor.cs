@@ -1014,6 +1014,8 @@ public static class SymbolExtractor
             new("class",    new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:abstract|data|sealed|open|inner|value|annotation|expect|actual)\s+)*(?:class|object)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Extension function (fun Type.name) / 拡張関数
             new("function", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:suspend|inline|infix|operator|tailrec|external|expect|actual)\s+)*fun\s+(?:\w+(?:<[^>]+>)?\.)?(?<name>\w+)\s*[\(<](?:.*?\))?(?::\s*(?<returnType>[^ {=]+))?", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            // Secondary constructor / セカンダリコンストラクタ
+            new("function", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*constructor\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Top-level val/var property / トップレベルプロパティ
             new("property", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:const|lateinit|override)\s+)?(?:val|var)\s+(?<name>\w+)\s*[=:]", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None),
@@ -2752,6 +2754,7 @@ public static class SymbolExtractor
 
         AssignContainers(symbols, lines, csharpLineStartStates);
         MaterializeRecordPrimaryComponentSymbols(symbols, pendingRecordPrimaryComponents);
+        NormalizeKotlinSecondaryConstructorNames(symbols);
         PopulateDeclaredContainerQualifiedNames(symbols);
         return symbols;
     }
@@ -19119,6 +19122,33 @@ public static class SymbolExtractor
             || string.Equals(trimmedName, "companion object", StringComparison.Ordinal)
             ? "Companion"
             : name;
+    }
+
+    private static void NormalizeKotlinSecondaryConstructorNames(List<SymbolRecord> symbols)
+    {
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind != "function"
+                || symbol.ContainerKind != "class"
+                || string.IsNullOrWhiteSpace(symbol.ContainerName))
+            {
+                continue;
+            }
+
+            var signature = symbol.Signature?.TrimStart();
+            if (string.IsNullOrWhiteSpace(signature))
+                continue;
+
+            var isSecondaryConstructor = signature.StartsWith("constructor", StringComparison.Ordinal)
+                || signature.StartsWith("public constructor", StringComparison.Ordinal)
+                || signature.StartsWith("private constructor", StringComparison.Ordinal)
+                || signature.StartsWith("protected constructor", StringComparison.Ordinal)
+                || signature.StartsWith("internal constructor", StringComparison.Ordinal);
+            if (!isSecondaryConstructor)
+                continue;
+
+            symbol.Name = symbol.ContainerName;
+        }
     }
 
     private static string NormalizeSqlSymbolName(string name)

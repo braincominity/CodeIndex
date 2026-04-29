@@ -10673,6 +10673,35 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Kotlin_DetectsSecondaryConstructors()
+    {
+        var content = """
+            class Person(val name: String) {
+                var age: Int = 0
+
+                constructor(name: String, age: Int) : this(name) { this.age = age }
+
+                constructor() : this("anonymous", 0)
+
+                fun greet(): String = "Hi $name"
+            }
+
+            class Box<T>(val value: T) {
+                private constructor(list: List<T>) : this(list.first())
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Person");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Box");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Person" && s.ContainerName == "Person" && s.Signature == "constructor(name: String, age: Int) : this(name) { this.age = age }");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Person" && s.ContainerName == "Person" && s.Signature == "constructor() : this(\"anonymous\", 0)");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "Box" && s.ContainerName == "Box" && s.Visibility == "private" && s.Signature == "private constructor(list: List<T>) : this(list.first())");
+        Assert.DoesNotContain(symbols, s => s.Kind == "function" && s.Name == "constructor");
+    }
+
+    [Fact]
     public void Extract_Kotlin_DetectsExpandedFeatures()
     {
         var content = "sealed interface Shape\nvalue class Email(val value: String)\ninner class Handler\n\ncompanion object {\n    const val MAX = 100\n}\n\nfun String.truncate(max: Int): String = take(max)\nsuspend fun fetchData(): List<Int> = emptyList()\ninline fun <reified T> parse(json: String): T = TODO()";
