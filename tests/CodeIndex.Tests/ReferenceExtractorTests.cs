@@ -67,6 +67,60 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_Css_CustomPropertiesAnimationsAndSelectors_AreReferenced()
+    {
+        const string content = """
+            :root {
+                --primary-color: #336699;
+                --spacing-unit: 8px;
+            }
+
+            .card {
+                color: var(--primary-color);
+                padding: var(--spacing-unit);
+                background: url('images/bg.png');
+            }
+
+            .btn-primary {
+                background: var(--primary-color);
+            }
+
+            .container .card {
+                margin: calc(var(--spacing-unit) * 2);
+            }
+
+            @media screen { .inline-media { color: red; } }
+
+            @keyframes fade-in {
+                from { opacity: 0; }
+                to   { opacity: 1; }
+            }
+
+            .modal {
+                animation-name: fade-in;
+                animation-duration: 0.3s;
+                animation: fade-in 0.3s ease-in;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "css", content);
+        var references = ReferenceExtractor.Extract(1, "css", content, symbols);
+
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "primary-color"
+            && reference.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "spacing-unit"
+            && reference.ReferenceKind == "reference"));
+        Assert.Single(references.Where(reference =>
+            reference.SymbolName == ".card"
+            && reference.ReferenceKind == "reference"));
+        Assert.Equal(2, references.Count(reference =>
+            reference.SymbolName == "fade-in"
+            && reference.ReferenceKind == "reference"));
+    }
+
+    [Fact]
     public void Extract_CsharpExpressionBodiedMembers_AttributeToIndividualMember()
     {
         // issue #233: expression-bodied methods and properties must attribute their
