@@ -618,6 +618,18 @@ public partial class DbReader
     /// </summary>
     public SymbolAnalysisResult AnalyzeSymbol(string query, int limit = 10, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth)
     {
+        if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
+        {
+            var workspaceFreshness = GetWorkspaceFreshness();
+            return new SymbolAnalysisResult
+            {
+                Query = query,
+                WorkspaceIndexedAt = workspaceFreshness.IndexedAt,
+                WorkspaceLatestModified = workspaceFreshness.LatestModified,
+                GraphTableAvailable = _hasReferencesTable,
+            };
+        }
+
         var normalizedQuery = NormalizeCSharpVerbatimQuery(query, lang) ?? query;
         // Propagate `exact` to every bundled sub-query so the one-round-trip AI workflow
         // (`inspect` / MCP `analyze_symbol`) keeps the same precision contract as the leaf
