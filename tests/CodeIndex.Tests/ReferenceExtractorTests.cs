@@ -14998,6 +14998,128 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScriptJsxComponentOpenTags_CaptureCapitalizedElementUsages()
+    {
+        const string content = """
+            function MyButton({ label }: { label: string }) {
+                return <button>{label}</button>;
+            }
+
+            function Header() {
+                return <h1>hi</h1>;
+            }
+
+            const UI = { Card: ({ children }: any) => <div>{children}</div> };
+
+            export default function App() {
+                const n = 0;
+                return (
+                    <div>
+                        <Header />
+                        <MyButton label="click" />
+                        <MyButton label={`n=${n}`} />
+                        <UI.Card>
+                            <MyButton label="nested" />
+                        </UI.Card>
+                        <MyButton
+                            label="multiline"
+                        />
+                        <MyButton label={String(n)} />
+                    </div>
+                );
+            }
+            """;
+
+        var references = ReferenceExtractor.Extract(
+            1,
+            "typescript",
+            content,
+            Array.Empty<CodeIndex.Models.SymbolRecord>(),
+            path: "App.tsx");
+
+        Assert.Contains(references, r =>
+            r.SymbolName == "MyButton"
+            && r.ReferenceKind == "call"
+            && r.Context.StartsWith("<MyButton", StringComparison.Ordinal));
+        Assert.Contains(references, r =>
+            r.SymbolName == "Header"
+            && r.ReferenceKind == "call"
+            && r.Context.StartsWith("<Header", StringComparison.Ordinal));
+        Assert.Contains(references, r =>
+            r.SymbolName == "UI"
+            && r.ReferenceKind == "call"
+            && r.Context.StartsWith("<UI.Card", StringComparison.Ordinal));
+        Assert.Contains(references, r =>
+            r.SymbolName == "Card"
+            && r.ReferenceKind == "call"
+            && r.Context.StartsWith("<UI.Card", StringComparison.Ordinal));
+        Assert.Contains(references, r =>
+            r.SymbolName == "String"
+            && r.ReferenceKind == "call"
+            && r.Context.Contains("String(n)", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, r => r.SymbolName is "button" or "div" or "h1");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptJsxComponentOpenTags_AreIgnoredOutsideJsxFiles()
+    {
+        const string content = """
+            function MyButton({ label }: { label: string }) {
+                return <button>{label}</button>;
+            }
+
+            function Header() {
+                return <h1>hi</h1>;
+            }
+
+            const UI = { Card: ({ children }: any) => <div>{children}</div> };
+
+            export default function App() {
+                const n = 0;
+                return (
+                    <div>
+                        <Header />
+                        <MyButton label="click" />
+                        <MyButton label={`n=${n}`} />
+                        <UI.Card>
+                            <MyButton label="nested" />
+                        </UI.Card>
+                        <MyButton
+                            label="multiline"
+                        />
+                        <MyButton label={String(n)} />
+                    </div>
+                );
+            }
+            """;
+
+        var references = ReferenceExtractor.Extract(
+            1,
+            "typescript",
+            content,
+            Array.Empty<CodeIndex.Models.SymbolRecord>(),
+            path: "App.ts");
+
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "MyButton"
+            && r.ReferenceKind == "call"
+            && r.Context.StartsWith("<", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "Header"
+            && r.ReferenceKind == "call"
+            && r.Context.StartsWith("<", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "UI"
+            && r.ReferenceKind == "call"
+            && r.Context.StartsWith("<", StringComparison.Ordinal));
+        Assert.DoesNotContain(references, r =>
+            r.SymbolName == "Card"
+            && r.ReferenceKind == "call"
+            && r.Context.StartsWith("<", StringComparison.Ordinal));
+        Assert.Contains(references, r => r.SymbolName == "String" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
     public void Extract_JavaScriptTaggedTemplateInStringLiteral_IsNotMisdetected()
     {
         // Regression guard: a backtick appearing inside a single- or double-quoted string must
