@@ -10825,25 +10825,48 @@ public static class SymbolExtractor
         // accept/reject decision. Block-comment state carries across line
         // boundaries. On every continuation line (li > lineIndex) the first
         // non-whitespace, non-comment character must be a valid tagged-template
-        // continuation starter — a backtick (the template itself), `.` (member
-        // chain such as `.attrs\`...\``), or `<` (TypeScript generic type args);
-        // anything else is treated as ASI-inserted statement termination and
-        // causes the gate to reject. This rejects `const X = styled.div\nfoo(\`x\`)`
-        // (expression statement beginning with an identifier), `const X = styled.div\nawait foo(\`x\`)`
-        // (top-level await), `const X = styled.div\nconst Y = 5;` (declaration), etc.
-        // The first real backtick → accept (tagged template on this statement).
-        // The first real `;` → reject (factory-capture or plain call).
+        // continuation starter — a backtick (the template itself) or `.` (member
+        // chain such as `.attrs\`...\``); anything else is treated as
+        // ASI-inserted statement termination and causes the gate to reject.
+        // This rejects `const X = styled.div\nfoo(\`x\`)` (expression statement
+        // beginning with an identifier), `const X = styled.div\nawait foo(\`x\`)`
+        // (top-level await), `const X = styled.div\nconst Y = 5;` (declaration),
+        // and `const X = styled.div\n<Foo>{\`...\`}</Foo>` (JSX element / TS cast
+        // start). Within the scan we additionally track parenthesis / bracket /
+        // angle / brace depth so that a backtick belonging to a nested
+        // expression (e.g. inside `.attrs({ ... })`) does not count as the
+        // tag head, and a top-level operator character (`+`, `-`, `*`, `%`,
+        // `?`, `!`, `&`, `|`, `^`, `=`, `,`, `:`) between the match end and
+        // the first backtick terminates the tag-head chain and forces
+        // rejection — e.g. `const X = styled.div + \`not a tag\`` must not
+        // be promoted to a phantom `function` symbol. When the pattern match
+        // already consumed an opening paren (styled(, memo(, connect(, etc.)
+        // the scan starts with depth -1 so that the upcoming matching `)`
+        // restores the balance to 0 rather than going further negative.
+        // The first real backtick at depth ≤ 0 → accept (tagged template on
+        // this statement). The first real `;` at depth ≤ 0 → reject
+        // (factory-capture or plain call).
         // match の絶対終端位置から raw ソースを前方走査し、Prettier 整形の複数行タグ付き
         // テンプレートにも対応するため、所定の行数まで改行をまたいで走査する。コメント
         // （`//`、`/* ... */`）や通常文字列（`'...'`、`"..."`）はスキップし、実コード上の
         // 文字だけで判定する。ブロックコメント状態は行境界をまたいで持ち越す。継続行
         // （li > lineIndex）の最初の空白・コメント以外の文字は、タグ付きテンプレートの継続
-        // として妥当な開始文字（バッククォート・`.`・`<`）でなければならない。それ以外は
+        // として妥当な開始文字（バッククォート・`.`）でなければならない。それ以外は
         // 暗黙 ASI による文終端として扱い走査を打ち切る。これにより `const X = styled.div\nfoo(\`x\`)`
         // （識別子始まりの式文）、`const X = styled.div\nawait foo(\`x\`)`（top-level await）、
-        // `const X = styled.div\nconst Y = 5;`（宣言文）等は phantom `function` を出さない。
-        // バッククォート → 維持（同一文のタグ付きテンプレート）、`;` → 除外（factory 捕捉 /
+        // `const X = styled.div\nconst Y = 5;`（宣言文）、`const X = styled.div\n<Foo>{...}</Foo>`
+        // （JSX 要素 / TS キャスト始まり）等は phantom `function` を出さない。走査中は
+        // 括弧（paren / bracket / angle / brace）の depth を追跡し、ネスト式（例:
+        // `.attrs({ ... })` の内側）のバッククォートが tag head として採用されないように
+        // する。さらに match 終端と最初のバッククォートの間に depth 0 の演算子文字
+        // （`+`、`-`、`*`、`%`、`?`、`!`、`&`、`|`、`^`、`=`、`,`、`:`）が現れた場合は
+        // tag-head チェーンが切れたとして即除外する — 例: `const X = styled.div + \`...\``
+        // を phantom `function` にしない。match 側が既に開き括弧（styled(, memo(,
+        // connect( 等）を消費している場合は scan 側 depth を -1 から始めて、対応する
+        // 閉じ `)` で depth が 0 に戻るようにする。depth ≤ 0 のバッククォート → 採用
+        // （同一文のタグ付きテンプレート）、depth ≤ 0 の `;` → 除外（factory 捕捉 /
         // 素の呼び出し形）。
+        int depth = matched.Length > 0 && matched[^1] == '(' ? -1 : 0;
         bool inBlockComment = false;
         int maxLine = Math.Min(lines.Length - 1, lineIndex + JsTsStyledFactoryGateMaxLookaheadLines);
         for (int li = lineIndex; li <= maxLine; li++)
@@ -10936,14 +10959,68 @@ public static class SymbolExtractor
                     continue;
                 }
                 if (c == '`')
-                    return false;
+                {
+                    if (depth <= 0)
+                        return false;
+                    // depth > 0: nested template literal (e.g. an argument inside
+                    // `.attrs(...)`). Not our tag head — skip over its body on
+                    // this raw line to the matching closing backtick without
+                    // interpreting `${...}` interpolation (good enough for the
+                    // operator-detection pass since depth > 0 content is already
+                    // outside the tag-head continuation chain).
+                    // depth > 0: ネストしたテンプレートリテラル（例: `.attrs(...)` の引数内）。
+                    // tag head ではないため、同一 raw 行内で閉じバッククォートまで読み飛ばす。
+                    // `${...}` の補間は解釈しないが、depth > 0 のコンテンツは既に tag-head
+                    // チェーン外なので operator 判定には影響しない。
+                    i++;
+                    while (i < raw.Length && raw[i] != '`')
+                    {
+                        if (raw[i] == '\\' && i + 1 < raw.Length)
+                        {
+                            i += 2;
+                            continue;
+                        }
+                        i++;
+                    }
+                    if (i < raw.Length) i++;
+                    continue;
+                }
                 if (c == ';')
+                {
+                    if (depth <= 0)
+                        return true;
+                    i++;
+                    continue;
+                }
+                if (c == '(' || c == '[' || c == '<' || c == '{')
+                {
+                    depth++;
+                    i++;
+                    continue;
+                }
+                if (c == ')' || c == ']' || c == '>' || c == '}')
+                {
+                    depth--;
+                    i++;
+                    continue;
+                }
+                // Depth-0 operator characters break the tag-head continuation
+                // chain — the candidate is not a styled tagged-template binding.
+                // depth 0 の演算子文字は tag-head 継続チェーンを切るため、候補は
+                // styled タグ付きテンプレート束縛ではないとして即除外する。
+                if (depth <= 0 && IsJsTsStyledTagHeadBreakingOperator(c))
                     return true;
                 i++;
             }
         }
         return true;
     }
+
+    private static bool IsJsTsStyledTagHeadBreakingOperator(char c) => c switch
+    {
+        '+' or '-' or '*' or '%' or '?' or '!' or '&' or '|' or '^' or '=' or ',' or ':' => true,
+        _ => false,
+    };
 
     private static bool[] FindCssQualifiedRuleAncestors(string[] lines)
     {

@@ -773,6 +773,54 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScript_HocBindingPatternRejectsOperatorBetweenStyledAndTemplate()
+    {
+        // `styled.div + \`...\`` and `styled(Component) + \`...\`` are NOT
+        // tagged-template bindings — the `+` operator at depth 0 between the
+        // styled expression and the backtick breaks the tag-head continuation
+        // chain. Closes #240 follow-up (codex review #12 blocker). Without the
+        // depth-0 operator reject, the gate would happily walk past `+` to
+        // the first backtick and accept the candidate as a phantom
+        // `function NotStyled` symbol.
+        // `styled.div + \`...\`` や `styled(Component) + \`...\`` は tagged-template
+        // 束縛ではない — depth 0 の `+` 演算子が styled 式とバッククォートの間に
+        // 入ることで tag-head 継続チェーンが切れる。Closes #240 follow-up
+        // （codex レビュー #12 の blocker 対応）。depth-0 演算子除外がないと、ゲートが
+        // `+` を跨いで最初のバッククォートに到達し phantom `function NotStyled` を
+        // 出してしまう。
+        var content = """
+            const NotStyledMember = styled.div + `not a styled template`;
+            const NotStyledCall = styled(Component) + `also not`;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "NotStyledMember");
+        Assert.DoesNotContain(symbols, s => s.Name == "NotStyledCall");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_HocBindingPatternRejectsOperatorBetweenStyledAndTemplate()
+    {
+        // TypeScript counterpart for the depth-0 operator reject — including
+        // a typed-annotation variant — must still drop these phantom bindings.
+        // Closes #240 follow-up (codex review #12 blocker).
+        // TypeScript 側の depth-0 演算子除外（型注釈付きの変種を含む）。
+        // Closes #240 follow-up（codex レビュー #12 の blocker 対応）。
+        var content = """
+            const NotStyledMember = styled.div + `not a styled template`;
+            const NotStyledCall = styled(Component) + `also not`;
+            const AnnotatedNotStyled: StyledComponent<'div'> = styled.div + `still not`;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.DoesNotContain(symbols, s => s.Name == "NotStyledMember");
+        Assert.DoesNotContain(symbols, s => s.Name == "NotStyledCall");
+        Assert.DoesNotContain(symbols, s => s.Name == "AnnotatedNotStyled");
+    }
+
+    [Fact]
     public void Extract_TypeScript_HocBindingPatternAcceptsCallbackPropInsideFunctionTypeGeneric()
     {
         // Inline function-type generic arguments whose parameter object literal
