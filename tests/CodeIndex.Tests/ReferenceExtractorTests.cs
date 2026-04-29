@@ -9618,6 +9618,42 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpUsingStaticTopLevelSameNameTypePattern_KeepsTypeReferences()
+    {
+        const string content = """
+            using static Probe.Color;
+
+            namespace Probe;
+
+            enum Color
+            {
+                Red
+            }
+
+            public class Red {}
+
+            class Demo
+            {
+                bool Match(object value) => value is Red;
+
+                bool Switch(object value) => value switch
+                {
+                    Red => true,
+                    _ => false,
+                };
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var redRefs = references.Where(r => r.SymbolName == "Red" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Equal(2, redRefs.Count);
+        Assert.Contains(redRefs, reference => reference.ContainerName == "Match");
+        Assert.Contains(redRefs, reference => reference.ContainerName == "Switch");
+    }
+
+    [Fact]
     public void Extract_CsharpUsingStaticNamespaceImportPattern_KeepsTypeReference()
     {
         const string content = """
