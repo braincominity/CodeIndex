@@ -817,6 +817,63 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_JavaScriptLineContinuationString_DoesNotLeakPhantomReferences()
+    {
+        const string crlf = "\r\n";
+        var content = string.Concat(
+            "function caller() {", crlf,
+            "  const s = \"line1\\", crlf,
+            "} externalCall() line2\";", crlf,
+            "  runTask();", crlf,
+            "}", crlf,
+            "function runTask() {}");
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "runTask" && reference.ContainerName == "caller");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "externalCall");
+    }
+
+    [Fact]
+    public void Extract_TypeScriptLineContinuationString_DoesNotLeakPhantomReferences()
+    {
+        const string content = """
+            function caller() {
+              const s = 'line1\
+            } externalCall() line2';
+              runTask();
+            }
+            function runTask() {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var references = ReferenceExtractor.Extract(1, "typescript", content, symbols);
+
+        Assert.Contains(references, reference => reference.SymbolName == "runTask" && reference.ContainerName == "caller");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "externalCall");
+    }
+
+    [Fact]
+    public void Extract_JavaScriptContinuedSingleQuotedString_DoesNotPolluteForOfHeaderScan()
+    {
+        const string content = "function f() {\n" +
+            "    const s = 'line1\\\n" +
+            "of externalCall';\n" +
+            "    for (\n" +
+            "        const ch of `abc`\n" +
+            "    ) {\n" +
+            "        use(ch);\n" +
+            "    }\n" +
+            "}\n";
+
+        var symbols = SymbolExtractor.Extract(1, "javascript", content);
+        var references = ReferenceExtractor.Extract(1, "javascript", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.ReferenceKind == "call" && r.SymbolName == "of");
+    }
+
+    [Fact]
     public void Extract_JavaScriptSyntaxConstructs_AreIgnored()
     {
         const string content = """
@@ -5688,6 +5745,25 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "NOLOCK");
         Assert.DoesNotContain(references, r => r.SymbolName == "public.logs");
         Assert.DoesNotContain(references, r => r.SymbolName == "archive].[events");
+    }
+
+    [Fact]
+    public void Extract_SQL_FromDerivedTableSourcesCapturesLaterReferences()
+    {
+        // issue #942: a derived-table source must not stop the top-level comma walk before later items.
+        // issue #942: derived table の後続にある top-level comma-separated source を落とさない。
+        const string content = """
+            SELECT * FROM (SELECT 1) x, accounts;
+            SELECT * FROM (SELECT 1) x(c1), accounts;
+            SELECT * FROM (SELECT func(subfunc(a)) FROM t) AS y, accounts;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Equal(3, references.Count(r => r.SymbolName == "accounts" && r.ReferenceKind == "reference"));
+        Assert.DoesNotContain(references, r => r.SymbolName == "x" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "y" && r.ReferenceKind == "reference");
     }
 
     [Fact]

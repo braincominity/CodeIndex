@@ -1134,7 +1134,7 @@ public partial class DbReader
             return false;
         }
 
-        if (ShouldSuppressCSharpQualifiedConstantPatternReference(path, lineNumber, symbolName, patternContext, patternColumn))
+        if (ShouldSuppressCSharpQualifiedConstantPatternReference(path, lineNumber, symbolName, patternContext, patternColumn, referenceKind))
             return true;
 
         if (!string.Equals(referenceKind, "type_reference", StringComparison.Ordinal))
@@ -1160,10 +1160,20 @@ public partial class DbReader
         return false;
     }
 
-    private bool ShouldSuppressCSharpQualifiedConstantPatternReference(string path, int lineNumber, string symbolName, string patternContext, int patternColumn)
+    private bool ShouldSuppressCSharpQualifiedConstantPatternReference(string path, int lineNumber, string symbolName, string patternContext, int patternColumn, string referenceKind)
     {
-        if (!TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out var qualifier))
+        if (!TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out var qualifier, out var anchorKind))
             return false;
+
+        // Exact `call` suppression only applies to `case` constant patterns; `is` patterns
+        // keep their preserved call row so qualified `is` expressions remain visible.
+        // exact の `call` 抑制は `case` 定数パターンのみに限定する。`is` パターンは
+        // preserved call row を維持し、qualified な `is` 式を可視のまま残す。
+        if (string.Equals(referenceKind, "call", StringComparison.Ordinal)
+            && !string.Equals(anchorKind, "case", StringComparison.Ordinal))
+        {
+            return false;
+        }
 
         var matchingContainers = GetCSharpConstantPatternContainersByMemberName(symbolName);
         if (matchingContainers.Count == 0)
@@ -2340,13 +2350,14 @@ public partial class DbReader
 
         var cursor = symbolColumn;
         cursor = SkipCSharpTriviaBackward(context, cursor);
-        return IsCSharpUsingStaticConstantPatternAnchor(context, ref cursor)
+        return IsCSharpUsingStaticConstantPatternAnchor(context, ref cursor, out _)
             || IsCSharpUsingStaticConstantTypeKeywordAnchor(context, ref cursor);
     }
 
-    private static bool TryExtractQualifiedCSharpPatternQualifier(string context, string symbolName, int columnNumber, out string qualifier)
+    private static bool TryExtractQualifiedCSharpPatternQualifier(string context, string symbolName, int columnNumber, out string qualifier, out string anchorKind)
     {
         qualifier = string.Empty;
+        anchorKind = string.Empty;
         if (string.IsNullOrWhiteSpace(context)
             || string.IsNullOrWhiteSpace(symbolName)
             || !TryFindCSharpReferenceTokenStart(context, symbolName, columnNumber, out var symbolColumn))
@@ -2367,24 +2378,31 @@ public partial class DbReader
             return false;
 
         var anchorCursor = headCursor;
-        if (!IsCSharpUsingStaticConstantPatternAnchor(context, ref anchorCursor))
+        if (!IsCSharpUsingStaticConstantPatternAnchor(context, ref anchorCursor, out anchorKind))
             return false;
 
         qualifier = fullHead[..lastDot];
         return !string.IsNullOrWhiteSpace(qualifier);
     }
 
-    private static bool IsCSharpUsingStaticConstantPatternAnchor(string text, ref int cursor)
+    private static bool IsCSharpUsingStaticConstantPatternAnchor(string text, ref int cursor, out string anchorKind)
     {
+        anchorKind = string.Empty;
         cursor = SkipCSharpTriviaBackward(text, cursor);
         if (TryConsumeTrailingCSharpToken(text, ref cursor, "not"))
             cursor = SkipCSharpTriviaBackward(text, cursor);
 
         while (true)
         {
-            if (TryConsumeTrailingCSharpToken(text, ref cursor, "case")
-                || TryConsumeTrailingCSharpToken(text, ref cursor, "is"))
+            if (TryConsumeTrailingCSharpToken(text, ref cursor, "case"))
             {
+                anchorKind = "case";
+                return true;
+            }
+
+            if (TryConsumeTrailingCSharpToken(text, ref cursor, "is"))
+            {
+                anchorKind = "is";
                 return true;
             }
 
@@ -2435,11 +2453,11 @@ public partial class DbReader
             || columnNumber <= 0)
         {
             return IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn)
-                || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _);
+                || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _, out _);
         }
 
         if (IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn)
-            || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _))
+            || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _, out _))
         {
             return true;
         }
@@ -2453,7 +2471,7 @@ public partial class DbReader
                 || !lineMap.TryGetValue(lineNumber, out var currentLine))
             {
                 return IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn)
-                    || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _);
+                    || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _, out _);
             }
 
             var lines = new List<string>();
@@ -2471,7 +2489,7 @@ public partial class DbReader
             patternContext = lines.Count <= 1 ? currentLine : string.Join('\n', lines);
             patternColumn = lines.Count <= 1 ? columnNumber : prefixLength + columnNumber;
             if (IsCSharpUsingStaticConstantPatternContext(patternContext, symbolName, patternColumn)
-                || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _))
+                || TryExtractQualifiedCSharpPatternQualifier(patternContext, symbolName, patternColumn, out _, out _))
             {
                 return true;
             }

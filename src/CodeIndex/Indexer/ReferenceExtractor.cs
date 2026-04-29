@@ -263,8 +263,17 @@ public static class ReferenceExtractor
         @"(?:\s+(?:AS\s+)?(?!JOIN\b|ON\b|USING\b|WHERE\b|GROUP\b|HAVING\b|ORDER\b|LIMIT\b|OFFSET\b|FETCH\b|UNION\b|EXCEPT\b|INTERSECT\b|RETURNING\b|FOR\b|WINDOW\b)(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + "))?";
     private const string SqlSourceTableHintTailPattern =
         @"(?:\s+WITH\s*\((?:[^()]|\([^()]*\))*\))?";
+    // Derived tables need to be skipped so later comma-separated sources still surface.
+    // derived table 本体は飛ばして、後続の comma-separated source を落とさないようにする。
+    private const string SqlParenthesizedSourcePattern =
+        @"\((?:[^()]|\((?<paren>)|\)(?<-paren>))*(?(paren)(?!))\)";
+    private const string SqlDerivedTableColumnAliasListPattern =
+        @"(?:\s*\(\s*(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @")(?:\s*,\s*(?:" + SqlQuotedIdentifierPattern + "|" + SqlBareIdentifierPattern + @"))*\s*\))?";
     private const string SqlSourceListItemPattern =
-        @"(?:(?:ONLY|LATERAL)\b\s+)*" + SqlQualifiedIdentifierPattern + SqlSourceTableHintTailPattern + SqlSourceAliasTailPattern;
+        @"(?:(?:ONLY|LATERAL)\b\s+)*(?:" +
+        SqlQualifiedIdentifierPattern + SqlSourceTableHintTailPattern + SqlSourceAliasTailPattern +
+        @"|" + SqlParenthesizedSourcePattern + SqlSourceAliasTailPattern + SqlDerivedTableColumnAliasListPattern +
+        @")";
     private const string SqlTopTargetModifierPattern =
         @"TOP\s*\([^)\r\n]*\)(?:\s+PERCENT)?(?:\s+WITH\s+TIES)?";
     private const string SqlMergeTargetHintPattern =
