@@ -15281,4 +15281,957 @@ public class ReferenceExtractorTests
         var helperRef = Assert.Single(references.Where(r => r.SymbolName == "Helper"));
         Assert.Equal(7, helperRef.Line);
     }
+
+    [Fact]
+    public void Extract_KotlinTripleQuotedString_DoesNotLeakPhantomCallReferences()
+    {
+        // Regression for issue #385: call-looking identifiers inside a Kotlin
+        // multi-line raw string (""".. .""") must not be captured as references.
+        // issue #385 回帰: Kotlin の複数行 raw 文字列（"""..."""）の内側にある
+        // 呼び出しらしい識別子は参照として抽出してはならない。
+        const string content = """"
+            package demo
+
+            class Demo {
+                fun m() {
+                    val sql = """
+                        SELECT * FROM users
+                        WHERE id = kotlinPhantomCall(42)
+                        AND name = anotherKotlinPhantom("bob")
+                    """.trimIndent()
+
+                    realKotlinCall()
+                }
+
+                private fun realKotlinCall() {}
+                private fun kotlinPhantomCall(x: Int): Int = x
+                private fun anotherKotlinPhantom(s: String): String = s
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "kotlinPhantomCall" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "anotherKotlinPhantom" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realKotlinCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_KotlinTripleQuotedStringInterpolationHole_KeepsRealCallReference()
+    {
+        // Regression for issue #385: `${expr}` interpolation holes inside a Kotlin
+        // multi-line raw string must preserve real call edges so the reference
+        // graph does not silently drop them. `$ident` is a bare-identifier hole and
+        // not a call; masking it with the body is safe.
+        // issue #385 回帰: Kotlin の複数行 raw 文字列内の `${expr}` ホールは
+        // 本物の call エッジを残すこと。`$ident` は単独識別子で call にならないため
+        // 本体とともにマスクしてもよい。
+        const string content = """"
+            package demo
+
+            class Demo {
+                fun m(name: String) {
+                    val sql = """
+                        phantom: kotlinPhantomCall(42)
+                        real: ${runTask()} trailing
+                        nested: ${helper(factory(deepReal()))}
+                        bare: $name
+                    """.trimIndent()
+                    realKotlinCall()
+                }
+
+                private fun runTask() {}
+                private fun helper(x: Int): Int = x
+                private fun factory(x: Int): Int = x
+                private fun deepReal(): Int = 0
+                private fun realKotlinCall() {}
+                private fun kotlinPhantomCall(x: Int): Int = x
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "kotlinPhantomCall" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "runTask" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "helper" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "factory" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "deepReal" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realKotlinCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SwiftMultilineString_DoesNotLeakPhantomCallReferences()
+    {
+        // Regression for issue #385: call-looking identifiers inside a Swift
+        // multi-line string (""".. .""") must not be captured as references.
+        // issue #385 回帰: Swift の複数行文字列（"""..."""）の内側にある
+        // 呼び出しらしい識別子は参照として抽出してはならない。
+        const string content = """"
+            import Foundation
+
+            class Demo {
+                func m() {
+                    let sql = """
+                        SELECT * FROM users
+                        WHERE id = swiftPhantomCall(42)
+                        AND name = anotherSwiftPhantom("bob")
+                        """
+
+                    realSwiftCall()
+                }
+
+                func realSwiftCall() {}
+                func swiftPhantomCall(_ x: Int) -> Int { x }
+                func anotherSwiftPhantom(_ s: String) -> String { s }
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "swiftPhantomCall" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "anotherSwiftPhantom" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realSwiftCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SwiftMultilineStringInterpolationHole_KeepsRealCallReference()
+    {
+        // Regression for issue #385: `\(expr)` interpolation holes inside a Swift
+        // multi-line string must preserve real call edges so the reference graph
+        // does not silently drop them. Extended `#"""..."""#` forms need matching
+        // `\#(expr)` interpolation to open a hole.
+        // issue #385 回帰: Swift の複数行文字列内の `\(expr)` ホールは本物の
+        // call エッジを残すこと。拡張 `#"""..."""#` では `\#(expr)` が hole を開く。
+        const string content = """"
+            import Foundation
+
+            class Demo {
+                func m(name: String) {
+                    let sql = """
+                        phantom: swiftPhantomCall(42)
+                        real: \(runTask()) trailing
+                        nested: \(helper(factory(deepReal())))
+                        """
+                    let raw = #"""
+                        phantom raw: swiftRawPhantom(99)
+                        real raw: \#(rawReal()) done
+                        """#
+                    realSwiftCall()
+                }
+
+                func runTask() -> Int { 1 }
+                func helper(_ x: Int) -> Int { x }
+                func factory(_ x: Int) -> Int { x }
+                func deepReal() -> Int { 0 }
+                func rawReal() -> Int { 0 }
+                func realSwiftCall() {}
+                func swiftPhantomCall(_ x: Int) -> Int { x }
+                func swiftRawPhantom(_ x: Int) -> Int { x }
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "swiftPhantomCall" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "swiftRawPhantom" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "runTask" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "helper" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "factory" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "deepReal" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "rawReal" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realSwiftCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_ScalaTripleQuotedString_DoesNotLeakPhantomCallReferences()
+    {
+        // Regression for issue #385: call-looking identifiers inside a Scala
+        // multi-line raw string (""".. .""", including interpolator-prefixed forms
+        // such as `s"""..."""` / `raw"""..."""`) must not be captured as references.
+        // issue #385 回帰: Scala の複数行 raw 文字列（"""...""" および `s"""..."""` /
+        // `raw"""..."""` などの interpolator 形式）の内側にある呼び出しらしい識別子は
+        // 参照として抽出してはならない。
+        const string content = """"
+            package demo
+
+            class Demo {
+              def m(): Unit = {
+                val plain =
+                  """
+                    |SELECT * FROM users
+                    |WHERE id = scalaPhantomCall(42)
+                    |AND name = anotherScalaPhantom("bob")
+                  """.stripMargin
+                val rawForm = raw"""rawScalaPhantom(7)"""
+                realScalaCall()
+              }
+
+              def realScalaCall(): Unit = ()
+              def scalaPhantomCall(x: Int): Int = x
+              def anotherScalaPhantom(s: String): String = s
+              def rawScalaPhantom(x: Int): Int = x
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "scala", content);
+        var references = ReferenceExtractor.Extract(1, "scala", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "scalaPhantomCall" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "anotherScalaPhantom" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "rawScalaPhantom" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realScalaCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_ScalaStringInterpolatorHole_KeepsRealCallReference()
+    {
+        // Regression for issue #385: `${expr}` interpolation holes inside a Scala
+        // interpolator-prefixed multi-line string (`s"""..."""` / `f"""..."""`) must
+        // preserve real call edges so the reference graph does not silently drop
+        // them. Plain `"""..."""` has no interpolation and its ${...}-looking text
+        // must stay masked.
+        // issue #385 回帰: Scala の interpolator 形式（`s"""..."""` / `f"""..."""`）
+        // 内の `${expr}` ホールは本物の call エッジを残すこと。プレーン `"""..."""`
+        // は補間なしで、${...} 風のテキストもマスクする。
+        const string content = """"
+            package demo
+
+            class Demo {
+              def m(name: String): Unit = {
+                val plain =
+                  """
+                    |plain: scalaPhantomCall(42)
+                  """.stripMargin
+                val interp = s"""
+                    |phantom: scalaPhantomCall(42)
+                    |real: ${runTask()} trailing
+                    |nested: ${helper(factory(deepReal()))}
+                    |bare: $name
+                  """.stripMargin
+                realScalaCall()
+              }
+
+              def runTask(): Int = 1
+              def helper(x: Int): Int = x
+              def factory(x: Int): Int = x
+              def deepReal(): Int = 0
+              def realScalaCall(): Unit = ()
+              def scalaPhantomCall(x: Int): Int = x
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "scala", content);
+        var references = ReferenceExtractor.Extract(1, "scala", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "scalaPhantomCall" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "runTask" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "helper" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "factory" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "deepReal" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realScalaCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_KotlinTripleQuotedStringInterpolationHole_WithCommentContainingCloseBrace_KeepsRealCallReference()
+    {
+        // Regression for issue #385 follow-up: a `${expr}` interpolation hole in a
+        // Kotlin raw string may contain a block comment or line comment whose body
+        // happens to include `}`. The hole scanner must recognize comments first so
+        // the `}` inside the comment does not close the hole prematurely and drop
+        // the following real call from the reference graph.
+        // issue #385 続編: Kotlin の `${expr}` 補間ホール内のコメント本体に含まれる
+        // `}` でホールを早閉じしてはならず、コメント後の本物の call を残すこと。
+        const string content = """"
+            package demo
+
+            class Demo {
+                fun m() {
+                    val sql = """
+                        real: ${ /* } */ kotlinAfterComment() }
+                        line: ${ kotlinLineBefore() // }
+                        } tail
+                    """.trimIndent()
+                    realKotlinCall()
+                }
+
+                private fun kotlinAfterComment(): Int = 0
+                private fun kotlinLineBefore(): Int = 0
+                private fun realKotlinCall() {}
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "kotlinAfterComment" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "kotlinLineBefore" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realKotlinCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SwiftMultilineStringInterpolationHole_WithCommentContainingCloseParen_KeepsRealCallReference()
+    {
+        // Regression for issue #385 follow-up: a `\(expr)` interpolation hole in a
+        // Swift multi-line string may contain a block comment or line comment whose
+        // body happens to include `)`. The hole scanner must recognize comments
+        // first so the `)` inside the comment does not close the hole prematurely.
+        // issue #385 続編: Swift の `\(expr)` 補間ホール内のコメント本体に含まれる
+        // `)` でホールを早閉じせず、コメント後の本物の call を残すこと。
+        const string content = """"
+            import Foundation
+
+            class Demo {
+                func m() {
+                    let sql = """
+                        real: \( /* ) */ swiftAfterComment() )
+                        line: \( swiftLineBefore() // )
+                        ) tail
+                        """
+                    realSwiftCall()
+                }
+
+                func swiftAfterComment() -> Int { 0 }
+                func swiftLineBefore() -> Int { 0 }
+                func realSwiftCall() {}
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "swiftAfterComment" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "swiftLineBefore" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realSwiftCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_ScalaStringInterpolatorHole_WithCommentContainingCloseBrace_KeepsRealCallReference()
+    {
+        // Regression for issue #385 follow-up: an `${expr}` interpolation hole in a
+        // Scala interpolator-prefixed multi-line string may contain a block comment
+        // or line comment whose body happens to include `}`. The hole scanner must
+        // recognize comments first so the `}` inside the comment does not close
+        // the hole prematurely.
+        // issue #385 続編: Scala の `${expr}` 補間ホール内のコメント本体に含まれる
+        // `}` でホールを早閉じせず、コメント後の本物の call を残すこと。
+        const string content = """"
+            package demo
+
+            class Demo {
+              def m(): Unit = {
+                val interp = s"""
+                    |real: ${ /* } */ scalaAfterComment() }
+                    |line: ${ scalaLineBefore() // }
+                    |} tail
+                  """.stripMargin
+                realScalaCall()
+              }
+
+              def scalaAfterComment(): Int = 0
+              def scalaLineBefore(): Int = 0
+              def realScalaCall(): Unit = ()
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "scala", content);
+        var references = ReferenceExtractor.Extract(1, "scala", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "scalaAfterComment" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "scalaLineBefore" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realScalaCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_KotlinTripleQuotedStringNestedTripleInHole_DoesNotLeakPhantomCalls()
+    {
+        // Regression for issue #992: a nested `"""..."""` literal opened inside a
+        // Kotlin `${...}` interpolation hole must not leak its body as phantom
+        // calls. The hole scanner has to recognise `"""` as a nested triple opener
+        // (not just `"` / `'` single-line strings) and mask through to the matching
+        // close before the hole's `{` / `}` tracking resumes.
+        // issue #992 回帰: Kotlin の `${...}` ホール内で開いた nested `"""..."""` の本文を
+        // phantom call として漏らさないこと。
+        const string content = """"
+            package demo
+
+            class Demo {
+                fun m() {
+                    val sql = """
+                        outer: ${ wrap("""
+                            kotlinNestedPhantom(99)
+                        """) }
+                    """.trimIndent()
+                    realKotlinCall()
+                }
+
+                private fun wrap(x: String): String = x
+                private fun realKotlinCall() {}
+                private fun kotlinNestedPhantom(x: Int): Int = x
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "kotlinNestedPhantom" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realKotlinCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SwiftMultilineStringNestedTripleInHole_DoesNotLeakPhantomCalls()
+    {
+        // Regression for issue #992: a nested `"""..."""` (or `#"""..."""#`) literal
+        // opened inside a Swift `\(...)` interpolation hole must not leak its body
+        // as phantom calls. Both plain and hash-delimited nested forms should be
+        // covered by the hole scanner's nested-triple state.
+        // issue #992 回帰: Swift の `\(...)` ホール内で開いた nested triple の本文を
+        // phantom call として漏らさないこと（plain と hash-delimited の両方）。
+        const string content = """"
+            import Foundation
+
+            class Demo {
+                func m() {
+                    let sql = """
+                        outer: \( wrap("""
+                            swiftNestedPhantom(99)
+                            """) )
+                        raw: \( wrap(#"""
+                            swiftHashNestedPhantom(99)
+                            """#) )
+                        """
+                    realSwiftCall()
+                }
+
+                func wrap(_ x: String) -> String { x }
+                func realSwiftCall() {}
+                func swiftNestedPhantom(_ x: Int) -> Int { x }
+                func swiftHashNestedPhantom(_ x: Int) -> Int { x }
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "swiftNestedPhantom" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "swiftHashNestedPhantom" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realSwiftCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_ScalaStringInterpolatorHoleNestedTriple_DoesNotLeakPhantomCalls()
+    {
+        // Regression for issue #992: a nested `"""..."""` literal opened inside a
+        // Scala interpolator-prefixed `${...}` hole must not leak its body as
+        // phantom calls.
+        // issue #992 回帰: Scala interpolator 形式の `${...}` ホール内で開いた
+        // nested `"""..."""` の本文を phantom call として漏らさないこと。
+        const string content = """"
+            package demo
+
+            class Demo {
+              def m(): Unit = {
+                val interp = s"""
+                    |outer: ${ wrap("""
+                    |    scalaNestedPhantom(99)
+                    |""") }
+                  """.stripMargin
+                realScalaCall()
+              }
+
+              def wrap(x: String): String = x
+              def realScalaCall(): Unit = ()
+              def scalaNestedPhantom(x: Int): Int = x
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "scala", content);
+        var references = ReferenceExtractor.Extract(1, "scala", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "scalaNestedPhantom" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realScalaCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_KotlinTripleQuotedStringNestedTripleHole_PreservesRealCallReferences()
+    {
+        // Regression for issue #996: a nested `"""..."""` literal opened inside an
+        // outer Kotlin `${...}` interpolation hole still has its own `${expr}` holes.
+        // The masker must preserve real call edges inside those inner holes while
+        // continuing to mask the rest of the nested literal body.
+        // issue #996 回帰: Kotlin の outer `${...}` 内に開いた nested `"""..."""` でも
+        // それ自身の `${expr}` ホール内の本物の call を保持する。
+        const string content = """"
+            package demo
+
+            class Demo {
+                fun m() {
+                    val sql = """
+                        outer: ${ wrap("""
+                            inner: ${innerCall()}
+                            phantom: kotlinNestedPhantom(99)
+                        """) }
+                    """.trimIndent()
+                    realKotlinCall()
+                }
+
+                private fun wrap(x: String): String = x
+                private fun innerCall(): Int = 0
+                private fun realKotlinCall() {}
+                private fun kotlinNestedPhantom(x: Int): Int = x
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "innerCall" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realKotlinCall" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "kotlinNestedPhantom" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SwiftMultilineStringNestedTripleHole_PreservesRealCallReferences()
+    {
+        // Regression for issue #996: a nested `"""..."""` (or `#"""..."""#`) literal
+        // opened inside an outer Swift `\(...)` interpolation hole still has its own
+        // `\(...)` (or `\#(...)` etc.) holes. The masker must preserve real call edges
+        // inside those inner holes while continuing to mask the rest of the body.
+        // issue #996 回帰: Swift の outer `\(...)` 内に開いた nested triple でも
+        // それ自身の `\(expr)` / `\#(expr)` ホール内の本物の call を保持する。
+        const string content = """"
+            import Foundation
+
+            class Demo {
+                func m() {
+                    let sql = """
+                        outer: \( wrap("""
+                            inner: \(innerCall())
+                            phantom: swiftNestedPhantom(99)
+                            """) )
+                        raw: \( wrap(#"""
+                            inner-raw: \#(rawInnerCall())
+                            phantom-raw: swiftRawNestedPhantom(99)
+                            """#) )
+                        """
+                    realSwiftCall()
+                }
+
+                func wrap(_ x: String) -> String { x }
+                func innerCall() -> Int { 0 }
+                func rawInnerCall() -> Int { 0 }
+                func realSwiftCall() {}
+                func swiftNestedPhantom(_ x: Int) -> Int { x }
+                func swiftRawNestedPhantom(_ x: Int) -> Int { x }
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "innerCall" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "rawInnerCall" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realSwiftCall" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "swiftNestedPhantom" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "swiftRawNestedPhantom" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_ScalaStringInterpolatorHoleNestedInterpolatorTriple_PreservesRealCallReferences()
+    {
+        // Regression for issue #996: a nested interpolator-prefixed `s"""..."""` (or
+        // `f"""...`, `raw"""...`) literal opened inside an outer Scala `${...}` hole
+        // still has its own `${expr}` holes. Plain nested `"""..."""` (no prefix)
+        // continues to mask everything because plain Scala triples have no interpolation.
+        // issue #996 回帰: Scala の outer `${...}` 内に開いた interpolator 付き nested
+        // triple は `${expr}` ホール内の call を残し、プレーン nested triple は全マスク。
+        const string content = """"
+            package demo
+
+            class Demo {
+              def m(): Unit = {
+                val interp = s"""
+                    |outer: ${ wrap(s"""
+                    |    inner: ${innerCall()}
+                    |    phantom-prefixed: scalaNestedPhantom(99)
+                    |""") }
+                    |plain-outer: ${ wrap("""
+                    |    plain phantom: scalaPlainNestedPhantom(99)
+                    |""") }
+                  """.stripMargin
+                realScalaCall()
+              }
+
+              def wrap(x: String): String = x
+              def innerCall(): Int = 0
+              def realScalaCall(): Unit = ()
+              def scalaNestedPhantom(x: Int): Int = x
+              def scalaPlainNestedPhantom(x: Int): Int = x
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "scala", content);
+        var references = ReferenceExtractor.Extract(1, "scala", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "innerCall" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realScalaCall" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "scalaNestedPhantom" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "scalaPlainNestedPhantom" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_KotlinTripleBody_QuotedSubstringWithCallShape_IsMasked()
+    {
+        // Regression for issue #998 review claim: a quoted substring inside a Kotlin
+        // `"""..."""` body that contains call-shaped text must not survive into the
+        // reference graph. The triple body's default `masked[pos] = ' '` path masks
+        // every char, so the quoted span (including the call shape) is fully blanked.
+        // issue #998 のレビュー懸念に対する回帰: Kotlin の `"""..."""` 本文中の
+        // 引用符付き部分文字列に call 形のテキストが含まれていても、reference graph に
+        // 漏らさないこと。
+        const string content = """"
+            package demo
+
+            class Demo {
+                fun m() {
+                    val sql = """
+                        WHERE message = "kotlinQuotedPhantom(42)"
+                        AND extra = "anotherKotlinQuotedPhantom('inner')"
+                    """.trimIndent()
+                    realKotlinCall()
+                }
+
+                private fun realKotlinCall() {}
+                private fun kotlinQuotedPhantom(x: Int): Int = x
+                private fun anotherKotlinQuotedPhantom(s: String): String = s
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "kotlinQuotedPhantom" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "anotherKotlinQuotedPhantom" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realKotlinCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SwiftTripleBody_QuotedSubstringWithCallShape_IsMasked()
+    {
+        // Regression for issue #998 review claim: a quoted substring inside a Swift
+        // `"""..."""` body that contains call-shaped text must not survive into the
+        // reference graph.
+        // issue #998 のレビュー懸念に対する回帰: Swift の `"""..."""` 本文中の
+        // 引用符付き部分文字列に call 形のテキストが含まれていても、reference graph に
+        // 漏らさないこと。
+        const string content = """"
+            import Foundation
+
+            class Demo {
+                func m() {
+                    let sql = """
+                        WHERE message = "swiftQuotedPhantom(42)"
+                        AND extra = "anotherSwiftQuotedPhantom('inner')"
+                        """
+                    realSwiftCall()
+                }
+
+                func realSwiftCall() {}
+                func swiftQuotedPhantom(_ x: Int) -> Int { x }
+                func anotherSwiftQuotedPhantom(_ s: String) -> String { s }
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "swiftQuotedPhantom" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "anotherSwiftQuotedPhantom" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realSwiftCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_ScalaTripleBody_QuotedSubstringWithCallShape_IsMasked()
+    {
+        // Regression for issue #998 review claim: a quoted substring inside a Scala
+        // `"""..."""` body that contains call-shaped text must not survive into the
+        // reference graph.
+        // issue #998 のレビュー懸念に対する回帰: Scala の `"""..."""` 本文中の
+        // 引用符付き部分文字列に call 形のテキストが含まれていても、reference graph に
+        // 漏らさないこと。
+        const string content = """"
+            package demo
+
+            class Demo {
+              def m(): Unit = {
+                val sql =
+                  """
+                    |WHERE message = "scalaQuotedPhantom(42)"
+                    |AND extra = "anotherScalaQuotedPhantom('inner')"
+                  """.stripMargin
+                realScalaCall()
+              }
+
+              def realScalaCall(): Unit = ()
+              def scalaQuotedPhantom(x: Int): Int = x
+              def anotherScalaQuotedPhantom(s: String): String = s
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "scala", content);
+        var references = ReferenceExtractor.Extract(1, "scala", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "scalaQuotedPhantom" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "anotherScalaQuotedPhantom" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realScalaCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_KotlinThreeLevelDeepNestedTriple_DoesNotLeakPhantomCalls()
+    {
+        // Regression for codex review #9 finding: a triple-quoted literal opened
+        // 3+ levels deep (i.e. inside the nested triple's own `${...}` hole) must
+        // not leak phantom calls. The defensive depth counter masks the deep body
+        // through to the matching close so call-shaped text cannot leak as
+        // references. Real calls 4+ levels deep are not preserved (would require
+        // a full stack), but the masking soundness is preserved.
+        // codex review #9 への回帰: Kotlin で 3 段以上深い triple 本文の phantom が
+        // 漏れないこと。
+        const string content = """"
+            package demo
+
+            class Demo {
+                fun m() {
+                    val sql = """
+                        outer: ${ wrap("""
+                            inner: ${ helper("""
+                                kotlinDeepPhantom(99)
+                            """) }
+                        """) }
+                    """.trimIndent()
+                    realKotlinCall()
+                }
+
+                private fun wrap(x: String): String = x
+                private fun helper(x: String): String = x
+                private fun realKotlinCall() {}
+                private fun kotlinDeepPhantom(x: Int): Int = x
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "kotlinDeepPhantom" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "helper" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realKotlinCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SwiftThreeLevelDeepNestedTriple_DoesNotLeakPhantomCalls()
+    {
+        // Regression for codex review #9 finding: same shape for Swift `\(...)` holes.
+        // codex review #9 への回帰: Swift `\(...)` ホールの 3 段深い triple 本文。
+        const string content = """"
+            import Foundation
+
+            class Demo {
+                func m() {
+                    let sql = """
+                        outer: \( wrap("""
+                            inner: \( helper("""
+                                swiftDeepPhantom(99)
+                                """) )
+                            """) )
+                        """
+                    realSwiftCall()
+                }
+
+                func wrap(_ x: String) -> String { x }
+                func helper(_ x: String) -> String { x }
+                func realSwiftCall() {}
+                func swiftDeepPhantom(_ x: Int) -> Int { x }
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "swiftDeepPhantom" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "helper" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realSwiftCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_ScalaThreeLevelDeepNestedTriple_DoesNotLeakPhantomCalls()
+    {
+        // Regression for codex review #9 finding: same shape for Scala interpolator
+        // `${...}` holes.
+        // codex review #9 への回帰: Scala の interpolator `${...}` ホールの 3 段深い triple。
+        const string content = """"
+            package demo
+
+            class Demo {
+              def m(): Unit = {
+                val interp = s"""
+                    |outer: ${ wrap(s"""
+                    |    inner: ${ helper(s"""
+                    |        scalaDeepPhantom(99)
+                    |""") }
+                    |""") }
+                  """.stripMargin
+                realScalaCall()
+              }
+
+              def wrap(x: String): String = x
+              def helper(x: String): String = x
+              def realScalaCall(): Unit = ()
+              def scalaDeepPhantom(x: Int): Int = x
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "scala", content);
+        var references = ReferenceExtractor.Extract(1, "scala", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "scalaDeepPhantom" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "helper" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realScalaCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SwiftOuterHole_HashDelimitedRawStringIsMasked()
+    {
+        // Regression for codex review #9 finding: a `#"..."#` extended raw string
+        // opened inside a Swift `\(...)` hole must mask its body so call-shaped
+        // text cannot leak and so the body's `(` / `)` cannot break the outer
+        // hole's paren counting.
+        // codex review #9 への回帰: Swift outer hole 内の `#"..."#` raw string が
+        // outer hole の paren 数え上げを崩さず、body の phantom 漏れも防ぐこと。
+        const string content = """"
+            import Foundation
+
+            class Demo {
+                func m() {
+                    let sql = """
+                        outer: \( wrap(#"foo \(swiftRawHolePhantom())"#) )
+                        plain: \( other(#"phantom: anotherSwiftRawPhantom('inner')"#) )
+                        """
+                    realSwiftCall()
+                }
+
+                func wrap(_ x: String) -> String { x }
+                func other(_ x: String) -> String { x }
+                func realSwiftCall() {}
+                func swiftRawHolePhantom() -> Int { 0 }
+                func anotherSwiftRawPhantom(_ s: String) -> String { s }
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "swiftRawHolePhantom" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "anotherSwiftRawPhantom" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "other" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realSwiftCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SwiftSingleLineRawString_HashCountedInterpolationHole_PreservesRealCalls()
+    {
+        // Regression for issue #1001: a single-line `#"..."#` Swift extended raw
+        // string (whether at the source root or inside a `\(...)` outer hole) must
+        // preserve any matching `\#(...)` interpolation hole bodies so real call
+        // edges inside the raw string still reach the reference graph. Mismatched
+        // backslash forms (e.g. `\(...)` inside a hash-1 raw string) stay literal
+        // text and are masked along with the rest of the body.
+        // issue #1001 回帰: 単行 `#"..."#` raw 文字列内の hash 数一致 `\#(...)` ホール本文は
+        // 残し、本物の call を reference graph に届けること。
+        const string content = """"
+            import Foundation
+
+            class Demo {
+                func m() {
+                    let outer = """
+                        in-hole-real:    \( wrap(#"foo \#(realInHoleCall()) bar"#) )
+                        in-hole-literal: \( other(#"baz \(notARealCall()) end"#) )
+                        """
+                    let topLevel = #"prefix \#(realTopLevelCall()) suffix"#
+                    realSwiftCall()
+                }
+
+                func wrap(_ x: String) -> String { x }
+                func other(_ x: String) -> String { x }
+                func realInHoleCall() -> Int { 0 }
+                func realTopLevelCall() -> Int { 0 }
+                func notARealCall() -> Int { 0 }
+                func realSwiftCall() {}
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "realInHoleCall" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realTopLevelCall" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "notARealCall" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "other" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realSwiftCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SwiftDeepHashDelimitedTriple_RequiresMatchingHashCloseToExitDeepMask()
+    {
+        // Regression for issue #1000: when a Swift triple-quoted literal opens
+        // 3+ levels deep with a leading hash run (`#"""..."""#` etc.) inside the
+        // nested triple's own `\(...)` hole, the deep-mask close path must require
+        // the same hash count. Otherwise a stray bare `"""` inside the deep body
+        // could exit the deep mask early and let later phantom calls leak.
+        // issue #1000 回帰: 3 段以上深い hash-delimited Swift triple は同じ hash 数の
+        // 閉じでのみ deep mask を抜け、bare `"""` で早抜けして phantom が漏れないこと。
+        const string content = """"
+            import Foundation
+
+            class Demo {
+                func m() {
+                    let sql = """
+                        outer: \( wrap("""
+                            inner: \( helper(#"""
+                                phantom-bare-close: """
+                                phantom-call: swiftDeepHashPhantom(99)
+                                """#) )
+                            """) )
+                        """
+                    realSwiftCall()
+                }
+
+                func wrap(_ x: String) -> String { x }
+                func helper(_ x: String) -> String { x }
+                func realSwiftCall() {}
+                func swiftDeepHashPhantom(_ x: Int) -> Int { x }
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "swiftDeepHashPhantom" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "helper" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realSwiftCall" && r.ReferenceKind == "call");
+    }
 }
