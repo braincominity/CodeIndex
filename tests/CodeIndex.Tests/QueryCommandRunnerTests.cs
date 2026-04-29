@@ -762,11 +762,14 @@ public class QueryCommandRunnerTests
         var languages = document.RootElement.GetProperty("languages");
         var javascript = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "javascript");
         var typescript = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "typescript");
+        var objc = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "objc");
 
         Assert.Contains(".cjs", javascript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
         Assert.Contains(".mjs", javascript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
         Assert.Contains(".cts", typescript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
         Assert.Contains(".mts", typescript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+        Assert.Contains(".m", objc.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+        Assert.Contains(".mm", objc.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
     }
 
     [Fact]
