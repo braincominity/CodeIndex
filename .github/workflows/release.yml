@@ -180,12 +180,14 @@ jobs:
 
       - name: Add license and trademark notices to publish output (Linux/macOS)
         if: runner.os != 'Windows'
-        run: cp LICENSE COMMERCIAL_LICENSE.md TRADEMARKS.md publish/
+        run: cp LICENSE LICENSES/FSL-1.1-ALv2.txt LICENSES/Apache-2.0.txt COMMERCIAL_LICENSE.md INTEGRATION_POLICY.md TRADEMARKS.md publish/ && cp -R LICENSES publish/
 
       - name: Add license and trademark notices to publish output (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: Copy-Item LICENSE,COMMERCIAL_LICENSE.md,TRADEMARKS.md publish
+        run: |
+          Copy-Item LICENSE,COMMERCIAL_LICENSE.md,INTEGRATION_POLICY.md,TRADEMARKS.md publish
+          Copy-Item LICENSES publish -Recurse
 
       - name: Archive release artifacts (Linux/macOS)
         if: runner.os != 'Windows'
@@ -297,10 +299,13 @@ jobs:
           bash install.sh "${TAG_NAME}"
 
           # Runtime and license/policy assets must land next to the binary.
-          for asset in cdidx libe_sqlite3.so version.json LICENSE COMMERCIAL_LICENSE.md TRADEMARKS.md; do
+          for asset in cdidx libe_sqlite3.so version.json LICENSE COMMERCIAL_LICENSE.md INTEGRATION_POLICY.md TRADEMARKS.md LICENSES; do
             test -e "$CDIDX_INSTALL_DIR/$asset" \
               || { echo "Missing $asset in $CDIDX_INSTALL_DIR" >&2; ls -la "$CDIDX_INSTALL_DIR" >&2; exit 1; }
           done
+
+          test -f "$CDIDX_INSTALL_DIR/LICENSES/FSL-1.1-ALv2.txt"
+          test -f "$CDIDX_INSTALL_DIR/LICENSES/Apache-2.0.txt"
 
           # --version must reflect the tag, not the v0.0.0 fallback.
           EXPECTED="cdidx ${TAG_NAME}"

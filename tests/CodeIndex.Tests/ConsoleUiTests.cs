@@ -114,7 +114,7 @@ public class ConsoleUiTests
     }
 
     [Fact]
-    public void PrintLicenseSummary_DescribesPerimeterAndCommercialRestriction()
+    public void PrintLicenseSummary_DescribesFslAndCommercialRestriction()
     {
         lock (TestConsoleLock.Gate)
         {
@@ -126,11 +126,12 @@ public class ConsoleUiTests
                 ConsoleUi.PrintLicenseSummary();
                 var output = writer.ToString();
 
-                Assert.Contains("PolyForm Perimeter License 1.0.0", output);
-                Assert.Contains("competes with CodeIndex", output);
-                Assert.Contains("competing commercial product or service", output);
+                Assert.Contains("Functional Source License, Version 1.1, ALv2 Future License (FSL-1.1-ALv2)", output);
+                Assert.Contains("non-competing purposes", output);
+                Assert.Contains("Competing commercial products or services require a separate written agreement", output);
                 Assert.Contains("separate written agreement", output);
-                Assert.Contains("TRADEMARKS.md", output);
+                Assert.Contains("LICENSES/Apache-2.0.txt", output);
+                Assert.Contains("INTEGRATION_POLICY.md", output);
             }
             finally
             {

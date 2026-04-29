@@ -439,6 +439,13 @@ existing_install_is_reusable() {
         return 1
     fi
 
+    [ -f "${INSTALL_DIR}/LICENSE" ] || return 1
+    [ -f "${INSTALL_DIR}/COMMERCIAL_LICENSE.md" ] || return 1
+    [ -f "${INSTALL_DIR}/INTEGRATION_POLICY.md" ] || return 1
+    [ -f "${INSTALL_DIR}/TRADEMARKS.md" ] || return 1
+    [ -f "${INSTALL_DIR}/LICENSES/FSL-1.1-ALv2.txt" ] || return 1
+    [ -f "${INSTALL_DIR}/LICENSES/Apache-2.0.txt" ] || return 1
+
     case "${OS_NAME:-}" in
         linux)
             [ -f "${INSTALL_DIR}/libe_sqlite3.so" ] || return 1
@@ -476,7 +483,7 @@ remove_promoted_files() {
 
     for asset in $promoted_files; do
         if [ -e "${install_dir}/${asset}" ]; then
-            if ! rm -f "${install_dir}/${asset}"; then
+            if ! rm -rf "${install_dir}/${asset}"; then
                 report_error "Failed to remove partially installed file ${install_dir}/${asset} during rollback. Manual recovery may be required."
                 return 1
             fi
@@ -785,16 +792,16 @@ download_and_install() {
         *)     error "Internal error: unknown OS_NAME '$OS_NAME' for asset selection." ;;
     esac
 
-    # License and trademark notices are shipped when present, but older mirrors
-    # may still lack them. Treat them as best-effort extras so we can keep
-    # supporting older release archives while ensuring new releases install the
-    # legal files that the release workflow now verifies.
-    # LICENSE / 商用ライセンス / 商標の案内は存在すれば一緒に配置するが、
-    # 古い mirror にはまだ無い可能性があるため必須にはしない。古い
-    # release archive を壊さず、新しい release では workflow が検証する
-    # 法務ファイルを確実にインストールできるようにする。
+    # License, integration-policy, and trademark notices are shipped when
+    # present, but older mirrors may still lack them. Treat them as best-effort
+    # extras so we can keep supporting older release archives while ensuring new
+    # releases install the legal files that the release workflow now verifies.
+    # LICENSE / 統合ポリシー / 商用ライセンス / 商標の案内は存在すれば
+    # 一緒に配置するが、古い mirror にはまだ無い可能性があるため必須には
+    # しない。古い release archive を壊さず、新しい release では workflow
+    # が検証する法務ファイルを確実にインストールできるようにする。
     local required_files="${BINARY_NAME} ${required_assets}"
-    local optional_assets="LICENSE COMMERCIAL_LICENSE.md TRADEMARKS.md"
+    local optional_assets="LICENSE COMMERCIAL_LICENSE.md INTEGRATION_POLICY.md TRADEMARKS.md LICENSES"
     local staged_assets="$required_assets"
     local asset
     for asset in $required_files; do
@@ -821,6 +828,10 @@ download_and_install() {
     for asset in $optional_assets; do
         if [ -f "${extract_dir}/${asset}" ]; then
             cp "${extract_dir}/${asset}" "${stage_dir}/${asset}"
+        elif [ -d "${extract_dir}/${asset}" ]; then
+            cp -R "${extract_dir}/${asset}" "${stage_dir}/${asset}"
+        fi
+        if [ -e "${stage_dir}/${asset}" ]; then
             staged_assets="${staged_assets} ${asset}"
         fi
     done

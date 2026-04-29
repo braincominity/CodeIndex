@@ -445,13 +445,13 @@ public static class ConsoleUi
     {
         Console.WriteLine("cdidx / CodeIndex license");
         Console.WriteLine();
-        Console.WriteLine("License: PolyForm Perimeter License 1.0.0");
+        Console.WriteLine("License: Functional Source License, Version 1.1, ALv2 Future License (FSL-1.1-ALv2)");
         Console.WriteLine("Copyright: Copyright 2026 Widthdom.");
-        Console.WriteLine("Summary: use, modification, and distribution are allowed, except for providing a product that competes with CodeIndex.");
-        Console.WriteLine("Providing a competing commercial product or service requires a separate written agreement with Widthdom.");
-        Console.WriteLine("Names and trademarks: CodeIndex and cdidx are not licensed for derivative product, package, or service branding.");
+        Console.WriteLine("Summary: use, modification, and distribution are allowed for non-competing purposes, including internal, commercial, AI, IDE, MCP, CI, and scripting integrations.");
+        Console.WriteLine("Competing commercial products or services require a separate written agreement with Widthdom.");
+        Console.WriteLine("Names and trademarks: CodeIndex and cdidx are not licensed for derivative product, package, service, or endorsement branding.");
         Console.WriteLine();
-        Console.WriteLine("See LICENSE, COMMERCIAL_LICENSE.md, and TRADEMARKS.md for the controlling terms.");
+        Console.WriteLine("See LICENSE, LICENSES/FSL-1.1-ALv2.txt, LICENSES/Apache-2.0.txt, COMMERCIAL_LICENSE.md, INTEGRATION_POLICY.md, and TRADEMARKS.md for the controlling terms.");
     }
 
     public static string? GetUsageLine(string command)

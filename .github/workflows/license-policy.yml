@@ -6,10 +6,13 @@ on:
       - main
     paths:
       - 'LICENSE'
+      - 'LICENSES/**'
       - 'COMMERCIAL_LICENSE.md'
+      - 'INTEGRATION_POLICY.md'
       - 'TRADEMARKS.md'
       - 'README.md'
       - 'MAINTAINERS.md'
+      - 'CONTRIBUTING.md'
       - 'src/CodeIndex/CodeIndex.csproj'
       - '.github/workflows/release.yml'
       - '.github/workflows/license-policy.yml'
@@ -18,10 +21,13 @@ on:
       - main
     paths:
       - 'LICENSE'
+      - 'LICENSES/**'
       - 'COMMERCIAL_LICENSE.md'
+      - 'INTEGRATION_POLICY.md'
       - 'TRADEMARKS.md'
       - 'README.md'
       - 'MAINTAINERS.md'
+      - 'CONTRIBUTING.md'
       - 'src/CodeIndex/CodeIndex.csproj'
       - '.github/workflows/release.yml'
       - '.github/workflows/license-policy.yml'
@@ -42,18 +48,40 @@ jobs:
         run: |
           set -euo pipefail
 
-          grep -F "PolyForm Perimeter License 1.0.0" LICENSE >/dev/null
-          grep -F "Required Notice: Copyright 2026 Widthdom." LICENSE >/dev/null
-          grep -F "competes with CodeIndex" COMMERCIAL_LICENSE.md >/dev/null
-          grep -F "CodeIndex and cdidx are not licensed" TRADEMARKS.md >/dev/null
-          grep -F "License-PolyForm%20Perimeter%201.0.0-orange" README.md >/dev/null
+          grep -F "FSL-1.1-ALv2" LICENSE >/dev/null
+          grep -F "Copyright 2026 Widthdom" LICENSE >/dev/null
+          grep -F "LICENSES/FSL-1.1-ALv2.txt" LICENSE >/dev/null
+          grep -F "LICENSES/Apache-2.0.txt" LICENSE >/dev/null
+
+          test -f LICENSES/FSL-1.1-ALv2.txt
+          test -f LICENSES/Apache-2.0.txt
+          test -f INTEGRATION_POLICY.md
+
+          grep -F "Functional Source License, Version 1.1, ALv2 Future License" LICENSES/FSL-1.1-ALv2.txt >/dev/null
+          grep -F "Apache License" LICENSES/Apache-2.0.txt >/dev/null
+
+          grep -F "Allowed Without a Separate Agreement" COMMERCIAL_LICENSE.md >/dev/null
+          grep -F "AI Agent, IDE, Editor, CI, and MCP Integration Policy" INTEGRATION_POLICY.md >/dev/null
+          grep -F "compatible with CodeIndex" TRADEMARKS.md >/dev/null
+
+          grep -F "License-FSL--1.1--ALv2-orange" README.md >/dev/null
+          grep -F "source-available / Fair Source-style" README.md >/dev/null
 
           grep -F "<PackageLicenseFile>LICENSE</PackageLicenseFile>" src/CodeIndex/CodeIndex.csproj >/dev/null
           grep -F "<PackageRequireLicenseAcceptance>true</PackageRequireLicenseAcceptance>" src/CodeIndex/CodeIndex.csproj >/dev/null
           grep -F 'Include="..\..\LICENSE" Pack="true"' src/CodeIndex/CodeIndex.csproj >/dev/null
           grep -F 'Include="..\..\COMMERCIAL_LICENSE.md" Pack="true"' src/CodeIndex/CodeIndex.csproj >/dev/null
+          grep -F 'Include="..\..\INTEGRATION_POLICY.md" Pack="true"' src/CodeIndex/CodeIndex.csproj >/dev/null
           grep -F 'Include="..\..\TRADEMARKS.md" Pack="true"' src/CodeIndex/CodeIndex.csproj >/dev/null
+          grep -F 'Include="..\..\LICENSES\FSL-1.1-ALv2.txt" Pack="true"' src/CodeIndex/CodeIndex.csproj >/dev/null
+          grep -F 'Include="..\..\LICENSES\Apache-2.0.txt" Pack="true"' src/CodeIndex/CodeIndex.csproj >/dev/null
           grep -F 'CopyToPublishDirectory="PreserveNewest"' src/CodeIndex/CodeIndex.csproj >/dev/null
+
+          if grep -R -n -E 'License-PolyForm|Licensed under PolyForm|PolyForm Perimeter License 1.0.0' \
+            LICENSE README.md COMMERCIAL_LICENSE.md TRADEMARKS.md src/CodeIndex/CodeIndex.csproj; then
+            echo "Stale PolyForm licensing metadata found in active policy files." >&2
+            exit 1
+          fi
 
           if grep -R -n -E 'License-MIT|PackageLicenseExpression>MIT|MIT License|sublicense, and/or sell' \
             LICENSE README.md src/CodeIndex/CodeIndex.csproj; then
@@ -62,4 +90,4 @@ jobs:
           fi
 
           grep -F "if: github.repository == 'Widthdom/CodeIndex'" .github/workflows/release.yml >/dev/null
-          grep -F "LICENSE COMMERCIAL_LICENSE.md TRADEMARKS.md" .github/workflows/release.yml >/dev/null
+          grep -F "LICENSE LICENSES/FSL-1.1-ALv2.txt LICENSES/Apache-2.0.txt COMMERCIAL_LICENSE.md INTEGRATION_POLICY.md TRADEMARKS.md" .github/workflows/release.yml >/dev/null
