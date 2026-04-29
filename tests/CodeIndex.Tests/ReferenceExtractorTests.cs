@@ -6344,6 +6344,37 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_TracksSplitLineInsertIntoAndSelectIntoTempTargets()
+    {
+        // issue #655: SQL target extraction must keep split-line `INSERT ... INTO` and
+        // `SELECT ... INTO #temp` forms on the reference path, not fall back to same-line-only
+        // call behavior or miss the temp-table reference entirely.
+        // issue #655: SQL target 抽出は split-line の `INSERT ... INTO` と
+        // `SELECT ... INTO #temp` を reference 経路に残し、same-line-only の call 挙動に
+        // 落ちたり temp-table reference を取りこぼしたりしないこと。
+        const string content = """
+            INSERT
+            INTO audit_log (action, user_id)
+            VALUES ('login', 42);
+
+            SELECT id
+            INTO #selected_users
+            FROM users;
+
+            SELECT * FROM #selected_users;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.Contains(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "reference");
+        Assert.DoesNotContain(references, r => r.SymbolName == "audit_log" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "#selected_users" && r.ReferenceKind == "reference");
+        Assert.Equal(2, references.Count(r => r.SymbolName == "#selected_users" && r.ReferenceKind == "reference"));
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference");
+    }
+
+    [Fact]
     public void Extract_SQL_TempStatementPrefixStillFlushesBeforeTopLevelWithCte()
     {
         // issue #741 control: `WITH cte AS (...)` must still start a new top-level statement even
