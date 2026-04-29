@@ -533,7 +533,8 @@ public static class SymbolExtractor
         [
             // Include optional `*` between `function` and name for generator functions (e.g. `function* gen()`, `async function* asyncGen()`)
             // `function` と名前の間に任意の `*` を許容し、ジェネレータ関数 (`function* gen()`, `async function* asyncGen()`) にも対応
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:async\s+)?function(?:\s+|\s*\*\s*)(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:async\s+)?function(?:\s+|\s*\*\s*)(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("property", new Regex(@"^\s*(?:(?<visibility>export)\s+)?declare\s+(?:const|let|var)\s+(?<name>\w+)(?::\s*[^;=]+)?\s*;", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // HOC-wrapped / call-result component bindings — same narrow HOC-prefix set
             // as the JavaScript row above, extended with an optional TypeScript generic
@@ -594,7 +595,7 @@ public static class SymbolExtractor
             new("namespace", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:namespace|module)\s+['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("namespace", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:namespace|module)\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("interface", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?type\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("interface", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?type\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             new("enum",     new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:const\s+)?enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             new("import",   new Regex(@"^\s*import\s+(?<name>.+?)\s+from\s+", RegexOptions.Compiled), BodyStyle.None),
         ],
@@ -1851,7 +1852,14 @@ public static class SymbolExtractor
                     }
 
                     if (lang == "csharp"
-                        && pattern.BodyStyle == BodyStyle.None
+                        && pattern.Kind == "function"
+                        && HasCSharpTokenBeforeIndex(matchLine, "when", absoluteStartColumn + match.Groups["name"].Index))
+                    {
+                        lineOffset = absoluteStartColumn + Math.Max(1, match.Length);
+                        continue;
+                      }
+                      if (lang == "csharp"
+                          && pattern.BodyStyle == BodyStyle.None
                         && (pattern.Kind == "property" || IsCSharpFieldLikeFunctionPattern(pattern))
                         && csharpInsideTypeBody != null
                         && !csharpInsideTypeBody.IsInsideTypeBodyAt(i, csharpGateRawStartColumn))
@@ -1893,16 +1901,23 @@ public static class SymbolExtractor
                         continue;
                     }
                     var rawReturnType = TryGetGroup(match, pattern.ReturnTypeGroup);
-                    if (lang == "csharp"
-                        && pattern.ReturnTypeGroup != null
-                        && HasInvalidCSharpReturnTypeSuffix(rawReturnType))
-                    {
-                        lineOffset = FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang);
-                        continue;
-                    }
-                    if (lang == "csharp"
-                        && pattern.Kind == "property"
-                        && IsStandaloneCSharpAccessorCandidate(patternMatchLine))
+                      if (lang == "csharp"
+                          && pattern.ReturnTypeGroup != null
+                          && HasInvalidCSharpReturnTypeSuffix(rawReturnType))
+                      {
+                          lineOffset = FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang);
+                          continue;
+                      }
+                      if (lang == "csharp"
+                          && pattern.Kind == "function"
+                          && HasCSharpTokenBeforeIndex(matchLine, "when", absoluteStartColumn + match.Groups["name"].Index))
+                      {
+                          lineOffset = absoluteStartColumn + Math.Max(1, match.Length);
+                          continue;
+                      }
+                      if (lang == "csharp"
+                          && pattern.Kind == "property"
+                          && IsStandaloneCSharpAccessorCandidate(patternMatchLine))
                     {
                         lineOffset = FindNextSameLineBraceStatementStart(matchLine, absoluteStartColumn + Math.Max(1, match.Length), lang);
                         continue;
@@ -8893,6 +8908,7 @@ public static class SymbolExtractor
 
         var ch = sanitizedLine[index];
         if (ch != '#'
+            && ch != '@'
             && ch != '*'
             && ch != '['
             && ch != '\''
@@ -9842,6 +9858,29 @@ public static class SymbolExtractor
                     : 1;
             }
         }
+
+        public void Remove(SymbolRecord symbol)
+        {
+            var exactKey = new SymbolRecordIdentity(symbol);
+            if (_exactCounts.TryGetValue(exactKey, out var exactCount))
+            {
+                if (exactCount <= 1)
+                    _exactCounts.Remove(exactKey);
+                else
+                    _exactCounts[exactKey] = exactCount - 1;
+            }
+
+            if (!TryGetSameLineSignatureKey(symbol, out var sameLineKey))
+                return;
+
+            if (!_sameLineSignatureCounts.TryGetValue(sameLineKey, out var sameLineCount))
+                return;
+
+            if (sameLineCount <= 1)
+                _sameLineSignatureCounts.Remove(sameLineKey);
+            else
+                _sameLineSignatureCounts[sameLineKey] = sameLineCount - 1;
+        }
     }
 
     private readonly record struct SymbolRecordIdentity(
@@ -9909,6 +9948,12 @@ public static class SymbolExtractor
                 return;
         }
 
+        if (symbol.Kind == "function"
+            && (symbol.BodyStartLine != null || symbol.BodyEndLine != null))
+        {
+            RemoveTrailingSameNameDeclarationOnlyFunctions(symbols, symbol);
+        }
+
         symbol.SameLineSignatureOccurrenceIndex = state.GetSameLineSignatureOccurrenceIndex(symbol);
 
         // Same-line restart paths can legitimately revisit the same declaration from a
@@ -9929,6 +9974,32 @@ public static class SymbolExtractor
 
         state.Record(symbol);
         symbols.Add(symbol);
+    }
+
+    private static void RemoveTrailingSameNameDeclarationOnlyFunctions(List<SymbolRecord> symbols, SymbolRecord symbol)
+    {
+        for (var index = symbols.Count - 1; index >= 0; index--)
+        {
+            var prior = symbols[index];
+            if (prior.FileId != symbol.FileId
+                || prior.Kind != symbol.Kind
+                || !string.Equals(prior.Name, symbol.Name, StringComparison.Ordinal)
+                || !string.Equals(prior.ContainerKind, symbol.ContainerKind, StringComparison.Ordinal)
+                || !string.Equals(prior.ContainerName, symbol.ContainerName, StringComparison.Ordinal)
+                || !string.Equals(prior.ContainerQualifiedName, symbol.ContainerQualifiedName, StringComparison.Ordinal))
+            {
+                break;
+            }
+
+            if (prior.BodyStartLine != null || prior.BodyEndLine != null)
+                break;
+
+            var signature = prior.Signature?.TrimStart();
+            if (signature != null && signature.StartsWith("declare ", StringComparison.Ordinal))
+                break;
+
+            symbols.RemoveAt(index);
+        }
     }
 
     // Some compact same-line C# fixtures can legitimately contain two distinct siblings with
@@ -11149,6 +11220,8 @@ public static class SymbolExtractor
         while (index < sanitizedHeader.Length && char.IsWhiteSpace(sanitizedHeader[index]))
             index++;
 
+        TrySkipJavaScriptTypeScriptDecorators(sanitizedHeader, ref index);
+
         string? candidateName = null;
         while (index < sanitizedHeader.Length)
         {
@@ -11650,6 +11723,8 @@ public static class SymbolExtractor
 
         while (index < sanitizedLine.Length && char.IsWhiteSpace(sanitizedLine[index]))
             index++;
+
+        TrySkipJavaScriptTypeScriptDecorators(sanitizedLine, ref index);
 
         while (index < sanitizedLine.Length)
         {
@@ -12524,11 +12599,58 @@ public static class SymbolExtractor
         return true;
     }
 
+    private static bool TrySkipJavaScriptTypeScriptDecorators(string line, ref int index)
+    {
+        var skippedAny = false;
+
+        while (index < line.Length)
+        {
+            while (index < line.Length && char.IsWhiteSpace(line[index]))
+                index++;
+
+            if (index >= line.Length || line[index] != '@')
+                return skippedAny;
+
+            skippedAny = true;
+            index++;
+
+            var parenDepth = 0;
+            var bracketDepth = 0;
+            var braceDepth = 0;
+
+            while (index < line.Length)
+            {
+                var ch = line[index];
+                if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && char.IsWhiteSpace(ch))
+                    break;
+
+                if (ch == '(')
+                    parenDepth++;
+                else if (ch == ')' && parenDepth > 0)
+                    parenDepth--;
+                else if (ch == '[')
+                    bracketDepth++;
+                else if (ch == ']' && bracketDepth > 0)
+                    bracketDepth--;
+                else if (ch == '{')
+                    braceDepth++;
+                else if (ch == '}' && braceDepth > 0)
+                    braceDepth--;
+
+                index++;
+            }
+        }
+
+        return skippedAny;
+    }
+
     private static string? GetJavaScriptTypeScriptMethodNameFromSource(string line, int startColumn)
     {
         var index = Math.Max(0, startColumn);
         while (index < line.Length && char.IsWhiteSpace(line[index]))
             index++;
+
+        TrySkipJavaScriptTypeScriptDecorators(line, ref index);
 
         while (index < line.Length)
         {
@@ -12769,6 +12891,7 @@ public static class SymbolExtractor
         {
             var ch = sanitizedLine[index];
             if (ch != '#'
+                && ch != '@'
                 && ch != '*'
                 && ch != '['
                 && ch != '\''
@@ -14456,15 +14579,41 @@ public static class SymbolExtractor
         return StartsWithCSharpEventAccessorKeyword(text, cursor);
     }
 
-    private static bool ShouldDeferCSharpFunctionSameLineAdvance(string matchLine, int startColumn)
-    {
-        if (startColumn < 0 || startColumn >= matchLine.Length)
+      private static bool ShouldDeferCSharpFunctionSameLineAdvance(string matchLine, int startColumn)
+      {
+          if (startColumn < 0 || startColumn >= matchLine.Length)
+              return false;
+
+          var remaining = matchLine[startColumn..];
+          return !CSharpTypeBodyDeclarationMarker.IsMatch(remaining)
+              && (CSharpSameLinePropertyStatementStartRegex.IsMatch(remaining)
+                  || CSharpSameLineEventOrDelegateStatementStartRegex.IsMatch(remaining));
+      }
+
+      private static bool HasCSharpTokenBeforeIndex(string text, string token, int exclusiveEnd)
+      {
+          return false;
+        if (string.IsNullOrEmpty(token) || exclusiveEnd <= 0)
             return false;
 
-        var remaining = matchLine[startColumn..];
-        return !CSharpTypeBodyDeclarationMarker.IsMatch(remaining)
-            && (CSharpSameLinePropertyStatementStartRegex.IsMatch(remaining)
-                || CSharpSameLineEventOrDelegateStatementStartRegex.IsMatch(remaining));
+        var searchStart = 0;
+        while (searchStart < exclusiveEnd)
+        {
+            var tokenIndex = text.IndexOf(token, searchStart, exclusiveEnd - searchStart, StringComparison.Ordinal);
+            if (tokenIndex < 0)
+                return false;
+
+            var tokenEnd = tokenIndex + token.Length;
+            if ((tokenIndex == 0 || !char.IsLetterOrDigit(text[tokenIndex - 1]) && text[tokenIndex - 1] != '_')
+                && (tokenEnd >= text.Length || !char.IsLetterOrDigit(text[tokenEnd]) && text[tokenEnd] != '_'))
+            {
+                return true;
+            }
+
+            searchStart = tokenIndex + 1;
+        }
+
+        return false;
     }
 
     private static bool ShouldDeferCSharpBracePropertySameLineAdvance(string matchLine, int startColumn)

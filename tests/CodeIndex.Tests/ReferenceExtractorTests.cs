@@ -9770,11 +9770,11 @@ public class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "Point" && r.ReferenceKind == "call");
     }
 
-    [Fact]
-    public void Extract_CsharpMultilinePositionalPatterns_CaptureTypeReferences()
-    {
-        // issue #969: multiline positional `case` / `is` heads must behave the same as
-        // the same-line forms and keep the real `type_reference` without phantom calls.
+      [Fact]
+      public void Extract_CsharpMultilinePositionalPatterns_CaptureTypeReferences()
+      {
+          // issue #969: multiline positional `case` / `is` heads must behave the same as
+          // the same-line forms and keep the real `type_reference` without phantom calls.
         // issue #969: 改行をまたぐ positional `case` / `is` head も同一行版と同様に
         // 本物の `type_reference` を残し、phantom な call を出してはならない。
         const string content = """
@@ -9815,6 +9815,47 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CsharpMultilinePositionalPatternWhenGuard_PreservesGuardCall()
+    {
+        // issue #986: a real `when`-guard call after a split positional pattern must stay
+        // visible as `call` instead of being suppressed as part of the pattern head.
+        // issue #986: 分割された positional pattern の後ろにある実際の `when` guard 呼び出しは、
+        // pattern head の一部として抑止されず `call` として残る必要がある。
+        const string content = """
+            namespace Probe;
+
+            class Point
+            {
+                public int X { get; }
+                public int Y { get; }
+            }
+
+            class Demo
+            {
+                void Check() { }
+
+                void Run(object value)
+                {
+                    switch (value)
+                    {
+                        case
+                            Point(var x, var y) when Check():
+                            break;
+                    }
+                }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
+
+        var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
+        Assert.Single(pointRefs);
+        Assert.Equal("Run", pointRefs[0].ContainerName);
+        Assert.Contains(references, r => r.SymbolName == "Check" && r.ReferenceKind == "call" && r.ContainerName == "Run");
+    }
+
+    [Fact]
     public void Extract_CsharpSwitchExpressionPositionalPatterns_DoNotEmitPhantomCalls()
     {
         // issue #968: switch-expression arm heads such as `Point(var x, var y) => 1`
@@ -9846,15 +9887,15 @@ public class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
-        Assert.Equal(2, pointRefs.Count);
-        Assert.All(pointRefs, r => Assert.Equal("Match", r.ContainerName));
-        Assert.DoesNotContain(references, r => r.SymbolName == "Point" && r.ReferenceKind == "call");
-    }
+          Assert.Equal(2, pointRefs.Count);
+          Assert.All(pointRefs, r => Assert.Equal("Match", r.ContainerName));
+          Assert.DoesNotContain(references, r => r.SymbolName == "Point" && r.ReferenceKind == "call");
+      }
 
-    [Fact]
-    public void Extract_CsharpCaseLogicalAndNegatedTypePatterns_CaptureTypeReferences()
-    {
-        // issues #668/#670: logical/negated type patterns must keep the left-hand type
+      [Fact]
+      public void Extract_CsharpCaseLogicalAndNegatedTypePatterns_CaptureTypeReferences()
+      {
+          // issues #668/#670: logical/negated type patterns must keep the left-hand type
         // dependency for both unqualified and qualified heads without reclassifying enum
         // member labels such as `Color.Red or Probe.Color.Blue` as type dependencies.
         // issues #668/#670: logical/negated な型パターンは unqualified / qualified の両方で

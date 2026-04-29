@@ -1106,13 +1106,19 @@ public static class ReferenceExtractor
                     ref pendingCSharpMultiLineTypePattern);
             }
 
-            bool ShouldSuppressDefinitionCall(string resolvedName, int callIndex)
-            {
-                if (definitionNames == null)
-                    return false;
+              bool ShouldSuppressDefinitionCall(string resolvedName, int callIndex)
+              {
+                  if (definitionNames == null)
+                      return false;
 
-                if (language != "sql")
-                    return definitionNames.Contains(resolvedName);
+                  if (language == "csharp")
+                  {
+                      if (context.Contains("when", StringComparison.Ordinal))
+                          return false;
+                  }
+
+                  if (language != "sql")
+                      return definitionNames.Contains(resolvedName);
 
                 if (sqlDefinitionLeafSpans == null)
                     return false;
@@ -1761,14 +1767,16 @@ public static class ReferenceExtractor
                     return;
                 }
 
-                // C# positional patterns such as `case Point(var x, var y):` are type-pattern
-                // heads, not calls. `CallRegex` still sees `Point(` and would otherwise emit a
-                // phantom `call` edge alongside the real `type_reference`.
-                // C# の positional pattern (`case Point(var x, var y):`) は型パターンの先頭であり、
-                // 呼び出しではない。`CallRegex` が `Point(` を拾ってしまうため、そのままだと
-                // 本物の `type_reference` に加えて phantom な `call` エッジが出る。
-                if (language == "csharp" && IsCSharpPatternHeadCallSite(preparedLines, i, preparedLine, callIndex))
-                    return;
+                  // C# positional patterns such as `case Point(var x, var y):` are type-pattern
+                  // heads, not calls. `CallRegex` still sees `Point(` and would otherwise emit a
+                  // phantom `call` edge alongside the real `type_reference`.
+                  // C# の positional pattern (`case Point(var x, var y):`) は型パターンの先頭であり、
+                  // 呼び出しではない。`CallRegex` が `Point(` を拾ってしまうため、そのままだと
+                  // 本物の `type_reference` に加えて phantom な `call` エッジが出る。
+                  var isCSharpPatternHeadCallSite = language == "csharp"
+                      && IsCSharpPatternHeadCallSite(preparedLines, i, preparedLine, callIndex);
+                  if (isCSharpPatternHeadCallSite)
+                      return;
 
                 var callContainer = ResolveContainerForCall(callIndex);
                 if (IsConstructorCallName(language, preparedLine, callIndex))
@@ -5570,11 +5578,15 @@ public static class ReferenceExtractor
         return cursor;
     }
 
-    private static bool IsCSharpPatternHeadCallSite(string[] preparedLines, int lineIndex, string preparedLine, int nameIndex)
-    {
-        var cursor = nameIndex;
-        if (IsCSharpConstantPatternAnchor(preparedLine, ref cursor))
-            return true;
+      private static bool IsCSharpPatternHeadCallSite(string[] preparedLines, int lineIndex, string preparedLine, int nameIndex)
+      {
+          var whenOffset = FindTopLevelCSharpWhenKeywordOffset(preparedLine);
+          if (whenOffset >= 0 && nameIndex > whenOffset)
+              return false;
+
+          var cursor = nameIndex;
+          if (IsCSharpConstantPatternAnchor(preparedLine, ref cursor))
+              return true;
 
         cursor = nameIndex;
         cursor = SkipCSharpTriviaBackward(preparedLine, cursor);

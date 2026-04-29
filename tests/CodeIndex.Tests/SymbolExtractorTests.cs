@@ -251,6 +251,60 @@ public class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_TypeScript_DetectsAmbientDeclarationsTypeAliasesAndDecoratedClassMembers()
+    {
+        var content = """
+            type Handler = (e: Event) => void;
+            type Coord = { x: number; y: number };
+
+            declare function globalHelper(x: number): number;
+            declare const VERSION: string;
+
+            declare module "ext" {
+                export function loadExt(): void;
+            }
+
+            class Api {
+                @log fetch() {}
+                @readonly name = "x";
+            }
+
+            function log(_: any, _k: string) {}
+            function readonly(_: any, _k: string) {}
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Handler");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "Coord");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "globalHelper");
+        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "VERSION");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "loadExt" && s.ContainerName == "ext");
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Api");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "fetch" && s.ContainerName == "Api");
+    }
+
+    [Fact]
+    public void Extract_TypeScript_CollapsesFunctionOverloadsIntoImplementationRow()
+    {
+        var content = """
+            function format(x: number): string;
+            function format(x: string): string;
+            function format(x: number | string): string {
+                return String(x);
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "typescript", content);
+        var overloads = symbols.Where(s => s.Kind == "function" && s.Name == "format").ToList();
+
+        var implementation = Assert.Single(overloads);
+        Assert.NotNull(implementation.BodyStartLine);
+        Assert.NotNull(implementation.BodyEndLine);
+        Assert.True(implementation.EndLine > implementation.StartLine);
+    }
+
+    [Fact]
     public void Extract_JavaScript_HocBindingPatternSkipsPascalCaseNonHocConstants()
     {
         // PascalCase bindings whose RHS is NOT a known HOC prefix must not be
@@ -2614,7 +2668,7 @@ public class SymbolExtractorTests
         // Quoted ambient module declaration / 引用符付きアンビエントモジュール宣言
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "express");
         Assert.Contains(symbols, s => s.Kind == "namespace" && s.Name == "App.Models");
-        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "ID");
+        Assert.Contains(symbols, s => s.Kind == "interface" && s.Name == "ID");
     }
 
     [Fact]
