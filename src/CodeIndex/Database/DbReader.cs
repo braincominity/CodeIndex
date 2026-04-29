@@ -3939,6 +3939,34 @@ public partial class DbReader
         var hasMultipleFallbackDefinitions = fallbackDefinitions.Count > 1;
         var hasMultipleFallbackDefinitionFiles = fallbackDefinitionPaths.Count > 1;
         var hasClassLikeDefinitions = fallbackDefinitions.Count > 0;
+
+        if (maxDepth <= 0)
+        {
+            return new ImpactAnalysisResult
+            {
+                Query = symbolName,
+                ResolvedName = resolvedName,
+                ImpactMode = "none",
+                Heuristic = false,
+                MaxDepth = maxDepth,
+                DefinitionCount = definitions.Count,
+                DefinitionFileCount = definitionPaths.Count,
+                HintCount = 0,
+                HasClassLikeDefinitions = hasClassLikeDefinitions,
+                HasMultipleDefinitions = hasMultipleDefinitions,
+                HasMultipleDefinitionFiles = definitionPaths.Count > 1,
+                Definitions = definitions,
+                Callers = [],
+                FileImpacts = [],
+                Truncated = false,
+                GraphTableAvailable = _hasReferencesTable,
+                ZeroResultReason = definitions.Count == 0 ? "no_matching_definition" : "depth_zero",
+                Suggestion = definitions.Count == 0
+                    ? "Try `cdidx definition <symbol>` to confirm the indexed name."
+                    : "Use `cdidx impact <symbol> --depth 1` or higher to traverse callers.",
+            };
+        }
+
         var (callers, truncated) = GetTransitiveCallers(symbolName, maxDepth, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
 
         var impactMode = "callers";
