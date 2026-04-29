@@ -109,6 +109,7 @@ Add or update tests whenever you change:
 - workspace freshness or trust metadata
 
 Prefer extending the closest existing `*Tests.cs` file. Create a new test file only when the area does not fit an existing one cleanly.
+For boundary tests, use the smallest fixture that still crosses the boundary. If the behavior only needs one page, chunk, cache, or offset overflow, do not scale synthetic data far past that point unless the larger size is part of the contract.
 
 ### CLI and console tests
 
@@ -215,6 +216,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - テスト名は説明的にする。現在のスイートは `Method_Scenario_ExpectedBehavior` 形式が中心です。
 - テストは決定的に保つ。マシン全体の git 設定、ロケール依存出力、外部の残存ファイルに依存しないこと。
 - 広いスナップショット風の検証より、小さなフィクスチャと明示的な assertion を優先する。
+- 境界を証明するテストでは、その境界をまたぐ最小の fixture を使う。1 ページ、1 chunk、1 cache、1 offset overflow で十分なら、それ以上に synthetic data を増やさない。ただし、より大きいサイズ自体が契約の一部なら例外です。
 - 本番コードのコメントやエラー文字列が英日併記前提なら、重要な箇所ではその期待もテストに反映する。
 - ユーザーに見える挙動を変えたら、テストに加えて `CHANGELOG.md` と関連ドキュメントも同じ変更に含める。
 
