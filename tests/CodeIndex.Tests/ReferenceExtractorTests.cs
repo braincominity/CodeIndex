@@ -6288,6 +6288,24 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_UpdateTopKeepsRealTargetAndSkipsTopKeyword()
+    {
+        const string content = """
+            UPDATE TOP (10) dbo.Users SET Name = 'x';
+            UPDATE TOP (1) ##session_log SET Name = 'y';
+            UPDATE dbo.Users SET Name = 'z';
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "TOP" && r.ReferenceKind == "reference");
+        Assert.Contains(references, r => r.SymbolName == "Users" && r.ReferenceKind == "reference" && r.Line == 1);
+        Assert.Contains(references, r => r.SymbolName == "##session_log" && r.ReferenceKind == "reference" && r.Line == 2);
+        Assert.Contains(references, r => r.SymbolName == "Users" && r.ReferenceKind == "reference" && r.Line == 3);
+    }
+
+    [Fact]
     public void Extract_SQL_TempStatementPrefixStillFlushesBeforeTopLevelWithCte()
     {
         // issue #741 control: `WITH cte AS (...)` must still start a new top-level statement even
