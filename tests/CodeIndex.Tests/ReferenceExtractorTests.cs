@@ -6659,6 +6659,33 @@ public class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_SQL_TempTablesDoNotLookAheadAcrossProcedureBodies()
+    {
+        // issue #659: a temp object established in a later SQL body must not legitimize an earlier
+        // read in a different body. The gate has to stay statement-order, not whole-file lookahead.
+        // issue #659: 後続の SQL body で確立された temp object は、別 body の先行 read を正当化しては
+        // いけない。ゲートは whole-file lookahead ではなく statement-order のままであるべき。
+        const string content = """
+            CREATE PROCEDURE dbo.ReadTemp AS
+            BEGIN
+                SELECT * FROM #later_temp;
+            END;
+            GO
+            CREATE PROCEDURE dbo.EstablishTemp AS
+            BEGIN
+                SELECT id INTO #later_temp FROM users;
+            END;
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "sql", content);
+        var references = ReferenceExtractor.Extract(1, "sql", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "#later_temp" && r.ReferenceKind == "reference" && r.Line == 3);
+        Assert.Contains(references, r => r.SymbolName == "#later_temp" && r.ReferenceKind == "reference" && r.Line == 8);
+        Assert.Contains(references, r => r.SymbolName == "users" && r.ReferenceKind == "reference" && r.Line == 8);
+    }
+
+    [Fact]
     public void Extract_SQL_TempTablesRespectSameLineStatementOrder()
     {
         // issue #679: statement-order temp gating must also work when multiple SQL statements share
