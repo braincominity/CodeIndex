@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### [Unreleased]
 
+#### Fixed
+- **C# `using static` の同名型パターン回帰を修正 (#685, #691)** — `using static` で import された enum/const 名と同じ短名を持つ real type を、`value is Red` や `case Red =>` のような pattern 位置で取り違えないようにする regression を追加し、top-level と nested の両方で `references` / `inspect` / `impact` が genuine type dependency を落とさないようにしました。Affects: `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`, `tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`.
+
 ### [1.16.0] - 2026-04-30
 
 #### Added
@@ -968,6 +971,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## 日本語
 
 ### [Unreleased]
+
+#### 修正
+- **C# の `using static` 同名型パターン回帰を修正 (#685, #691)** — `using static` で import された enum/const 名と同じ短名を持つ real type を、`value is Red` や `case Red =>` のような pattern 位置で取り違えないようにする regression を追加し、top-level と nested の両方で `references` / `inspect` / `impact` が genuine type dependency を落とさないようにしました。対象: `tests/CodeIndex.Tests/ReferenceExtractorTests.cs`、`tests/CodeIndex.Tests/QueryCommandRunnerTests.cs`.
 
 ### [1.16.0] - 2026-04-30
 
