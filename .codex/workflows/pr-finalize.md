@@ -10,6 +10,7 @@ Use this after implementation, commit, and review are complete.
 4. The PR body must include:
    - summary;
    - validation;
+   - documentation/changelog updates, or a clear rationale if none were required;
    - `Fixes #...` lines for issues that should auto-close;
    - follow-up candidates, if any.
 
