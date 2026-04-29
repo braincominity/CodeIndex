@@ -6729,7 +6729,10 @@ public class DbReaderTests : IDisposable
             }
             """);
 
-        const int suppressedReferenceCount = 65_537;
+        // One full raw page of suppressed rows is enough to prove that the
+        // exact using-static filter keeps paging until it reaches the visible
+        // call site.
+        const int suppressedReferenceCount = 64;
         const int callReferenceLine = suppressedReferenceCount + 10;
 
         using (var updateFileCmd = _db.Connection.CreateCommand())
