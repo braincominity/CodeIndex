@@ -15389,4 +15389,117 @@ public class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "scalaLineBefore" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "realScalaCall" && r.ReferenceKind == "call");
     }
+
+    [Fact]
+    public void Extract_KotlinTripleQuotedStringNestedTripleInHole_DoesNotLeakPhantomCalls()
+    {
+        // Regression for issue #992: a nested `"""..."""` literal opened inside a
+        // Kotlin `${...}` interpolation hole must not leak its body as phantom
+        // calls. The hole scanner has to recognise `"""` as a nested triple opener
+        // (not just `"` / `'` single-line strings) and mask through to the matching
+        // close before the hole's `{` / `}` tracking resumes.
+        // issue #992 回帰: Kotlin の `${...}` ホール内で開いた nested `"""..."""` の本文を
+        // phantom call として漏らさないこと。
+        const string content = """"
+            package demo
+
+            class Demo {
+                fun m() {
+                    val sql = """
+                        outer: ${ wrap("""
+                            kotlinNestedPhantom(99)
+                        """) }
+                    """.trimIndent()
+                    realKotlinCall()
+                }
+
+                private fun wrap(x: String): String = x
+                private fun realKotlinCall() {}
+                private fun kotlinNestedPhantom(x: Int): Int = x
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
+        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "kotlinNestedPhantom" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realKotlinCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_SwiftMultilineStringNestedTripleInHole_DoesNotLeakPhantomCalls()
+    {
+        // Regression for issue #992: a nested `"""..."""` (or `#"""..."""#`) literal
+        // opened inside a Swift `\(...)` interpolation hole must not leak its body
+        // as phantom calls. Both plain and hash-delimited nested forms should be
+        // covered by the hole scanner's nested-triple state.
+        // issue #992 回帰: Swift の `\(...)` ホール内で開いた nested triple の本文を
+        // phantom call として漏らさないこと（plain と hash-delimited の両方）。
+        const string content = """"
+            import Foundation
+
+            class Demo {
+                func m() {
+                    let sql = """
+                        outer: \( wrap("""
+                            swiftNestedPhantom(99)
+                            """) )
+                        raw: \( wrap(#"""
+                            swiftHashNestedPhantom(99)
+                            """#) )
+                        """
+                    realSwiftCall()
+                }
+
+                func wrap(_ x: String) -> String { x }
+                func realSwiftCall() {}
+                func swiftNestedPhantom(_ x: Int) -> Int { x }
+                func swiftHashNestedPhantom(_ x: Int) -> Int { x }
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "swift", content);
+        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "swiftNestedPhantom" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r => r.SymbolName == "swiftHashNestedPhantom" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realSwiftCall" && r.ReferenceKind == "call");
+    }
+
+    [Fact]
+    public void Extract_ScalaStringInterpolatorHoleNestedTriple_DoesNotLeakPhantomCalls()
+    {
+        // Regression for issue #992: a nested `"""..."""` literal opened inside a
+        // Scala interpolator-prefixed `${...}` hole must not leak its body as
+        // phantom calls.
+        // issue #992 回帰: Scala interpolator 形式の `${...}` ホール内で開いた
+        // nested `"""..."""` の本文を phantom call として漏らさないこと。
+        const string content = """"
+            package demo
+
+            class Demo {
+              def m(): Unit = {
+                val interp = s"""
+                    |outer: ${ wrap("""
+                    |    scalaNestedPhantom(99)
+                    |""") }
+                  """.stripMargin
+                realScalaCall()
+              }
+
+              def wrap(x: String): String = x
+              def realScalaCall(): Unit = ()
+              def scalaNestedPhantom(x: Int): Int = x
+            }
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, "scala", content);
+        var references = ReferenceExtractor.Extract(1, "scala", content, symbols);
+
+        Assert.DoesNotContain(references, r => r.SymbolName == "scalaNestedPhantom" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
+        Assert.Contains(references, r => r.SymbolName == "realScalaCall" && r.ReferenceKind == "call");
+    }
 }

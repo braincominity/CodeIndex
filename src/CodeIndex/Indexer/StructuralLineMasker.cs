@@ -2526,6 +2526,14 @@ internal static class StructuralLineMasker
         // -1 when outside a hole, >=0 = nested `{` depth inside the hole (0 = top).
         // ホール状態は行をまたいで保持する。ホール外は -1、ホール内は `{` 深さ（0 が最上位）。
         var holeBraceDepth = -1;
+        // Persistent across lines: a nested `"""..."""` literal opened inside the
+        // current `${ ... }` hole. While true, mask body chars until the next `"""`
+        // closer so call-shaped identifiers in the nested literal cannot leak as
+        // phantom references. Closes #992.
+        // ホール内に開いた nested triple-quoted string の状態。true の間は次の `"""`
+        // クローザまで本文を空白化し、nested literal 内の call 風識別子が phantom
+        // として `references` に漏れないようにする。
+        var nestedTripleOpen = false;
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -2573,6 +2581,26 @@ internal static class StructuralLineMasker
                         // 認識して `/* } */` のようなコメント内 `}` でホールを早閉じ
                         // しないようにする。単行文字列・char リテラルも同様にスキップし、
                         // lambda / object literal 用のネスト `{` / `}` を追跡する。
+                        if (nestedTripleOpen)
+                        {
+                            // Inside a nested `"""..."""` literal opened earlier in this
+                            // hole. Mask body chars until the next `"""` closer so the
+                            // nested literal cannot leak phantom call references.
+                            // ホール内で先に開いた nested triple の本文。次の `"""` まで
+                            // マスクし、nested literal 内の call が phantom として漏れない。
+                            if (pos + 2 < line.Length
+                                && line[pos] == '"' && line[pos + 1] == '"' && line[pos + 2] == '"')
+                            {
+                                ReplaceWithSpaces(masked, pos, 3);
+                                pos += 3;
+                                nestedTripleOpen = false;
+                                continue;
+                            }
+                            masked[pos] = ' ';
+                            pos++;
+                            continue;
+                        }
+
                         if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '/')
                         {
                             ReplaceWithSpaces(masked, pos, line.Length - pos);
@@ -2585,6 +2613,20 @@ internal static class StructuralLineMasker
                             ReplaceWithSpaces(masked, pos, 2);
                             blockCommentDepth = 1;
                             pos += 2;
+                            continue;
+                        }
+
+                        // Nested `"""..."""` literal opener inside the hole. Detect
+                        // before the single-line-string skipper so the first `"` does
+                        // not advance us into the literal body via `SkipJsSingleLineString`.
+                        // ホール内で開く nested `"""..."""` の opener。先頭 `"` が単行
+                        // 文字列スキッパーに渡って literal 本体へ進まないよう先に検知する。
+                        if (pos + 2 < line.Length
+                            && line[pos] == '"' && line[pos + 1] == '"' && line[pos + 2] == '"')
+                        {
+                            ReplaceWithSpaces(masked, pos, 3);
+                            pos += 3;
+                            nestedTripleOpen = true;
                             continue;
                         }
 
@@ -2626,6 +2668,10 @@ internal static class StructuralLineMasker
                         ReplaceWithSpaces(masked, pos, 3);
                         pos += 3;
                         insideTriple = false;
+                        // Defensive: any open nested-triple state is owned by the just-
+                        // closed outer triple, so reset it as well.
+                        // 防御的に、外側 triple を閉じた時点で nested-triple 状態も解除する。
+                        nestedTripleOpen = false;
                         continue;
                     }
 
@@ -2693,6 +2739,13 @@ internal static class StructuralLineMasker
         // -1 when outside a \(...) interpolation hole, >=0 = nested `(` depth.
         // \(...) ホール外は -1、ホール内は `(` 深さ。
         var holeParenDepth = -1;
+        // Persistent across lines: a nested `"""..."""` or `#"""..."""#` literal
+        // opened inside the current `\(...)` hole. -1 when no nested triple is
+        // open; >=0 = leading `#` count required at the matching close. While set,
+        // mask body chars until the close so phantom calls cannot leak. Closes #992.
+        // ホール内に開いた nested `"""..."""` / `#"""..."""#` の状態。-1 で未オープン、
+        // 0 以上は閉じに必要な `#` 個数。set 中は本文を空白化し、phantom call が漏れない。
+        var nestedTripleHashCount = -1;
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -2738,6 +2791,27 @@ internal static class StructuralLineMasker
                         // \(expr) ホール内: 本文を保存。block / line コメントを先に
                         // 認識して `/* ) */` のようなコメント内 `)` でホールを早閉じ
                         // しないようにする。単行文字列もスキップし、ネスト `(` / `)` も追跡する。
+                        if (nestedTripleHashCount >= 0)
+                        {
+                            // Inside a nested `"""..."""` (optionally hash-delimited) opened
+                            // earlier in this hole. Mask body chars until the matching close
+                            // so call-shaped identifiers cannot leak as phantom references.
+                            // ホール内で先に開いた nested triple の本文。一致 hash 数の `"""`
+                            // クローザまでマスクし、call 風識別子が phantom として漏れない。
+                            if (pos + 2 < line.Length
+                                && line[pos] == '"' && line[pos + 1] == '"' && line[pos + 2] == '"'
+                                && HasHashRun(line, pos + 3, nestedTripleHashCount))
+                            {
+                                ReplaceWithSpaces(masked, pos, 3 + nestedTripleHashCount);
+                                pos += 3 + nestedTripleHashCount;
+                                nestedTripleHashCount = -1;
+                                continue;
+                            }
+                            masked[pos] = ' ';
+                            pos++;
+                            continue;
+                        }
+
                         if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '/')
                         {
                             ReplaceWithSpaces(masked, pos, line.Length - pos);
@@ -2750,6 +2824,23 @@ internal static class StructuralLineMasker
                             ReplaceWithSpaces(masked, pos, 2);
                             blockCommentDepth = 1;
                             pos += 2;
+                            continue;
+                        }
+
+                        // Nested triple-quoted string opener inside the hole: optional
+                        // leading `#` run then `"""`. Detect before the single-line-string
+                        // skipper so the first `"` of `"""` does not advance into the body.
+                        // ホール内で開く nested triple の opener。先頭 `"` が単行文字列
+                        // スキッパーに渡って literal 本体へ進まないよう先に検知する。
+                        var holeNestedHashes = CountRun(line, pos, '#');
+                        if (pos + holeNestedHashes + 2 < line.Length
+                            && line[pos + holeNestedHashes] == '"'
+                            && line[pos + holeNestedHashes + 1] == '"'
+                            && line[pos + holeNestedHashes + 2] == '"')
+                        {
+                            ReplaceWithSpaces(masked, pos, holeNestedHashes + 3);
+                            pos += holeNestedHashes + 3;
+                            nestedTripleHashCount = holeNestedHashes;
                             continue;
                         }
 
@@ -2795,6 +2886,10 @@ internal static class StructuralLineMasker
                         pos += 3 + tripleHashCount;
                         insideTriple = false;
                         tripleHashCount = 0;
+                        // Defensive: outer triple owns any nested-triple state from a
+                        // hole, so reset it as well when the outer literal closes.
+                        // 防御的に、外側 triple が閉じた時点で nested-triple 状態も解除する。
+                        nestedTripleHashCount = -1;
                         continue;
                     }
 
@@ -2927,6 +3022,13 @@ internal static class StructuralLineMasker
         var isInterpolator = false;
         var blockCommentDepth = 0;
         var holeBraceDepth = -1;
+        // Persistent across lines: a nested `"""..."""` literal opened inside the
+        // current `${ ... }` hole. While true, mask body chars until the next `"""`
+        // closer so call-shaped identifiers cannot leak as phantom references.
+        // Closes #992.
+        // ホール内で開いた nested triple-quoted string の状態。true の間は次の `"""`
+        // クローザまで本文を空白化し、call 風識別子が phantom として漏れない。
+        var nestedTripleOpen = false;
 
         for (int i = 0; i < lines.Length; i++)
         {
@@ -2970,6 +3072,26 @@ internal static class StructuralLineMasker
                         // ${expr} ホール内: 本文を保存。block / line コメントを先に
                         // 認識して `/* } */` のようなコメント内 `}` でホールを早閉じ
                         // しないようにする。
+                        if (nestedTripleOpen)
+                        {
+                            // Inside a nested `"""..."""` literal opened earlier in this
+                            // hole. Mask body chars until the next `"""` closer so the
+                            // nested literal cannot leak phantom call references.
+                            // ホール内で先に開いた nested triple の本文。次の `"""` まで
+                            // マスクし、nested literal 内の call が phantom として漏れない。
+                            if (pos + 2 < line.Length
+                                && line[pos] == '"' && line[pos + 1] == '"' && line[pos + 2] == '"')
+                            {
+                                ReplaceWithSpaces(masked, pos, 3);
+                                pos += 3;
+                                nestedTripleOpen = false;
+                                continue;
+                            }
+                            masked[pos] = ' ';
+                            pos++;
+                            continue;
+                        }
+
                         if (pos + 1 < line.Length && line[pos] == '/' && line[pos + 1] == '/')
                         {
                             ReplaceWithSpaces(masked, pos, line.Length - pos);
@@ -2982,6 +3104,20 @@ internal static class StructuralLineMasker
                             ReplaceWithSpaces(masked, pos, 2);
                             blockCommentDepth = 1;
                             pos += 2;
+                            continue;
+                        }
+
+                        // Nested `"""..."""` literal opener inside the hole. Detect
+                        // before the single-line-string skipper so the first `"` does
+                        // not advance us into the literal body via `SkipJsSingleLineString`.
+                        // ホール内で開く nested `"""..."""` の opener。先頭 `"` が単行
+                        // 文字列スキッパーに渡って literal 本体へ進まないよう先に検知する。
+                        if (pos + 2 < line.Length
+                            && line[pos] == '"' && line[pos + 1] == '"' && line[pos + 2] == '"')
+                        {
+                            ReplaceWithSpaces(masked, pos, 3);
+                            pos += 3;
+                            nestedTripleOpen = true;
                             continue;
                         }
 
@@ -3024,6 +3160,10 @@ internal static class StructuralLineMasker
                         pos += 3;
                         insideTriple = false;
                         isInterpolator = false;
+                        // Defensive: outer triple owns any nested-triple state from a
+                        // hole, so reset it as well when the outer literal closes.
+                        // 防御的に、外側 triple が閉じた時点で nested-triple 状態も解除する。
+                        nestedTripleOpen = false;
                         continue;
                     }
 
